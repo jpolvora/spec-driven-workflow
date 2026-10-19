@@ -38,12 +38,16 @@ function parseFrontmatter(text) {
   return values;
 }
 
-function extractReferences(content, dirName) {
+function extractReferences(content, dirName, skillName) {
   const refs = new Set();
-  const re = new RegExp(dirName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\/([^\\s\\)\\]\\}\'"`]+)', 'g');
+  const re = new RegExp('(?:skills\\/([A-Za-z0-9_-]+)\\/)?' + dirName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\/([^\\s\\)\\]\\}\'"`]+)', 'g');
   let m;
   while ((m = re.exec(content)) !== null) {
-    let ref = m[1].replace(/[.,;:]+$/, '');
+    const matchedSkill = m[1];
+    if (matchedSkill && skillName && matchedSkill !== skillName) {
+      continue;
+    }
+    let ref = m[2].replace(/[.,;:]+$/, '');
     ref = ref.split('#')[0].split('?')[0];
     if (ref) refs.add(ref);
   }
@@ -134,7 +138,7 @@ function verifySkills(options = {}) {
     if (!fs.existsSync(refsDir) || !fs.statSync(refsDir).isDirectory()) {
       errors.push({ skill: skillName, message: 'Tier 2 violation: missing references/ directory in ' + skillRel });
     } else {
-      const refFiles = extractReferences(content, 'references');
+      const refFiles = extractReferences(content, 'references', skillName);
       for (const ref of refFiles) {
         const refPath = path.join(refsDir, ref);
         if (!fs.existsSync(refPath)) {
@@ -148,7 +152,7 @@ function verifySkills(options = {}) {
     if (!fs.existsSync(scriptsDir) || !fs.statSync(scriptsDir).isDirectory()) {
       errors.push({ skill: skillName, message: 'Tier 3 violation: missing scripts/ directory in ' + skillRel });
     } else {
-      const scriptRefs = extractReferences(content, 'scripts').filter(f => f.endsWith('.cjs'));
+      const scriptRefs = extractReferences(content, 'scripts', skillName).filter(f => f.endsWith('.cjs'));
       for (const ref of scriptRefs) {
         const refPath = path.join(scriptsDir, ref);
         if (!fs.existsSync(refPath)) {

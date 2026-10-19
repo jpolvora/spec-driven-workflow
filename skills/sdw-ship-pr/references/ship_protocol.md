@@ -15,7 +15,7 @@ Before publishing branches or creating remote pull requests, `sdw-ship-pr` evalu
 | `requiredBuild` | boolean | false | If true, runs `npm run build` or project build command | Build failure halts ship |
 | `runAllTests` | boolean | false | If true, runs `npm test` or full test suite | Test failure halts ship |
 | `securityChecksEnabled` | boolean | true | Delegates to `sdw-security-checks` over the worktree for credentials, private keys, or exposed tokens | Leak detection or scanner failure halts ship |
-| `reviewFixCommand` | string | null | Command that applies review-thread fixes before the convergence loop resolves threads | Unset: active threads are reported as `review_pending`, never auto-resolved |
+| `reviewFixCommand` | string | null | Command that applies review-thread fixes before the convergence loop resolves threads | Unset: active threads are reported as `review_pending`, never auto-resolved without verified fix |
 
 ---
 
@@ -46,36 +46,59 @@ Before publishing branches or creating remote pull requests, `sdw-ship-pr` evalu
 
 ---
 
-## 4. Review Convergence & Resolution Protocol
+## 4. Cooperative & Proactive Review Convergence Protocol
 
-When `scmCodeReviewEnabled: true` or `--poll-pr` is active, `sdw-ship-pr` executes automated review convergence:
+When `scmCodeReviewEnabled: true` or `--poll-pr` is active, `sdw-ship-pr` executes automated review convergence grounded in cooperative and proactive problem resolution (inspired by `ws-fix-pr` and `COOPERATIVE_FIX.md`):
 
-### 4.1 Polling & Settle Period
+### 4.1 Mandatory Order of Operations
+
+```text
+1. Wait code-review & CI finish ──────────► Poll check status until settled
+2. Check active threads ──────────────────► Query provider.listReviewThreads
+3. If active threads exist: Fetch it all ─► Retrieve all open threads, file locations & comments
+4. Cooperative & proactive fix ───────────► Analyze defect class & fix all occurrences (not just anchor)
+5. Verify ────────────────────────────────► Run npm test / build suite to confirm clean pass
+6. Commit ────────────────────────────────► Stage surgical fix paths; git commit -m "fix(review): ..."
+7. Push ──────────────────────────────────► git push origin <head> (remote must have the commit)
+8. Close related threads with comment ────► Call provider.resolveReviewThread with detailed fix summary
+```
+
+> [!IMPORTANT]
+> **Push before Resolve:** A thread must NEVER be marked resolved before the commit containing the fix is pushed to the remote tracking branch. Reviewers and CI verify the PR against remote commits.
+> **Explain before Closing:** A thread must NEVER be closed without an informative resolution comment detailing what was fixed and why it resolves the defect. Hash-only or empty comments are forbidden.
+
+### 4.2 Settle Period & Status Polling
 - Waits `--poll-interval` milliseconds between rounds (default `20000`).
 - Runs up to `--max-iterations` convergence rounds (default `3`).
-- The existing CI settle window (15–30 seconds) is covered by the default interval.
+- Polls `provider.checkPrStatus(prNumber)` and `provider.listReviewThreads(prNumber)`.
+- If all checks pass and `activeCount === 0`, marks review converged.
 
-### 4.2 Review Thread Inspection
-- Calls `provider.listReviewThreads(prIdentifier)`.
-- Categorizes threads by status:
-  - Active: `isResolved === false` and no resolution reply marker.
-  - Resolved: `isResolved === true` or contains `<!-- resolution-reply -->`.
-
-### 4.3 Surgical Fix & Resolution Comment Requirement
+### 4.3 Cooperative & Proactive Analysis & Fixing
 When active review threads or failing checks are detected:
-1. **Analyze:** Parse the feedback, file paths, line numbers, and suggested corrections.
-2. **Fix:** Apply surgical edits through `reviewFixCommand` (CLI `--review-fix-command` or config) or a caller-supplied `threadFixer` callback. Without one, leave the threads active and report `review_pending`.
-3. **Verify:** Execute tests (`npm test`) to confirm fixes pass without regressions.
-4. **Commit & Push:**
-   - Commit: `git commit -m "fix(review): address review feedback"`
-   - Push: `git push origin <headBranch>`
-5. **Resolve Thread via SCM Provider** (only after a verified fix):
-   - For every resolved thread or review comment, call `provider.resolveReviewThread({ prNumber, threadId, comment, model, dryRun })`.
-   - The resolution `comment` must summarize:
-     - What changed (files modified and technical rationale).
-     - Why the fix resolves the reported defect.
-   - On GitHub: The provider runs a GraphQL mutation executing both `addPullRequestReviewThreadReply` and `resolveReviewThread` atomically.
-   - On Azure DevOps: The provider posts a reply comment via `pullRequestThreadComments` and patches thread status to `fixed` (`2`).
+1. **Analyze Root Cause & Defect Class:** Do not treat review comments as isolated line bugs. Name the underlying defect class (e.g. missing boundary check, unhandled promise rejection, type conversion issue, unrequested scope).
+2. **Proactive Sibling Sweep:** Grep the pull request diff and sibling modules for identical anti-patterns. If the reviewer flagged an issue in one file, proactively inspect and fix the same issue across all related files in the change.
+3. **Surgical Scope Enclosure:** Apply minimal fixes satisfying acceptance criteria and `sdw-rules` simplicity first. Avoid drive-by refactorings or speculative abstractions.
+4. **Execution Methods:**
+   - **Agent / Subagent Mode:** When an AI agent executes `sdw-ship-pr` (standalone or via `sdw-orch`), the agent directly performs the cooperative fix cycle, verifies with tests, commits, pushes, and calls `resolve-thread`.
+   - **Command Mode:** In automated pipelines, `reviewFixCommand` (or `--review-fix-command`) executes the fix command, runs tests, commits, pushes, and resolves threads.
+   - **Programmatic Mode:** `options.threadFixer` allows custom runners to supply fixes and per-thread resolution notes.
+
+### 4.4 Thread Resolution Comment Contract
+For every addressed thread, `provider.resolveReviewThread({ prNumber, threadId, comment })` posts a comment following the standard template:
+
+```markdown
+<!-- resolution-reply -->
+Resolved review issue: applied fix and verified acceptance criteria.
+
+Fixed in commit {commitSha}.
+
+Summary: {Files modified and exact technical correction applied}. {Why this resolves the review feedback}.
+Defect class: {defectClass}
+Proactive sweep: {proactiveFixed or "None (single instance)"}
+```
+
+- **GitHub:** Executed via GraphQL mutation atomically calling `addPullRequestReviewThreadReply` and `resolveReviewThread`.
+- **Azure DevOps:** Posts a reply comment via `pullRequestThreadComments` and updates thread status to `fixed` (`2`).
 
 ---
 
@@ -101,7 +124,13 @@ When invoked with `--json`, `sdw-ship-pr` emits JSON with the following structur
     "rounds": 1,
     "resolvedThreads": 2,
     "activeThreads": 0,
-    "pendingThreads": []
+    "pendingThreads": [],
+    "issuesFixed": [
+      {
+        "threadId": "PRRT_kwTEST123",
+        "resolution": "<!-- resolution-reply -->\nResolved review issue..."
+      }
+    ]
   },
   "shipStatus": "delivered"
 }

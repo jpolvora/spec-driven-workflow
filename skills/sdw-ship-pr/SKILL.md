@@ -5,6 +5,9 @@ version: 0.1.0
 invocation_names:
   - sdw-ship-pr
   - ship-pr
+  - sdw-ship-pr list-threads
+  - sdw-ship-pr resolve-thread
+  - sdw-ship-pr check-status
 ---
 
 # sdw-ship-pr
@@ -18,6 +21,9 @@ Self-contained PR shipping manager for Spec-Driven Workflow (SDW). Orchestrates 
 Standalone CLI:
 ```bash
 node skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs [options]
+node skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs list-threads --pr <number>
+node skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs resolve-thread --pr <number> --thread <id> --comment "<text>"
+node skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs check-status --pr <number>
 ```
 
 Parameters:
@@ -68,21 +74,19 @@ Detailed protocol: [`references/ship_protocol.md`](references/ship_protocol.md).
    - Otherwise, create a new pull request via `provider.createPullRequest({ title, body, head, base, dryRun })`.
 - Done when: Pull request number and URL are captured or reused, or SCM creation skipped cleanly.
 
-### Step 5: Post-PR Review Convergence
+### Step 5: Post-PR Review Convergence (Cooperative & Proactive Fix Cycle)
 1. When `scmCodeReviewEnabled: true` or `--poll-pr` passed (and `scmProvider != "none"`):
-   - Wait 15–30 seconds for automated CI and review workflows to initialize on remote infrastructure.
+   - **Wait for code-review & CI:** Await remote CI workflows and automated/agentic review runs (`provider.checkPrStatus` / `gh pr checks`) to finish.
    - Loop up to configured iteration ceiling (default 3 rounds):
-     a. Poll check status via `provider.checkPrStatus(prIdentifier)` and active threads via `provider.listReviewThreads(prIdentifier)`.
-     b. If all checks pass and `activeCount === 0`, mark converged and exit loop.
-     c. If failing checks or active review threads exist:
-        - Analyze thread feedback and failing check diagnostics.
-        - Apply surgical code fixes to resolve the reported issues. A fix requires `config.reviewFixCommand`, `--review-fix-command` (programmatic `options.reviewFixCommand`), or a caller-supplied `threadFixer`; without one, leave the threads active and report `review_pending`.
-        - Run the verification test suite when `runAllTests` is enabled.
-        - Stage and commit fix changes (`git commit -m "fix(review): address review feedback"`).
-        - Push the commit to the remote branch (`git push origin <head>`).
-        - Only after a verified fix, call `provider.resolveReviewThread({ prNumber, threadId, comment, model })` with a summary describing the fix.
-2. If unresolved issues remain after maximum iterations, record review residual and report status. Never resolve a thread without an applied, verified fix.
-- Done when: Active threads resolved and CI checks green, or iteration ceiling reached with status recorded.
+     a. **Check active threads:** Call `provider.listReviewThreads(prNumber)`. If all checks pass and `activeCount === 0`, mark converged and exit loop.
+     b. **Fetch it all:** If active threads exist, retrieve all open threads, file locations, line numbers, and reviewer comments.
+     c. **Cooperative & proactive fix:** Analyze feedback critically. Name the underlying defect class (e.g. unhandled error, type mismatch, missing validation). Proactively sweep sibling files and related PR modifications for the same pattern, fixing all occurrences rather than patching only the reported line. Apply minimal surgical fixes (`sdw-rules` simplicity first; no unrequested refactorings).
+     d. **Verify:** Run test suite (`npm test`) and project build to ensure fixes pass cleanly without regressions.
+     e. **Commit:** Stage only surgical fix paths and commit: `git commit -m "fix(review): address review feedback"`.
+     f. **Push:** Push the commit to the remote tracking branch: `git push origin <head>`.
+     g. **Close related threads with comment:** **Only after pushing**, call `provider.resolveReviewThread({ prNumber, threadId, comment })` for each addressed thread, posting an informative comment explaining the fix that was implemented (commit SHA, files modified, changes made, and why it resolves the issue).
+2. If unresolved issues remain after maximum iterations, record review residual and report status. Never close a thread before pushing, and never close without an explanatory fix comment.
+- Done when: Active threads resolved with explanatory comments after push and CI checks green, or iteration ceiling reached with status recorded.
 
 ### Step 6: Delivery Outcome & State Persistence
 1. Record PR URL, PR number, ship status, and review convergence results.

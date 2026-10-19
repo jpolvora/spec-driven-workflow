@@ -63,18 +63,10 @@ When executing multiple specifications (`run <spec1> <spec2> ...` or batch queue
    Compare branch changes to base commit, verifying rule invariants and clean syntax in an iterative loop (up to 3 auto-fix attempts).
    - Done when: Code review checks pass or fixes applied.
 
-8. **PR Preparation, Delivery & Code Review Convergence**
-   Evaluate `.sdw/config.json` delivery options (`scmProvider`, `pushDelivery`, `scmCodeReviewEnabled`):
-   - When `pushDelivery: true` (or `--push`), push the branch to remote origin.
-   - When `scmProvider` is active (`github` | `ado`), open or reuse the PR via the provider contract.
-   - When `scmCodeReviewEnabled: true` (or `--poll-pr`), enter the post-PR review convergence loop:
-     1. Await completion of remote CI workflows and automated/agentic review runs (`gh pr checks <PR>` / `check-pr-status`).
-     2. Query review comments and active threads from provider (`gh pr view <PR> --comments` / `gh api` / `list-threads`).
-     3. Critically evaluate review feedback against spec ACs and simplicity guidelines (`sdw-rules`).
-     4. If actionable comments or test gaps are identified, execute surgical fixes, verify (`npm test`), commit, push, and iterate until checks pass green and threads are resolved.
-     5. If feedback is technically invalid or counter-productive, provide explicit refutation with evidence.
-   - When `scmCodeReviewEnabled: false`, skip remote review polling.
-   - Done when: Specification marked completed in index, and if `pushDelivery`/`scmCodeReviewEnabled` are enabled, PR is created and review convergence loop completes per `config.json`.
+8. **PR Preparation, Delivery & Review Convergence**
+   Delegate pull request preparation, pre-PR verification gates, remote publishing, SCM submission, and post-PR review convergence to `sdw-ship-pr`. Pass active run ID, specification slug, and CLI options (`--push`, `--poll-pr`, `--dry-run`).
+   - Run: `node skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs --run-id <runId> --spec <specSlug> [options]`
+   - Done when: `sdw-ship-pr` completes with exit code 0, delivery outcome is recorded in `.sdw/state/{runId}.state.json`, and specification is marked completed in index.
 
 ## References
 
