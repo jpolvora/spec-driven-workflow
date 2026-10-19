@@ -45,7 +45,7 @@ Mandatory repository rules and development guidelines for all AI agents working 
    - This is a deliberate phase policy; the maintainer will update this rule when the project's compatibility behavior changes.
 
 7. **No Unrequested Version Control Writes:**
-   - Never run `git commit`, `git push`, or any other history-writing or remote-publishing operation unless the user explicitly requested it.
+   - Never run `git commit`, `git push`, or any other history-writing or remote-publishing operation unless the user explicitly requested it or if is part of a requirement of workflow running sdw-orch/sdw-implement requests.
    - Staging (`git add`) is permitted only as part of an explicitly requested commit.
    - Leave changes in the working tree and report them; the maintainer decides when and how to commit or push.
 
