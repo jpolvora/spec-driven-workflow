@@ -35,7 +35,7 @@ Orchestrates spec execution from input requirement to delivery commit, automated
    - Done when: All decision gaps are resolved and spec is marked refined.
 
 3. **Decompose into DAG Tasks & Execute Implementation**
-   Analyze complexity and emit DAG execution units. Dispatch subagents in isolated contexts using scoped prompts (or execute the implementation tasks). Run test suites (`npm test`) until all tests pass.
+   Analyze complexity and emit DAG execution units. Subagents must adhere to `sdw-rules` simplicity first and surgical diff directives (minimum code to satisfy ACs). Run test suites (`npm test`) until all tests pass.
    - Done when: DAG tasks are generated, implementation code is written, and tests pass.
 
 4. **Evaluate Conformance Score & Review**

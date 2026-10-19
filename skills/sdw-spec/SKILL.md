@@ -36,7 +36,7 @@ Specification lifecycle, authoring, synchronization, and formatting manager inte
    - Done when: `index.specs.md` exists and lists all current specifications with accurate lifecycle statuses.
 
 2. **Author or Import New Specification**
-   Create a new specification with an autoincremented 3-digit prefix (`NNN`) from free-text or remote SCM issue.
+   Create a new specification with an autoincremented 3-digit prefix (`NNN`) from free-text or remote SCM issue. When formulating or editing specifications, apply `sdw-rules` for scope enclosure; never infer unprompted features without a user-gate.
    - Run: `node skills/sdw-spec/scripts/sdw_spec.cjs new "<requirements>"` or `node skills/sdw-spec/scripts/sdw_spec.cjs import --provider <github|azure-devops> --id <id>`
    - Done when: Canonical `.sdw/specs/NNN-{slug}.md` file is created and registered with status `pending`.
 

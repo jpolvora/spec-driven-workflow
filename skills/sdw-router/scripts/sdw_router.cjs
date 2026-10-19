@@ -144,6 +144,11 @@ const INTENT_RULES = {
     primaryKeywords: ['orch', 'orchestrator', 'orchestration', 'implement spec', 'specification implementation', 'workflow execution'],
     secondaryKeywords: ['workflow', 'implement', 'implementation', 'resumption', 'run spec', 'resume', 'status', 'dag', 'conformance', 'delivery commit', 'automated review', 'pull request', 'push', 'batch', 'resume-batch', 'multi-spec'],
     recommendedOption: 'Orchestrate end-to-end implementation and delivery using sdw-orch'
+  },
+  'sdw-rules': {
+    primaryKeywords: ['sdw-rules', 'shared rules', 'karpathy', 'simplicity first', 'scope enclosure', 'anti-overengineering'],
+    secondaryKeywords: ['guideline', 'guidelines', 'yagni', 'surgical diff', 'traps log', 'audit-spec', 'log-trap', 'traps.md'],
+    recommendedOption: 'Review behavioral rules, anti-patterns, or log traps using sdw-rules'
   }
 };
 
@@ -222,7 +227,7 @@ function routePrompt(prompt, options) {
     }
   }
 
-  const knownExplicitSkills = ['sdw-config', 'sdw-spec', 'sdw-orch', 'sdw-router'];
+  const knownExplicitSkills = ['sdw-config', 'sdw-spec', 'sdw-orch', 'sdw-router', 'sdw-rules'];
   for (const s of knownExplicitSkills) {
     if (new RegExp(`(?:^|\\s)[/@]?${s}\\b`, 'i').test(lower)) {
       // It was explicitly requested but might be missing on disk
