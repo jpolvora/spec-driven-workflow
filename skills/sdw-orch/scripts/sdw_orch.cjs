@@ -1816,13 +1816,19 @@ function cmdTaskFinish(options) {
     return 1;
   }
 
-  // Load spec to validate AC IDs
+  // Load spec to validate AC IDs (fail closed: unknown-AC detection requires a known AC set)
   let specAcs = [];
-  if (state.specPath && fs.existsSync(state.specPath)) {
+  if (state.specPath) {
     try {
       const specContent = fs.readFileSync(state.specPath, 'utf8');
       specAcs = dagPlanner.parseAcceptanceCriteria(specContent);
-    } catch (e) {}
+    } catch (e) {
+      specAcs = [];
+    }
+  }
+  if (!Array.isArray(specAcs) || specAcs.length === 0) {
+    console.error(`Error: Cannot validate evidence for task "${taskId}": specification at "${state.specPath}" is unreadable or declares no acceptance criteria.`);
+    return 1;
   }
 
   // Validate evidence schema & content (AC8, AC28, AC29)
