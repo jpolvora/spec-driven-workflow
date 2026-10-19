@@ -511,3 +511,22 @@ test('sdw-ship-pr - pre-PR test gate receives verification.timeoutMs', async () 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('sdw-ship-pr - resolveReviewThread does not duplicate the resolution marker', async () => {
+  const executor = (cmd) => {
+    if (cmd.includes('gh api graphql')) {
+      return JSON.stringify({ data: { resolveReviewThread: { thread: { isResolved: true } } } });
+    }
+    return '';
+  };
+  const provider = createScmProvider('github', { executor });
+  const result = await provider.resolveReviewThread({
+    prNumber: 3,
+    threadId: 'PRRT_fake',
+    comment: '<!-- resolution-reply -->\nFixed in the current tree.',
+    model: 'sdw-ship-pr'
+  });
+  assert.strictEqual(result.resolved, true);
+  const count = (result.comment.match(/<!-- resolution-reply -->/g) || []).length;
+  assert.strictEqual(count, 1, 'marker must appear exactly once even when the caller pre-prefixes it');
+});

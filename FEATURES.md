@@ -102,12 +102,12 @@
 
 *End-to-end PR shipping, pre-PR requirement checks, remote publishing, and automated review convergence.*
 
-- **Standalone & Delegated Invocation:** Directly invokable standalone (`node skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs` / `/sdw-ship-pr`) at any time, or delegated by `sdw-orch` Step 8.
+- **Standalone & Delegated Invocation:** Directly invokable standalone (`node skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs` / `/sdw-ship-pr`) with dedicated subcommands (`ship`, `list-threads`, `resolve-thread`, `check-status`), or delegated by `sdw-orch` Step 8.
 - **Pre-PR Quality Verification Gates:** Evaluates `prePrInstructions`, `prePrCommand`, `requiredBuild`, `runAllTests`, and `securityChecksEnabled` from `.sdw/config.json`.
 - **Remote Branch Publishing:** Synchronizes the active branch to remote origin (`pushDelivery: true` or `--push`).
 - **Unified SCM PR Creation & Idempotency:** Agnostically creates or reuses open PRs for GitHub and Azure DevOps, or cleanly bypasses remote submission when `scmProvider: "none"`.
-- **Automated Review Convergence Loop:** Polls CI checks (`checkPrStatus`) and active review threads (`listReviewThreads`) up to the configured iteration ceiling.
-- **Resolution Summary Comment & Thread Close:** For every resolved review issue, posts a technical summary comment describing what changed and why, atomically resolving the thread on the remote SCM provider (GitHub GraphQL mutation or Azure DevOps PATCH).
+- **Cooperative & Proactive Review Convergence:** Enforces a strict 8-step lifecycle (wait review/CI finish → check active threads → fetch all → cooperative defect class fix across sibling files → test verification → commit → push → close related threads).
+- **Push-Before-Resolve Mandate & Resolution Comment Contract:** Guarantees threads are never closed before the fix commit is pushed to the remote tracking branch. Posts a structured resolution reply comment citing the commit SHA, defect class, and fix summary.
 - **Zero-Mutation Dry-Run Simulation:** Simulates pre-PR checks, branch push, PR creation, and review polling without remote mutations when `--dry-run` is active.
 
 ---

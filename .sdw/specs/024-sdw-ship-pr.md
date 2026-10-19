@@ -12,7 +12,9 @@ specDate: 2026-10-19
 
 The delivery and pull request lifecycle in SDW currently resides directly inside `sdw-orch` Step 8. This couples pre-PR verification gates (`prePrCommand`, `prePrInstructions`, `requiredBuild`, `runAllTests`), remote branch publishing (`pushDelivery`), SCM pull request creation/reuse (`createPullRequest`), and post-PR review convergence loops (`scmCodeReviewEnabled`) to the orchestrator state machine. This coupling inflates `sdw-orch` line count and context overhead, complicates environments where no SCM is configured (`scmProvider: "none"`), and prevents consumers from invoking delivery operations standalone outside of a full 8-step orchestrator run.
 
-This specification refactors the PR preparation, delivery submission, and review convergence features into a dedicated, self-contained skill named `sdw-ship-pr`. The new skill operates both as an independent CLI tool (`node skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs` / `/sdw-ship-pr`) callable at any time, and as a delegated execution target consumed by `sdw-orch` Step 8. `sdw-ship-pr` strictly respects all related options in `.sdw/config.json` (`scmProvider`, `pushDelivery`, `scmCodeReviewEnabled`, `requiredBuild`, `runAllTests`, `prePrCommand`, `prePrInstructions`), supporting dry-run execution, decoupled error handling, and structured JSON output.
+This specification refactors the PR preparation, delivery submission, and review convergence features into a dedicated, self-contained skill named `sdw-ship-pr`. The new skill operates both as an independent CLI tool (`node skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs` / `/sdw-ship-pr`) callable at any time with dedicated subcommands (`ship`, `list-threads`, `resolve-thread`, `check-status`), and as a delegated execution target consumed by `sdw-orch` Step 8. `sdw-orch` delegates the entire convergence lifecycle cleanly without embedding duplicated convergence, review, or fix instructions.
+
+Furthermore, `sdw-ship-pr` implements a cooperative and proactive review convergence protocol inspired by `ws-fix-pr` and `COOPERATIVE_FIX.md`. Rather than treating reviewer feedback as isolated line edits, the skill identifies the underlying defect class and sweeps across sibling files in the pull request. It enforces a strict order of operations: wait for code reviews and CI checks to complete, fetch all active threads, apply cooperative fixes, verify tests, commit, push to remote, and only then resolve threads with an informative resolution comment citing the fixing commit SHA and defect class. A strict push-before-resolve invariant guarantees that no thread is closed before its fix is pushed to the remote branch.
 
 ### Design Intent
 
@@ -22,29 +24,47 @@ Preserve lean context budgets and modular separation of concerns. By extracting 
 
 - AC1: The system shall provide a standalone skill `sdw-ship-pr` under `skills/sdw-ship-pr/` conforming to the 3-Tier progressive disclosure standard.
 - AC2: The system shall implement `sdw-ship-pr` with zero external runtime npm dependencies using Node.js 22 standard library only.
-- AC3: The system shall expose CLI commands for `sdw-ship-pr` accepting `--run-id`, `--spec`, `--head`, `--base`, `--title`, `--body`, `--push`, `--poll-pr`, `--dry-run`, and `--json`.
+- AC3: The system shall expose CLI subcommands for `sdw-ship-pr` (`ship`, `list-threads`, `resolve-thread`, `check-status`) accepting `--run-id`, `--spec`, `--head`, `--base`, `--title`, `--body`, `--push`, `--poll-pr`, `--dry-run`, and `--json`.
 - AC4: While executing pre-PR verification, the system shall evaluate `prePrInstructions`, `prePrCommand`, `requiredBuild`, `runAllTests`, and `securityChecksEnabled` from `.sdw/config.json`.
 - AC5: If pre-PR verification gates fail after maximum automated fix attempts, then the system shall halt and return a non-zero exit code with actionable error details.
 - AC6: While `pushDelivery` is true or `--push` is passed, the system shall push the active branch to the remote origin before creating a pull request.
 - AC7: When `scmProvider` is set to `github` or `ado`, the system shall create or reuse an open pull request using the unified SCM provider contract.
 - AC8: While `scmProvider` is set to `none`, the system shall skip remote pull request creation and report local delivery readiness without error.
-- AC9: While `scmCodeReviewEnabled` is true or `--poll-pr` is passed, the system shall execute the post-PR review convergence loop, polling CI status and reviewer comments.
-- AC10: When review comments or failing checks are detected during convergence, the system shall execute surgical fixes, verify tests, commit review fixes, and push updates up to the configured iteration ceiling.
+- AC9: While `scmCodeReviewEnabled` is true or `--poll-pr` is passed, the system shall execute the post-PR review convergence loop, waiting for remote code reviews and CI checks to complete before evaluating active threads.
+- AC10: When active review threads or failing checks are detected during convergence, the system shall fetch all active threads, execute cooperative and proactive fixes across sibling files, verify tests, commit review fixes, and push updates before resolving any threads.
 - AC11: While `--dry-run` is passed, the system shall simulate pre-PR checks, branch pushing, PR creation, and review polling without executing remote mutations or git commits.
-- AC12: While `sdw-orch` Step 8 executes, the orchestrator shall delegate PR delivery by invoking `sdw-ship-pr` with the active run ID and specification parameters.
+- AC12: While `sdw-orch` Step 8 executes, the orchestrator shall delegate PR delivery and review convergence to `sdw-ship-pr` without carrying internal convergence or review instructions.
 - AC13: When `sdw-ship-pr` completes under `sdw-orch`, the orchestrator shall record PR metadata, delivery URL, and ship status into `.sdw/state/{runId}.state.json`.
 - AC14: The system shall update `sdw-router` to discover and route ship, delivery, and PR convergence intents to `sdw-ship-pr`.
 - AC15: The system shall provide automated test coverage validating standalone execution, orchestrator delegation, dry-run simulation, and config-driven skip conditions.
-- AC16: When resolving a review comment or thread during convergence, the system shall post a reply comment summarizing how the issue was resolved and mark the thread or comment resolved on the remote SCM provider.
+- AC16: When resolving a review comment or thread during convergence, the system shall post a resolution reply comment referencing the commit SHA and defect class, and mark the thread resolved on the remote SCM provider only after pushing the fix commit.
 - AC17: The system shall implement `listReviewThreads` and `resolveReviewThread` in the SCM provider contract for both GitHub and Azure DevOps.
+- AC18: When analyzing review feedback, the system shall execute a cooperative and proactive defect class sweep across all files changed in the pull request to resolve identical patterns.
+- AC19: If an active review thread is addressed, then the system shall forbid resolving the thread without first pushing the fixing commit to the remote tracking branch.
+- AC20: If a thread resolution comment is posted, then the system shall reject empty, whitespace-only, or hash-only resolution comments.
+- AC21: Where a thread is resolved via `resolve-thread`, the system shall format the resolution comment with the standard prefix and commit reference.
 
 ## Notes
 
 - Implementation layout:
-  - `skills/sdw-ship-pr/SKILL.md`: Tier-1 skill definition with frontmatter, subcommands, compact state steps, and Done when criteria (≤ 120 lines).
-  - `skills/sdw-ship-pr/references/ship_protocol.md`: Tier-2 reference detailing pre-PR checks, SCM provider interaction, and convergence state transitions.
-  - `skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs`: Tier-3 deterministic execution helper parsing CLI arguments, reading `.sdw/config.json`, running pre-PR gates, creating PRs, and driving review convergence.
+  - `skills/sdw-ship-pr/SKILL.md`: Tier-1 skill definition with frontmatter, subcommands (`ship`, `list-threads`, `resolve-thread`, `check-status`), compact 8-step convergence cycle, and Done when criteria (≤ 120 lines).
+  - `skills/sdw-ship-pr/references/ship_protocol.md`: Tier-2 reference detailing pre-PR checks, cooperative proactive resolution protocol, resolution comment contract, push-before-resolve invariant, and SCM provider convergence transitions.
+  - `skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs`: Tier-3 deterministic execution helper parsing CLI subcommands, reading `.sdw/config.json`, running pre-PR gates, creating PRs, fetching threads, driving review convergence, and resolving threads with structured comments.
+- Cooperative convergence order of operations:
+  1. Wait code-review and CI finish (polling until status settles).
+  2. Query active threads via provider contract.
+  3. If active threads exist: fetch all open threads and comments.
+  4. Cooperative & proactive fix: identify defect class and fix all occurrences across related files.
+  5. Verify: run test suite (`npm test`) to guarantee clean pass.
+  6. Commit: stage surgical fix files and commit.
+  7. Push: push fix commit to remote tracking branch.
+  8. Close related threads with resolution comment citing the commit SHA, defect class, and explanation.
+- Push-before-resolve invariant:
+  - A thread must NEVER be marked resolved before the commit containing the fix is pushed to the remote tracking branch.
+- Resolution comment contract:
+  - Format: `<!-- resolution-reply -->\nResolved review issue: applied fix and verified acceptance criteria.\n\nFixed in commit {commitSha}.\n\nSummary: {summary}.\nDefect class: {defectClass}\nProactive sweep: {proactiveSweep}`.
 - Orchestrator integration:
+  - `skills/sdw-orch/SKILL.md` Step 8 delegates to `sdw-ship-pr` without carrying internal review convergence loops.
   - `skills/sdw-orch/scripts/sdw_orch.cjs` Step 8 invokes `sdw-ship-pr` via command execution (`node skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs --run-id <runId> ...`) or programmatic module call when available.
   - Step 8 updates `state.steps[8]` with `sdw-ship-pr` JSON output (`pullRequest`, `shipStatus`, `pushedBranch`, `reviewConvergence`).
 - Router integration:

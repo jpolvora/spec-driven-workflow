@@ -445,7 +445,8 @@ class GitHubProvider extends ScmProvider {
     }
 
     const note = model ? `${comment}\n\n---\nLLM model: ${model}` : comment;
-    const bodyWithMarker = `<!-- resolution-reply -->\n${note}`;
+    // Idempotent: cmdResolveThread already prefixes the marker, so only add it when absent.
+    const bodyWithMarker = comment.includes('<!-- resolution-reply -->') ? note : `<!-- resolution-reply -->\n${note}`;
 
     try {
       if (threadId && String(threadId).startsWith('PRRT_')) {

@@ -76,15 +76,15 @@ flowchart TD
    - Runs pre-commit secret leak scan (`sdw-security-checks`) when enabled.
    - Creates an atomic, structured delivery git commit (`feat(...)`).
 
-7. **Automated Code Review Loop**
-   - Compares the newly committed code against the base branch commit.
-   - Evaluates project-specific coding standards, architectural invariants, security risks, and regressions.
-   - If warnings or findings are reported, applies targeted surgical fixes and creates updated commits in an iterative loop until all findings are resolved.
+7. **Automated Code Review Loop (Delegated to `sdw-code-review`)**
+   - Dispatches `sdw-code-review` to inspect working-tree and branch diffs against an auto-detected base branch.
+   - Evaluates Karpathy Guidelines, `sdw-rules` simplicity, surgical diff hygiene, and syntax invariants.
+   - Generates an actionable Markdown fix plan (`{slug}-step-7.md`) and applies surgical fixes in an iterative loop.
 
-8. **Pre-PR Quality Gates, PR Preparation & Remote Review Resolution Loop**
-   - Runs opt-in build verification (`requiredBuild`, `buildCommand`) and full test execution pass (`runAllTests`, `testCommand`) with an automated surgical fix loop (up to 3 attempts) and secret leak scanning.
-   - Executes optional project-specific pre-PR commands (`prePrCommand`) and instructions (`prePrInstructions`).
-   - Marks the feature spec as completed, assembles PR metadata, and pushes to remote origin when `--push` is enabled.
+8. **PR Preparation, Delivery & Review Convergence (Delegated to `sdw-ship-pr`)**
+   - Delegates pre-PR verification gates (`requiredBuild`, `runAllTests`, `prePrCommand`, `prePrInstructions`) and delivery publishing to `sdw-ship-pr`.
+   - Executes cooperative and proactive review convergence with push-before-resolve guarantees, posting structured resolution comments before closing threads.
+   - Updates the specification index to `completed` and records PR metadata in the run state.
 
 ---
 
