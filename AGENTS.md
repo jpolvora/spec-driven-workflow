@@ -114,7 +114,6 @@ Instructions and skills specific to the development environment are sourced from
    - The loaded guidelines are mandatory and must be strictly honored and followed throughout the session: surface assumptions explicitly, keep solutions simple, make surgical changes, and define verifiable success criteria.
    - If the file cannot be loaded, report this explicitly to the user; do not silently continue without it.
 
-2. **Autoload spec-memo runtime skills (`@.agents/skills/ws-memo/SKILL.md`, `@.agents/skills/ws-session-tracking/SKILL.md`):**
-   - Load [`@.agents/skills/ws-memo/SKILL.md`](.agents/skills/ws-memo/SKILL.md) and [`@.agents/skills/ws-session-tracking/SKILL.md`](.agents/skills/ws-session-tracking/SKILL.md) at the start of **every session**, after the Karpathy guidelines.
-   - `ws-memo` is the only entry point for vault memory operations; `ws-session-tracking` is the only entry point for prompt and session records. Both use the `spec-memo` MCP server configured in `.ws/config.json`.
-   - If either skill cannot be loaded, report this explicitly; do not silently continue without it.
+2. **Autoload spec-memo runtime skills (`@.agents/skills/ws-memo/SKILL.md`):**
+   - Load [`@.agents/skills/ws-memo/SKILL.md`](.agents/skills/ws-memo/SKILL.md) at the start of **every session**, after the Karpathy guidelines.
+   - `ws-memo` is the only entry point for vault memory operations;
