@@ -4,5 +4,7 @@
   "scoreMin": 8,
   "scmCodeReviewEnabled": false,
   "stateDir": "{projectRoot}/.sdw/state",
-  "autoResolveGaps": true
+  "autoResolveGaps": true,
+  "requiredBuild": false,
+  "runAllTests": false
 }

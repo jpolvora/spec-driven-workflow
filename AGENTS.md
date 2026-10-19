@@ -138,3 +138,7 @@ This repository uses Spec-Driven Workflow for spec management, configuration, an
 ** Never reference files with hardcoded full OS paths. Use always relative paths to the project root.
 ** When dealing with paths and files references, use token paths and resolve correctly.
 
+## 9. Checklist for preparing PR:
+
+** Before submiting a PR, ensure version incremented `package.json`.
+

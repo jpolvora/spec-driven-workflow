@@ -64,7 +64,13 @@ const DEFAULT_CONFIG = {
   scmCodeReviewEnabled: false,
   pushDelivery: false,
   stateDir: '{projectRoot}/.sdw/state',
-  autoResolveGaps: true
+  autoResolveGaps: true,
+  requiredBuild: false,
+  buildCommand: 'npm run build',
+  runAllTests: false,
+  testCommand: 'npm test',
+  prePrCommand: '',
+  prePrInstructions: ''
 };
 
 const DEFAULT_SCHEMA = {
@@ -110,6 +116,36 @@ const DEFAULT_SCHEMA = {
       "type": "boolean",
       "description": "Automatically apply recommended defaults for unhandled grilling gaps when running non-interactively.",
       "default": true
+    },
+    "requiredBuild": {
+      "type": "boolean",
+      "description": "Enforce successful build verification in Step 8 before creating delivery commit or PR.",
+      "default": false
+    },
+    "buildCommand": {
+      "type": "string",
+      "description": "Command to execute for build verification.",
+      "default": "npm run build"
+    },
+    "runAllTests": {
+      "type": "boolean",
+      "description": "Enforce passing all test suites in Step 8 before creating delivery commit or PR.",
+      "default": false
+    },
+    "testCommand": {
+      "type": "string",
+      "description": "Command to execute for test verification pass.",
+      "default": "npm test"
+    },
+    "prePrCommand": {
+      "type": "string",
+      "description": "Optional project-specific shell command to execute before PR preparation (e.g. version bump, lint).",
+      "default": ""
+    },
+    "prePrInstructions": {
+      "type": "string",
+      "description": "Optional project-specific instructions or checklist for agents to verify prior to PR submission.",
+      "default": ""
     }
   },
   "additionalProperties": true
@@ -175,6 +211,48 @@ function validateConfigSchema(config) {
   if ('pushDelivery' in config) {
     if (typeof config.pushDelivery !== 'boolean') {
       errors.push('Property "pushDelivery" must be a boolean.');
+    }
+  }
+
+  // requiredBuild
+  if ('requiredBuild' in config) {
+    if (typeof config.requiredBuild !== 'boolean') {
+      errors.push('Property "requiredBuild" must be a boolean.');
+    }
+  }
+
+  // buildCommand
+  if ('buildCommand' in config) {
+    if (typeof config.buildCommand !== 'string') {
+      errors.push('Property "buildCommand" must be a string.');
+    }
+  }
+
+  // runAllTests
+  if ('runAllTests' in config) {
+    if (typeof config.runAllTests !== 'boolean') {
+      errors.push('Property "runAllTests" must be a boolean.');
+    }
+  }
+
+  // testCommand
+  if ('testCommand' in config) {
+    if (typeof config.testCommand !== 'string') {
+      errors.push('Property "testCommand" must be a string.');
+    }
+  }
+
+  // prePrCommand
+  if ('prePrCommand' in config) {
+    if (typeof config.prePrCommand !== 'string') {
+      errors.push('Property "prePrCommand" must be a string.');
+    }
+  }
+
+  // prePrInstructions
+  if ('prePrInstructions' in config) {
+    if (typeof config.prePrInstructions !== 'string') {
+      errors.push('Property "prePrInstructions" must be a string.');
     }
   }
 

@@ -41,6 +41,36 @@
       "type": "boolean",
       "description": "Automatically apply recommended defaults for unhandled grilling gaps when running non-interactively.",
       "default": true
+    },
+    "requiredBuild": {
+      "type": "boolean",
+      "description": "Enforce successful build verification in Step 8 before creating delivery commit or PR.",
+      "default": false
+    },
+    "buildCommand": {
+      "type": "string",
+      "description": "Command to execute for build verification.",
+      "default": "npm run build"
+    },
+    "runAllTests": {
+      "type": "boolean",
+      "description": "Enforce passing all test suites in Step 8 before creating delivery commit or PR.",
+      "default": false
+    },
+    "testCommand": {
+      "type": "string",
+      "description": "Command to execute for test verification pass.",
+      "default": "npm test"
+    },
+    "prePrCommand": {
+      "type": "string",
+      "description": "Optional project-specific shell command to execute before PR preparation (e.g. version bump, lint).",
+      "default": ""
+    },
+    "prePrInstructions": {
+      "type": "string",
+      "description": "Optional project-specific instructions or checklist for agents to verify prior to PR submission.",
+      "default": ""
     }
   },
   "additionalProperties": true
