@@ -99,7 +99,7 @@ The user requested native multi-specification orchestration:
 - Subagent context fencing: each queue item is dispatched as an independent subagent or process execution, preventing token exhaustion and cross-task context contamination.
 - State directory resolution: reads `stateDir` from `.sdw/config.json`, falling back to `{projectRoot}/.sdw/state`.
 - All automation scripts must be implemented in Node.js 22 CommonJS (`.cjs`) using standard library modules only (`fs`, `path`, `process`, `child_process`).
-- Rename Compatibility (spec 004): batch execution targets the canonical `skills/sdw-orch/scripts/sdw_orch.cjs`; when 004 is not yet implemented it targets `skills/sdw-implement/scripts/sdw_implement.cjs`, and the legacy shim must forward `run`, `resume` and `resume-batch` unchanged.
+- Orchestrator Path (spec 004): batch execution targets the canonical `skills/sdw-orch/scripts/sdw_orch.cjs`; no wrapper for the removed `sdw-implement` path is maintained.
 - Side-Effect-Free Dry Run: `--dry-run` validates and prints the batch plan only; it must not create branches, worktrees, commits, or `in_progress` batch manifests.
 - Branch & Worktree Interaction (spec 010): when `useFeatureBranches` or `useWorktrees` are enabled, each queued item executes on its own feature branch with per-task worktrees; the pre-flight clean-tree check applies between items and the active branch is recorded per queue entry.
 

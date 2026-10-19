@@ -10,6 +10,7 @@ Mandatory repository rules and development guidelines for all AI agents working 
 - **Core Philosophy:** Modern LLM architectures possess high reasoning and planning capabilities. Excessive prompt instructions and repetitive sediment are eliminated to minimize token consumption, reduce context window overhead, and dramatically accelerate execution speed.
 - **Agent Agnostic (First-Class Feature):** The entire project, all skills, and tooling are strictly **agent-agnostic** and **harness-agnostic**. It is a mandatory, first-class requirement that no component creates dependencies on specific harnesses, proprietary vendors, or specific IDE implementations. Everything must be designed and implemented to ensure wide compatibility with most agents and harnesses.
 - **Predictability & Determinism:** Workflows are orchestrated through clear state machines, empirical exit criteria (`Done when:`), and deterministic Node.js helper scripts instead of stochastic prompt guidelines.
+- **No Backward Compatibility (Current Phase):** Breaking changes are allowed and encouraged when adding or updating specifications, skills, and tooling. Do not preserve compatibility: remove legacy paths instead of shimming them. Compatibility requirements produce excessive, unnecessary instructions and sediment; keep the project concise, small, and optimized.
 
 ---
 
@@ -37,6 +38,16 @@ Mandatory repository rules and development guidelines for all AI agents working 
    - Do not create dependencies on specific harnesses, proprietary agent runtimes, specific vendors, or particular IDE implementations.
    - Rely strictly on universal primitives: portable filesystem operations, standard CLI execution (Node.js 22 built-ins), standard Markdown/YAML/JSON formats, and portable stdin/stdout/file-based interaction.
    - Always ensure broad compatibility across diverse agents and harnesses (e.g., Claude Code, Cursor, Codex/Copilot, Antigravity, OpenCode, Windsurf, or generic CLI harnesses).
+
+6. **Breaking Changes Encouraged (Current Phase):**
+   - When adding or updating specifications, skills, or tooling, do not preserve backward compatibility; replace and remove legacy paths rather than wrapping or shimming them.
+   - Do not author compatibility shims, deprecation wrappers, migration layers, or dual-support branches for superseded behavior.
+   - This is a deliberate phase policy; the maintainer will update this rule when the project's compatibility behavior changes.
+
+7. **No Unrequested Version Control Writes:**
+   - Never run `git commit`, `git push`, or any other history-writing or remote-publishing operation unless the user explicitly requested it.
+   - Staging (`git add`) is permitted only as part of an explicitly requested commit.
+   - Leave changes in the working tree and report them; the maintainer decides when and how to commit or push.
 
 ---
 

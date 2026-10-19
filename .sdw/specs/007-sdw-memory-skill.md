@@ -139,7 +139,7 @@ The specification originated from the user requirement:
 |----------------|-------------|---------------------|
 | Workspace configuration | Baseline `.sdw/config.json` is initialized and valid | Run `node skills/sdw-config/scripts/sdw_config.cjs check` |
 | Specification validation | Specification passes authoring mode validation | Run `node skills/sdw-spec/scripts/validate_spec.cjs --mode=authoring .sdw/specs/007-sdw-memory-skill.md` |
-| Orchestrator baseline | Orchestrator skill structure is present in repository | Verify orchestrator scripts in `skills/sdw-orch/` (canonical after spec 004) or the `skills/sdw-implement/` legacy shim |
+| Orchestrator baseline | Orchestrator skill structure is present in repository | Verify orchestrator scripts in `skills/sdw-orch/` (canonical after spec 004) |
 | Skill layout compliance | Skill architecture adheres to standard 3-tier structure | Validate planned paths under `skills/sdw-memory/` |
 | Node runtime compatibility | Environment provides Node.js 22 or higher | Run `node -v` check |
 

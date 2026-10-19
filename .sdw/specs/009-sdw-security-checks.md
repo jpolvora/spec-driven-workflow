@@ -10,7 +10,7 @@ specDate: 2026-10-19
 
 ## Description
 
-The SDW orchestrator creates git commits at two points in its state machine: the delivery commit (step 6) and the review-fix commit (step 7) inside `skills/sdw-implement/scripts/sdw_implement.cjs`. Today neither path performs any secret, credential, or PII inspection, so a leak can be committed into history before the code review step ever runs.
+The SDW orchestrator creates git commits at two points in its state machine: the delivery commit (step 6) and the review-fix commit (step 7) inside the orchestrator script (canonical path `skills/sdw-orch/scripts/sdw_orch.cjs`, renamed by spec 004). Today neither path performs any secret, credential, or PII inspection, so a leak can be committed into history before the code review step ever runs.
 
 This specification introduces `skills/sdw-security-checks/`, a new first-class SDW skill ported from the global user skill `ws-secrets-leak-review` (`$HOME/.agents/skills/ws-secrets-leak-review`). The port preserves the leak-audit methodology — high/medium/low confidence model, secret pattern catalog, sensitive file inventory, `.gitignore` advisories, and `allowlist secret` false-positive pragma — while conforming to SDW standards: three-tier progressive disclosure and Node.js 22 standard library only, with no external binary dependency such as ripgrep.
 
@@ -74,14 +74,14 @@ The specification originated from the user request to promote the global leak-re
   - `.sdw/config.schema.json`: add the `securityChecksEnabled` property with `"type": "boolean"` and `"default": false`.
   - `skills/sdw-config/references/config_spec.md`: add the property row to the supported properties table and default configuration baseline.
   - `.sdw/config.json` template: key stays omitted or explicit `false`; enabling is a consumer opt-in.
-- Orchestrator Integration (`skills/sdw-implement/scripts/sdw_implement.cjs`):
+- Orchestrator Integration (`skills/sdw-orch/scripts/sdw_orch.cjs`, canonical after spec 004):
   - `loadProjectConfig` fallback object gains `securityChecksEnabled: false`.
   - Step 6 (delivery commit): when enabled, invoke `node skills/sdw-security-checks/scripts/sdw_security_checks.cjs scan --staged --json` and abort before `git add -A` on exit code `1` or `2`.
   - Step 7 (review-fix commit): same gate applied before the automated fix commit.
   - New CLI flag `--skip-security`; when used, the run state records `securityGate: { bypassed: true, reason: "--skip-security" }`.
   - Step 6/7 state output records the structured scan summary (`severityCounts`, `findings`, `exitCode`).
-- Cross-Skill References: `skills/sdw-implement/SKILL.md` cites the gate in step 4 of its workflow description; the future `sdw-router` skill routes secret-audit requests to `sdw-security-checks`.
-- Rename Compatibility (spec 004): when 004 is implemented, the gate applies to the canonical `skills/sdw-orch/scripts/sdw_orch.cjs`; the legacy `sdw_implement.cjs` shim must forward `--skip-security` and gate behavior unchanged.
+- Cross-Skill References: `skills/sdw-orch/SKILL.md` cites the gate in step 4 of its workflow description; the future `sdw-router` skill routes secret-audit requests to `sdw-security-checks`.
+- No Compatibility Shim (AGENTS.md rule 6): the rename removes the `sdw-implement` path entirely; `--skip-security` exists only on the canonical orchestrator script.
 - Branch & Worktree Interaction (spec 010): the gate inspects the staged content of the primary working tree after worktree integration; no additional behavior is required.
 - Portability & Packaging: included under `skills/` so it is discoverable and installable via `npx skills add <repo> --skill sdw-security-checks`.
 

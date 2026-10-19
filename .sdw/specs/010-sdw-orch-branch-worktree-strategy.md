@@ -10,7 +10,7 @@ specDate: 2026-10-19
 
 ## Description
 
-Today the `sdw-implement` orchestrator always operates directly on whatever branch the user has checked out, inside the primary working tree. Run state captures `baseCommit` only (`state_manager.cjs`), DAG tasks are dispatched as context-fenced prompts against the primary tree, conformance scoring and code review read diffs from the primary tree, and step 8 assembles a PR payload without any head/base branch information.
+Today the orchestrator (`sdw-implement`, renamed to `sdw-orch` by spec 004) always operates directly on whatever branch the user has checked out, inside the primary working tree. Run state captures `baseCommit` only (`state_manager.cjs`), DAG tasks are dispatched as context-fenced prompts against the primary tree, conformance scoring and code review read diffs from the primary tree, and step 8 assembles a PR payload without any head/base branch information.
 
 This specification adds two optional, runtime-resolved configuration properties to `.sdw/config.json`:
 
@@ -51,7 +51,7 @@ Keep the default behavior bit-for-bit identical to today: both keys default to `
 - AC20: When worktree creation is pending, the system shall verify git availability, repository initialization, and destination writability before proceeding.
 - AC21: Where `--no-worktrees` or `--no-feature-branch` is passed at runtime, the system shall override the corresponding configuration value for that run and record the override.
 - AC22: When the `status` subcommand executes, the system shall display the active branch and registered worktrees for the run.
-- AC23: The system shall document the branch and worktree behavior in `skills/sdw-implement/SKILL.md` and the orchestrator protocol reference.
+- AC23: The system shall document the branch and worktree behavior in `skills/sdw-orch/SKILL.md` and the orchestrator protocol reference.
 
 ## Original Issue Context
 
@@ -92,7 +92,7 @@ The specification originated from the user request to extend the orchestrator wi
 - Ordering Constraint: worktree integration completes within step 4; steps 5 (scoring), 6 (delivery commit), and 7 (review) continue to read the primary working tree, so no scoring or review logic changes are required.
 - Status Reporting (`cmdStatus`): print `Branch:`, `Base Branch:`, and a `Worktrees:` section listing task id, path, and status; JSON mode includes the same fields through the state file.
 - Directory Structure: `.sdw/worktrees/` joins the documented `.sdw/` layout as an ephemeral, ignored directory; run-scoped subdirectories (`{runId}/`) are removed by the workflow after successful integration.
-- Rename Compatibility (spec 004): when 004 is implemented, apply the branch and worktree logic to the canonical `skills/sdw-orch/scripts/sdw_orch.cjs`; the legacy shim must forward `--no-worktrees` and `--no-feature-branch` unchanged.
+- No Compatibility Shim (AGENTS.md rule 6): after spec 004 the logic lives only in `skills/sdw-orch/scripts/sdw_orch.cjs`; the removed `sdw-implement` path forwards nothing.
 - Batch Interaction (spec 005): each queued item activates its own feature branch; `--dry-run` must not create branches, worktrees, or commits; the active branch is recorded per queue entry in the batch manifest.
 
 ## Out of Scope
