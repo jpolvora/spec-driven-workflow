@@ -189,21 +189,25 @@ function cmdRun(options) {
     console.log(`  Verified ACs: ${scoreReport.verifiedCount}/${scoreReport.totalAcs}`);
     console.log(`  Failing ACs:  ${scoreReport.failingCount}/${scoreReport.totalAcs}`);
 
-    state.score = scoreReport.score;
-    state.scoreIteration = (state.scoreIteration || 0) + 1;
-
     if (!scoreReport.passed) {
       console.error(`[Step 5: Conformance Scoring] Conformance score below threshold (${scoreReport.score} < ${options.minScore}). Triggering re-implementation feedback loop.`);
       state = stateManager.updateStepState(targetRoot, state.runId, 5, 'reimplementation_needed', scoreReport);
+      state.score = scoreReport.score;
+      state.scoreIteration = (state.scoreIteration || 0) + 1;
       state.status = 'failed';
       stateManager.saveRunState(targetRoot, state);
       return 2; // Exit code 2 indicates score failure / re-implementation needed
     }
 
     state = stateManager.updateStepState(targetRoot, state.runId, 5, 'completed', scoreReport);
+    state.score = scoreReport.score;
+    state.scoreIteration = (state.scoreIteration || 0) + 1;
     state = stateManager.saveRunState(targetRoot, state);
-  } else if (state.steps[5].output) {
+  } else if (state.steps[5] && state.steps[5].output) {
     scoreReport = state.steps[5].output;
+    if (state.score === null && scoreReport.score !== undefined) {
+      state.score = scoreReport.score;
+    }
   }
 
   // Step 6: Delivery Commit (AC11)
@@ -361,7 +365,8 @@ function cmdStatus(options) {
     console.log(`Specification:${state.specPath}`);
     console.log(`Status:       ${state.status}`);
     console.log(`Current Step: ${state.currentStep} / ${state.totalSteps}`);
-    console.log(`Score:        ${state.score !== null ? `${state.score}/10` : 'N/A'}`);
+    const displayScore = state.score !== null ? `${state.score}/10` : (state.steps[5] && state.steps[5].output && state.steps[5].output.score !== undefined ? `${state.steps[5].output.score}/10` : 'N/A');
+    console.log(`Score:        ${displayScore}`);
     console.log('\nSteps Overview:');
     for (const [sNum, sObj] of Object.entries(state.steps)) {
       console.log(`  Step ${sNum} [${sObj.name}]: ${sObj.status.toUpperCase()}`);
