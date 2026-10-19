@@ -33,17 +33,17 @@ Orchestrates spec execution from input requirement to delivery commit, automated
    Walk decision tree paths for input bounds, failure recovery, and concurrency. If unresolvable gaps remain, query the user via `ask_question` with options and a recommended default.
    - Done when: All decision gaps are resolved and spec is marked refined.
 
-3. **Decompose into DAG Tasks & Dispatch Subagents**
-   Analyze complexity and emit DAG execution units. Dispatch subagents in isolated contexts using scoped prompts rather than cumulative chat history.
-   - Done when: DAG tasks are generated and implementation outputs are received.
+3. **Decompose into DAG Tasks & Execute Implementation**
+   Analyze complexity and emit DAG execution units. Dispatch subagents in isolated contexts using scoped prompts (or execute the implementation tasks). Run test suites (`npm test`) until all tests pass.
+   - Done when: DAG tasks are generated, implementation code is written, and tests pass.
 
 4. **Evaluate Conformance Score & Review**
    Compute conformance score (0-10) against touched files. If score < threshold (default 8/10), loop back with error feedback. Once passing, stage and commit the delivery code, then execute automated code review against `baseCommit`.
    - Done when: Conformance score meets threshold and code review findings are resolved.
 
-5. **Prepare PR & Complete Lifecycle**
-   Package pull request metadata, associate work items, mark specification completed, and optionally poll for remote review comments.
-   - Done when: Specification is marked completed and PR artifacts are prepared.
+5. **Deliver Commit & Remote Push**
+   Execute `node skills/sdw-orch/scripts/sdw_orch.cjs run <specPath> --push` to create the delivery git commit, package pull request metadata, mark specification completed in `index.specs.md`, and push the active branch to remote origin.
+   - Done when: Specification is marked completed in index, delivery commit exists on git log, and changes are pushed to remote origin.
 
 ## References
 

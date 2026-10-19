@@ -44,10 +44,9 @@ Mandatory repository rules and development guidelines for all AI agents working 
    - Do not author compatibility shims, deprecation wrappers, migration layers, or dual-support branches for superseded behavior.
    - This is a deliberate phase policy; the maintainer will update this rule when the project's compatibility behavior changes.
 
-7. **No Unrequested Version Control Writes:**
-   - Never run `git commit`, `git push`, or any other history-writing or remote-publishing operation unless the user explicitly requested it or if is part of a requirement of workflow running sdw-orch requests.
-   - Staging (`git add`) is permitted only as part of an explicitly requested commit.
-   - Leave changes in the working tree and report them; the maintainer decides when and how to commit or push.
+7. **Version Control Execution Protocol:**
+   - **SDW Orchestrator Workflows (`sdw-orch`):** When executing an orchestrator workflow (`sdw-orch`), creating the delivery commit in Step 6 and pushing changes to the active remote branch in Step 8 (or via `--push`) is **mandatory and pre-authorized** as an integral part of the delivery lifecycle.
+   - **Standalone / Ad-Hoc Agent Requests:** For ad-hoc queries, explorations, and isolated refactorings outside of `sdw-orch`, never run `git commit` or `git push` unless the user explicitly requested it in their prompt; leave changes in the working tree and report them.
 
 ---
 
@@ -103,3 +102,19 @@ Specifications in `.sdw/specs/` must conform to the canonical SDW specification 
 - **Run State Isolation:** Workflow state for an active run is maintained in `.sdw/state/{runId}.state.json`. Never pollute shared configuration or global directories with ephemeral session state.
 - **Subagent Context Fencing:** When orchestrators dispatch subagents (e.g. implementation units), provide only the necessary task slice and reference context rather than raw cumulative transcripts.
 - **User Clarification Gate:** When ambiguous branch paths or decision gaps are detected during grilling, present explicit options with a recommended default (using host question prompt mechanisms like `ask_question` where supported, or structured interactive chat prompts).
+
+---
+
+## 6. Development Environment — Instruction & Skill Loading
+
+Instructions and skills specific to the development environment are sourced from [`.agents/skills/`](.agents/skills/) and loaded per the rules below.
+
+1. **Autoload Karpathy Guidelines (`@.agents/skills/karpathy-guidelines/SKILL.md`):**
+   - Load [`@.agents/skills/karpathy-guidelines/SKILL.md`](.agents/skills/karpathy-guidelines/SKILL.md) at the start of **every session** in this repository, before any coding, review, or refactoring work.
+   - The loaded guidelines are mandatory and must be strictly honored and followed throughout the session: surface assumptions explicitly, keep solutions simple, make surgical changes, and define verifiable success criteria.
+   - If the file cannot be loaded, report this explicitly to the user; do not silently continue without it.
+
+2. **Autoload spec-memo runtime skills (`@.agents/skills/ws-memo/SKILL.md`, `@.agents/skills/ws-session-tracking/SKILL.md`):**
+   - Load [`@.agents/skills/ws-memo/SKILL.md`](.agents/skills/ws-memo/SKILL.md) and [`@.agents/skills/ws-session-tracking/SKILL.md`](.agents/skills/ws-session-tracking/SKILL.md) at the start of **every session**, after the Karpathy guidelines.
+   - `ws-memo` is the only entry point for vault memory operations; `ws-session-tracking` is the only entry point for prompt and session records. Both use the `spec-memo` MCP server configured in `.ws/config.json`.
+   - If either skill cannot be loaded, report this explicitly; do not silently continue without it.

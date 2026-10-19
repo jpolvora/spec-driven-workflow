@@ -357,3 +357,35 @@ slug: legacy-feature
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('Remote Push & Branch Publishing Lifecycle (--push)', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-push-test-'));
+  try {
+    const specDir = path.join(tmpDir, '.sdw', 'specs');
+    fs.mkdirSync(specDir, { recursive: true });
+    const specPath = path.join(specDir, 'push-feature.md');
+    fs.writeFileSync(specPath, `---
+slug: push-feature
+---
+# Push Feature
+## Acceptance Criteria
+- AC1: The orchestrator shall test remote branch push execution.
+`);
+
+    // Execute run with --push when no remote is configured (handles local safely)
+    const exitCode = sdwOrch.cmdRun({
+      root: tmpDir,
+      specPath: '.sdw/specs/push-feature.md',
+      push: true,
+      minScore: 0,
+      skipReview: true,
+      skipPr: false
+    });
+
+    assert.equal(exitCode, 0, 'Cleanly finishes run with --push flag without unhandled exceptions');
+    const state = stateManager.findLatestRunState(tmpDir);
+    assert.equal(state.status, 'completed', 'Run marked completed');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

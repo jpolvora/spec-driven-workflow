@@ -30,6 +30,7 @@ function parseArgs(args) {
     skipReview: false,
     skipPr: false,
     pollPr: undefined,
+    push: false,
     abortOnGaps: false,
     simulateFailure: false,
     force: false,
@@ -46,6 +47,7 @@ function parseArgs(args) {
     else if (arg === '--skip-review') result.skipReview = true;
     else if (arg === '--skip-pr') result.skipPr = true;
     else if (arg === '--poll-pr') result.pollPr = true;
+    else if (arg === '--push') result.push = true;
     else if (arg === '--abort-on-gaps') result.abortOnGaps = true;
     else if (arg === '--simulate-failure') result.simulateFailure = true;
     else if (arg === '--force') result.force = true;
@@ -97,6 +99,7 @@ function loadProjectConfig(targetRoot) {
         specsDir: path.join(root, '.sdw', 'specs').replace(/\\/g, '/'),
         scoreMin: 8,
         scmCodeReviewEnabled: false,
+        pushDelivery: false,
         stateDir: path.join(root, '.sdw', 'state').replace(/\\/g, '/'),
         ...resolved
       };
@@ -107,6 +110,7 @@ function loadProjectConfig(targetRoot) {
     specsDir: path.join(root, '.sdw', 'specs').replace(/\\/g, '/'),
     scoreMin: 8,
     scmCodeReviewEnabled: false,
+    pushDelivery: false,
     stateDir: path.join(root, '.sdw', 'state').replace(/\\/g, '/'),
     autoResolveGaps: false
   };
@@ -409,6 +413,26 @@ function cmdRun(options) {
     state = stateManager.updateStepState(targetRoot, state.runId, 8, 'skipped', { reason: 'Skipped via --skip-pr' });
   }
 
+  // Remote Push / Branch Publishing (--push or config.pushDelivery)
+  const shouldPush = options.push !== undefined ? options.push : (config && config.pushDelivery);
+  if (shouldPush) {
+    try {
+      const remotes = execSync('git remote', { cwd: targetRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+      const currentBranch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: targetRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+      if (remotes && currentBranch && currentBranch !== 'HEAD') {
+        console.log(`[sdw-orch] Pushing delivery branch to origin/${currentBranch}...`);
+        execSync(`git push origin ${currentBranch}`, { cwd: targetRoot, stdio: 'inherit' });
+        state.pushedBranch = currentBranch;
+      } else if (!remotes) {
+        console.log(`[sdw-orch] Remote push skipped: no git remote configured.`);
+      }
+    } catch (pushErr) {
+      console.error(`[sdw-orch] Warning: git push failed: ${pushErr.message}`);
+      if (!state.errors) state.errors = [];
+      state.errors.push({ step: 8, timestamp: new Date().toISOString(), error: `git push failed: ${pushErr.message}` });
+    }
+  }
+
   state.status = 'completed';
   state.currentStep = 8;
   state = stateManager.saveRunState(targetRoot, state);
@@ -515,6 +539,7 @@ Options:
   --abort-on-gaps     Halt at grilling gate if decision gaps are detected
   --simulate-failure  Simulate subagent unrecoverable failure for testing
   --latest            (status/resume) Target the most recent run state
+  --push              Push active branch and delivery commit to remote origin
   --skip-review       Skip code review step
   --skip-pr           Skip pull request preparation step
   --force             Override quality gates or allow execution on archived specs

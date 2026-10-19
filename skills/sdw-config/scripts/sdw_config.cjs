@@ -62,6 +62,7 @@ const DEFAULT_CONFIG = {
   specsDir: '{projectRoot}/.sdw/specs',
   scoreMin: 8,
   scmCodeReviewEnabled: false,
+  pushDelivery: false,
   stateDir: '{projectRoot}/.sdw/state',
   autoResolveGaps: true
 };
@@ -93,6 +94,11 @@ const DEFAULT_SCHEMA = {
     "scmCodeReviewEnabled": {
       "type": "boolean",
       "description": "Enable remote pull request review polling loop and automated review comment resolution.",
+      "default": false
+    },
+    "pushDelivery": {
+      "type": "boolean",
+      "description": "Automatically push the delivery commit and branch to remote origin upon workflow completion.",
       "default": false
     },
     "stateDir": {
@@ -162,6 +168,13 @@ function validateConfigSchema(config) {
   if ('autoResolveGaps' in config) {
     if (typeof config.autoResolveGaps !== 'boolean') {
       errors.push('Property "autoResolveGaps" must be a boolean.');
+    }
+  }
+
+  // pushDelivery
+  if ('pushDelivery' in config) {
+    if (typeof config.pushDelivery !== 'boolean') {
+      errors.push('Property "pushDelivery" must be a boolean.');
     }
   }
 

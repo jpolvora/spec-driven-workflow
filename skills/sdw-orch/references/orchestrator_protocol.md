@@ -48,4 +48,4 @@ Each execution session is completely isolated within a dedicated JSON state file
 5. **Conformance Scoring:** Compares diffs against AC requirements. If score < threshold (default 8/10), attaches feedback and triggers re-implementation loop.
 6. **Delivery Commit:** Creates an atomic, structured git commit for verified code.
 7. **Automated Code Review:** Compares current branch changes to `baseCommit`, verifying rule invariants and clean syntax in an iterative loop.
-8. **PR Preparation:** Assembles pull request metadata, marks the spec completed, and provides PR review resolution polling.
+8. **PR Preparation & Remote Push:** Assembles pull request metadata, marks the spec completed, pushes the active branch to remote origin (when `--push` or `pushDelivery` enabled), and provides PR review resolution polling.

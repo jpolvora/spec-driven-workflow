@@ -16,17 +16,6 @@ yarn-error.log*
 .sdw/state/*
 !.sdw/state/.gitkeep
 
-# spec-memo local session state
-.spec-memo/
-
-# Local agent caches & scratch
-.agents/
-.gemini/
-.cursor/
-.claude/
-scratch/
-*.tmp
-*.bak
 
 # Testing & Coverage
 coverage/
@@ -41,3 +30,7 @@ Desktop.ini
 .idea/
 *.sublime-project
 *.sublime-workspace
+
+# spec-memo runtime state & workflow-skills harness config (never commit)
+.spec-memo/
+.ws/

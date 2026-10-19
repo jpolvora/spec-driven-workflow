@@ -58,6 +58,11 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
       "description": "Enable remote pull request review polling loop and automated review comment resolution.",
       "default": false
     },
+    "pushDelivery": {
+      "type": "boolean",
+      "description": "Automatically push the delivery commit and branch to remote origin upon workflow completion.",
+      "default": false
+    },
     "stateDir": {
       "type": "string",
       "description": "Path to the directory storing run session state files. Supports token {projectRoot}.",
@@ -81,6 +86,7 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
 | `specsDir` | `string` | `"{projectRoot}/.sdw/specs"` | Path to specifications directory (supports `{projectRoot}`) |
 | `scoreMin` | `integer` | `8` | Minimum acceptable conformance score (range: 0–10) |
 | `scmCodeReviewEnabled` | `boolean` | `false` | Whether remote PR comment polling and automated fix resolution loop is active |
+| `pushDelivery` | `boolean` | `false` | Whether to automatically push delivery commits to remote origin |
 | `stateDir` | `string` | `"{projectRoot}/.sdw/state"` | Path to isolated execution run state directory (supports `{projectRoot}`) |
 | `autoResolveGaps` | `boolean` | `true` | Whether to auto-apply recommended grilling defaults when non-interactive |
 
@@ -96,6 +102,7 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
   "specsDir": "{projectRoot}/.sdw/specs",
   "scoreMin": 8,
   "scmCodeReviewEnabled": false,
+  "pushDelivery": false,
   "stateDir": "{projectRoot}/.sdw/state",
   "autoResolveGaps": true
 }

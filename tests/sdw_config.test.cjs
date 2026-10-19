@@ -163,3 +163,29 @@ slug: feature
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('sdw-config: validates pushDelivery boolean setting', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-pushcfg-test-'));
+  try {
+    sdwConfig.cmdInit({ root: tmpDir });
+    const cfgPath = path.join(tmpDir, '.sdw', 'config.json');
+
+    // Valid boolean
+    fs.writeFileSync(cfgPath, JSON.stringify({
+      specsDir: '{projectRoot}/.sdw/specs',
+      pushDelivery: true
+    }, null, 2), 'utf8');
+    const validCheck = sdwConfig.cmdCheck({ root: tmpDir });
+    assert.equal(validCheck, 0, 'Accepts boolean pushDelivery');
+
+    // Invalid non-boolean
+    fs.writeFileSync(cfgPath, JSON.stringify({
+      specsDir: '{projectRoot}/.sdw/specs',
+      pushDelivery: 'invalid-string'
+    }, null, 2), 'utf8');
+    const invalidCheck = sdwConfig.cmdCheck({ root: tmpDir });
+    assert.equal(invalidCheck, 1, 'Rejects non-boolean pushDelivery');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

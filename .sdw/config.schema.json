@@ -27,6 +27,11 @@
       "description": "Enable remote pull request review polling loop and automated review comment resolution.",
       "default": false
     },
+    "pushDelivery": {
+      "type": "boolean",
+      "description": "Automatically push the delivery commit and branch to remote origin upon workflow completion.",
+      "default": false
+    },
     "stateDir": {
       "type": "string",
       "description": "Path to the directory storing run session state files. Supports token {projectRoot}.",
