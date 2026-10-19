@@ -275,8 +275,22 @@ class GitHubProvider extends ScmProvider {
           return { name: parts[0] || 'check', state: parts[1] || 'unknown', bucket: parts[1] || 'unknown' };
         });
       }
-      const pendingCount = checks.filter(c => c.state === 'pending' || c.bucket === 'pending' || c.state === 'in_progress').length;
-      const failedCount = checks.filter(c => c.state === 'fail' || c.bucket === 'fail' || c.state === 'failure').length;
+      const pendingStates = new Set(['pending', 'in_progress', 'queued', 'waiting']);
+      const failedStates = new Set([
+        'fail',
+        'failure',
+        'cancelled',
+        'cancel',
+        'timed_out',
+        'action_required',
+        'startup_failure'
+      ]);
+      const checkState = c => String(c.state || '').toLowerCase();
+      const checkBucket = c => String(c.bucket || '').toLowerCase();
+
+      const pendingCount = checks.filter(c => pendingStates.has(checkState(c)) || pendingStates.has(checkBucket(c))).length;
+      // A cancelled check is not a passing check: count it as failed so allPassed cannot become true.
+      const failedCount = checks.filter(c => failedStates.has(checkState(c)) || failedStates.has(checkBucket(c))).length;
       const allPassed = checks.length > 0 && pendingCount === 0 && failedCount === 0;
 
       return {
@@ -599,10 +613,11 @@ class AzureDevOpsProvider extends ScmProvider {
       const cleanTitle = title.replace(/["`$\\]/g, '\\$&');
       let descArg = '';
       if (body) {
-        const tmpDir = os.tmpdir();
-        tempBodyFile = path.join(tmpDir, `sdw-ado-pr-body-${Date.now()}-${Math.random().toString(36).slice(2)}.md`);
-        fs.writeFileSync(tempBodyFile, body, 'utf8');
-        descArg = `--description "@${tempBodyFile.replace(/\\/g, '/')}"`;
+        // `az repos pr create --description` takes literal values and does not expand `@file`.
+        // Pass each body line as its own quoted argument; Azure CLI joins them with newlines.
+        const quoteArg = value => `"${String(value).replace(/(["\\$`])/g, '\\$1')}"`;
+        const bodyLines = String(body).split(/\r?\n/);
+        descArg = `--description ${bodyLines.map(quoteArg).join(' ')}`;
       }
       const validWorkItems = Array.isArray(workItems)
         ? workItems.map(id => String(id).trim()).filter(id => /^\d+$/.test(id))

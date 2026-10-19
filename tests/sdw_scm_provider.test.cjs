@@ -626,3 +626,45 @@ test('sdw-scm-provider - fetchWorkItem rejects non-numeric IDs for shell safety'
 
 
 
+
+test('sdw-scm-provider - cancelled checks are not treated as passing', async () => {
+  const provider = createScmProvider('github', {
+    executor: (cmd) => {
+      if (cmd.includes('gh pr checks')) {
+        return JSON.stringify([
+          { name: 'ci/build', state: 'SUCCESS', bucket: 'pass' },
+          { name: 'ci/test', state: 'CANCELLED', bucket: 'cancel' }
+        ]);
+      }
+      throw new Error(`Unexpected command: ${cmd}`);
+    }
+  });
+
+  const status = await provider.checkPrStatus(42);
+  assert.strictEqual(status.failedCount, 1, 'Cancelled check must count as failed');
+  assert.strictEqual(status.allPassed, false, 'A cancelled check must not allow allPassed');
+});
+
+test('sdw-scm-provider - Azure createPullRequest passes description inline instead of @file', async () => {
+  let createCommand = '';
+  const provider = createScmProvider('ado', {
+    executor: (cmd) => {
+      if (cmd.includes('az repos pr list')) return JSON.stringify([]);
+      if (cmd.includes('az repos pr create')) {
+        createCommand = cmd;
+        return JSON.stringify({ pullRequestId: 77, url: 'https://dev.azure.com/org/proj/_git/repo/pullrequest/77' });
+      }
+      throw new Error(`Unexpected command: ${cmd}`);
+    }
+  });
+
+  await provider.createPullRequest({
+    title: 'feat: inline body',
+    body: 'Line one\nLine two',
+    head: 'feature/inline',
+    base: 'master'
+  });
+
+  assert.ok(createCommand.includes('--description "Line one" "Line two"'), 'Body lines must be passed inline');
+  assert.ok(!createCommand.includes('@'), 'Description must not use the unsupported @file form');
+});

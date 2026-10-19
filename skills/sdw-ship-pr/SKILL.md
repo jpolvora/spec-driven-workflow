@@ -29,6 +29,8 @@ Parameters:
 - `--body <string>`: Custom PR description body.
 - `--push`: Force push active branch to remote origin before PR creation.
 - `--poll-pr`: Enable post-PR review polling and convergence loop.
+- `--max-iterations <n>`: Review convergence ceiling (default `3`).
+- `--poll-interval <ms>`: Wait between convergence rounds (default `20000`).
 - `--dry-run`: Simulate pre-PR checks, branch push, PR creation, and review polling without remote mutations.
 - `--json`: Output structured JSON execution report.
 
@@ -74,12 +76,12 @@ Detailed protocol: [`references/ship_protocol.md`](references/ship_protocol.md).
      b. If all checks pass and `activeCount === 0`, mark converged and exit loop.
      c. If failing checks or active review threads exist:
         - Analyze thread feedback and failing check diagnostics.
-        - Apply surgical code fixes to resolve the reported issues.
-        - Run verification test suite to ensure no regressions.
+        - Apply surgical code fixes to resolve the reported issues. A fix requires `config.reviewFixCommand`, `--review-fix-command` (programmatic `options.reviewFixCommand`), or a caller-supplied `threadFixer`; without one, leave the threads active and report `review_pending`.
+        - Run the verification test suite when `runAllTests` is enabled.
         - Stage and commit fix changes (`git commit -m "fix(review): address review feedback"`).
-        - Push commit to remote branch (`git push origin <head>`).
-        - For each resolved thread/comment, call `provider.resolveReviewThread({ prNumber, threadId, comment, model })` with a summary describing the fix and mark the thread resolved.
-2. If unresolved issues remain after maximum iterations, record review residual and report status.
+        - Push the commit to the remote branch (`git push origin <head>`).
+        - Only after a verified fix, call `provider.resolveReviewThread({ prNumber, threadId, comment, model })` with a summary describing the fix.
+2. If unresolved issues remain after maximum iterations, record review residual and report status. Never resolve a thread without an applied, verified fix.
 - Done when: Active threads resolved and CI checks green, or iteration ceiling reached with status recorded.
 
 ### Step 6: Delivery Outcome & State Persistence

@@ -34,5 +34,6 @@
   "runAllTests": true,
   "testCommand": "npm test",
   "prePrCommand": "",
-  "prePrInstructions": ""
+  "prePrInstructions": "",
+  "reviewFixCommand": ""
 }

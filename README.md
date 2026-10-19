@@ -90,6 +90,8 @@ flowchart TD
 
 ```text
 spec-driven-workflow/
+├── bin/                          # Repository tooling (local review dry run)
+│   └── review-dry-run.cjs        # Pinned OpenCode 1.19.1 + agentic-code-reviewers
 ├── .github/                      # GitHub Actions automation & CI/CD
 │   ├── workflows/                # Continuous integration, code review, and release pipelines
 │   │   ├── ci.yml
@@ -242,6 +244,17 @@ node skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs --head develop --dry-run --json
 # Ship and run review convergence loop with resolution summary comments
 node skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs --head develop --push --poll-pr
 ```
+
+### Local Agentic Code Review Dry Run
+
+Runs the same `agentic-code-reviewers` recipe as CI against the current branch (`develop` → `master`) without publishing PR threads:
+
+```bash
+npm install          # installs the pinned opencode-ai@1.19.1 dev dependency
+npm run review:dry   # alias: npm run review
+```
+
+The helper uses the `OPENCODE_API_KEY` from the OS environment through the `opencode-go` provider, forces the pinned OpenCode `1.19.1` binary, and passes `--dry-run` with the Custom stack prompt. Findings are printed as `::error` / `::warning` annotations and the command exits `0` even when issues are found. See [AGENTS.md](AGENTS.md#10-local-code-review-dry-run-agentic-code-reviewers) for overrides.
 
 ## 5. License & Contribution
 

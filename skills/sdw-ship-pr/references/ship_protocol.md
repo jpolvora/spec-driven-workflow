@@ -14,7 +14,8 @@ Before publishing branches or creating remote pull requests, `sdw-ship-pr` evalu
 | `prePrCommand` | string | null | Shell command to execute (e.g. `npm run lint` or custom verify script) | Non-zero exit code halts ship |
 | `requiredBuild` | boolean | false | If true, runs `npm run build` or project build command | Build failure halts ship |
 | `runAllTests` | boolean | false | If true, runs `npm test` or full test suite | Test failure halts ship |
-| `securityChecksEnabled` | boolean | true | Scans git diff for credentials, private keys, or exposed tokens | Leak detection halts ship |
+| `securityChecksEnabled` | boolean | true | Delegates to `sdw-security-checks` over the worktree for credentials, private keys, or exposed tokens | Leak detection or scanner failure halts ship |
+| `reviewFixCommand` | string | null | Command that applies review-thread fixes before the convergence loop resolves threads | Unset: active threads are reported as `review_pending`, never auto-resolved |
 
 ---
 
@@ -50,8 +51,9 @@ Before publishing branches or creating remote pull requests, `sdw-ship-pr` evalu
 When `scmCodeReviewEnabled: true` or `--poll-pr` is active, `sdw-ship-pr` executes automated review convergence:
 
 ### 4.1 Polling & Settle Period
-- Waits initial settle time (default 15–30 seconds) for CI actions and automated reviewer workflows (such as `agentic-code-reviewers`) to trigger.
-- Runs up to 3 iterative convergence rounds.
+- Waits `--poll-interval` milliseconds between rounds (default `20000`).
+- Runs up to `--max-iterations` convergence rounds (default `3`).
+- The existing CI settle window (15–30 seconds) is covered by the default interval.
 
 ### 4.2 Review Thread Inspection
 - Calls `provider.listReviewThreads(prIdentifier)`.
@@ -62,12 +64,12 @@ When `scmCodeReviewEnabled: true` or `--poll-pr` is active, `sdw-ship-pr` execut
 ### 4.3 Surgical Fix & Resolution Comment Requirement
 When active review threads or failing checks are detected:
 1. **Analyze:** Parse the feedback, file paths, line numbers, and suggested corrections.
-2. **Fix:** Apply surgical edits to the codebase addressing the specific defect class.
+2. **Fix:** Apply surgical edits through `reviewFixCommand` (CLI `--review-fix-command` or config) or a caller-supplied `threadFixer` callback. Without one, leave the threads active and report `review_pending`.
 3. **Verify:** Execute tests (`npm test`) to confirm fixes pass without regressions.
 4. **Commit & Push:**
    - Commit: `git commit -m "fix(review): address review feedback"`
    - Push: `git push origin <headBranch>`
-5. **Resolve Thread via SCM Provider:**
+5. **Resolve Thread via SCM Provider** (only after a verified fix):
    - For every resolved thread or review comment, call `provider.resolveReviewThread({ prNumber, threadId, comment, model, dryRun })`.
    - The resolution `comment` must summarize:
      - What changed (files modified and technical rationale).
@@ -98,7 +100,8 @@ When invoked with `--json`, `sdw-ship-pr` emits JSON with the following structur
     "converged": true,
     "rounds": 1,
     "resolvedThreads": 2,
-    "activeThreads": 0
+    "activeThreads": 0,
+    "pendingThreads": []
   },
   "shipStatus": "delivered"
 }

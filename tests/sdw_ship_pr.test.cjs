@@ -190,7 +190,8 @@ test('sdw-ship-pr - AC16, AC17: Review convergence loop fixes issues, adds summa
       config,
       head: 'develop',
       base: 'master',
-      maxIterations: 1
+      maxIterations: 1,
+      threadFixer: async () => ({ fixed: true, summary: 'Added the missing null check and verified tests' })
     }, fakeExecutor);
 
     assert.strictEqual(report.success, true);
@@ -284,3 +285,101 @@ test('sdw-ship-pr - CLI --json mode produces strictly machine-readable JSON on s
 });
 
 
+
+test('sdw-ship-pr - active threads are not resolved without a verified fixer', async () => {
+  const calls = [];
+  const fakeExecutor = (cmd) => {
+    calls.push(cmd);
+    if (cmd.includes('--input')) {
+      const match = cmd.match(/--input\s+"([^"]+)"/);
+      if (match && fs.existsSync(match[1])) {
+        const fileContent = fs.readFileSync(match[1], 'utf8');
+        if (fileContent.includes('reviewThreads')) {
+          return JSON.stringify({
+            data: {
+              repository: {
+                pullRequest: {
+                  reviewThreads: {
+                    nodes: [
+                      {
+                        id: 'PRRT_kwTEST123',
+                        isResolved: false,
+                        path: 'src/index.js',
+                        line: 10,
+                        comments: {
+                          nodes: [{ id: 'PRRC_1', body: 'Missing null check', author: { login: 'reviewer' } }]
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          });
+        }
+      }
+    }
+    if (cmd.includes('pr checks')) {
+      return JSON.stringify([{ name: 'ci/build', state: 'pass', bucket: 'pass' }]);
+    }
+    if (cmd.includes('gh repo view')) {
+      return JSON.stringify({ owner: { login: 'fake-owner' }, name: 'fake-repo' });
+    }
+    if (cmd.includes('gh api graphql') && cmd.includes('reviewThreads')) {
+      return JSON.stringify({
+        data: {
+          repository: {
+            pullRequest: {
+              reviewThreads: {
+                nodes: [
+                  {
+                    id: 'PRRT_kwTEST123',
+                    isResolved: false,
+                    path: 'src/index.js',
+                    line: 10,
+                    comments: {
+                      nodes: [{ id: 'PRRC_1', body: 'Missing null check', author: { login: 'reviewer' } }]
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      });
+    }
+    if (cmd.includes('gh pr list')) {
+      return JSON.stringify([{ number: 42, url: 'https://github.com/fake-owner/fake-repo/pull/42', headRefName: 'develop', baseRefName: 'master' }]);
+    }
+    if (cmd.includes('where gh') || cmd.includes('command -v gh')) return '/usr/bin/gh';
+    if (cmd.includes('gh auth status')) return 'Logged in';
+    return '';
+  };
+
+  const { tmpDir, config } = setupTestWorkspace();
+  config.scmProvider = 'github';
+  config.scmCodeReviewEnabled = true;
+
+  try {
+    const report = await sdwShipPr.runShipPr({
+      projectRoot: tmpDir,
+      config,
+      head: 'develop',
+      base: 'master',
+      maxIterations: 1,
+      pollIntervalMs: 0
+    }, fakeExecutor);
+
+    assert.strictEqual(report.success, false);
+    assert.strictEqual(report.shipStatus, 'review_pending');
+    assert.strictEqual(report.reviewConvergence.resolvedThreads, 0);
+    assert.strictEqual(report.reviewConvergence.pendingThreads.length, 1);
+    assert.strictEqual(
+      calls.some(c => c.includes('resolveReviewThread')),
+      false,
+      'No thread may be resolved without a verified fix'
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

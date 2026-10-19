@@ -654,6 +654,15 @@ function cmdRun(options) {
     const specAcs = dagPlanner.parseAcceptanceCriteria(effectiveSpecContent);
 
     if (implMode === 'handoff') {
+      if (useWorktrees) {
+        // Handoff prepares prompts for an external worker; task worktrees are not created here.
+        // Fall back to the primary tree instead of advertising a non-existent working directory.
+        useWorktrees = false;
+        state.worktreeSkipReason = 'handoff mode uses the primary working tree; task worktrees are only created in command mode';
+        state = stateManager.saveRunState(targetRoot, state);
+        console.log(`[Step 4: Worktree] Worktrees skipped in handoff mode; using the primary working tree.`);
+      }
+
       // AC3: write one prompt file per DAG task
       const preparedTasks = [];
       for (const task of dagPlan.tasks) {
@@ -985,7 +994,8 @@ function cmdRun(options) {
         state.securityGate = { bypassed: true, reason: '--skip-security' };
       } else {
         console.log(`[Step 6: Security Gate] securityChecksEnabled=true; running pre-commit leak scan...`);
-        const scanResult = runSecurityGate(targetRoot, { staged: true });
+        // Scan the worktree before staging: implementation changes are typically unstaged at this point.
+        const scanResult = runSecurityGate(targetRoot, { staged: false });
         state.securityGate = {
           bypassed: false,
           exitCode: scanResult.exitCode,
@@ -1051,7 +1061,8 @@ function cmdRun(options) {
       // Security checks gate before review-fix commit (AC7)
       if (Boolean(config.securityChecksEnabled) && !options.skipSecurity) {
         console.log(`[Step 7: Security Gate] Running pre-commit leak scan before review-fix commit...`);
-        const scanResult = runSecurityGate(targetRoot, { staged: true });
+        // Review fixes are unstaged; scan the worktree so the gate sees them before staging.
+        const scanResult = runSecurityGate(targetRoot, { staged: false });
         if (scanResult.exitCode !== 0) {
           console.error(`[Step 7: Security Gate] Review-fix commit blocked by security checks gate (exit code ${scanResult.exitCode}).`);
           break;
@@ -1429,7 +1440,7 @@ function cmdTaskFinish(options) {
   }
 
   const config = loadProjectConfig(targetRoot);
-  const useWorktrees = options.worktrees ? true : (options.noWorktrees ? false : Boolean(config.worktrees));
+  const useWorktrees = options.worktrees ? true : (options.noWorktrees ? false : Boolean(config.useWorktrees));
 
   const dagTasks = (Array.isArray(state.dagTasks) && state.dagTasks.length > 0)
     ? state.dagTasks
@@ -1561,9 +1572,14 @@ function cmdTaskFinish(options) {
     // Run verification gates (AC17, AC18, AC19)
     console.log(`Executing verification gates on integrated tree...`);
     const gateResults = runVerificationGates(targetRoot, config, { ...options, runId: state.runId, slug: state.specSlug });
+    // runVerificationGates records failures through stateManager.recordError, which reloads and
+    // writes the state file. Reload before writing gates so those failures are not overwritten.
+    state = stateManager.loadRunState(targetRoot, state.runId) || state;
     state.steps[4].gates = gateResults.gates;
     if (!gateResults.passed) {
       console.error(`Verification gates failed.`);
+      state.steps[4].status = 'failed';
+      state.status = 'failed';
       stateManager.saveRunState(targetRoot, state);
       return 1;
     }
@@ -1618,8 +1634,9 @@ function cmdResume(options) {
 
   let resumptionStep = stateManager.getResumptionStep(state);
 
-  // If resuming at or before Step 4, check task completion and verification gates (AC20)
-  if (resumptionStep <= 4) {
+  // Only the Step 4 resumption path owns task completion and verification gates (AC20).
+  // Resuming at Steps 1-3 must let cmdRun generate the DAG and enter Step 4 normally.
+  if (resumptionStep === 4) {
     const dagTasks = (Array.isArray(state.dagTasks) && state.dagTasks.length > 0)
       ? state.dagTasks
       : ((state.steps[3] && state.steps[3].output && state.steps[3].output.tasks) || []);
@@ -1629,6 +1646,19 @@ function cmdResume(options) {
     const incompleteTasks = dagTasks.filter(t => !completedTasks.includes(t.id));
 
     if (incompleteTasks.length > 0) {
+      const resumeConfig = loadProjectConfig(targetRoot);
+      const implMode = options.implementationMode || (resumeConfig.implementation && resumeConfig.implementation.mode) || 'handoff';
+      if (implMode === 'command') {
+        console.log(`[sdw-orch resume] Command mode detected; re-entering Step 4 to dispatch the configured command.`);
+        return cmdRun({
+          ...options,
+          specPath: state.specPath,
+          runId: state.runId,
+          startStep: 4,
+          implementationMode: 'command'
+        });
+      }
+
       console.error(`[sdw-orch resume] Cannot advance past Step 4: ${incompleteTasks.length} task(s) remain incomplete:`);
       dagTasks.forEach(t => {
         const isDone = completedTasks.includes(t.id);

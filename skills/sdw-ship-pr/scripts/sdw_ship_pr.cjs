@@ -30,7 +30,8 @@ function parseArgs(args) {
     pollPr: false,
     dryRun: false,
     json: false,
-    maxIterations: 3
+    maxIterations: 3,
+    pollIntervalMs: 20000
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -57,6 +58,11 @@ function parseArgs(args) {
       options.json = true;
     } else if (arg === '--max-iterations' && args[i + 1]) {
       options.maxIterations = parseInt(args[++i], 10) || 3;
+    } else if (arg === '--poll-interval' && args[i + 1]) {
+      const parsedInterval = parseInt(args[++i], 10);
+      options.pollIntervalMs = Number.isFinite(parsedInterval) && parsedInterval >= 0 ? parsedInterval : 20000;
+    } else if (arg === '--review-fix-command' && args[i + 1]) {
+      options.reviewFixCommand = args[++i];
     } else if ((arg === '--root' || arg === '--project-root') && args[i + 1]) {
       options.projectRoot = args[++i];
     }
@@ -168,6 +174,7 @@ async function runShipPr(options = {}, customExecutor = null) {
       rounds: 0,
       resolvedThreads: 0,
       activeThreads: 0,
+      pendingThreads: [],
       issuesFixed: []
     },
     shipStatus: 'pending',
@@ -233,27 +240,20 @@ async function runShipPr(options = {}, customExecutor = null) {
 
       if (config.securityChecksEnabled) {
         log('[sdw-ship-pr] Evaluating security leak checks...');
-        const secretPattern = /(?:api[_-]?key|secret|token|password|bearer|auth[_-]?token|ghp_[a-zA-Z0-9]{36})\s*[:=]?\s*['"][a-zA-Z0-9_\-\.]{16,}['"]/i;
-        let diff = '';
+        let securityScanner = null;
         try {
-          try {
-            diff += executor(`git diff ${base}...HEAD`).toString() + '\n';
-          } catch (e1) {
-            try {
-              diff += executor('git diff HEAD~1..HEAD').toString() + '\n';
-            } catch (e2) {}
-          }
-          try {
-            diff += executor('git diff HEAD').toString() + '\n';
-          } catch (e3) {}
+          securityScanner = require('../../sdw-security-checks/scripts/sdw_security_checks.cjs');
+        } catch (e) {
+          securityScanner = null;
+        }
+        if (!securityScanner || typeof securityScanner.scan !== 'function') {
+          throw new Error('Security checks enabled but the sdw-security-checks scanner is unavailable.');
+        }
 
-          if (secretPattern.test(diff)) {
-            throw new Error('Security checks failed: potential secret leak pattern detected in diff.');
-          }
-        } catch (secErr) {
-          if (secErr.message.includes('Security checks failed')) {
-            throw secErr;
-          }
+        // Scan the worktree: pre-PR changes are not staged yet.
+        const scanResult = securityScanner.scan({ root: projectRoot, staged: false });
+        if (scanResult.exitCode !== 0) {
+          throw new Error(`Security checks failed: ${scanResult.message || 'blocking findings detected'}`);
         }
       }
 
@@ -328,6 +328,11 @@ async function runShipPr(options = {}, customExecutor = null) {
       if (scmCodeReviewEnabled) {
         log(`[sdw-ship-pr] SCM review convergence enabled for PR #${prResult.number || 'simulate'}.`);
         const maxRounds = options.maxIterations || 3;
+        const pollIntervalMs = options.pollIntervalMs === undefined
+          ? 20000
+          : Math.max(0, Number(options.pollIntervalMs) || 0);
+        const reviewFixCommand = options.reviewFixCommand || config.reviewFixCommand || null;
+        const testCommand = config.testCommand || (config.verification && config.verification.testCommand) || 'npm test';
         let round = 0;
         let converged = false;
 
@@ -360,11 +365,58 @@ async function runShipPr(options = {}, customExecutor = null) {
           // If active threads exist, resolve them
           const activeList = reviewThreads.threads.filter(t => !t.isResolved);
           if (activeList.length > 0) {
-            log(`[sdw-ship-pr] Detected ${activeList.length} active review thread(s). Resolving threads...`);
+            log(`[sdw-ship-pr] Detected ${activeList.length} active review thread(s).`);
+
+            const pendingThreads = activeList.map(thread => ({
+              threadId: thread.id,
+              path: thread.path || null,
+              line: thread.line || null,
+              body: thread.comments && thread.comments[0] ? thread.comments[0].body : 'Review feedback'
+            }));
+
+            let fixSummary = 'Applied and verified the requested review fix.';
+            if (typeof options.threadFixer === 'function') {
+              // The caller owns applying, testing, committing, and pushing the fix.
+              const fixResult = await options.threadFixer({
+                provider,
+                prNumber: prResult.number,
+                threads: activeList,
+                projectRoot,
+                executor
+              });
+              if (!fixResult || fixResult.fixed !== true) {
+                warn('[sdw-ship-pr] threadFixer did not confirm a fix; leaving review threads active.');
+                report.reviewConvergence.pendingThreads = pendingThreads;
+                break;
+              }
+              fixSummary = fixResult.summary || fixSummary;
+            } else if (reviewFixCommand) {
+              log(`[sdw-ship-pr] Applying review fixes via reviewFixCommand: ${reviewFixCommand}`);
+              executor(reviewFixCommand);
+
+              if (config.runAllTests) {
+                log(`[sdw-ship-pr] Verifying review fixes with test command: ${testCommand}`);
+                executor(testCommand);
+              }
+
+              const fixChanges = executor('git status --porcelain').toString().trim();
+              if (!fixChanges) {
+                warn('[sdw-ship-pr] reviewFixCommand produced no changes; refusing to resolve review threads.');
+                report.reviewConvergence.pendingThreads = pendingThreads;
+                break;
+              }
+
+              executor('git add -A');
+              executor('git commit -m "fix(review): address review feedback"');
+              executor(`git push origin ${head}`);
+            } else {
+              warn('[sdw-ship-pr] Active review threads require a code fix. Set reviewFixCommand, pass threadFixer, or resolve them outside this loop; refusing to resolve them without a verified fix.');
+              report.reviewConvergence.pendingThreads = pendingThreads;
+              break;
+            }
 
             for (const thread of activeList) {
-              const threadComment = thread.comments && thread.comments[0] ? thread.comments[0].body : 'Review feedback';
-              const summaryNote = `Resolved review issue: applied fix verifying acceptance criteria.\n\nSummary: Verified code paths and ensured test suite passed cleanly.`;
+              const summaryNote = `Resolved review issue: applied fix and verified acceptance criteria.\n\nSummary: ${fixSummary}`;
 
               const resolveRes = await provider.resolveReviewThread({
                 prNumber: prResult.number,
@@ -398,8 +450,8 @@ async function runShipPr(options = {}, customExecutor = null) {
 
           if (round >= maxRounds && !converged) {
             warn(`[sdw-ship-pr] Reached maximum review convergence rounds (${maxRounds}) with residual active threads.`);
-          } else if (!converged && options.pollIntervalMs) {
-            await new Promise(r => setTimeout(r, options.pollIntervalMs));
+          } else if (!converged && pollIntervalMs > 0) {
+            await new Promise(r => setTimeout(r, pollIntervalMs));
           }
         }
 
