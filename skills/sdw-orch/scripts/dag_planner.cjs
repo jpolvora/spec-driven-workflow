@@ -38,15 +38,15 @@ function generateDagPlan(specContent, options) {
   // Infer default target files from slug
   let defaultTargetFiles = (options && options.targetFiles) || [];
   if (defaultTargetFiles.length === 0) {
-    if (slug.includes('implement')) {
+    if (slug.includes('orch') || slug.includes('implement')) {
       defaultTargetFiles = [
-        'skills/sdw-implement/scripts/sdw_implement.cjs',
-        'skills/sdw-implement/scripts/state_manager.cjs',
-        'skills/sdw-implement/scripts/spec_derivation.cjs',
-        'skills/sdw-implement/scripts/spec_grilling.cjs',
-        'skills/sdw-implement/scripts/dag_planner.cjs',
-        'skills/sdw-implement/scripts/score_evaluator.cjs',
-        'skills/sdw-implement/scripts/review_runner.cjs'
+        'skills/sdw-orch/scripts/sdw_orch.cjs',
+        'skills/sdw-orch/scripts/state_manager.cjs',
+        'skills/sdw-orch/scripts/spec_derivation.cjs',
+        'skills/sdw-orch/scripts/spec_grilling.cjs',
+        'skills/sdw-orch/scripts/dag_planner.cjs',
+        'skills/sdw-orch/scripts/score_evaluator.cjs',
+        'skills/sdw-orch/scripts/review_runner.cjs'
       ];
     } else if (slug.includes('config')) {
       defaultTargetFiles = ['skills/sdw-config/scripts/sdw_config.cjs'];

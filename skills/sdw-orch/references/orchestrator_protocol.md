@@ -1,6 +1,6 @@
-# sdw-implement Orchestrator Protocol & Architecture Reference
+# sdw-orch Orchestrator Protocol & Architecture Reference
 
-This reference details the internal lifecycle and contracts of the `sdw-implement` orchestrator.
+This reference details the internal lifecycle and contracts of the `sdw-orch` orchestrator.
 
 ## 1. Run State Lifecycle (`.sdw/state/{runId}.state.json`)
 
@@ -8,6 +8,7 @@ Each execution session is completely isolated within a dedicated JSON state file
 
 ```json
 {
+  "orchestrator": "sdw-orch",
   "runId": "run-1729300000-feature",
   "specSlug": "feature",
   "specPath": ".sdw/specs/feature.spec.md",

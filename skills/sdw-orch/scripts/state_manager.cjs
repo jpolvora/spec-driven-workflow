@@ -62,6 +62,7 @@ function createRunState(options) {
   }
 
   const state = {
+    orchestrator: 'sdw-orch',
     runId,
     specSlug,
     specPath,

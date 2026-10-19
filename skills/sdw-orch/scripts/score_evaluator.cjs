@@ -100,7 +100,7 @@ function evaluateScore(specContent, options) {
 
   // Also check skills/ and .sdw/ default locations if targetFiles still empty
   if (filesToCheck.size === 0) {
-    const defaultSearchDirs = ['skills/sdw-implement/scripts', 'skills/sdw-implement', '.sdw'];
+    const defaultSearchDirs = ['skills/sdw-orch/scripts', 'skills/sdw-orch', '.sdw'];
     for (const d of defaultSearchDirs) {
       const fullDir = path.resolve(projectRoot, d);
       if (fs.existsSync(fullDir)) {

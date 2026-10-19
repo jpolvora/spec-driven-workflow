@@ -1,16 +1,18 @@
 ---
-name: sdw-implement
+name: sdw-orch
 description: End-to-end workflow orchestrator that coordinates spec execution, subagent dispatch, review loops, and delivery.
 version: 0.1.0
 invocation_names:
-  - sdw-implement
-  - sdw-implement run
-  - sdw-implement resume
-  - sdw-implement status
+  - sdw-orch
+  - sdw-orch run
+  - sdw-orch resume
+  - sdw-orch status
+  - sdw-orchestrator
+  - orch
 ---
-# sdw-implement
+# sdw-orch
 
-> When this skill is loaded, output "sdw-implement loaded."
+> When this skill is loaded, output "sdw-orch loaded."
 
 Orchestrates spec execution from input requirement to delivery commit, automated code review, and pull request.
 
@@ -24,7 +26,7 @@ Orchestrates spec execution from input requirement to delivery commit, automated
 
 1. **Initialize State & Inspect Specification**
    Resolve project root and create an isolated run state in `.sdw/state/{runId}.state.json`. If the spec is human-friendly, derive an agentic spec; if already formatted for agents, skip derivation.
-   - Run: `node skills/sdw-implement/scripts/sdw_implement.cjs run <specPath> [options]`
+   - Run: `node skills/sdw-orch/scripts/sdw_orch.cjs run <specPath> [options]`
    - Done when: Run state JSON exists on disk and derivation status is recorded.
 
 2. **Conduct Grilling Round**

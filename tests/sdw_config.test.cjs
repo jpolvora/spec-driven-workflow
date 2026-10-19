@@ -7,8 +7,8 @@ const path = require('path');
 const os = require('os');
 
 const sdwConfig = require('../skills/sdw-config/scripts/sdw_config.cjs');
-const stateManager = require('../skills/sdw-implement/scripts/state_manager.cjs');
-const sdwImplement = require('../skills/sdw-implement/scripts/sdw_implement.cjs');
+const stateManager = require('../skills/sdw-orch/scripts/state_manager.cjs');
+const sdwOrch = require('../skills/sdw-orch/scripts/sdw_orch.cjs');
 
 test('sdw-config: loadConfig parses {projectRoot} tokens and provides defaults', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-cfg-test-'));
@@ -121,7 +121,7 @@ test('sdw-config: cmdCheck fails when config violates schema bounds', () => {
   }
 });
 
-test('sdw-implement reads custom config values from .sdw/config.json', () => {
+test('sdw-orch reads custom config values from .sdw/config.json', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-readcfg-test-'));
   try {
     sdwConfig.cmdInit({ root: tmpDir });
@@ -148,8 +148,8 @@ slug: feature
 - AC1: The orchestrator shall test custom score.
 `);
 
-    // Verify sdw-implement detects the spec in specsDir even when passed as relative name
-    const runCode = sdwImplement.cmdRun({
+    // Verify sdw-orch detects the spec in specsDir even when passed as relative name
+    const runCode = sdwOrch.cmdRun({
       root: tmpDir,
       specPath: 'feature.md', // Relative name resolved via config.specsDir
       skipReview: true,

@@ -14,7 +14,7 @@ The Spec-Driven Workflow (SDW) framework provides a lightweight, token-efficient
 
 Distributable skills reside under `skills/<skill-name>/` with standard `SKILL.md` entrypoints and YAML frontmatter. This enables developers and AI agents to discover, install, and update individual or bundled SDW skills (`sdw-config`, `sdw-spec`, `sdw-orch`, `sdw-router`, `sdw-memory`, `sdw-rules`, `sdw-security-checks`) into portable agent customization directories (e.g., `.agents/skills/`) using `npx skills add` and `npx skills update`.
 
-To ensure release stability, the repository provides a deterministic packaging verification script and an automated GitHub Actions CI/CD release workflow. When a version tag is pushed, the workflow runs test suites, validates all specifications, verifies skill structure conformance, and tags the release for discovery across the agent skills ecosystem.
+Release stability is provided by a deterministic packaging verification script plus the GitHub Actions workflows defined in spec 011 (github-actions-integration), which run test suites, validate all specifications, and verify skill structure conformance before publishing a tag.
 
 ### Design Intent
 
@@ -28,9 +28,7 @@ Implements the minimal packaging and distribution requirements necessary to make
 - AC4: The system shall provide a deterministic packaging verification script using Node.js standard library modules without external runtime dependencies.
 - AC5: When the packaging script executes with the verify flag, the system shall validate that all skills adhere to the three-tier architecture guidelines.
 - AC6: If a required skill file or script is missing during packaging verification, then the system shall abort verification with an exit code of one.
-- AC7: When a version release tag is pushed to the repository, the system shall trigger an automated CI/CD workflow executing test suites and packaging verification.
-- AC8: When the automated release workflow completes validation successfully, the system shall publish the release tag for discovery on the agent skills registry.
-- AC9: If any unit test or specification validation fails during the automated release workflow, then the system shall cancel the release process.
+- AC7: Where release or review workflows execute, the system shall defer all workflow definitions to spec 011 (github-actions-integration).
 
 ## Original Issue Context
 
@@ -81,15 +79,7 @@ The specification originated from the user draft in `.sdw/specs/006-packaging-in
     - Tier 2: `references/` directory with referenced documentation files present on disk.
     - Tier 3: `scripts/` directory with all referenced `.cjs` scripts present and executable.
     - Zero external runtime npm dependencies.
-- Automated CI/CD Release Workflow (`.github/workflows/release.yml`):
-  - Trigger: Push of tag matching `v*.*.*` or manual `workflow_dispatch`.
-  - Pipeline steps:
-    1. Checkout repository.
-    2. Setup Node.js 22.
-    3. Run specification validation (`validate_spec.cjs` across all `.sdw/specs/*.md`).
-    4. Run unit test suite (`npm test`).
-    5. Run packaging verification (`node scripts/verify_skills.cjs`).
-    6. Publish release tag and release notes for `skills.sh` registry indexing.
+- CI/CD Ownership Boundary: all `.github/workflows/` YAML files (continuous integration, agentic code review, release) are defined by spec 011 (github-actions-integration); this specification owns the packaging format and the `scripts/verify_skills.cjs` helper that those workflows invoke.
 - Runtime Constraints:
   - All automation scripts must be implemented in Node.js 22 CommonJS (`.cjs`) using standard library modules only (`fs`, `path`, `process`, `child_process`).
 - Verification Scope & Extensibility:

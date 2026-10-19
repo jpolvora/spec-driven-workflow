@@ -66,7 +66,7 @@ The specification originated from the user request to extend the orchestrator wi
   - `.sdw/config.schema.json`: add both properties with `"type": "boolean"` and `"default": false`.
   - `skills/sdw-config/references/config_spec.md`: add property table rows and the updated default configuration baseline.
   - `.sdw/config.json` template: both keys omitted or explicit `false`; enabling is a consumer opt-in.
-- Runtime Resolution (`skills/sdw-implement/scripts/sdw_implement.cjs`):
+- Runtime Resolution (`skills/sdw-orch/scripts/sdw_orch.cjs`):
   - `loadProjectConfig` fallback object gains `useWorktrees: false` and `useFeatureBranches: false`.
   - `parseArgs` gains `--no-worktrees` and `--no-feature-branch` one-shot overrides; applied values and their source (config or flag) are recorded in state.
 - Branch Resolution Rules:

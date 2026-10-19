@@ -7,13 +7,13 @@ const path = require('path');
 const os = require('os');
 const { execSync } = require('child_process');
 
-const stateManager = require('../skills/sdw-implement/scripts/state_manager.cjs');
-const specDerivation = require('../skills/sdw-implement/scripts/spec_derivation.cjs');
-const specGrilling = require('../skills/sdw-implement/scripts/spec_grilling.cjs');
-const dagPlanner = require('../skills/sdw-implement/scripts/dag_planner.cjs');
-const scoreEvaluator = require('../skills/sdw-implement/scripts/score_evaluator.cjs');
-const reviewRunner = require('../skills/sdw-implement/scripts/review_runner.cjs');
-const sdwImplement = require('../skills/sdw-implement/scripts/sdw_implement.cjs');
+const stateManager = require('../skills/sdw-orch/scripts/state_manager.cjs');
+const specDerivation = require('../skills/sdw-orch/scripts/spec_derivation.cjs');
+const specGrilling = require('../skills/sdw-orch/scripts/spec_grilling.cjs');
+const dagPlanner = require('../skills/sdw-orch/scripts/dag_planner.cjs');
+const scoreEvaluator = require('../skills/sdw-orch/scripts/score_evaluator.cjs');
+const reviewRunner = require('../skills/sdw-orch/scripts/review_runner.cjs');
+const sdwOrch = require('../skills/sdw-orch/scripts/sdw_orch.cjs');
 
 test('AC1 & AC2: Run State Isolation & Resumption Lifecycle', async (t) => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-test-'));
@@ -26,6 +26,7 @@ test('AC1 & AC2: Run State Isolation & Resumption Lifecycle', async (t) => {
     });
 
     assert.ok(runState.runId.startsWith('run-'), 'Run ID should be generated');
+    assert.equal(runState.orchestrator, 'sdw-orch', 'Run state must record sdw-orch orchestrator');
     const statePath = stateManager.getStateFilePath(tmpDir, runState.runId);
     assert.ok(fs.existsSync(statePath), 'State file must exist on disk (AC1)');
 
@@ -192,7 +193,7 @@ slug: low-score
 `);
 
     // Running with minScore 8 against nonexistent implementation should exit with code 2 (loop trigger)
-    const exitCode = sdwImplement.cmdRun({
+    const exitCode = sdwOrch.cmdRun({
       root: tmpDir,
       specPath: '.sdw/specs/low-score.md',
       minScore: 8,
@@ -247,7 +248,7 @@ slug: recovery
     assert.equal(resumptionStep, 4, 'Resumption starts at step 4');
 
     // Run resume
-    sdwImplement.cmdResume({
+    sdwOrch.cmdResume({
       root: tmpDir,
       runId: runState.runId,
       skipReview: true,
@@ -273,7 +274,7 @@ test('Negative Scenario 3: User Cancellation at Grilling Gate', () => {
     fs.writeFileSync(specPath, `# Bare Specification without Dimensions
 Simple text without bounds, concurrency, or persistence notes.`);
 
-    const exitCode = sdwImplement.cmdRun({
+    const exitCode = sdwOrch.cmdRun({
       root: tmpDir,
       specPath: '.sdw/specs/grill-abort.md',
       abortOnGaps: true
@@ -289,3 +290,70 @@ Simple text without bounds, concurrency, or persistence notes.`);
   }
 });
 
+test('Negative Scenario 4: Removed Legacy Path Invocation Fails Loudly (AC8)', () => {
+  assert.throws(() => {
+    require('../skills/sdw-implement/scripts/sdw_implement.cjs');
+  }, {
+    code: 'MODULE_NOT_FOUND'
+  }, 'Invoking removed skills/sdw-implement path must throw MODULE_NOT_FOUND');
+});
+
+test('Negative Scenario 5: Obsolete State File Rejection on Resume', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-obsolete-test-'));
+  try {
+    const specDir = path.join(tmpDir, '.sdw', 'specs');
+    const stateDir = path.join(tmpDir, '.sdw', 'state');
+    fs.mkdirSync(specDir, { recursive: true });
+    fs.mkdirSync(stateDir, { recursive: true });
+
+    const specPath = path.join(specDir, 'legacy-feature.md');
+    fs.writeFileSync(specPath, `---
+slug: legacy-feature
+---
+# Legacy Feature
+## Acceptance Criteria
+- AC1: The orchestrator shall test legacy state rejection.
+`);
+
+    // Create a legacy state file with obsolete orchestrator identifier
+    const legacyRunId = 'run-1700000000000-legacy-feature';
+    const legacyStateFile = path.join(stateDir, `${legacyRunId}.state.json`);
+    fs.writeFileSync(legacyStateFile, JSON.stringify({
+      orchestrator: 'sdw-implement',
+      runId: legacyRunId,
+      specSlug: 'legacy-feature',
+      specPath: '.sdw/specs/legacy-feature.md',
+      projectRoot: tmpDir.replace(/\\/g, '/'),
+      status: 'in_progress',
+      currentStep: 3,
+      totalSteps: 8,
+      createdAt: '2026-10-18T00:00:00.000Z',
+      updatedAt: '2026-10-18T00:05:00.000Z',
+      baseCommit: null,
+      deliveryCommit: null,
+      score: null,
+      dagTasks: [],
+      steps: {
+        1: { name: 'derivation', status: 'completed' },
+        2: { name: 'grilling', status: 'completed' },
+        3: { name: 'dag_generation', status: 'completed' },
+        4: { name: 'implementation', status: 'pending' },
+        5: { name: 'scoring', status: 'pending' },
+        6: { name: 'delivery_commit', status: 'pending' },
+        7: { name: 'code_review', status: 'pending' },
+        8: { name: 'pr_preparation', status: 'pending' }
+      },
+      handoffs: {},
+      errors: []
+    }, null, 2), 'utf8');
+
+    const exitCode = sdwOrch.cmdResume({
+      root: tmpDir,
+      runId: legacyRunId
+    });
+
+    assert.equal(exitCode, 1, 'Must reject resumption of obsolete/legacy state file with exit code 1');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

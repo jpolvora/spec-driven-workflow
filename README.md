@@ -17,9 +17,9 @@ SDW standardizes how developers specify, refine, implement, review, and ship fea
 
 ---
 
-## 2. The Core Workflow Orchestrator: `sdw-implement`
+## 2. The Core Workflow Orchestrator: `sdw-orch`
 
-At the center of SDW is the **`sdw-implement`** orchestrator skill. It coordinates the feature delivery lifecycle end-to-end, managing a dedicated run state file (`.sdw/state/{runId}.state.json`) that enables pause, inspection, resume, and seamless data handoffs across subagents.
+At the center of SDW is the **`sdw-orch`** orchestrator skill. It coordinates the feature delivery lifecycle end-to-end, managing a dedicated run state file (`.sdw/state/{runId}.state.json`) that enables pause, inspection, resume, and seamless data handoffs across subagents.
 
 ```mermaid
 flowchart TD
@@ -91,7 +91,7 @@ spec-driven-workflow/
 │   │   ├── SKILL.md              # 3-Tier Tier 1 instructions
 │   │   ├── references/           # Tier 2 reference schemas & contracts
 │   │   └── scripts/              # Tier 3 deterministic Node.js helpers (sdw_config.cjs)
-│   └── sdw-implement/            # Orchestrator skill (in development)
+│   └── sdw-orch/                 # Orchestrator skill (in development)
 ├── AGENTS.md                     # Mandatory rules and protocols for AI agents
 └── README.md                     # Project documentation and architecture guide
 ```

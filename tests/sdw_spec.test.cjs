@@ -11,7 +11,7 @@ const { getNextPrefix, createNewSpec, importRemoteSpec, toEarsCriterion } = requ
 const { validate, validateFile } = require('../skills/sdw-spec/scripts/validate_spec.cjs');
 const { syncIndex } = require('../skills/sdw-spec/scripts/spec_sync.cjs');
 const { ScmProvider, createScmProvider } = require('../skills/sdw-spec/scripts/scm_provider_contract.cjs');
-const sdwImplement = require('../skills/sdw-implement/scripts/sdw_implement.cjs');
+const sdwOrch = require('../skills/sdw-orch/scripts/sdw_orch.cjs');
 
 function setupTestWorkspace() {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-spec-test-'));
@@ -497,8 +497,8 @@ None.
     updateSpecStatus('001-archived-test', 'completed', { root: tmpDir });
     archiveSpec('001-archived-test', { root: tmpDir });
 
-    // AC25: sdw-implement rejects execution on archived spec without override flag
-    const exitCodeBlocked = sdwImplement.cmdRun({
+    // AC25: sdw-orch rejects execution on archived spec without override flag
+    const exitCodeBlocked = sdwOrch.cmdRun({
       root: tmpDir,
       specPath: '001-archived-test.md',
       force: false,
@@ -507,7 +507,7 @@ None.
     assert.equal(exitCodeBlocked, 1, 'Rejects execution on archived spec without override');
 
     // Unarchive / allow archived execution with --allow-archived flag
-    const exitCodeAllowed = sdwImplement.cmdRun({
+    const exitCodeAllowed = sdwOrch.cmdRun({
       root: tmpDir,
       specPath: '001-archived-test.md',
       allowArchived: true,

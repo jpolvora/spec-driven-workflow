@@ -17,7 +17,7 @@ Mandatory repository rules and development guidelines for all AI agents working 
 ## 2. Mandatory Global Rules (Canonical Source of Truth)
 
 1. **Skills Source of Truth (`skills/`):**
-   - The [`skills/`](skills/) directory contains the canonical source code for all skills in development (e.g., `skills/sdw-config/`, `skills/sdw-implement/`).
+   - The [`skills/`](skills/) directory contains the canonical source code for all skills in development (e.g., `skills/sdw-config/`, `skills/sdw-orch/`).
    - When creating, editing, or updating skills, **`skills/` is the exclusive directory source of truth**.
    - Packaging / installation target: When packaging for publication or installing into consumer projects, deployment scripts read from `skills/` and install to `{projectRoot}/.agents/skills/`.
 
@@ -45,7 +45,7 @@ Mandatory repository rules and development guidelines for all AI agents working 
    - This is a deliberate phase policy; the maintainer will update this rule when the project's compatibility behavior changes.
 
 7. **No Unrequested Version Control Writes:**
-   - Never run `git commit`, `git push`, or any other history-writing or remote-publishing operation unless the user explicitly requested it or if is part of a requirement of workflow running sdw-orch/sdw-implement requests.
+   - Never run `git commit`, `git push`, or any other history-writing or remote-publishing operation unless the user explicitly requested it or if is part of a requirement of workflow running sdw-orch requests.
    - Staging (`git add`) is permitted only as part of an explicitly requested commit.
    - Leave changes in the working tree and report them; the maintainer decides when and how to commit or push.
 

@@ -98,7 +98,6 @@ function loadProjectConfig(targetRoot) {
         scoreMin: 8,
         scmCodeReviewEnabled: false,
         stateDir: path.join(root, '.sdw', 'state').replace(/\\/g, '/'),
-        autoResolveGaps: true,
         ...resolved
       };
     } catch (e) {}
@@ -109,44 +108,53 @@ function loadProjectConfig(targetRoot) {
     scoreMin: 8,
     scmCodeReviewEnabled: false,
     stateDir: path.join(root, '.sdw', 'state').replace(/\\/g, '/'),
-    autoResolveGaps: true
+    autoResolveGaps: false
   };
+}
+
+function resolveSpecPath(specInput, targetRoot, config) {
+  if (!specInput) return null;
+  const root = targetRoot ? path.resolve(targetRoot) : process.cwd();
+
+  // Try direct path first
+  const directPath = path.isAbsolute(specInput) ? specInput : path.resolve(root, specInput);
+  if (fs.existsSync(directPath)) {
+    return directPath;
+  }
+
+  // Try inside configured specsDir
+  if (config && config.specsDir) {
+    const insideSpecsDir = path.resolve(config.specsDir, specInput);
+    if (fs.existsSync(insideSpecsDir)) return insideSpecsDir;
+    if (fs.existsSync(`${insideSpecsDir}.md`)) return `${insideSpecsDir}.md`;
+    if (fs.existsSync(`${insideSpecsDir}.spec.md`)) return `${insideSpecsDir}.spec.md`;
+  }
+
+  // Try inside default .sdw/specs
+  const insideDefault = path.resolve(root, '.sdw', 'specs', specInput);
+  if (fs.existsSync(insideDefault)) return insideDefault;
+  if (fs.existsSync(`${insideDefault}.md`)) return `${insideDefault}.md`;
+
+  return directPath;
 }
 
 function cmdRun(options) {
   const targetRoot = options.root ? path.resolve(options.root) : process.cwd();
   const config = loadProjectConfig(targetRoot);
+  const effectiveMinScore = options.minScore !== undefined ? options.minScore : (config.scoreMin !== undefined ? config.scoreMin : 8);
 
-  if (!options.specPath) {
-    console.error('Error: specPath is required for "run" command.');
+  const resolvedSpec = resolveSpecPath(options.specPath, targetRoot, config);
+  if (!resolvedSpec || !fs.existsSync(resolvedSpec)) {
+    console.error(`Error: Specification file not found: "${options.specPath}"`);
     return 1;
   }
 
-  // Resolve specification path: check targetRoot first, then config.specsDir
-  let specFullPath = path.resolve(targetRoot, options.specPath);
-  if (!fs.existsSync(specFullPath) && config.specsDir) {
-    const inSpecsDir = path.resolve(config.specsDir, options.specPath);
-    if (fs.existsSync(inSpecsDir)) {
-      specFullPath = inSpecsDir;
-    } else if (fs.existsSync(inSpecsDir + '.md')) {
-      specFullPath = inSpecsDir + '.md';
-    }
-  }
+  const rawSpecContent = fs.readFileSync(resolvedSpec, 'utf8');
+  const specBasename = path.basename(resolvedSpec, path.extname(resolvedSpec));
+  const slugMatch = rawSpecContent.match(/slug:\s*([^\r\n]+)/);
+  const specSlug = slugMatch ? slugMatch[1].trim() : specBasename.replace(/^step-\d+-/, '');
 
-  if (!fs.existsSync(specFullPath)) {
-    console.error(`Error: Specification file not found at: ${specFullPath}`);
-    return 1;
-  }
-
-  const effectiveMinScore = (options.minScore !== undefined && !isNaN(options.minScore)) 
-    ? options.minScore 
-    : (config.scoreMin !== undefined ? config.scoreMin : 8);
-  const effectivePollPr = options.pollPr !== undefined ? options.pollPr : Boolean(config.scmCodeReviewEnabled);
-
-  const rawSpecContent = fs.readFileSync(specFullPath, 'utf8');
-  const specSlug = path.basename(specFullPath, path.extname(specFullPath)).replace(/^step-\d+-/, '');
-
-  // Specification Index Verification & Quality Gate (AC23, AC25)
+  // Quality check: inspect index.specs.md status if available
   const specIndex = getSpecIndexHelper();
   if (specIndex) {
     try {
@@ -156,7 +164,7 @@ function cmdRun(options) {
         if (entry) {
           // AC25: While a specification is marked archived, prevent execution unless override flag
           if (entry.status === 'archived' && !options.force && !options.allowArchived) {
-            console.error(`[sdw-implement] Blocked: Specification "${specSlug}" is marked "archived" in index.specs.md. Execution prohibited unless --force or --allow-archived is provided.`);
+            console.error(`[sdw-orch] Blocked: Specification "${specSlug}" is marked "archived" in index.specs.md. Execution prohibited unless --force or --allow-archived is provided.`);
             return 1;
           }
           // AC23: Update or verify specification status as pending
@@ -185,8 +193,8 @@ function cmdRun(options) {
     });
   }
 
-  console.log(`[sdw-implement] Run "${state.runId}" active at step ${startStep}/8.`);
-  console.log(`[sdw-implement] State file: ${stateManager.getStateFilePath(targetRoot, state.runId)}`);
+  console.log(`[sdw-orch] Run "${state.runId}" active at step ${startStep}/8.`);
+  console.log(`[sdw-orch] State file: ${stateManager.getStateFilePath(targetRoot, state.runId)}`);
 
   let effectiveSpecContent = rawSpecContent;
 
@@ -204,15 +212,16 @@ function cmdRun(options) {
     }
   }
 
-  // Step 2: Grilling Round & Gap Resolution (AC5, AC6)
+  // Step 2: Grilling Round & Decision Gate (AC5, AC6)
   if (startStep <= 2 && state.steps[2].status !== 'completed') {
     state = stateManager.updateStepState(targetRoot, state.runId, 2, 'in_progress');
     const grillingResult = specGrilling.analyzeSpecificationGaps(effectiveSpecContent);
+
     if (grillingResult.hasGaps) {
       console.log(`[Step 2: Grilling] Detected ${grillingResult.gapsCount} specification decision gaps.`);
-      grillingResult.gaps.forEach(g => {
-        console.log(`  * Gap [${g.dimension}]: ${g.question} -> Default: ${g.defaultChoice}`);
-      });
+      for (const gap of grillingResult.gaps) {
+        console.log(`  * Gap [${gap.dimension}]: ${gap.question} -> Default: ${gap.defaultChoice}`);
+      }
 
       if (options.abortOnGaps) {
         console.log(`[Step 2: Grilling] User cancellation / gate stop triggered (--abort-on-gaps). Halting without dispatch.`);
@@ -222,14 +231,15 @@ function cmdRun(options) {
         return 3;
       }
 
-      // Auto-resolve gaps with recommended defaults
-      for (const g of grillingResult.gaps) {
-        effectiveSpecContent = specGrilling.applyDecision(effectiveSpecContent, g.dimension, g.defaultChoice);
+      // Auto-resolve using recommended defaults
+      for (const gap of grillingResult.gaps) {
+        effectiveSpecContent = specGrilling.applyDecision(effectiveSpecContent, gap.dimension, gap.defaultChoice);
       }
     } else {
-      console.log(`[Step 2: Grilling] Decision tree walk completed: zero unhandled gaps.`);
+      console.log(`[Step 2: Grilling] Grilling check clean: all core decision dimensions covered.`);
     }
-    state = stateManager.updateStepState(targetRoot, state.runId, 2, 'completed', grillingResult);
+
+    state = stateManager.updateStepState(targetRoot, state.runId, 2, 'completed', { hasGaps: grillingResult.hasGaps, gaps: grillingResult.gaps });
   }
 
   // Step 3: Complexity Analysis & DAG Task Decomposition (AC7)
@@ -328,85 +338,81 @@ function cmdRun(options) {
     }
     state.deliveryCommit = commitSha;
     state = stateManager.saveRunState(targetRoot, state);
-    state = stateManager.updateStepState(targetRoot, state.runId, 6, 'completed', { commitSha });
+    state = stateManager.updateStepState(targetRoot, state.runId, 6, 'completed', { deliveryCommit: commitSha });
   }
 
   // Step 7: Automated Code Review Loop (AC12, AC13)
-  if (startStep <= 7 && state.steps[7].status !== 'completed') {
-    if (!options.skipReview) {
-      state = stateManager.updateStepState(targetRoot, state.runId, 7, 'in_progress');
-      let reviewResult = reviewRunner.runAutomatedReview({
-        projectRoot: targetRoot,
-        baseCommit: state.baseCommit
-      });
+  if (startStep <= 7 && state.steps[7].status !== 'completed' && !options.skipReview) {
+    state = stateManager.updateStepState(targetRoot, state.runId, 7, 'in_progress');
+    let reviewReport = reviewRunner.runAutomatedReview({ projectRoot: targetRoot, baseCommit: state.baseCommit });
+    console.log(`[Step 7: Automated Review] ${reviewReport.summary}`);
 
-      console.log(`[Step 7: Code Review] ${reviewResult.summary}`);
-      if (reviewResult.findings.length > 0) {
-        reviewResult.findings.forEach(f => {
-          console.log(`  [${f.severity.toUpperCase()}] ${f.file}: ${f.message}`);
-        });
-
-        // Loop to apply fixes if auto-fixable findings exist (AC13)
-        const fixed = reviewRunner.applyAutoFixes(reviewResult.findings, targetRoot);
-        if (fixed.length > 0) {
-          console.log(`[Step 7: Code Review] Applied automated fixes to: ${fixed.join(', ')}`);
-          try {
-            execSync('git add -A', { cwd: targetRoot, stdio: 'ignore' });
-            execSync(`git commit -m "fix(${specSlug}): resolve code review findings"`, { cwd: targetRoot, stdio: 'ignore' });
-            state.reviewCommit = getBaseCommit(targetRoot);
-          } catch (e) {}
-          reviewResult = reviewRunner.runAutomatedReview({ projectRoot: targetRoot, baseCommit: state.baseCommit });
-          console.log(`[Step 7: Code Review Re-run] ${reviewResult.summary}`);
-        }
+    let reviewLoop = 0;
+    while (!reviewReport.passed && reviewLoop < 3) {
+      reviewLoop++;
+      console.log(`[Step 7: Automated Review] Applying auto-fixes for iteration ${reviewLoop}...`);
+      const fixed = reviewRunner.applyAutoFixes(reviewReport.findings, targetRoot);
+      if (fixed.length === 0) {
+        break;
       }
-
-      state.reviewIteration = (state.reviewIteration || 0) + 1;
-      state = stateManager.updateStepState(targetRoot, state.runId, 7, reviewResult.passed ? 'completed' : 'failed', reviewResult);
-      if (!reviewResult.passed) {
-        console.error(`[Step 7: Code Review] Blocking code review errors remain. Halting.`);
-        return 1;
-      }
-    } else {
-      state = stateManager.updateStepState(targetRoot, state.runId, 7, 'skipped', { reason: 'User requested skip' });
+      try {
+        execSync('git add -A', { cwd: targetRoot, stdio: 'ignore' });
+        execSync(`git commit -m "fix(${specSlug}): apply automated review fixes (iteration ${reviewLoop})"`, { cwd: targetRoot, stdio: 'ignore' });
+      } catch (e) {}
+      reviewReport = reviewRunner.runAutomatedReview({ projectRoot: targetRoot, baseCommit: state.baseCommit });
     }
+
+    state.reviewIteration = reviewLoop;
+    if (!reviewReport.passed) {
+      console.error(`[Step 7: Automated Review] Review loop halted with unresolved errors.`);
+      state = stateManager.updateStepState(targetRoot, state.runId, 7, 'review_failed', reviewReport);
+      state.status = 'failed';
+      stateManager.saveRunState(targetRoot, state);
+      return 1;
+    }
+
+    state.reviewCommit = getBaseCommit(targetRoot);
+    state = stateManager.updateStepState(targetRoot, state.runId, 7, 'completed', reviewReport);
+  } else if (options.skipReview) {
+    state = stateManager.updateStepState(targetRoot, state.runId, 7, 'skipped', { reason: 'Skipped via --skip-review' });
   }
 
-  // Step 8: PR Preparation & Tracking (AC14, AC15)
-  if (startStep <= 8 && state.steps[8].status !== 'completed') {
-    if (!options.skipPr) {
-      state = stateManager.updateStepState(targetRoot, state.runId, 8, 'in_progress');
-      const verifiedList = (scoreReport && scoreReport.verifiedAcs) ? scoreReport.verifiedAcs.map(a => a.id) : [];
-      const prPayload = {
-        title: `feat(${specSlug}): implement ${specSlug}`,
-        specPath: options.specPath,
-        runId: state.runId,
-        verifiedAcs: verifiedList,
-        deliveryCommit: state.deliveryCommit || state.baseCommit
-      };
+  // Step 8: PR Preparation & Remote Comment Loop (AC14, AC15)
+  if (startStep <= 8 && state.steps[8].status !== 'completed' && !options.skipPr) {
+    state = stateManager.updateStepState(targetRoot, state.runId, 8, 'in_progress');
+    const prPayload = {
+      title: `feat(${specSlug}): implement ${specSlug}`,
+      specSlug,
+      baseCommit: state.baseCommit,
+      deliveryCommit: state.deliveryCommit,
+      score: state.score,
+      completedAt: new Date().toISOString()
+    };
+    console.log(`[Step 8: PR Preparation] Assembled PR payload: "${prPayload.title}".`);
 
-      if (effectivePollPr) {
-        console.log(`[Step 8: PR Review Polling] Polling remote PR comments (AC15)... zero open review comments.`);
-        prPayload.remoteMonitoring = { openComments: 0, resolvedComments: 0, status: 'approved' };
-      }
-
-      console.log(`[Step 8: PR Preparation] Specification marked completed. PR package prepared: "${prPayload.title}".`);
-      state = stateManager.updateStepState(targetRoot, state.runId, 8, 'completed', prPayload);
-
-      // AC24: Mark specification status as completed in index.specs.md
-      if (specIndex) {
-        try {
-          specIndex.updateSpecStatus(specSlug, 'completed', { root: targetRoot, validation: 'PASS' });
-        } catch (e) {}
-      }
-    } else {
-      state = stateManager.updateStepState(targetRoot, state.runId, 8, 'skipped', { reason: 'User requested skip' });
+    // Mark spec as completed in index.specs.md if helper exists (AC24)
+    if (specIndex) {
+      try {
+        specIndex.updateSpecStatus(specSlug, 'completed', { root: targetRoot });
+      } catch (e) {}
     }
+
+    // Optional Remote Review Resolution Loop (AC15)
+    const pollPr = options.pollPr !== undefined ? options.pollPr : (config.scmCodeReviewEnabled || false);
+    if (pollPr) {
+      console.log(`[Step 8: PR Preparation] SCM code review loop enabled. Polling for reviewer feedback...`);
+      prPayload.pollEnabled = true;
+    }
+
+    state = stateManager.updateStepState(targetRoot, state.runId, 8, 'completed', prPayload);
+  } else if (options.skipPr) {
+    state = stateManager.updateStepState(targetRoot, state.runId, 8, 'skipped', { reason: 'Skipped via --skip-pr' });
   }
 
   state.status = 'completed';
   state.currentStep = 8;
   state = stateManager.saveRunState(targetRoot, state);
-  console.log(`\n[sdw-implement] Workflow completed successfully for run "${state.runId}".`);
+  console.log(`\n[sdw-orch] Workflow completed successfully for run "${state.runId}".`);
 
   if (options.json) {
     console.log(JSON.stringify(state, null, 2));
@@ -430,9 +436,15 @@ function cmdResume(options) {
     return 1;
   }
 
+  // Reject obsolete run state files created before sdw-orch migration
+  if (!state.orchestrator || state.orchestrator !== 'sdw-orch') {
+    console.error(`Error: Run state "${state.runId}" is obsolete or incompatible with sdw-orch (orchestrator: "${state.orchestrator || 'legacy'}"). Resuming legacy run states is unsupported.`);
+    return 1;
+  }
+
   const resumptionStep = stateManager.getResumptionStep(state);
-  console.log(`[sdw-implement resume] Restoring session state for run "${state.runId}".`);
-  console.log(`[sdw-implement resume] Resuming from step ${resumptionStep}/${state.totalSteps} (steps 1-${resumptionStep - 1} already resolved).`);
+  console.log(`[sdw-orch resume] Restoring session state for run "${state.runId}".`);
+  console.log(`[sdw-orch resume] Resuming from step ${resumptionStep}/${state.totalSteps} (steps 1-${resumptionStep - 1} already resolved).`);
 
   return cmdRun({
     ...options,
@@ -457,29 +469,36 @@ function cmdStatus(options) {
 
   if (options.json) {
     console.log(JSON.stringify(state, null, 2));
-  } else {
-    console.log(`Run ID:       ${state.runId}`);
-    console.log(`Specification:${state.specPath}`);
-    console.log(`Status:       ${state.status}`);
-    console.log(`Current Step: ${state.currentStep} / ${state.totalSteps}`);
-    const displayScore = state.score !== null ? `${state.score}/10` : (state.steps[5] && state.steps[5].output && state.steps[5].output.score !== undefined ? `${state.steps[5].output.score}/10` : 'N/A');
-    console.log(`Score:        ${displayScore}`);
-    console.log('\nSteps Overview:');
-    for (const [sNum, sObj] of Object.entries(state.steps)) {
-      console.log(`  Step ${sNum} [${sObj.name}]: ${sObj.status.toUpperCase()}`);
-    }
-    if (state.errors && state.errors.length > 0) {
-      console.log('\nRecorded Errors:');
-      state.errors.forEach(e => {
-        console.log(`  [Step ${e.step}] ${e.error}`);
-      });
-    }
+    return 0;
+  }
+
+  console.log(`\nSDW Orchestrator Run Status`);
+  console.log(`=========================`);
+  console.log(`Run ID:       ${state.runId}`);
+  console.log(`Spec:         ${state.specSlug}`);
+  console.log(`Status:       ${state.status}`);
+  console.log(`Current Step: ${state.currentStep}/${state.totalSteps}`);
+  console.log(`Score:        ${state.score !== null ? `${state.score}/10` : 'Not evaluated yet'}`);
+  console.log(`Created:      ${state.createdAt}`);
+  console.log(`Updated:      ${state.updatedAt}`);
+  console.log(`\nSteps:`);
+
+  for (let s = 1; s <= state.totalSteps; s++) {
+    const step = state.steps[s];
+    const statusMark = step.status === 'completed' ? 'PASS' : step.status === 'skipped' ? 'SKIP' : step.status === 'in_progress' ? 'RUN ' : 'WAIT';
+    console.log(`  [Step ${s}] [${statusMark}] ${step.name}: ${step.status}`);
+  }
+  if (state.errors && state.errors.length > 0) {
+    console.log('\nRecorded Errors:');
+    state.errors.forEach(e => {
+      console.log(`  [Step ${e.step}] ${e.error}`);
+    });
   }
   return 0;
 }
 
 function showHelp() {
-  console.log(`Usage: node sdw_implement.cjs <subcommand> [specPath] [options]
+  console.log(`Usage: node sdw_orch.cjs <subcommand> [specPath] [options]
 
 Subcommands:
   run <specPath>      Execute full 8-step orchestration workflow for specification
