@@ -37,5 +37,5 @@
   "prePrCommand": "",
   "prePrInstructions": "",
   "reviewFixCommand": "",
-  "maxPreemptions": 3
+  "maxPreemptions": 10
 }
