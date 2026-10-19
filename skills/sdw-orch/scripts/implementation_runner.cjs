@@ -246,15 +246,30 @@ function integrateTaskWorktree(options) {
   const { targetRoot, specSlug, taskId, taskWorktreeAbs, taskWorktreeRel, taskBranch } = options;
   const root = targetRoot ? path.resolve(targetRoot) : process.cwd();
 
-  // 1. Commit inside task worktree
-  execSync('git add -A', { cwd: taskWorktreeAbs, stdio: 'ignore' });
-  execSync(`git commit -m "task(${specSlug}): ${taskId}"`, { cwd: taskWorktreeAbs, stdio: 'ignore' });
-  const taskCommitSha = execSync('git rev-parse HEAD', { cwd: taskWorktreeAbs, encoding: 'utf8' }).trim();
+  // 1. Commit inside task worktree (argv form: no shell interpolation of specSlug/taskId)
+  const addProc = spawnSync('git', ['add', '-A'], { cwd: taskWorktreeAbs, stdio: 'ignore' });
+  if (addProc.status !== 0) {
+    throw new Error(`Failed to stage changes for task ${taskId} in worktree ${taskWorktreeRel}.`);
+  }
+  const commitProc = spawnSync('git', ['commit', '-m', `task(${specSlug}): ${taskId}`], {
+    cwd: taskWorktreeAbs,
+    stdio: 'ignore'
+  });
+  if (commitProc.status !== 0) {
+    throw new Error(`Failed to commit changes for task ${taskId} in worktree ${taskWorktreeRel}.`);
+  }
+  const revProc = spawnSync('git', ['rev-parse', 'HEAD'], {
+    cwd: taskWorktreeAbs,
+    encoding: 'utf8'
+  });
+  if (revProc.status !== 0 || !revProc.stdout) {
+    throw new Error(`Failed to resolve task commit SHA for task ${taskId}.`);
+  }
+  const taskCommitSha = String(revProc.stdout).trim();
 
-  // 2. Cherry-pick into primary tree
-  try {
-    execSync(`git cherry-pick ${taskCommitSha}`, { cwd: root, stdio: 'ignore' });
-  } catch (cpErr) {
+  // 2. Cherry-pick into primary tree (argv form: commit SHA passed without shell)
+  const cherryProc = spawnSync('git', ['cherry-pick', taskCommitSha], { cwd: root, stdio: 'ignore' });
+  if (cherryProc.status !== 0) {
     // Preserves worktree for inspection on conflict
     const conflictErr = new Error(`Cherry-pick conflict during integration of task ${taskId} (commit ${taskCommitSha}). Worktree preserved at ${taskWorktreeRel}.`);
     conflictErr.isConflict = true;
@@ -262,10 +277,12 @@ function integrateTaskWorktree(options) {
     throw conflictErr;
   }
 
-  // 3. Safe cleanup of worktree and branch
+  // 3. Safe cleanup of worktree and branch (argv form: no shell interpolation)
   try {
-    execSync(`git worktree remove "${taskWorktreeRel}"`, { cwd: root, stdio: 'ignore' });
-    execSync(`git branch -d ${taskBranch}`, { cwd: root, stdio: 'ignore' });
+    const rmProc = spawnSync('git', ['worktree', 'remove', taskWorktreeRel], { cwd: root, stdio: 'ignore' });
+    if (rmProc.status !== 0) throw new Error('git worktree remove failed');
+    const delProc = spawnSync('git', ['branch', '-d', taskBranch], { cwd: root, stdio: 'ignore' });
+    if (delProc.status !== 0) throw new Error('git branch delete failed');
   } catch (rmErr) {
     console.warn(`[sdw-orch] Warning: Failed to cleanly remove worktree ${taskWorktreeRel}: ${rmErr.message}`);
   }
