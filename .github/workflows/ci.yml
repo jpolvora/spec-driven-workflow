@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main, develop]
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Validate specifications in authoring mode
+        run: |
+          set -e
+          echo "Starting specification validation loop..."
+          count=0
+          for spec in .sdw/specs/*.md; do
+            if [ -f "$spec" ] && [ "$(basename "$spec")" != "index.specs.md" ]; then
+              echo "Validating $spec..."
+              node skills/sdw-spec/scripts/validate_spec.cjs --mode=authoring --repo-root . "$spec"
+              count=$((count + 1))
+            fi
+          done
+          echo "Validated $count specification(s) successfully."
+
+      - name: Run unit test suite
+        run: npm test
+
+      - name: Verify skill packaging (when present)
+        run: |
+          if [ -f scripts/verify_skills.cjs ]; then
+            echo "Running skill packaging verification..."
+            node scripts/verify_skills.cjs
+          else
+            echo "Packaging verification script (scripts/verify_skills.cjs) not present yet; skipping."
+          fi

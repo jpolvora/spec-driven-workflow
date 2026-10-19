@@ -153,10 +153,23 @@
 
 ---
 
+### 10. 🤖 GitHub Actions CI/CD, Agentic Code Review & Skills Distribution
+
+*Zero-dependency CI verification, fork-resilient agentic PR reviews, and vendor-neutral skills distribution.*
+
+- **Continuous Integration (`ci.yml`):** Automatically validates all specifications in `.sdw/specs/` in authoring mode, runs the zero-dependency unit test suite (`npm test`), and verifies skill packaging integrity (`scripts/verify_skills.cjs` when present) on pull requests and pushes to `main` and `develop`.
+- **Agentic Code Review (`agentic-code-review.yml`):** Runs the `agentic-code-reviewers` engine against the PR diff using configurable repository Variables (`SDW_CODE_REVIEW_ENGINE`, `SDW_CODE_REVIEW_MODEL`, `SDW_CODE_REVIEW_VARIANT`).
+- **Fork Safety & Credential Graceful Degradation:** When required secrets (`OPENCODE_API_KEY` or `CURSOR_API_KEY`) are missing (fork PRs or fresh clones), emits a standardized informational notice and exits cleanly with code `0` without failing PR checks.
+- **Unresolved Thread Merge Block:** Queries active GraphQL review threads (`pullRequest.reviewThreads`) and blocks merge until all reviewer comments have been addressed or resolved.
+- **SDW Review Prompt Contract (`.github/agentic-code-reviewers-prompt.md`):** Custom stack prompt encoding EARS conformance, Tier 1 line budgets (≤ ~120 lines), zero external runtime dependencies, agent and harness agnosticism, and breaking-changes policies.
+- **Skills Distribution (`release.yml`):** Triggers on semantic version tags (`v*.*.*`) or manual dispatch (`verify_only`), repeating validation and tests before creating a GitHub release without build artifacts, keeping skills directly consumable via `npx skills`.
+
+---
+
 ## 🗺️ Product Roadmap & Upcoming Horizons
 
 The following specifications are scheduled for upcoming execution phases:
 
 - **006 — Packaging & Vercel Skills Compatibility:** Standalone npm packaging, one-command installer, and seamless distribution across `.agents/skills/`.
 - **007 — SDW Memory Skill:** Integrated anti-regression project memory and vault trap retrieval.
-- **011 — GitHub Actions CI/CD Integration:** Automated workflow runs, agentic PR reviews, and skill distribution pipelines.
+

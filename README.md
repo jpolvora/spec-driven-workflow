@@ -90,6 +90,13 @@ flowchart TD
 
 ```text
 spec-driven-workflow/
+├── .github/                      # GitHub Actions automation & CI/CD
+│   ├── workflows/                # Continuous integration, code review, and release pipelines
+│   │   ├── ci.yml
+│   │   ├── agentic-code-review.yml
+│   │   └── release.yml
+│   ├── agentic-code-reviewers-prompt.md # SDW review contract for agentic reviewers
+│   └── README.md                 # GitHub integration documentation
 ├── .sdw/                         # Canonical template for consumer projects
 │   ├── config.json               # Default configuration schema
 │   ├── directory-structure.md    # Layout rules & documentation
@@ -110,6 +117,7 @@ spec-driven-workflow/
 ├── tests/                        # Automated unit & integration test suites
 │   ├── sdw_branch_worktree.test.cjs
 │   ├── sdw_config.test.cjs
+│   ├── sdw_github_actions.test.cjs
 │   ├── sdw_orch.test.cjs
 │   ├── sdw_orch_implementation.test.cjs
 │   ├── sdw_refinement_gates.test.cjs
