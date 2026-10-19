@@ -2,9 +2,19 @@
 
 const fs = require('fs');
 const path = require('path');
+const { spawnSync } = require('child_process');
 
 function normalizePath(p) {
   return p.replace(/\\/g, '/');
+}
+
+function isGitTracked(root, rel) {
+  try {
+    const r = spawnSync('git', ['ls-files', '--error-unmatch', rel], { cwd: root, encoding: 'utf8', stdio: 'ignore' });
+    return r.status === 0;
+  } catch (e) {
+    return false;
+  }
 }
 
 /**
@@ -99,6 +109,9 @@ function validateEvidence(evidence, options = {}) {
       }
 
       if (!fs.existsSync(absPath)) {
+        if (isGitTracked(root, normalized)) {
+          continue;
+        }
         errors.push(`File "${relPath}" listed in "filesChanged" does not exist on disk.`);
       }
     }

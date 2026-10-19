@@ -97,7 +97,8 @@ The specification originated from the user requirement:
   }
   ```
 
-- Step 8 Pre-PR Execution Lifecycle:
+- Step 8 Pre-PR Execution Lifecycle & Delegation:
+  - Per specification `024-sdw-ship-pr`, Step 8 of `sdw-orch` delegates pre-PR verification gates and delivery submission directly to `sdw-ship-pr`.
   1. Evaluate `prePrCommand` / project-specific instructions from `AGENTS.md` (e.g. version bump). If files are touched, scan for secret leaks and stage changes.
   2. If `requiredBuild: true`, execute `buildCommand`. On error, trigger fix loop (max 3 iterations).
   3. If `runAllTests: true`, execute `testCommand`. On error, trigger fix loop (max 3 iterations).

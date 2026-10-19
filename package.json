@@ -1,12 +1,17 @@
 {
   "name": "spec-driven-workflow",
-  "version": "0.0.5",
+  "version": "0.0.16",
   "description": "This is a rework of workflow-skills project\r The goal is to simplify.\r Today AI Models are smarter, it is not necessary a lot of instructions and complexity\r This will increase speed of execution and token consumption, minimize request load.",
   "main": "index.cjs",
   "scripts": {
-    "test": "node --test tests/*.test.cjs"
+    "test": "node --test tests/*.test.cjs",
+    "review": "node bin/review-dry-run.cjs",
+    "review:dry": "node bin/review-dry-run.cjs"
   },
   "keywords": [],
   "author": "",
-  "license": "ISC"
+  "license": "ISC",
+  "devDependencies": {
+    "opencode-ai": "1.19.1"
+  }
 }

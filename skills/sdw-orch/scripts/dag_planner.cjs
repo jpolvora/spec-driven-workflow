@@ -57,7 +57,7 @@ function generateDagPlan(specContent, options) {
         'skills/sdw-orch/scripts/spec_grilling.cjs',
         'skills/sdw-orch/scripts/dag_planner.cjs',
         'skills/sdw-orch/scripts/score_evaluator.cjs',
-        'skills/sdw-orch/scripts/review_runner.cjs'
+        'skills/sdw-code-review/scripts/sdw_code_review.cjs'
       ];
     } else if (slug.includes('config')) {
       defaultTargetFiles = ['skills/sdw-config/scripts/sdw_config.cjs'];

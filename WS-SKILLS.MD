@@ -227,10 +227,10 @@ None of this invalidates the architecture — but the report should distinguish 
 | # | Gap | Why it blocks | Maps to |
 |---|---|---|---|
 | 1 | Installer / packaging | Consumers cannot adopt; no `npx`, no update path | Spec 006 |
-| 2 | Real implementation dispatch (Step 4) | Orchestrator cannot build anything | New spec |
-| 3 | SCM intents (create PR, comment, close, threads, merge) | Pipeline stops at local commit | Spec 012 |
-| 4 | Evidence-based verification (AC ledger) | Current score is lexical and gameable | New spec |
-| 5 | Build/test execution gate | Claims tests pass without running them | New spec |
+| 2 | Real implementation dispatch (Step 4) | Orchestrator cannot build anything | Spec 015 |
+| 3 | SCM intents (create PR, comment, close, threads, merge) | Pipeline stops at local commit | Spec 016 |
+| 4 | Evidence-based verification (AC ledger) | Current score is lexical and gameable | Spec 017 |
+| 5 | Build/test execution gate | Claims tests pass without running them | Spec 015 |
 
 ### P1 — quality and continuity
 
@@ -238,22 +238,24 @@ None of this invalidates the architecture — but the report should distinguish 
 |---|---|---|
 | 6 | Persist refined spec + per-step artifacts | Spec 014 |
 | 7 | Memory skill / trap retrieval | Spec 007 |
-| 8 | Fresh independent verify + adversarial audit | New spec |
-| 9 | Config schema alignment (11 keys) | Quick fix |
-| 10 | Turn-boundary checkpoint / resume hardening | New spec |
-| 11 | Branch strategy options beyond `feature/{slug}` | Spec 010 (partial) |
+| 8 | Fresh independent verify + adversarial audit | Spec 018 |
+| 9 | Config schema alignment (11 keys) | Spec 015 |
+| 10 | Turn-boundary checkpoint / resume hardening | Spec 019 |
+| 11 | Branch strategy options beyond `feature/{slug}` | Spec 020 |
 
 ### P2 — ecosystem and observability
 
 | # | Gap | Recommendation |
 |---|---|---|
-| 12 | Live monitor / telemetry | Adopt a slim `sdw-monitor` |
-| 13 | Doctor + harness audit + FSM simulation | Adopt simplified `doctor`/`check` |
-| 14 | Activity/standup/explain reporting | Optional, consumer-driven |
+| 12 | Live monitor / telemetry | Spec 021 — slim `sdw-monitor` |
+| 13 | Doctor + harness audit + FSM simulation | Spec 022 — simplified `doctor`/`check` |
+| 14 | Activity/standup/explain reporting | Spec 023 — consumer-driven |
 | 15 | Wiki / kanban / dual board | Defer; high surface, low core value |
 | 16 | Multi-host subagent projection | Defer until installer exists |
 | 17 | Distributed multi-CLI baton | Skip — complexity not justified yet |
 | 18 | Benchmark suite / GUI editor / 3 package tiers | Skip |
+
+**Specification backlog:** 006, 007, 015–023. Specs 015–023 were authored from this report and pass canonical authoring validation.
 
 ---
 

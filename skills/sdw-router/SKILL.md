@@ -30,6 +30,7 @@ Always-autoloaded entrypoint and traffic controller routing agent tasks across a
 | Spec implementation, orchestration, DAG tasks, scoring, review, PR | `sdw-orch` | End-to-end implementation and delivery pipeline |
 | Behavioral rules, simplicity, YAGNI, anti-overengineering, trap log | `sdw-rules` | Shared engineering principles, simplicity, and traps |
 | Secret scanning, credentials leak check, pre-commit leak gate | `sdw-security-checks` | Pre-commit secrets and credentials leak scanner |
+| Deep working-tree code review, review fix planning, code-review | `sdw-code-review` | Standalone review, executable fix plans, and orch Step 7 delegation |
 | Unrecognized or general coding / conversation | *(Pass-through)* | Allows standard agent execution without intercepting |
 
 ## Steps
@@ -49,7 +50,7 @@ Always-autoloaded entrypoint and traffic controller routing agent tasks across a
    - Done when: Target skill is determined or pass-through signal is returned.
 
 3. **Dispatch Target Skill**
-   Load and invoke the selected skill (`sdw-config`, `sdw-spec`, or `sdw-orch`) with the user's intent.
+   Load and invoke the selected skill (`sdw-config`, `sdw-spec`, `sdw-orch`, or `sdw-code-review`) with the user's intent.
    - Done when: Target skill execution is initiated.
 
 ## References

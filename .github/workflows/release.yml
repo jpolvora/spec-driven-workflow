@@ -1,0 +1,74 @@
+name: Release and Distribution
+
+# Release & Distribution Workflow
+#
+# Triggers on semantic version tag pushes (v*.*.*) or manual dispatch.
+# Validates all specs, executes tests, verifies packaging, and creates a GitHub Release
+# without build artifacts so that the repository remains consumable directly via `npx skills`.
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      verify_only:
+        description: "Run verification only without publishing a release"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  verify-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Validate specifications in authoring mode
+        run: |
+          set -e
+          echo "Starting specification validation loop..."
+          count=0
+          for spec in .sdw/specs/*.md; do
+            if [ -f "$spec" ] && [ "$(basename "$spec")" != "index.specs.md" ]; then
+              echo "Validating $spec..."
+              node skills/sdw-spec/scripts/validate_spec.cjs --mode=authoring --repo-root . "$spec"
+              count=$((count + 1))
+            fi
+          done
+          echo "Validated $count specification(s) successfully."
+
+      - name: Run unit test suite
+        run: npm test
+
+      - name: Verify skill packaging (when present)
+        run: |
+          if [ -f scripts/verify_skills.cjs ]; then
+            echo "Running skill packaging verification..."
+            node scripts/verify_skills.cjs
+          else
+            echo "Packaging verification script (scripts/verify_skills.cjs) not present yet; skipping."
+          fi
+
+      - name: Publish GitHub Release (npx skills distribution)
+        if: ${{ !inputs.verify_only && startsWith(github.ref, 'refs/tags/v') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ github.ref_name }}"
+          echo "Publishing GitHub release for tag: ${TAG}"
+          # Publish tag release without compiled build artifacts so skills are consumed directly from repository sources
+          gh release create "${TAG}" --generate-notes --title "Release ${TAG}"
+          echo "Release ${TAG} published successfully."

@@ -98,7 +98,21 @@
 
 ---
 
-### 6. 🔒 `sdw-security-checks` — Configurable Pre-Commit Secrets & Leak Gate
+### 6. 🚢 `sdw-ship-pr` — Standalone Delivery, SCM Submission & Review Convergence
+
+*End-to-end PR shipping, pre-PR requirement checks, remote publishing, and automated review convergence.*
+
+- **Standalone & Delegated Invocation:** Directly invokable standalone (`node skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs` / `/sdw-ship-pr`) with dedicated subcommands (`ship`, `list-threads`, `resolve-thread`, `check-status`), or delegated by `sdw-orch` Step 8.
+- **Pre-PR Quality Verification Gates:** Evaluates `prePrInstructions`, `prePrCommand`, `requiredBuild`, `runAllTests`, and `securityChecksEnabled` from `.sdw/config.json`.
+- **Remote Branch Publishing:** Synchronizes the active branch to remote origin (`pushDelivery: true` or `--push`).
+- **Unified SCM PR Creation & Idempotency:** Agnostically creates or reuses open PRs for GitHub and Azure DevOps, or cleanly bypasses remote submission when `scmProvider: "none"`.
+- **Cooperative & Proactive Review Convergence:** Enforces a strict 8-step lifecycle (wait review/CI finish → check active threads → fetch all → cooperative defect class fix across sibling files → test verification → commit → push → close related threads).
+- **Push-Before-Resolve Mandate & Resolution Comment Contract:** Guarantees threads are never closed before the fix commit is pushed to the remote tracking branch. Posts a structured resolution reply comment citing the commit SHA, defect class, and fix summary.
+- **Zero-Mutation Dry-Run Simulation:** Simulates pre-PR checks, branch push, PR creation, and review polling without remote mutations when `--dry-run` is active.
+
+---
+
+### 7. 🔒 `sdw-security-checks` — Configurable Pre-Commit Secrets & Leak Gate
 
 *Deterministic, zero-dependency secret detection and leak prevention guarding against credential leaks before git commits.*
 
@@ -110,7 +124,7 @@
 
 ---
 
-### 7. 🛡️ Orchestrator Refinement & Pre-PR Quality Gates
+### 8. 🛡️ Orchestrator Refinement & Pre-PR Quality Gates
 
 *Consolidated technical planning and ironclad repository-level quality gates before PR publication.*
 
@@ -121,27 +135,30 @@
 
 ---
 
-### 8. 📜 Human-Auditable Step Artifacts Persistence
+### 9. 📜 Human-Auditable Step Artifacts Persistence
 
 *Deterministic side-effect persistence capturing intermediate reasoning, task graphs, and verification evidence.*
 
-- **Human-Auditable Evidence:** Steps 2, 3, and 5 automatically persist structured Markdown artifacts under `.sdw/state/{slug}/{runId}/`, providing transparency without altering pipeline execution semantics.
+- **Human-Auditable Evidence:** Steps 2, 3, 5, and 7 automatically persist structured Markdown artifacts under `.sdw/state/{slug}/{runId}/`, providing transparency without altering pipeline execution semantics.
 - **Step 2 (Refinement Artifact `{slug}-step-2.md`):** Records detected decision gaps, resolutions applied per gap, the decision tree walk summary, and the full refined specification snapshot.
 - **Step 3 (DAG Generation Artifact `{slug}-step-3.md`):** Documents complexity analysis, task decomposition (dependencies, covered acceptance criteria, target files), and context-fenced task prompts.
 - **Step 5 (Scoring Artifact `{slug}-step-5.md`):** Summarizes implementation touched files, quantitative conformance score breakdown, verified criteria table, failing criteria table, and evaluator feedback.
+- **Step 7 (Delegated Review Artifact `{slug}-step-7.md`):** The `sdw-code-review` Markdown fix-plan report (header, findings table, detailed findings, executable fix plan) written via `--report`.
 - **State Linkage & Best-Effort Resilience:** The run state records `artifactsDir` and per-step `artifact` paths. Failures in artifact generation log warnings and record errors without halting delivery execution.
 
 ---
 
-### 9. 🧪 Battle-Tested Quality & Zero-Flake Test Suite
+### 10. 🧪 Battle-Tested Quality & Zero-Flake Test Suite
 
 *Engineering rigor backed by 100% native automated tests.*
 
 - **Native Node.js Test Runner:** Built with `node:test` and `node:assert/strict` — zero third-party testing frameworks required.
-- **97 Comprehensive Test Scenarios:**
+- **166 Comprehensive Test Scenarios:**
+  - `sdw_code_review.test.cjs`: Standalone execution, base auto-detection, report generation, surgical auto-fix, dry-run simulation, orchestrator delegation, router registration, and fail-closed negatives.
   - `sdw_config.test.cjs`: Configuration parsing, schema validation, token expansion, and initialization gates.
   - `sdw_spec.test.cjs`: Index bootstrapping, EARS validation, synthesis, SCM provider contract, state synchronization, and archival quality gates.
   - `sdw_orch.test.cjs`: State machine transitions, derivation, grilling decision trees, DAG decomposition, scoring gates, code review auto-fixing, remote push publishing, and unattended multi-spec batch queue execution.
+  - `sdw_ship_pr.test.cjs`: Standalone PR shipping, dry-run simulation, pre-PR requirement checks, review convergence with summary comments, and orchestrator delegation.
   - `sdw_refinement_gates.test.cjs`: Step 2 Refinement state machine naming, technical blueprint ingestion into Step 3, config schema validation, build and test quality gates, automated fix retry loops, and pre-PR lifecycle hooks.
   - `sdw_step_artifacts.test.cjs`: Intermediate step artifact persistence (steps 2, 3, 5), directory isolation (`.sdw/state/{slug}/{runId}/`), run state linkage, deterministic overwrite on re-execution, and resilient failure handling.
   - `sdw_branch_worktree.test.cjs`: Feature branch lifecycle, dirty tree refusal, branch reuse, worktree creation/cleanup, cherry-pick integration, and runtime overrides.
@@ -153,10 +170,36 @@
 
 ---
 
+### 11. 🤖 GitHub Actions CI/CD, Agentic Code Review & Skills Distribution
+
+*Zero-dependency CI verification, fork-resilient agentic PR reviews, and vendor-neutral skills distribution.*
+
+- **Continuous Integration (`ci.yml`):** Automatically validates all specifications in `.sdw/specs/` in authoring mode, runs the zero-dependency unit test suite (`npm test`), and verifies skill packaging integrity (`scripts/verify_skills.cjs` when present) on pull requests and pushes to `main` and `develop`.
+- **Agentic Code Review (`agentic-code-review.yml`):** Runs the `agentic-code-reviewers` engine against the PR diff using configurable repository Variables (`SDW_CODE_REVIEW_ENGINE`, `SDW_CODE_REVIEW_MODEL`, `SDW_CODE_REVIEW_VARIANT`).
+- **Fork Safety & Credential Graceful Degradation:** When required secrets (`OPENCODE_API_KEY` or `CURSOR_API_KEY`) are missing (fork PRs or fresh clones), emits a standardized informational notice and exits cleanly with code `0` without failing PR checks.
+- **Unresolved Thread Merge Block:** Queries active GraphQL review threads (`pullRequest.reviewThreads`) and blocks merge until all reviewer comments have been addressed or resolved.
+- **SDW Review Prompt Contract (`.github/agentic-code-reviewers-prompt.md`):** Custom stack prompt encoding EARS conformance, Tier 1 line budgets (≤ ~120 lines), zero external runtime dependencies, agent and harness agnosticism, and breaking-changes policies.
+- **Local Review Dry Run (`npm run review:dry`):** Reproduces the CI reviewer locally against the current branch (`develop` → `master`) with the Custom stack prompt, a pinned `opencode-ai@1.19.1` dev dependency, the OS `OPENCODE_API_KEY` through the `opencode-go` provider, and `--dry-run` so no PR threads are created.
+- **Safe Review Convergence:** `sdw-ship-pr` waits between rounds (`--poll-interval`, default 20s) and refuses to resolve active review threads unless a `reviewFixCommand` or `threadFixer` applied and verified a fix; unresolved threads are reported as `review_pending`.
+- **Skills Distribution (`release.yml`):** Triggers on semantic version tags (`v*.*.*`) or manual dispatch (`verify_only`), repeating validation and tests before creating a GitHub release without build artifacts, keeping skills directly consumable via `npx skills`.
+
+### 12. 🔍 `sdw-code-review` — Standalone Deep Review, Fix Planning & Orchestrator Delegation
+
+*Lean, harness-agnostic working-tree code reviewer that doubles as the `sdw-orch` Step 7 authority.*
+
+- **Standalone & User-Invocable:** Directly runnable at any time (`node skills/sdw-code-review/scripts/sdw_code_review.cjs run|fix|doctor` / `/sdw-code-review`), or dispatched as a subagent/CLI runner under `sdw-orch` Step 7.
+- **Auto-Detected Base & Full-Tree Scope:** Resolves the comparison target via explicit `--base`, config `baseBranch`, tracking remotes (`origin/main|master`), local branches, merge-base, or initial commit; inspects committed (`base..HEAD`) plus uncommitted (staged, unstaged, untracked) diffs.
+- **Karpathy-Grounded Rules:** Enforces simplicity first (YAGNI, surgical scope, no speculative generality) and syntax hygiene (active `debugger`, unresolved TODOs, committed secrets, sensitive filenames) with Fowler-baseline smells (oversized diffs).
+- **Executable Report Contract:** Emits a Markdown fix plan (header, findings table, detailed hunks, ordered checklist) plus structured JSON (`passed`, `errorCount`, `warningCount`, `suggestionCount`, `findings` with stable `CR-001` IDs, severity, `file:line`, rule, and fix prescription).
+- **Surgical Auto-Fix & Dry-Run:** Applies minimal fixes (debugger removal) up to the iteration ceiling (default 3); `--dry-run` reports planned fixes without touching disk; blocking residuals exit non-zero.
+- **Orchestrator Delegation:** `sdw-orch` Step 7 holds no duplicated review logic — it dispatches the CLI, parses JSON, gates fix commits through `sdw-security-checks`, and persists `{slug}-step-7.md`.
+
+---
+
 ## 🗺️ Product Roadmap & Upcoming Horizons
 
 The following specifications are scheduled for upcoming execution phases:
 
 - **006 — Packaging & Vercel Skills Compatibility:** Standalone npm packaging, one-command installer, and seamless distribution across `.agents/skills/`.
 - **007 — SDW Memory Skill:** Integrated anti-regression project memory and vault trap retrieval.
-- **011 — GitHub Actions CI/CD Integration:** Automated workflow runs, agentic PR reviews, and skill distribution pipelines.
+

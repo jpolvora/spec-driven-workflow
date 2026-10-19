@@ -10,7 +10,6 @@ const specDerivation = require('./spec_derivation.cjs');
 const specGrilling = require('./spec_grilling.cjs');
 const dagPlanner = require('./dag_planner.cjs');
 const scoreEvaluator = require('./score_evaluator.cjs');
-const reviewRunner = require('./review_runner.cjs');
 const batchRunner = require('./batch_runner.cjs');
 const artifactWriter = require('./artifact_writer.cjs');
 const implementationRunner = require('./implementation_runner.cjs');
@@ -137,6 +136,149 @@ function getBaseCommit(projectRoot) {
   }
 }
 
+function assertSafeSlug(specSlug) {
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(String(specSlug))) {
+    throw new Error(
+      `Invalid specification slug "${specSlug}". Expected lowercase letters, digits, and hyphens (^[a-z0-9][a-z0-9-]*$).`
+    );
+  }
+}
+
+function git(targetRoot, args, options = {}) {
+  const result = spawnSync('git', args, { cwd: targetRoot, encoding: 'utf8', ...options });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    const stderr = result.stderr ? String(result.stderr).trim() : '';
+    throw new Error(stderr || `git ${args.join(' ')} failed (exit ${result.status})`);
+  }
+  return result.stdout;
+}
+
+function normalizeRel(p) {
+  return String(p || '').replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
+function isScopedExcluded(rel) {
+  const n = normalizeRel(rel);
+  return n.startsWith('.sdw/state/') || n === '.sdw/state'
+    || n.startsWith('.sdw/worktrees/') || n === '.sdw/worktrees'
+    || n.startsWith('.git/');
+}
+
+function getStatusFiles(targetRoot) {
+  try {
+    const out = execSync('git status --porcelain', { cwd: targetRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    if (!out) return [];
+    return out.split('\n')
+      .map(l => l.trim().replace(/^[A-Z?]{1,2}\s+/, '').trim().replace(/^"(.*)"$/, '$1'))
+      .filter(Boolean)
+      .map(normalizeRel)
+      .filter(f => !isScopedExcluded(f));
+  } catch (e) {
+    return [];
+  }
+}
+
+function statSignature(targetRoot, rel) {
+  try {
+    const abs = path.join(targetRoot, rel);
+    if (!fs.existsSync(abs)) return '<deleted>';
+    const st = fs.statSync(abs);
+    if (!st.isFile()) return '<dir>';
+    return `${st.mtimeMs}:${st.size}`;
+  } catch (e) {
+    return '<error>';
+  }
+}
+
+function snapshotStats(targetRoot) {
+  const m = new Map();
+  for (const f of getStatusFiles(targetRoot)) {
+    m.set(f, statSignature(targetRoot, f));
+  }
+  return m;
+}
+
+function diffSinceSnapshot(targetRoot, beforeStats) {
+  const afterFiles = getStatusFiles(targetRoot);
+  const delta = [];
+  for (const f of afterFiles) {
+    const before = beforeStats ? beforeStats.get(f) : undefined;
+    const now = statSignature(targetRoot, f);
+    if (before === undefined || before !== now) delta.push(f);
+  }
+  return delta;
+}
+
+function isGitTracked(targetRoot, rel) {
+  const r = spawnSync('git', ['ls-files', '--error-unmatch', rel], { cwd: targetRoot, encoding: 'utf8', stdio: 'ignore' });
+  return r.status === 0;
+}
+
+function stageAndCommitOnly(targetRoot, files, message) {
+  const clean = [...new Set((files || []).map(normalizeRel))]
+    .filter(f => f && !f.includes('..') && !path.isAbsolute(f) && !/^[a-zA-Z]:/.test(f) && !isScopedExcluded(f));
+  const stageable = [];
+  for (const f of clean) {
+    const abs = path.join(targetRoot, f);
+    if (fs.existsSync(abs)) {
+      stageable.push(f);
+    } else if (isGitTracked(targetRoot, f)) {
+      stageable.push(f);
+    }
+  }
+  if (stageable.length === 0) {
+    return { committed: false, commitSha: getBaseCommit(targetRoot), files: [] };
+  }
+  git(targetRoot, ['add', '--', ...stageable], { stdio: 'ignore' });
+  let staged = '';
+  try {
+    staged = execSync('git diff --cached --name-only', { cwd: targetRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch (e) {
+    staged = '';
+  }
+  if (!staged) {
+    return { committed: false, commitSha: getBaseCommit(targetRoot), files: stageable };
+  }
+  git(targetRoot, ['commit', '-m', message], { stdio: 'ignore' });
+  return { committed: true, commitSha: getBaseCommit(targetRoot), files: stageable };
+}
+
+function collectDeliveryFiles(targetRoot, specSlug, state) {
+  const files = new Set();
+  const tasks = (state && state.steps && state.steps[4] && state.steps[4].tasks) || {};
+  for (const t of Object.values(tasks)) {
+    if (t && t.status === 'completed' && Array.isArray(t.filesChanged)) {
+      for (const f of t.filesChanged) {
+        const n = normalizeRel(String(f || '').trim());
+        if (n && !n.includes('..') && !path.isAbsolute(n) && !/^[a-zA-Z]:/.test(n) && !isScopedExcluded(n)) {
+          files.add(n);
+        }
+      }
+    }
+    if (t && t.status === 'completed' && Array.isArray(t.acIds) && t.filesChanged === undefined && Array.isArray(t.files)) {
+      for (const f of t.files) {
+        const n = normalizeRel(String(f || '').trim());
+        if (n && !n.includes('..') && !path.isAbsolute(n) && !isScopedExcluded(n)) files.add(n);
+      }
+    }
+  }
+  try {
+    const cfg = loadProjectConfig(targetRoot);
+    const specsDirAbs = cfg && cfg.specsDir ? path.resolve(cfg.specsDir) : path.join(path.resolve(targetRoot), '.sdw', 'specs');
+    const idxAbs = path.join(specsDirAbs, 'index.specs.md');
+    if (fs.existsSync(idxAbs)) {
+      const rel = normalizeRel(path.relative(path.resolve(targetRoot), idxAbs));
+      if (rel && !rel.includes('..') && !isScopedExcluded(rel)) files.add(rel);
+    }
+  } catch (e) {}
+  const fallbackIdx = '.sdw/specs/index.specs.md';
+  try {
+    if (fs.existsSync(path.join(path.resolve(targetRoot), fallbackIdx))) files.add(fallbackIdx);
+  } catch (e) {}
+  return [...files].sort();
+}
+
 function runSecurityGate(targetRoot, options = {}) {
   try {
     const secScanner = require('../../sdw-security-checks/scripts/sdw_security_checks.cjs');
@@ -166,6 +308,9 @@ function runVerificationGates(targetRoot, config, options = {}) {
   const runId = options.runId;
 
   const verificationConfig = (config && config.verification) || {};
+  const gateTimeoutMs = Number(verificationConfig.timeoutMs) > 0
+    ? Number(verificationConfig.timeoutMs)
+    : 600000;
   const reqBuild = options.requiredBuild !== undefined
     ? options.requiredBuild
     : Boolean(config.requiredBuild || (verificationConfig.buildCommand && typeof verificationConfig.buildCommand === 'string'));
@@ -184,7 +329,7 @@ function runVerificationGates(targetRoot, config, options = {}) {
 
     while (!buildPassed && buildAttempts <= maxFixAttempts) {
       try {
-        execSync(buildCmd, { cwd: targetRoot, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8' });
+        execSync(buildCmd, { cwd: targetRoot, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', timeout: gateTimeoutMs });
         buildPassed = true;
         const durationMs = Date.now() - start;
         gates.build = { status: 'passed', exitCode: 0, durationMs };
@@ -207,11 +352,12 @@ function runVerificationGates(targetRoot, config, options = {}) {
         }
 
         console.log(`[Step 4: Verification Gate] Build failed. Attempting automated surgical fix (attempt ${buildAttempts}/${maxFixAttempts})...`);
+        const fixBefore = snapshotStats(targetRoot);
         if (typeof options.buildFixer === 'function') {
           options.buildFixer(targetRoot, buildAttempts);
         }
-        const fixStatus = execSync('git status --porcelain', { cwd: targetRoot, encoding: 'utf8' }).trim();
-        if (fixStatus) {
+        const fixDelta = diffSinceSnapshot(targetRoot, fixBefore);
+        if (fixDelta.length > 0) {
           if (Boolean(config.securityChecksEnabled) && !options.skipSecurity) {
             const sec = runSecurityGate(targetRoot, { staged: false });
             if (sec.exitCode !== 0) {
@@ -224,8 +370,7 @@ function runVerificationGates(targetRoot, config, options = {}) {
               break;
             }
           }
-          execSync('git add -A', { cwd: targetRoot, stdio: 'ignore' });
-          execSync(`git commit -m "fix(${specSlug}): resolve build failure (attempt ${buildAttempts})"`, { cwd: targetRoot, stdio: 'ignore' });
+          stageAndCommitOnly(targetRoot, fixDelta, `fix(${specSlug}): resolve build failure (attempt ${buildAttempts})`);
         }
       }
     }
@@ -242,7 +387,7 @@ function runVerificationGates(targetRoot, config, options = {}) {
 
     while (!testPassed && testAttempts <= maxFixAttempts) {
       try {
-        execSync(testCmd, { cwd: targetRoot, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8' });
+        execSync(testCmd, { cwd: targetRoot, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', timeout: gateTimeoutMs });
         testPassed = true;
         const durationMs = Date.now() - start;
         gates.test = { status: 'passed', exitCode: 0, durationMs };
@@ -265,11 +410,12 @@ function runVerificationGates(targetRoot, config, options = {}) {
         }
 
         console.log(`[Step 4: Verification Gate] Tests failed. Attempting automated surgical fix (attempt ${testAttempts}/${maxFixAttempts})...`);
+        const testFixBefore = snapshotStats(targetRoot);
         if (typeof options.testFixer === 'function') {
           options.testFixer(targetRoot, testAttempts);
         }
-        const fixStatus = execSync('git status --porcelain', { cwd: targetRoot, encoding: 'utf8' }).trim();
-        if (fixStatus) {
+        const testFixDelta = diffSinceSnapshot(targetRoot, testFixBefore);
+        if (testFixDelta.length > 0) {
           if (Boolean(config.securityChecksEnabled) && !options.skipSecurity) {
             const sec = runSecurityGate(targetRoot, { staged: false });
             if (sec.exitCode !== 0) {
@@ -282,8 +428,7 @@ function runVerificationGates(targetRoot, config, options = {}) {
               break;
             }
           }
-          execSync('git add -A', { cwd: targetRoot, stdio: 'ignore' });
-          execSync(`git commit -m "fix(${specSlug}): resolve test failure (attempt ${testAttempts})"`, { cwd: targetRoot, stdio: 'ignore' });
+          stageAndCommitOnly(targetRoot, testFixDelta, `fix(${specSlug}): resolve test failure (attempt ${testAttempts})`);
         }
       }
     }
@@ -382,6 +527,14 @@ function cmdRun(options) {
   const slugMatch = rawSpecContent.match(/slug:\s*([^\r\n]+)/);
   const specSlug = slugMatch ? slugMatch[1].trim() : specBasename.replace(/^step-\d+-/, '');
 
+  try {
+    assertSafeSlug(specSlug);
+  } catch (slugErr) {
+    console.error(`[sdw-orch] ${slugErr.message}`);
+    options._runResult = { error: slugErr.message };
+    return 1;
+  }
+
   // Quality check: inspect index.specs.md status if available
   const specIndex = getSpecIndexHelper();
   if (specIndex) {
@@ -446,22 +599,10 @@ function cmdRun(options) {
   let activeBranch = currentBranch;
   let branchReused = false;
 
-  // Feature branch activation before step 1 (AC6, AC7, AC8)
+  // Feature branch activation before step 1 (AC6, AC8)
+  // Dirty working trees are allowed: execution proceeds independently of git
+  // state and delivery commits stage only tracked spec files (scoped commits).
   if (useFeatureBranches) {
-    // AC7: Refuse dirty working tree
-    try {
-      const statusOut = execSync('git status --porcelain', { cwd: targetRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-      if (statusOut) {
-        console.error(`[Branch Activation] Error: Git working tree is dirty; cannot create or switch feature branch.`);
-        options._runResult = { status: 'failed', error: 'Working tree is dirty; refusing feature branch activation' };
-        return 1;
-      }
-    } catch (gitErr) {
-      console.error(`[Branch Activation] Git error: ${gitErr.message}`);
-      options._runResult = { status: 'failed', error: gitErr.message };
-      return 1;
-    }
-
     const targetBranch = `feature/${specSlug}`;
     if (currentBranch === targetBranch) {
       branchReused = true;
@@ -472,7 +613,7 @@ function cmdRun(options) {
       if (branchCheck.status === 0) {
         // AC8: Switch to existing branch and record reuse
         try {
-          execSync(`git switch ${targetBranch}`, { cwd: targetRoot, stdio: 'ignore' });
+          git(targetRoot, ['switch', targetBranch], { stdio: 'ignore' });
           branchReused = true;
           activeBranch = targetBranch;
           console.log(`[Branch Activation] Reused and switched to existing feature branch "${targetBranch}".`);
@@ -483,7 +624,7 @@ function cmdRun(options) {
       } else {
         // AC6: Create and switch to new feature branch
         try {
-          execSync(`git switch -c ${targetBranch}`, { cwd: targetRoot, stdio: 'ignore' });
+          git(targetRoot, ['switch', '-c', targetBranch], { stdio: 'ignore' });
           branchReused = false;
           activeBranch = targetBranch;
           console.log(`[Branch Activation] Created and switched to feature branch "${targetBranch}" from ${baseBranch}.`);
@@ -654,6 +795,15 @@ function cmdRun(options) {
     const specAcs = dagPlanner.parseAcceptanceCriteria(effectiveSpecContent);
 
     if (implMode === 'handoff') {
+      if (useWorktrees) {
+        // Handoff prepares prompts for an external worker; task worktrees are not created here.
+        // Fall back to the primary tree instead of advertising a non-existent working directory.
+        useWorktrees = false;
+        state.worktreeSkipReason = 'handoff mode uses the primary working tree; task worktrees are only created in command mode';
+        state = stateManager.saveRunState(targetRoot, state);
+        console.log(`[Step 4: Worktree] Worktrees skipped in handoff mode; using the primary working tree.`);
+      }
+
       // AC3: write one prompt file per DAG task
       const preparedTasks = [];
       for (const task of dagPlan.tasks) {
@@ -985,7 +1135,8 @@ function cmdRun(options) {
         state.securityGate = { bypassed: true, reason: '--skip-security' };
       } else {
         console.log(`[Step 6: Security Gate] securityChecksEnabled=true; running pre-commit leak scan...`);
-        const scanResult = runSecurityGate(targetRoot, { staged: true });
+        // Scan the worktree before staging: implementation changes are typically unstaged at this point.
+        const scanResult = runSecurityGate(targetRoot, { staged: false });
         state.securityGate = {
           bypassed: false,
           exitCode: scanResult.exitCode,
@@ -1014,16 +1165,21 @@ function cmdRun(options) {
         } catch (e) {}
       }
 
-      const statusOut = execSync('git status --porcelain', { cwd: targetRoot, encoding: 'utf8' }).trim();
-      if (statusOut) {
-        console.log(`[Step 6: Delivery Commit] Staging and committing implementation changes...`);
-        execSync('git add -A', { cwd: targetRoot, stdio: 'ignore' });
-        execSync(`git commit -m "feat(${specSlug}): implement ${specSlug}"`, { cwd: targetRoot, stdio: 'ignore' });
-        commitSha = getBaseCommit(targetRoot);
-        console.log(`[Step 6: Delivery Commit] Created delivery commit ${commitSha}`);
+      // Scoped delivery commit: stage only tracked spec files (evidence
+      // filesChanged + spec index). Unrelated worktree changes are left alone.
+      const deliveryFiles = collectDeliveryFiles(targetRoot, specSlug, state);
+      if (deliveryFiles.length > 0) {
+        console.log(`[Step 6: Delivery Commit] Staging scoped delivery files (${deliveryFiles.length}): ${deliveryFiles.join(', ')}`);
+        const res = stageAndCommitOnly(targetRoot, deliveryFiles, `feat(${specSlug}): implement ${specSlug}`);
+        commitSha = res.commitSha;
+        if (res.committed) {
+          console.log(`[Step 6: Delivery Commit] Created delivery commit ${commitSha}`);
+        } else {
+          console.log(`[Step 6: Delivery Commit] No scoped changes to commit; using commit ${commitSha}`);
+        }
       } else {
         commitSha = getBaseCommit(targetRoot) || baseCommit;
-        console.log(`[Step 6: Delivery Commit] Working tree clean; using commit ${commitSha}`);
+        console.log(`[Step 6: Delivery Commit] No tracked spec files to commit; using commit ${commitSha}`);
       }
     } catch (err) {
       console.log(`[Step 6: Delivery Commit] Git note: ${err.message}`);
@@ -1034,47 +1190,133 @@ function cmdRun(options) {
     state = stateManager.updateStepState(targetRoot, state.runId, 6, 'completed', { deliveryCommit: commitSha });
   }
 
-  // Step 7: Automated Code Review Loop (AC12, AC13)
+  // Step 7: Delegated Code Review via sdw-code-review (Spec 025)
+  // Sole review authority is skills/sdw-code-review; orchestrator dispatches
+  // CLI runner (or subagent in handoff) and inspects the JSON report.
   if (startStep <= 7 && state.steps[7].status !== 'completed' && !options.skipReview) {
     state = stateManager.updateStepState(targetRoot, state.runId, 7, 'in_progress');
-    let reviewReport = reviewRunner.runAutomatedReview({ projectRoot: targetRoot, baseCommit: state.baseCommit });
-    console.log(`[Step 7: Automated Review] ${reviewReport.summary}`);
+    const codeReviewScript = path.resolve(__dirname, '../../sdw-code-review/scripts/sdw_code_review.cjs');
+    const hasCodeReview = fs.existsSync(codeReviewScript);
+
+    if (!hasCodeReview) {
+      const msg = `sdw-code-review skill missing at "${codeReviewScript}". Run packaging installer to restore skills/.`;
+      console.error(`[Step 7: Delegated Review] ${msg}`);
+      state = stateManager.updateStepState(targetRoot, state.runId, 7, 'review_failed', { error: msg });
+      state.status = 'failed';
+      stateManager.saveRunState(targetRoot, state);
+      options._runResult = { runId: state.runId, status: 'failed', error: msg };
+      return 1;
+    }
+
+    let artifactsDirAbs = null;
+    try {
+      artifactsDirAbs = artifactWriter.ensureArtifactDir(targetRoot, specSlug, state.runId, state.artifactsDir);
+    } catch (e) { artifactsDirAbs = null; }
+    const reportAbsPath = artifactsDirAbs
+      ? path.join(artifactsDirAbs, `${specSlug}-step-7.md`)
+      : path.join(targetRoot, '.sdw', 'state', 'code-review.report.md');
+
+    function parseReviewJson(stdout) {
+      try {
+        const t = String(stdout || '').trim();
+        if (!t) return null;
+        const s = t.indexOf('{');
+        const e = t.lastIndexOf('}');
+        if (s !== -1 && e !== -1 && e > s) return JSON.parse(t.slice(s, e + 1));
+        return JSON.parse(t);
+      } catch (err) { return null; }
+    }
+
+    function invokeCodeReviewCli(useFix) {
+      const cliArgs = [codeReviewScript, 'run', '--target', targetRoot, '--report', reportAbsPath, '--json', '--max-iterations', '1'];
+      if (state.baseCommit) cliArgs.push('--base', state.baseCommit);
+      if (useFix) cliArgs.push('--fix');
+      try {
+        const proc = spawnSync(process.execPath, cliArgs, { cwd: targetRoot, encoding: 'utf8' });
+        const parsed = parseReviewJson(proc.stdout);
+        if (parsed) return { report: parsed, exitCode: proc.status };
+      } catch (e) {}
+      return null;
+    }
+
+    function invokeCodeReviewModule(useFix) {
+      try {
+        const cr = require('../../sdw-code-review/scripts/sdw_code_review.cjs');
+        const report = cr.runCodeReview({
+          projectRoot: targetRoot,
+          base: state.baseCommit || null,
+          report: reportAbsPath,
+          fix: Boolean(useFix),
+          dryRun: false,
+          maxIterations: 1
+        });
+        return { report, exitCode: report.passed ? 0 : 1 };
+      } catch (e) { return null; }
+    }
+
+    function invokeReview(useFix) {
+      return invokeCodeReviewCli(useFix) || invokeCodeReviewModule(useFix);
+    }
+
+    console.log(`[Step 7: Delegated Review] Dispatching sdw-code-review (CLI) against base '${state.baseCommit || 'auto'}'...`);
+    let first = invokeReview(false);
+    if (!first || !first.report) {
+      const msg = 'sdw-code-review invocation failed with no parsable JSON report.';
+      console.error(`[Step 7: Delegated Review] ${msg}`);
+      state = stateManager.updateStepState(targetRoot, state.runId, 7, 'review_failed', { error: msg });
+      state.status = 'failed';
+      stateManager.saveRunState(targetRoot, state);
+      options._runResult = { runId: state.runId, status: 'failed', error: msg };
+      return 1;
+    }
+    let reviewReport = first.report;
+    console.log(`[Step 7: Delegated Review] ${reviewReport.passed ? 'Code review passed.' : `Code review failed with ${reviewReport.blockingCount || 0} blocking finding(s).`} Report: ${reviewReport.reportPath || reportAbsPath}`);
 
     let reviewLoop = 0;
-    while (!reviewReport.passed && reviewLoop < 3) {
+    while (reviewReport && !reviewReport.passed && reviewLoop < 3) {
+      const fixable = (reviewReport.findings || []).filter(f => f.fixable && f.status === 'open');
+      if (fixable.length === 0) break;
       reviewLoop++;
-      console.log(`[Step 7: Automated Review] Applying auto-fixes for iteration ${reviewLoop}...`);
-      const fixed = reviewRunner.applyAutoFixes(reviewReport.findings, targetRoot);
-      if (fixed.length === 0) {
+      console.log(`[Step 7: Delegated Review] Applying auto-fixes for iteration ${reviewLoop}...`);
+      const fixRes = invokeReview(true);
+      if (!fixRes || !fixRes.report) break;
+      const fixedFiles = fixRes.report.fixedFiles || [];
+      if (fixedFiles.length === 0) {
+        reviewReport = fixRes.report;
         break;
       }
-      // Security checks gate before review-fix commit (AC7)
       if (Boolean(config.securityChecksEnabled) && !options.skipSecurity) {
         console.log(`[Step 7: Security Gate] Running pre-commit leak scan before review-fix commit...`);
-        const scanResult = runSecurityGate(targetRoot, { staged: true });
+        const scanResult = runSecurityGate(targetRoot, { staged: false });
         if (scanResult.exitCode !== 0) {
           console.error(`[Step 7: Security Gate] Review-fix commit blocked by security checks gate (exit code ${scanResult.exitCode}).`);
+          reviewReport = fixRes.report;
           break;
         }
       }
       try {
-        execSync('git add -A', { cwd: targetRoot, stdio: 'ignore' });
-        execSync(`git commit -m "fix(${specSlug}): apply automated review fixes (iteration ${reviewLoop})"`, { cwd: targetRoot, stdio: 'ignore' });
+        stageAndCommitOnly(targetRoot, fixedFiles, `fix(${specSlug}): apply automated review fixes (iteration ${reviewLoop})`);
       } catch (e) {}
-      reviewReport = reviewRunner.runAutomatedReview({ projectRoot: targetRoot, baseCommit: state.baseCommit });
+      const verify = invokeReview(false);
+      reviewReport = (verify && verify.report) ? verify.report : fixRes.report;
     }
 
     state.reviewIteration = reviewLoop;
+    let artifactRel = null;
+    try {
+      artifactRel = path.relative(targetRoot, reportAbsPath).replace(/\\/g, '/');
+    } catch (e) { artifactRel = null; }
     if (!reviewReport.passed) {
-      console.error(`[Step 7: Automated Review] Review loop halted with unresolved errors.`);
-      state = stateManager.updateStepState(targetRoot, state.runId, 7, 'review_failed', reviewReport);
+      console.error(`[Step 7: Delegated Review] Review loop halted with unresolved errors.`);
+      state = stateManager.updateStepState(targetRoot, state.runId, 7, 'review_failed', reviewReport, null, artifactRel ? { artifact: artifactRel } : undefined);
       state.status = 'failed';
       stateManager.saveRunState(targetRoot, state);
+      options._runResult = { runId: state.runId, status: 'failed', error: 'Unresolved code review findings' };
       return 1;
     }
 
     state.reviewCommit = getBaseCommit(targetRoot);
-    state = stateManager.updateStepState(targetRoot, state.runId, 7, 'completed', reviewReport);
+    state = stateManager.updateStepState(targetRoot, state.runId, 7, 'completed', reviewReport, null, artifactRel ? { artifact: artifactRel } : undefined);
   } else if (options.skipReview) {
     state = stateManager.updateStepState(targetRoot, state.runId, 7, 'skipped', { reason: 'Skipped via --skip-review' });
   }
@@ -1083,144 +1325,153 @@ function cmdRun(options) {
   if (startStep <= 8 && state.steps[8].status !== 'completed' && !options.skipPr) {
     state = stateManager.updateStepState(targetRoot, state.runId, 8, 'in_progress');
 
-    // 1. Project-Specific Pre-PR Instructions / Lifecycle Hook (AC11, AC12)
-    if (config.prePrInstructions) {
-      console.log(`[Step 8: Pre-PR Gate] Evaluating project pre-PR instructions: "${config.prePrInstructions}"`);
-    }
-    if (config.prePrCommand || typeof options.prePrHook === 'function') {
-      try {
-        if (config.prePrCommand) {
-          console.log(`[Step 8: Pre-PR Gate] Executing pre-PR command: "${config.prePrCommand}"...`);
-          execSync(config.prePrCommand, { cwd: targetRoot, stdio: 'inherit' });
-        }
-        if (typeof options.prePrHook === 'function') {
-          options.prePrHook(targetRoot);
-        }
-        const prePrStatus = execSync('git status --porcelain', { cwd: targetRoot, encoding: 'utf8' }).trim();
-        if (prePrStatus) {
-          // Verify secret leaks before staging pre-PR modifications (AC12)
-          if (Boolean(config.securityChecksEnabled) && !options.skipSecurity) {
-            const secRes = runSecurityGate(targetRoot, { staged: false });
-            if (secRes.exitCode !== 0) {
-              console.error(`[Step 8: Pre-PR Gate] Pre-PR changes rejected by security leak check.`);
-              state.status = 'failed';
-              stateManager.recordError(targetRoot, state.runId, 8, 'Pre-PR changes rejected by security leak check');
-              return 1;
-            }
-          }
-          execSync('git add -A', { cwd: targetRoot, stdio: 'ignore' });
-          execSync(`git commit -m "chore(${specSlug}): apply pre-pr requirements"`, { cwd: targetRoot, stdio: 'ignore' });
-          state.deliveryCommit = getBaseCommit(targetRoot);
-          stateManager.saveRunState(targetRoot, state);
-        }
-      } catch (err) {
-        console.error(`[Step 8: Pre-PR Gate] Pre-PR command failed: ${err.message}`);
-        state.status = 'failed';
-        stateManager.recordError(targetRoot, state.runId, 8, `Pre-PR command failed: ${err.message}`);
-        return 1;
+    const shipPrScript = path.resolve(__dirname, '../../sdw-ship-pr/scripts/sdw_ship_pr.cjs');
+    const hasShipPr = fs.existsSync(shipPrScript);
+
+    // If sdw-ship-pr is available and no unit-test fixer hooks are passed, delegate pre-PR gates to sdw-ship-pr as single owner
+    if (!hasShipPr || options.testFixer || options.buildFixer || options.prePrHook) {
+      // 1. Project-Specific Pre-PR Instructions / Lifecycle Hook (AC11, AC12)
+      if (config.prePrInstructions) {
+        console.log(`[Step 8: Pre-PR Gate] Evaluating project pre-PR instructions: "${config.prePrInstructions}"`);
       }
-    }
-
-    // 2. Pre-PR Quality Gates (Build Verification & Full Test Pass) (AC5, AC6, AC7, AC8, AC9, AC10)
-    const requiredBuild = Boolean(config.requiredBuild);
-    const runAllTests = Boolean(config.runAllTests);
-
-    if (!requiredBuild && !runAllTests) {
-      console.log(`[Step 8: Pre-PR Verification] Build and test verification skipped (requiredBuild: false, runAllTests: false).`);
-    } else {
-      // Build Verification (AC5, AC8, AC9, AC10)
-      if (requiredBuild) {
-        const buildCmd = config.buildCommand || 'npm run build';
-        console.log(`[Step 8: Pre-PR Verification] Running build check: ${buildCmd}`);
-        let buildPassed = false;
-        let buildAttempts = 0;
-        const maxFixAttempts = 3;
-
-        while (!buildPassed && buildAttempts <= maxFixAttempts) {
-          try {
-            execSync(buildCmd, { cwd: targetRoot, stdio: ['ignore', 'pipe', 'pipe'] });
-            buildPassed = true;
-          } catch (buildErr) {
-            buildAttempts++;
-            if (buildAttempts > maxFixAttempts) {
-              console.error(`[Step 8: Pre-PR Verification] Build verification failed after ${maxFixAttempts} attempt(s). Halting.`);
-              state.status = 'failed';
-              stateManager.recordError(targetRoot, state.runId, 8, `Build verification failed after ${maxFixAttempts} attempt(s): ${buildErr.message}`);
-              return 1;
-            }
-            console.log(`[Step 8: Pre-PR Verification] Build failed. Attempting automated surgical fix (attempt ${buildAttempts}/${maxFixAttempts})...`);
-            if (typeof options.buildFixer === 'function') {
-              options.buildFixer(targetRoot, buildAttempts);
-            }
-            const fixStatus = execSync('git status --porcelain', { cwd: targetRoot, encoding: 'utf8' }).trim();
-            if (fixStatus) {
-              if (Boolean(config.securityChecksEnabled) && !options.skipSecurity) {
-                const sec = runSecurityGate(targetRoot, { staged: false });
-                if (sec.exitCode !== 0) {
-                  console.error(`[Step 8: Pre-PR Verification] Fix commit rejected: secret leak detected.`);
-                  state.status = 'failed';
-                  stateManager.recordError(targetRoot, state.runId, 8, 'Fix commit rejected: secret leak detected');
-                  return 1;
-                }
-              }
-              execSync('git add -A', { cwd: targetRoot, stdio: 'ignore' });
-              execSync(`git commit -m "fix(${specSlug}): resolve build failure (attempt ${buildAttempts})"`, { cwd: targetRoot, stdio: 'ignore' });
-              state.deliveryCommit = getBaseCommit(targetRoot);
-              stateManager.saveRunState(targetRoot, state);
-            } else {
-              console.error(`[Step 8: Pre-PR Verification] No automated fixes could be generated for build failure.`);
-              state.status = 'failed';
-              stateManager.recordError(targetRoot, state.runId, 8, `Build verification failed: ${buildErr.message}`);
-              return 1;
-            }
+      if (config.prePrCommand || typeof options.prePrHook === 'function') {
+        const prePrBefore = snapshotStats(targetRoot);
+        try {
+          if (config.prePrCommand) {
+            console.log(`[Step 8: Pre-PR Gate] Executing pre-PR command: "${config.prePrCommand}"...`);
+            execSync(config.prePrCommand, { cwd: targetRoot, stdio: 'inherit' });
           }
+          if (typeof options.prePrHook === 'function') {
+            options.prePrHook(targetRoot);
+          }
+          const prePrDelta = diffSinceSnapshot(targetRoot, prePrBefore);
+          if (prePrDelta.length > 0) {
+            // Verify secret leaks before staging pre-PR modifications (AC12)
+            if (Boolean(config.securityChecksEnabled) && !options.skipSecurity) {
+              const secRes = runSecurityGate(targetRoot, { staged: false });
+              if (secRes.exitCode !== 0) {
+                console.error(`[Step 8: Pre-PR Gate] Pre-PR changes rejected by security leak check.`);
+                state.status = 'failed';
+                stateManager.recordError(targetRoot, state.runId, 8, 'Pre-PR changes rejected by security leak check');
+                return 1;
+              }
+            }
+            stageAndCommitOnly(targetRoot, prePrDelta, `chore(${specSlug}): apply pre-pr requirements`);
+            state.deliveryCommit = getBaseCommit(targetRoot);
+            stateManager.saveRunState(targetRoot, state);
+          }
+        } catch (err) {
+          console.error(`[Step 8: Pre-PR Gate] Pre-PR command failed: ${err.message}`);
+          state.status = 'failed';
+          stateManager.recordError(targetRoot, state.runId, 8, `Pre-PR command failed: ${err.message}`);
+          return 1;
         }
       }
 
-      // Test Verification (AC6, AC8, AC9, AC10)
-      if (runAllTests) {
-        const testCmd = config.testCommand || 'npm test';
-        console.log(`[Step 8: Pre-PR Verification] Running test suite: ${testCmd}`);
-        let testPassed = false;
-        let testAttempts = 0;
-        const maxFixAttempts = 3;
+      // 2. Pre-PR Quality Gates (Build Verification & Full Test Pass) (AC5, AC6, AC7, AC8, AC9, AC10)
+      const requiredBuild = Boolean(config.requiredBuild);
+      const runAllTests = Boolean(config.runAllTests);
+      const gateTimeoutMs = Number(config.verification && config.verification.timeoutMs) > 0
+        ? Number(config.verification.timeoutMs)
+        : 600000;
 
-        while (!testPassed && testAttempts <= maxFixAttempts) {
-          try {
-            execSync(testCmd, { cwd: targetRoot, stdio: ['ignore', 'pipe', 'pipe'] });
-            testPassed = true;
-          } catch (testErr) {
-            testAttempts++;
-            if (testAttempts > maxFixAttempts) {
-              console.error(`[Step 8: Pre-PR Verification] Test verification failed after ${maxFixAttempts} attempt(s). Halting.`);
-              state.status = 'failed';
-              stateManager.recordError(targetRoot, state.runId, 8, `Test verification failed after ${maxFixAttempts} attempt(s): ${testErr.message}`);
-              return 1;
-            }
-            console.log(`[Step 8: Pre-PR Verification] Tests failed. Attempting automated surgical fix (attempt ${testAttempts}/${maxFixAttempts})...`);
-            if (typeof options.testFixer === 'function') {
-              options.testFixer(targetRoot, testAttempts);
-            }
-            const fixStatus = execSync('git status --porcelain', { cwd: targetRoot, encoding: 'utf8' }).trim();
-            if (fixStatus) {
-              if (Boolean(config.securityChecksEnabled) && !options.skipSecurity) {
-                const sec = runSecurityGate(targetRoot, { staged: false });
-                if (sec.exitCode !== 0) {
-                  console.error(`[Step 8: Pre-PR Verification] Fix commit rejected: secret leak detected.`);
-                  state.status = 'failed';
-                  stateManager.recordError(targetRoot, state.runId, 8, 'Fix commit rejected: secret leak detected');
-                  return 1;
-                }
+      if (!requiredBuild && !runAllTests) {
+        console.log(`[Step 8: Pre-PR Verification] Build and test verification skipped (requiredBuild: false, runAllTests: false).`);
+      } else {
+        // Build Verification (AC5, AC8, AC9, AC10)
+        if (requiredBuild) {
+          const buildCmd = config.buildCommand || 'npm run build';
+          console.log(`[Step 8: Pre-PR Verification] Running build check: ${buildCmd}`);
+          let buildPassed = false;
+          let buildAttempts = 0;
+          const maxFixAttempts = 3;
+
+          while (!buildPassed && buildAttempts <= maxFixAttempts) {
+            try {
+              execSync(buildCmd, { cwd: targetRoot, stdio: ['ignore', 'pipe', 'pipe'], timeout: gateTimeoutMs });
+              buildPassed = true;
+            } catch (buildErr) {
+              buildAttempts++;
+              if (buildAttempts > maxFixAttempts) {
+                console.error(`[Step 8: Pre-PR Verification] Build verification failed after ${maxFixAttempts} attempt(s). Halting.`);
+                state.status = 'failed';
+                stateManager.recordError(targetRoot, state.runId, 8, `Build verification failed after ${maxFixAttempts} attempt(s): ${buildErr.message}`);
+                return 1;
               }
-              execSync('git add -A', { cwd: targetRoot, stdio: 'ignore' });
-              execSync(`git commit -m "fix(${specSlug}): resolve test failure (attempt ${testAttempts})"`, { cwd: targetRoot, stdio: 'ignore' });
-              state.deliveryCommit = getBaseCommit(targetRoot);
-              stateManager.saveRunState(targetRoot, state);
-            } else {
-              console.error(`[Step 8: Pre-PR Verification] No automated fixes could be generated for test failure.`);
-              state.status = 'failed';
-              stateManager.recordError(targetRoot, state.runId, 8, `Test verification failed: ${testErr.message}`);
-              return 1;
+              console.log(`[Step 8: Pre-PR Verification] Build failed. Attempting automated surgical fix (attempt ${buildAttempts}/${maxFixAttempts})...`);
+              const buildFixBefore = snapshotStats(targetRoot);
+              if (typeof options.buildFixer === 'function') {
+                options.buildFixer(targetRoot, buildAttempts);
+              }
+              const buildFixDelta = diffSinceSnapshot(targetRoot, buildFixBefore);
+              if (buildFixDelta.length > 0) {
+                if (Boolean(config.securityChecksEnabled) && !options.skipSecurity) {
+                  const sec = runSecurityGate(targetRoot, { staged: false });
+                  if (sec.exitCode !== 0) {
+                    console.error(`[Step 8: Pre-PR Verification] Fix commit rejected: secret leak detected.`);
+                    state.status = 'failed';
+                    stateManager.recordError(targetRoot, state.runId, 8, 'Fix commit rejected: secret leak detected');
+                    return 1;
+                  }
+                }
+                stageAndCommitOnly(targetRoot, buildFixDelta, `fix(${specSlug}): resolve build failure (attempt ${buildAttempts})`);
+                state.deliveryCommit = getBaseCommit(targetRoot);
+                stateManager.saveRunState(targetRoot, state);
+              } else {
+                console.error(`[Step 8: Pre-PR Verification] No automated fixes could be generated for build failure.`);
+                state.status = 'failed';
+                stateManager.recordError(targetRoot, state.runId, 8, `Build verification failed: ${buildErr.message}`);
+                return 1;
+              }
+            }
+          }
+        }
+
+        // Test Verification (AC6, AC8, AC9, AC10)
+        if (runAllTests) {
+          const testCmd = config.testCommand || 'npm test';
+          console.log(`[Step 8: Pre-PR Verification] Running test suite: ${testCmd}`);
+          let testPassed = false;
+          let testAttempts = 0;
+          const maxFixAttempts = 3;
+
+          while (!testPassed && testAttempts <= maxFixAttempts) {
+            try {
+              execSync(testCmd, { cwd: targetRoot, stdio: ['ignore', 'pipe', 'pipe'], timeout: gateTimeoutMs });
+              testPassed = true;
+            } catch (testErr) {
+              testAttempts++;
+              if (testAttempts > maxFixAttempts) {
+                console.error(`[Step 8: Pre-PR Verification] Test verification failed after ${maxFixAttempts} attempt(s). Halting.`);
+                state.status = 'failed';
+                stateManager.recordError(targetRoot, state.runId, 8, `Test verification failed after ${maxFixAttempts} attempt(s): ${testErr.message}`);
+                return 1;
+              }
+              console.log(`[Step 8: Pre-PR Verification] Tests failed. Attempting automated surgical fix (attempt ${testAttempts}/${maxFixAttempts})...`);
+              const testFixBefore = snapshotStats(targetRoot);
+              if (typeof options.testFixer === 'function') {
+                options.testFixer(targetRoot, testAttempts);
+              }
+              const testFixDelta = diffSinceSnapshot(targetRoot, testFixBefore);
+              if (testFixDelta.length > 0) {
+                if (Boolean(config.securityChecksEnabled) && !options.skipSecurity) {
+                  const sec = runSecurityGate(targetRoot, { staged: false });
+                  if (sec.exitCode !== 0) {
+                    console.error(`[Step 8: Pre-PR Verification] Fix commit rejected: secret leak detected.`);
+                    state.status = 'failed';
+                    stateManager.recordError(targetRoot, state.runId, 8, 'Fix commit rejected: secret leak detected');
+                    return 1;
+                  }
+                }
+                stageAndCommitOnly(targetRoot, testFixDelta, `fix(${specSlug}): resolve test failure (attempt ${testAttempts})`);
+                state.deliveryCommit = getBaseCommit(targetRoot);
+                stateManager.saveRunState(targetRoot, state);
+              } else {
+                console.error(`[Step 8: Pre-PR Verification] No automated fixes could be generated for test failure.`);
+                state.status = 'failed';
+                stateManager.recordError(targetRoot, state.runId, 8, `Test verification failed: ${testErr.message}`);
+                return 1;
+              }
             }
           }
         }
@@ -1239,57 +1490,128 @@ function cmdRun(options) {
     };
     console.log(`[Step 8: PR Preparation] Assembled PR payload: "${prPayload.title}".`);
 
-    // Mark spec as completed in index.specs.md if helper exists (AC24)
+    // Optional Remote Review Resolution Loop & SCM Provider state (AC14, AC15, AC20)
+    const pollPr = options.pollPr !== undefined ? options.pollPr : (config.scmCodeReviewEnabled || false);
+    const currentScm = state.scm || { provider: config.scmProvider || 'none', resolvedFrom: 'config', cliInstalled: null, cliAuthenticated: null, skipped: false, skipReason: null, errors: [] };
+    if (currentScm.provider === 'none') {
+      console.log(`[Step 8: PR Preparation] SCM polling skipped (scmProvider: none).`);
+      currentScm.skipped = true;
+      currentScm.skipReason = 'scmProvider is set to "none"';
+    } else {
+      const scmContract = getScmProviderContract();
+      const capability = scmContract ? scmContract.checkScmCapability(currentScm.provider) : { available: false, error: 'contract unavailable' };
+      currentScm.cliInstalled = capability.installed;
+      currentScm.cliAuthenticated = capability.authenticated;
+
+      if (!capability.available) {
+        console.warn(`[Step 8: PR Preparation] SCM polling skipped: ${capability.error}`);
+        currentScm.skipped = true;
+        currentScm.skipReason = capability.error;
+        if (!currentScm.errors) currentScm.errors = [];
+        currentScm.errors.push(capability.error);
+      } else if (pollPr) {
+        console.log(`[Step 8: PR Preparation] SCM code review loop enabled via ${currentScm.provider} (${capability.bin}). Polling for reviewer feedback...`);
+        prPayload.pollEnabled = true;
+        prPayload.scmProvider = currentScm.provider;
+      }
+    }
+    state.scm = currentScm;
+    state = stateManager.saveRunState(targetRoot, state);
+
+    // Delegate PR delivery, SCM submission, and review convergence to sdw-ship-pr (AC12, AC13)
+    if (hasShipPr) {
+      try {
+        console.log(`[sdw-orch Step 8] Delegating delivery to sdw-ship-pr...`);
+        // argv form: specSlug/runId/paths are never interpreted by a shell.
+        const shipArgs = [
+          shipPrScript,
+          '--run-id', state.runId,
+          '--spec', specSlug,
+          '--root', targetRoot,
+          ...(options.push || config.pushDelivery ? ['--push'] : []),
+          ...(pollPr ? ['--poll-pr'] : []),
+          ...(options.dryRun ? ['--dry-run'] : []),
+          '--json'
+        ];
+
+        const shipProc = spawnSync(process.execPath, shipArgs, {
+          cwd: targetRoot,
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'pipe']
+        });
+        if (shipProc.error) throw shipProc.error;
+        const shipStdout = shipProc.stdout || '';
+        if (!String(shipStdout).trim() && shipProc.status !== 0) {
+          const shipErr = shipProc.stderr ? String(shipProc.stderr).trim() : '';
+          throw new Error(shipErr || `sdw-ship-pr exited with code ${shipProc.status}`);
+        }
+
+        let shipResult = null;
+        try {
+          const trimmed = (shipStdout || '').trim();
+          const jsonStart = trimmed.indexOf('{');
+          const jsonEnd = trimmed.lastIndexOf('}');
+          if (jsonStart !== -1 && jsonEnd !== -1) {
+            shipResult = JSON.parse(trimmed.slice(jsonStart, jsonEnd + 1));
+          } else {
+            shipResult = JSON.parse(trimmed);
+          }
+        } catch (e) {
+          console.warn(`[sdw-orch Step 8] Note: Failed to parse sdw-ship-pr JSON output: ${e.message}`);
+        }
+
+        if (shipResult) {
+          if (shipResult.success === false || shipResult.shipStatus === 'failed') {
+            throw new Error(shipResult.error || 'sdw-ship-pr reported delivery failure');
+          }
+          if (shipResult.pullRequest) {
+            state.pullRequest = shipResult.pullRequest;
+            prPayload.pullRequest = shipResult.pullRequest;
+          }
+          state.shipStatus = shipResult.shipStatus;
+          prPayload.shipStatus = shipResult.shipStatus;
+          if (shipResult.pushed) {
+            state.pushedBranch = shipResult.head;
+            prPayload.pushedBranch = shipResult.head;
+          }
+          prPayload.reviewConvergence = shipResult.reviewConvergence;
+        }
+      } catch (shipErr) {
+        console.error(`[sdw-orch Step 8] Delivery failed: ${shipErr.message}`);
+        state.status = 'failed';
+        state = stateManager.updateStepState(targetRoot, state.runId, 8, 'failed', { error: shipErr.message });
+        stateManager.recordError(targetRoot, state.runId, 8, shipErr.message);
+        options._runResult = { runId: state.runId, status: 'failed', error: shipErr.message };
+        return 1;
+      }
+    }
+
+    state = stateManager.updateStepState(targetRoot, state.runId, 8, 'completed', prPayload);
+
+    // Mark spec as completed in index.specs.md after successful delivery (AC24)
     if (specIndex) {
       try {
         specIndex.updateSpecStatus(specSlug, 'completed', { root: targetRoot });
       } catch (e) {}
     }
-
-    // Optional Remote Review Resolution Loop (AC14, AC15, AC20)
-    const pollPr = options.pollPr !== undefined ? options.pollPr : (config.scmCodeReviewEnabled || false);
-    if (pollPr) {
-      const currentScm = state.scm || { provider: 'none', resolvedFrom: 'config', cliInstalled: null, cliAuthenticated: null, skipped: false, skipReason: null, errors: [] };
-      if (currentScm.provider === 'none') {
-        console.log(`[Step 8: PR Preparation] SCM polling skipped (scmProvider: none).`);
-        currentScm.skipped = true;
-        currentScm.skipReason = 'scmProvider is set to "none"';
-      } else {
-        const scmContract = getScmProviderContract();
-        const capability = scmContract ? scmContract.checkScmCapability(currentScm.provider) : { available: false, error: 'contract unavailable' };
-        currentScm.cliInstalled = capability.installed;
-        currentScm.cliAuthenticated = capability.authenticated;
-
-        if (!capability.available) {
-          console.warn(`[Step 8: PR Preparation] SCM polling skipped: ${capability.error}`);
-          currentScm.skipped = true;
-          currentScm.skipReason = capability.error;
-          if (!currentScm.errors) currentScm.errors = [];
-          currentScm.errors.push(capability.error);
-        } else {
-          console.log(`[Step 8: PR Preparation] SCM code review loop enabled via ${currentScm.provider} (${capability.bin}). Polling for reviewer feedback...`);
-          prPayload.pollEnabled = true;
-          prPayload.scmProvider = currentScm.provider;
-        }
-      }
-      state.scm = currentScm;
-      state = stateManager.saveRunState(targetRoot, state);
-    }
-
-    state = stateManager.updateStepState(targetRoot, state.runId, 8, 'completed', prPayload);
   } else if (options.skipPr) {
     state = stateManager.updateStepState(targetRoot, state.runId, 8, 'skipped', { reason: 'Skipped via --skip-pr' });
+    if (specIndex) {
+      try {
+        specIndex.updateSpecStatus(specSlug, 'completed', { root: targetRoot });
+      } catch (e) {}
+    }
   }
 
-  // Remote Push / Branch Publishing (--push or config.pushDelivery) (AC14)
+  // Remote Push / Branch Publishing (--push or config.pushDelivery) fallback
   const shouldPush = options.push !== undefined ? options.push : (config && config.pushDelivery);
-  if (shouldPush) {
+  if (shouldPush && !state.pushedBranch) {
     try {
       const remotes = execSync('git remote', { cwd: targetRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
       const currentBranch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: targetRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
       if (remotes && currentBranch && currentBranch !== 'HEAD') {
         console.log(`[sdw-orch] Pushing delivery branch to origin/${currentBranch}...`);
-        execSync(`git push origin ${currentBranch}`, { cwd: targetRoot, stdio: 'inherit' });
+        git(targetRoot, ['push', 'origin', currentBranch], { stdio: 'inherit' });
         state.pushedBranch = currentBranch;
       } else if (!remotes) {
         console.log(`[sdw-orch] Remote push skipped: no git remote configured.`);
@@ -1299,7 +1621,7 @@ function cmdRun(options) {
       if (!state.errors) state.errors = [];
       state.errors.push({ step: 8, timestamp: new Date().toISOString(), error: `git push failed: ${pushErr.message}` });
     }
-  } else {
+  } else if (!shouldPush) {
     console.log(`[Step 8: PR Preparation] Pre-PR verification passed. PR payload assembled (remote push disabled).`);
   }
 
@@ -1359,7 +1681,7 @@ function cmdTaskFinish(options) {
   }
 
   const config = loadProjectConfig(targetRoot);
-  const useWorktrees = options.worktrees ? true : (options.noWorktrees ? false : Boolean(config.worktrees));
+  const useWorktrees = options.worktrees ? true : (options.noWorktrees ? false : Boolean(config.useWorktrees));
 
   const dagTasks = (Array.isArray(state.dagTasks) && state.dagTasks.length > 0)
     ? state.dagTasks
@@ -1491,9 +1813,14 @@ function cmdTaskFinish(options) {
     // Run verification gates (AC17, AC18, AC19)
     console.log(`Executing verification gates on integrated tree...`);
     const gateResults = runVerificationGates(targetRoot, config, { ...options, runId: state.runId, slug: state.specSlug });
+    // runVerificationGates records failures through stateManager.recordError, which reloads and
+    // writes the state file. Reload before writing gates so those failures are not overwritten.
+    state = stateManager.loadRunState(targetRoot, state.runId) || state;
     state.steps[4].gates = gateResults.gates;
     if (!gateResults.passed) {
       console.error(`Verification gates failed.`);
+      state.steps[4].status = 'failed';
+      state.status = 'failed';
       stateManager.saveRunState(targetRoot, state);
       return 1;
     }
@@ -1548,8 +1875,9 @@ function cmdResume(options) {
 
   let resumptionStep = stateManager.getResumptionStep(state);
 
-  // If resuming at or before Step 4, check task completion and verification gates (AC20)
-  if (resumptionStep <= 4) {
+  // Only the Step 4 resumption path owns task completion and verification gates (AC20).
+  // Resuming at Steps 1-3 must let cmdRun generate the DAG and enter Step 4 normally.
+  if (resumptionStep === 4) {
     const dagTasks = (Array.isArray(state.dagTasks) && state.dagTasks.length > 0)
       ? state.dagTasks
       : ((state.steps[3] && state.steps[3].output && state.steps[3].output.tasks) || []);
@@ -1559,6 +1887,19 @@ function cmdResume(options) {
     const incompleteTasks = dagTasks.filter(t => !completedTasks.includes(t.id));
 
     if (incompleteTasks.length > 0) {
+      const resumeConfig = loadProjectConfig(targetRoot);
+      const implMode = options.implementationMode || (resumeConfig.implementation && resumeConfig.implementation.mode) || 'handoff';
+      if (implMode === 'command') {
+        console.log(`[sdw-orch resume] Command mode detected; re-entering Step 4 to dispatch the configured command.`);
+        return cmdRun({
+          ...options,
+          specPath: state.specPath,
+          runId: state.runId,
+          startStep: 4,
+          implementationMode: 'command'
+        });
+      }
+
       console.error(`[sdw-orch resume] Cannot advance past Step 4: ${incompleteTasks.length} task(s) remain incomplete:`);
       dagTasks.forEach(t => {
         const isDone = completedTasks.includes(t.id);
@@ -1779,5 +2120,10 @@ module.exports = {
   cmdTaskFinish,
   showHelp,
   loadProjectConfig,
-  resolveSpecPath
+  resolveSpecPath,
+  collectDeliveryFiles,
+  stageAndCommitOnly,
+  getStatusFiles,
+  snapshotStats,
+  diffSinceSnapshot
 };

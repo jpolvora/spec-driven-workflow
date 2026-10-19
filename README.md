@@ -1,5 +1,7 @@
 # Spec-Driven Workflow (SDW)
 
+[![Agentic Code Review](https://github.com/jpolvora/spec-driven-workflow/actions/workflows/agentic-code-review.yml/badge.svg)](https://github.com/jpolvora/spec-driven-workflow/actions/workflows/agentic-code-review.yml)
+
 A streamlined, deterministic framework for spec-driven software development with AI coding agents.
 
 ---
@@ -74,15 +76,15 @@ flowchart TD
    - Runs pre-commit secret leak scan (`sdw-security-checks`) when enabled.
    - Creates an atomic, structured delivery git commit (`feat(...)`).
 
-7. **Automated Code Review Loop**
-   - Compares the newly committed code against the base branch commit.
-   - Evaluates project-specific coding standards, architectural invariants, security risks, and regressions.
-   - If warnings or findings are reported, applies targeted surgical fixes and creates updated commits in an iterative loop until all findings are resolved.
+7. **Automated Code Review Loop (Delegated to `sdw-code-review`)**
+   - Dispatches `sdw-code-review` to inspect working-tree and branch diffs against an auto-detected base branch.
+   - Evaluates Karpathy Guidelines, `sdw-rules` simplicity, surgical diff hygiene, and syntax invariants.
+   - Generates an actionable Markdown fix plan (`{slug}-step-7.md`) and applies surgical fixes in an iterative loop.
 
-8. **Pre-PR Quality Gates, PR Preparation & Remote Review Resolution Loop**
-   - Runs opt-in build verification (`requiredBuild`, `buildCommand`) and full test execution pass (`runAllTests`, `testCommand`) with an automated surgical fix loop (up to 3 attempts) and secret leak scanning.
-   - Executes optional project-specific pre-PR commands (`prePrCommand`) and instructions (`prePrInstructions`).
-   - Marks the feature spec as completed, assembles PR metadata, and pushes to remote origin when `--push` is enabled.
+8. **PR Preparation, Delivery & Review Convergence (Delegated to `sdw-ship-pr`)**
+   - Delegates pre-PR verification gates (`requiredBuild`, `runAllTests`, `prePrCommand`, `prePrInstructions`) and delivery publishing to `sdw-ship-pr`.
+   - Executes cooperative and proactive review convergence with push-before-resolve guarantees, posting structured resolution comments before closing threads.
+   - Updates the specification index to `completed` and records PR metadata in the run state.
 
 ---
 
@@ -90,6 +92,15 @@ flowchart TD
 
 ```text
 spec-driven-workflow/
+├── bin/                          # Repository tooling (local review dry run)
+│   └── review-dry-run.cjs        # Pinned OpenCode 1.19.1 + agentic-code-reviewers
+├── .github/                      # GitHub Actions automation & CI/CD
+│   ├── workflows/                # Continuous integration, code review, and release pipelines
+│   │   ├── ci.yml
+│   │   ├── agentic-code-review.yml
+│   │   └── release.yml
+│   ├── agentic-code-reviewers-prompt.md # SDW review contract for agentic reviewers
+│   └── README.md                 # GitHub integration documentation
 ├── .sdw/                         # Canonical template for consumer projects
 │   ├── config.json               # Default configuration schema
 │   ├── directory-structure.md    # Layout rules & documentation
@@ -101,15 +112,19 @@ spec-driven-workflow/
 │   ├── traps.md                  # Central anti-regression trap log
 │   └── worktrees/                # Ephemeral per-task git worktrees for isolated subagents
 ├── skills/                       # Canonical source of truth for all skills
+│   ├── sdw-code-review/          # Standalone deep working-tree review & fix planning
 │   ├── sdw-config/               # Project configuration & verification skill
 │   ├── sdw-orch/                 # End-to-end workflow orchestrator skill
 │   ├── sdw-router/               # Always-autoloaded entrypoint and skill router
 │   ├── sdw-rules/                # Shared behavioral rules, simplicity & anti-overengineering
 │   ├── sdw-security-checks/      # Pre-commit secrets and credentials leak scanner
+│   ├── sdw-ship-pr/              # Standalone PR shipping & review convergence skill
 │   └── sdw-spec/                 # Spec authoring, validation, sync, and index manager
 ├── tests/                        # Automated unit & integration test suites
 │   ├── sdw_branch_worktree.test.cjs
+│   ├── sdw_code_review.test.cjs
 │   ├── sdw_config.test.cjs
+│   ├── sdw_github_actions.test.cjs
 │   ├── sdw_orch.test.cjs
 │   ├── sdw_orch_implementation.test.cjs
 │   ├── sdw_refinement_gates.test.cjs
@@ -117,6 +132,7 @@ spec-driven-workflow/
 │   ├── sdw_rules.test.cjs
 │   ├── sdw_scm_provider.test.cjs
 │   ├── sdw_security_checks.test.cjs
+│   ├── sdw_ship_pr.test.cjs
 │   ├── sdw_spec.test.cjs
 │   └── sdw_step_artifacts.test.cjs
 ├── AGENTS.md                     # Mandatory rules and protocols for AI agents
@@ -217,6 +233,47 @@ node skills/sdw-security-checks/scripts/sdw_security_checks.cjs scan --staged
 # Emit structured JSON report
 node skills/sdw-security-checks/scripts/sdw_security_checks.cjs scan --staged --json
 ```
+
+### Using `sdw-ship-pr` (PR Shipping & Review Convergence)
+
+The `sdw-ship-pr` skill executes pre-PR verification, publishes branches, creates/reuses PRs, and runs automated review convergence:
+
+```bash
+# Execute standalone PR shipping with pre-PR verification
+node skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs --head <branch> --base <baseBranch>
+
+# Dry-run simulation without git push or remote mutations
+node skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs --head develop --dry-run --json
+
+# Ship and run review convergence loop with resolution summary comments
+node skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs --head develop --push --poll-pr
+```
+
+### Using `sdw-code-review` (Deep Review & Fix Planning)
+
+The `sdw-code-review` skill deeply analyzes committed and uncommitted working-tree changes against an auto-detected base branch, and doubles as the `sdw-orch` Step 7 delegation target:
+
+```bash
+# Review working tree and HEAD diffs (auto-detected base), write Markdown fix plan
+node skills/sdw-code-review/scripts/sdw_code_review.cjs run
+
+# Review with surgical auto-fixes (up to 3 iterations) and JSON output
+node skills/sdw-code-review/scripts/sdw_code_review.cjs fix --json
+
+# Simulate fixes without modifying files
+node skills/sdw-code-review/scripts/sdw_code_review.cjs run --fix --dry-run --json
+```
+
+### Local Agentic Code Review Dry Run
+
+Runs the same `agentic-code-reviewers` recipe as CI against the current branch (`develop` → `master`) without publishing PR threads:
+
+```bash
+npm install          # installs the pinned opencode-ai@1.19.1 dev dependency
+npm run review:dry   # alias: npm run review
+```
+
+The helper uses the `OPENCODE_API_KEY` from the OS environment through the `opencode-go` provider, forces the pinned OpenCode `1.19.1` binary, and passes `--dry-run` with the Custom stack prompt. Findings are printed as `::error` / `::warning` annotations and the command exits `0` even when issues are found. See [AGENTS.md](AGENTS.md#10-local-code-review-dry-run-agentic-code-reviewers) for overrides.
 
 ## 5. License & Contribution
 

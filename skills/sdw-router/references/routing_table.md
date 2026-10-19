@@ -68,6 +68,28 @@ When evaluating a user turn, the router applies four strict precedence tiers:
   - "Resume interrupted run run-1792396125490"
   - "Check status of the current orchestrator execution"
 
+### Skill: `sdw-ship-pr`
+- **Domain**: Pull request preparation, pre-PR requirement checks, remote branch publishing, SCM PR creation/reuse, and automated review convergence.
+- **Explicit Invocations**: `/sdw-ship-pr`, `@sdw-ship-pr`, `sdw-ship-pr`, `/ship-pr`, `@ship-pr`, `ship-pr`
+- **Trigger Keywords**:
+  - `ship pr`, `ship-pr`, `create pr`, `open pr`, `submit pr`, `deliver pr`
+  - `pre-pr`, `poll pr`, `resolve review`, `resolve thread`, `review convergence`, `converge`
+- **Typical Prompts**:
+  - "Check pre-PR requirements and ship a pull request for develop"
+  - "Open a PR on GitHub and resolve reviewer comments"
+  - "Run PR review convergence loop on PR #3"
+
+### Skill: `sdw-code-review`
+- **Domain**: Standalone deep working-tree code review, actionable fix planning, and orchestrator Step 7 delegation.
+- **Explicit Invocations**: `/sdw-code-review`, `@sdw-code-review`, `sdw-code-review`, `/code-review`, `@code-review`, `code-review`
+- **Trigger Keywords**:
+  - `code review`, `code-review`, `review code`, `deep review`, `sdw-code-review`
+  - `review findings`, `fix review`, `review fix plan`, `run review`, `blocking findings`, `code review report`
+- **Typical Prompts**:
+  - "Run a deep code review on current working tree changes"
+  - "Review code changes against the base branch and plan fixes"
+  - "Check review findings and apply surgical fixes"
+
 ---
 
 ## 3. Disambiguation on Tied Confidence

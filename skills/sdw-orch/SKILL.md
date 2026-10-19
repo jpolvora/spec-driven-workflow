@@ -35,7 +35,7 @@ When executing multiple specifications (`run <spec1> <spec2> ...` or batch queue
 ## Steps
 
 1. **Spec Ingestion & Derivation**
-   Resolve project root and create isolated run state in `.sdw/state/{runId}.state.json`. If `useFeatureBranches: true`, verify clean working tree and activate feature branch (`feature/{specSlug}`). If the spec is human-friendly, derive an agentic spec; if already formatted, skip derivation.
+   Resolve project root and create isolated run state in `.sdw/state/{runId}.state.json`. If `useFeatureBranches: true`, activate feature branch (`feature/{specSlug}`); dirty trees are allowed and never block execution. If the spec is human-friendly, derive an agentic spec; if already formatted, skip derivation.
    - Run: `node skills/sdw-orch/scripts/sdw_orch.cjs run <specPath> [options]`
    - Done when: Run state exists on disk, branch is active, and derivation status recorded.
 
@@ -56,16 +56,19 @@ When executing multiple specifications (`run <spec1> <spec2> ...` or batch queue
    - Done when: Conformance score meets threshold and scoring artifact `{slug}-step-5.md` persisted.
 
 6. **Delivery Commit & Security Gate**
-   Refuse delivery commit if Step 4 is incomplete, any task unaccepted, or any gate failed. Run pre-commit secret leak scan (`sdw-security-checks`) when enabled. Stage and commit delivery changes atomically.
-   - Done when: Step 4 quality guards pass, pre-commit security check passes, and delivery commit exists.
+   Refuse delivery commit if Step 4 is incomplete, any task unaccepted, or any gate failed. Run pre-commit secret leak scan (`sdw-security-checks`) when enabled. Stage and commit only tracked spec files (accepted evidence `filesChanged` + `index.specs.md`); unrelated worktree changes are never staged.
+   - Done when: Step 4 quality guards pass, pre-commit security check passes, and scoped delivery commit exists.
 
-7. **Automated Code Review Loop**
-   Compare branch changes to base commit, verifying rule invariants and clean syntax in an iterative loop (up to 3 auto-fix attempts).
-   - Done when: Code review checks pass or fixes applied.
+7. **Delegated Code Review via sdw-code-review**
+   Dispatch subagent or CLI runner for `sdw-code-review`; inspect generated report to advance to Step 8 or trigger fix iteration.
+   - Run: `node skills/sdw-code-review/scripts/sdw_code_review.cjs run --target <root> [--base <ref>] --report <artifact> [--fix] [--json]`
+   - `sdw-code-review` is the sole code review authority; no duplicated internal review instructions.
+   - Done when: Report shows 0 blocking findings (`critical`/`warning`) or fix ceiling reached with residual recorded.
 
-8. **PR Preparation & Remote Push**
-   Assemble pull request payload, mark specification completed in `index.specs.md`, and push the active branch to remote origin (when `--push` or `pushDelivery` enabled).
-   - Done when: Specification is marked completed in index and changes pushed to remote.
+8. **PR Preparation, Delivery & Review Convergence**
+   Delegate pull request preparation, pre-PR verification gates, remote publishing, SCM submission, and post-PR review convergence to `sdw-ship-pr`. Pass active run ID, specification slug, and CLI options (`--push`, `--poll-pr`, `--dry-run`).
+   - Run: `node skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs --run-id <runId> --spec <specSlug> [options]`
+   - Done when: `sdw-ship-pr` completes with exit code 0, delivery outcome is recorded in `.sdw/state/{runId}.state.json`, and specification is marked completed in index.
 
 ## References
 

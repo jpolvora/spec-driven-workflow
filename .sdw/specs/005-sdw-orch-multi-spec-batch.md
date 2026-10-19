@@ -16,6 +16,8 @@ To preserve subagent context isolation and prevent conversational or syntactic p
 
 A dedicated Tier 3 batch runner module manages queue orchestration through a lightweight manifest (`.sdw/state/batch-{batchId}.json`). The batch engine coordinates pre-flight validation, sequential execution, failure recovery policies (`--continue-on-error` vs. default halt-on-error), automatic index synchronization via `sdw-spec sync`, and batch resumption.
 
+Furthermore, multi-specification batch execution operates in mandatory unattended mode: the orchestrator runs continuously through every specification from first to last without halting between specifications for conversational check-ins or user confirmation, auto-resolving grilling and refinement decision gaps with recommended defaults.
+
 ### Design Intent
 
 Extends the single-specification `sdw-orch` orchestrator with multi-specification queueing capabilities without bloating the Tier 1 agent context window. By maintaining strict subagent context fencing per specification and encapsulating queue state logic in a dedicated Tier 3 batch runner module, the architecture achieves optimal token efficiency, ergonomic CLI invocations, and deterministic batch recovery.
@@ -33,6 +35,8 @@ Extends the single-specification `sdw-orch` orchestrator with multi-specificatio
 - AC9: Where the dry-run flag is provided via `--dry-run`, the system shall validate all queued specifications and display the execution plan without executing any tasks.
 - AC10: When all specifications in the batch complete, the system shall emit a comprehensive summary report displaying per-specification execution status, elapsed duration, and commit or pull request references.
 - AC11: While executing a batch item, the system shall fence subagent context to the current specification without leaking transcripts from preceding batch items.
+- AC12: While executing a multi-specification batch queue, the system shall run continuously in unattended mode from first to last specification without conversational check-ins or user confirmation between specifications.
+- AC13: While executing a batch queue, the system shall auto-resolve specification decision gaps using recommended defaults.
 
 ## Original Issue Context
 

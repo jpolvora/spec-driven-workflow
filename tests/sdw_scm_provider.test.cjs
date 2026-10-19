@@ -267,7 +267,7 @@ None
     cfg.scmProvider = 'none';
     cfg.implementation = {
       mode: 'command',
-      command: 'node -e "const fs = require(\'fs\'); fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({ taskId: process.env.SDW_TASK_ID, acIds: [\'AC1\'], filesChanged: [\'.sdw/specs/\' + process.env.SDW_SPEC_SLUG + \'.md\'], summary: \'done\' }));"'
+      command: 'node -e "const fs = require(\'fs\'); fs.writeFileSync(\'scm-task.txt\', \'done\'); fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({ taskId: process.env.SDW_TASK_ID, acIds: [\'AC1\'], filesChanged: [\'scm-task.txt\'], summary: \'done\' }));"'
     };
     fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
 
@@ -294,4 +294,466 @@ None
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
+});
+
+test('sdw-scm-provider - createPullRequest on GitHubProvider (creation, reuse, and dry-run)', async () => {
+  const provider = createScmProvider('github', {
+    executor: (cmd) => {
+      if (cmd.includes('gh pr list')) {
+        return JSON.stringify([]);
+      }
+      if (cmd.includes('gh pr create')) {
+        return 'https://github.com/jpolvora/spec-driven-workflow/pull/99\n';
+      }
+      throw new Error(`Unexpected command: ${cmd}`);
+    }
+  });
+
+  // Creation
+  const res = await provider.createPullRequest({
+    title: 'feat: add new feature',
+    body: '## Description\nNew feature details',
+    head: 'feature/new-feature',
+    base: 'master'
+  });
+  assert.strictEqual(res.number, '99');
+  assert.strictEqual(res.url, 'https://github.com/jpolvora/spec-driven-workflow/pull/99');
+  assert.strictEqual(res.reused, false);
+  assert.strictEqual(res.dryRun, false);
+
+  // Reuse when PR already exists
+  const reuseProvider = createScmProvider('github', {
+    executor: (cmd) => {
+      if (cmd.includes('gh pr list')) {
+        return JSON.stringify([{
+          number: 101,
+          url: 'https://github.com/jpolvora/spec-driven-workflow/pull/101',
+          title: 'Existing PR',
+          headRefName: 'feature/existing',
+          baseRefName: 'master'
+        }]);
+      }
+      throw new Error(`Unexpected command: ${cmd}`);
+    }
+  });
+  const reuseRes = await reuseProvider.createPr({
+    title: 'New PR title',
+    head: 'feature/existing',
+    base: 'master'
+  });
+  assert.strictEqual(reuseRes.number, '101');
+  assert.strictEqual(reuseRes.reused, true);
+
+  // Dry run
+  const dryRunRes = await provider.createPullRequest({
+    title: 'feat: dry run test',
+    head: 'feature/dry-run',
+    base: 'master',
+    dryRun: true
+  });
+  assert.strictEqual(dryRunRes.dryRun, true);
+  assert.strictEqual(dryRunRes.reused, false);
+  assert.ok(dryRunRes.command.includes('gh pr create'));
+});
+
+test('sdw-scm-provider - createPullRequest on AzureDevOpsProvider (creation, reuse, and dry-run)', async () => {
+  const provider = createScmProvider('ado', {
+    executor: (cmd) => {
+      if (cmd.includes('az repos pr list')) {
+        return JSON.stringify([]);
+      }
+      if (cmd.includes('az repos pr create')) {
+        return JSON.stringify({
+          pullRequestId: 202,
+          url: 'https://dev.azure.com/org/proj/_git/repo/pullrequest/202'
+        });
+      }
+      throw new Error(`Unexpected command: ${cmd}`);
+    }
+  });
+
+  // Creation
+  const res = await provider.createPullRequest({
+    title: 'feat: add ado feature',
+    body: 'Details',
+    head: 'feature/ado-test',
+    base: 'master'
+  });
+  assert.strictEqual(res.number, '202');
+  assert.strictEqual(res.reused, false);
+  assert.strictEqual(res.dryRun, false);
+
+  // Reuse when PR exists
+  const reuseProvider = createScmProvider('ado', {
+    executor: (cmd) => {
+      if (cmd.includes('az repos pr list')) {
+        return JSON.stringify([{
+          pullRequestId: 205,
+          url: 'https://dev.azure.com/org/proj/_git/repo/pullrequest/205',
+          title: 'Existing ADO PR',
+          sourceRefName: 'refs/heads/feature/ado-test',
+          targetRefName: 'refs/heads/master'
+        }]);
+      }
+      throw new Error(`Unexpected command: ${cmd}`);
+    }
+  });
+  const reuseRes = await reuseProvider.createPr({
+    title: 'New title',
+    head: 'feature/ado-test',
+    base: 'master'
+  });
+  assert.strictEqual(reuseRes.number, '205');
+  assert.strictEqual(reuseRes.reused, true);
+
+  // Dry run
+  const dryRunRes = await provider.createPullRequest({
+    title: 'feat: ado dry run',
+    head: 'feature/ado-test',
+    base: 'master',
+    dryRun: true
+  });
+  assert.strictEqual(dryRunRes.dryRun, true);
+  assert.strictEqual(dryRunRes.reused, false);
+  assert.ok(dryRunRes.command.includes('az repos pr create'));
+});
+
+test('sdw-scm-provider - failed PR list does not create duplicate PR on GitHub or Azure DevOps', async () => {
+  // GitHub failure on pr list
+  const ghFailingListProvider = createScmProvider('github', {
+    executor: (cmd) => {
+      if (cmd.includes('gh pr list')) {
+        throw new Error('network timeout on gh pr list');
+      }
+      return 'https://github.com/org/repo/pull/123';
+    }
+  });
+
+  await assert.rejects(
+    async () => {
+      await ghFailingListProvider.createPullRequest({
+        title: 'feat: test',
+        head: 'feature/test',
+        base: 'master'
+      });
+    },
+    /Unable to verify existing pull request before creation: network timeout on gh pr list/
+  );
+
+  // Azure DevOps failure on pr list
+  const adoFailingListProvider = createScmProvider('ado', {
+    executor: (cmd) => {
+      if (cmd.includes('az repos pr list')) {
+        throw new Error('az repos pr list rate limited');
+      }
+      return JSON.stringify({ pullRequestId: 999 });
+    }
+  });
+
+  await assert.rejects(
+    async () => {
+      await adoFailingListProvider.createPullRequest({
+        title: 'feat: test ado',
+        head: 'feature/test-ado',
+        base: 'master'
+      });
+    },
+    /Unable to verify existing pull request before creation: az repos pr list rate limited/
+  );
+});
+
+test('sdw-scm-provider - GitHubProvider.queryWorkItems maps issues to work items', async () => {
+  const provider = createScmProvider('github', {
+    executor: (cmd) => {
+      if (cmd.includes('gh issue list')) {
+        return JSON.stringify([
+          {
+            number: 42,
+            title: 'Implement OAuth token refresh',
+            body: 'Detailed spec.\n\n## Acceptance Criteria\n- AC1: The system shall refresh expired tokens.\n- AC2: When token invalid, the system shall logout.',
+            url: 'https://github.com/org/repo/issues/42',
+            state: 'OPEN',
+            labels: [{ name: 'security' }, { name: 'auth' }]
+          }
+        ]);
+      }
+      throw new Error(`Unexpected command: ${cmd}`);
+    }
+  });
+
+  const items = await provider.queryWorkItems({ state: 'open', limit: 10 });
+  assert.strictEqual(items.length, 1);
+  assert.strictEqual(items[0].id, '42');
+  assert.strictEqual(items[0].title, 'Implement OAuth token refresh');
+  assert.strictEqual(items[0].source, 'github');
+  assert.strictEqual(items[0].state, 'open');
+  assert.deepStrictEqual(items[0].tags, ['security', 'auth']);
+  assert.strictEqual(items[0].acceptanceCriteria.length, 2);
+  assert.ok(items[0].acceptanceCriteria[0].includes('refresh expired tokens'));
+});
+
+test('sdw-scm-provider - AzureDevOpsProvider.fetchWorkItem converts HTML and extracts ACs', async () => {
+  const provider = createScmProvider('ado', {
+    executor: (cmd) => {
+      if (cmd.includes('az boards work-item show')) {
+        return JSON.stringify({
+          id: 555,
+          fields: {
+            'System.Title': 'Implement User Session Management',
+            'System.Description': '<p>This is HTML formatted description with &amp; entity.</p>',
+            'Microsoft.VSTS.Common.AcceptanceCriteria': '<ul><li>The system shall validate active session cookies.</li><li>When session expired, the system shall redirect to login.</li></ul>',
+            'System.State': 'Active',
+            'System.Tags': 'core; security'
+          }
+        });
+      }
+      throw new Error(`Unexpected command: ${cmd}`);
+    }
+  });
+
+  const item = await provider.fetchWorkItem('555');
+  assert.strictEqual(item.id, '555');
+  assert.strictEqual(item.source, 'azure-devops');
+  assert.strictEqual(item.title, 'Implement User Session Management');
+  assert.ok(item.description.includes('This is HTML formatted description with & entity.'));
+  assert.strictEqual(item.state, 'active');
+  assert.deepStrictEqual(item.tags, ['core', 'security']);
+  assert.strictEqual(item.acceptanceCriteria.length, 2);
+  assert.strictEqual(item.acceptanceCriteria[0], 'The system shall validate active session cookies.');
+  assert.strictEqual(item.acceptanceCriteria[1], 'When session expired, the system shall redirect to login.');
+});
+
+test('sdw-scm-provider - AzureDevOpsProvider.queryWorkItems executes WIQL and maps items', async () => {
+  const provider = createScmProvider('ado', {
+    executor: (cmd) => {
+      if (cmd.includes('az boards query')) {
+        return JSON.stringify([{ id: 888 }]);
+      }
+      if (cmd.includes('az boards work-item show --id 888')) {
+        return JSON.stringify({
+          id: 888,
+          fields: {
+            'System.Title': 'Query Work Item Title',
+            'System.Description': 'Simple text description',
+            'Microsoft.VSTS.Common.AcceptanceCriteria': '- AC1: The system shall query work items.',
+            'System.State': 'New',
+            'System.Tags': 'backend'
+          }
+        });
+      }
+      throw new Error(`Unexpected command: ${cmd}`);
+    }
+  });
+
+  const items = await provider.queryWorkItems({ state: 'new' });
+  assert.strictEqual(items.length, 1);
+  assert.strictEqual(items[0].id, '888');
+  assert.strictEqual(items[0].source, 'azure-devops');
+  assert.strictEqual(items[0].title, 'Query Work Item Title');
+  assert.strictEqual(items[0].state, 'new');
+  assert.deepStrictEqual(items[0].tags, ['backend']);
+  assert.strictEqual(items[0].acceptanceCriteria.length, 1);
+});
+
+test('sdw-scm-provider - GitHubProvider.queryWorkItems maps issues and tags', async () => {
+  const provider = createScmProvider('github', {
+    executor: (cmd) => {
+      if (cmd.includes('gh issue list')) {
+        return JSON.stringify([{
+          number: 77,
+          title: 'Issue 77',
+          body: '- AC1: The system shall work properly.',
+          url: 'https://github.com/issues/77',
+          state: 'OPEN',
+          labels: [{ name: 'bug' }, { name: 'triage' }]
+        }]);
+      }
+      throw new Error(`Unexpected command: ${cmd}`);
+    }
+  });
+
+  const items = await provider.queryWorkItems({ state: 'open', limit: 5 });
+  assert.strictEqual(items.length, 1);
+  assert.strictEqual(items[0].id, '77');
+  assert.strictEqual(items[0].source, 'github');
+  assert.deepStrictEqual(items[0].tags, ['bug', 'triage']);
+  assert.strictEqual(items[0].acceptanceCriteria.length, 1);
+});
+
+test('sdw-scm-provider - createPullRequest aborts and throws on failed PR list (GitHub and ADO)', async () => {
+  const ghProvider = createScmProvider('github', {
+    executor: (cmd) => {
+      if (cmd.includes('gh pr list')) {
+        throw new Error('API rate limit exceeded');
+      }
+      return '';
+    }
+  });
+
+  await assert.rejects(
+    () => ghProvider.createPullRequest({ title: 'test', head: 'feat' }),
+    /Unable to verify existing pull request before creation/
+  );
+
+  const adoProvider = createScmProvider('ado', {
+    executor: (cmd) => {
+      if (cmd.includes('az repos pr list')) {
+        throw new Error('Connection timeout');
+      }
+      return '';
+    }
+  });
+
+  await assert.rejects(
+    () => adoProvider.createPullRequest({ title: 'test', head: 'feat' }),
+    /Unable to verify existing pull request before creation/
+  );
+});
+
+test('sdw-scm-provider - fetchWorkItem rejects non-numeric IDs for shell safety', async () => {
+  const ghProvider = createScmProvider('github', { executor: () => '' });
+  await assert.rejects(
+    () => ghProvider.fetchWorkItem('123; rm -rf /'),
+    /Item identifier must be a valid numeric ID/
+  );
+
+  const adoProvider = createScmProvider('ado', { executor: () => '' });
+  await assert.rejects(
+    () => adoProvider.fetchWorkItem('`malicious`'),
+    /Item identifier must be a valid numeric ID/
+  );
+});
+
+
+
+
+test('sdw-scm-provider - cancelled checks are not treated as passing', async () => {
+  const provider = createScmProvider('github', {
+    executor: (cmd) => {
+      if (cmd.includes('gh pr checks')) {
+        return JSON.stringify([
+          { name: 'ci/build', state: 'SUCCESS', bucket: 'pass' },
+          { name: 'ci/test', state: 'CANCELLED', bucket: 'cancel' }
+        ]);
+      }
+      throw new Error(`Unexpected command: ${cmd}`);
+    }
+  });
+
+  const status = await provider.checkPrStatus(42);
+  assert.strictEqual(status.failedCount, 1, 'Cancelled check must count as failed');
+  assert.strictEqual(status.allPassed, false, 'A cancelled check must not allow allPassed');
+});
+
+test('sdw-scm-provider - Azure createPullRequest passes description inline instead of @file', async () => {
+  let createCommand = '';
+  const provider = createScmProvider('ado', {
+    executor: (cmd) => {
+      if (cmd.includes('az repos pr list')) return JSON.stringify([]);
+      if (cmd.includes('az repos pr create')) {
+        createCommand = cmd;
+        return JSON.stringify({ pullRequestId: 77, url: 'https://dev.azure.com/org/proj/_git/repo/pullrequest/77' });
+      }
+      throw new Error(`Unexpected command: ${cmd}`);
+    }
+  });
+
+  await provider.createPullRequest({
+    title: 'feat: inline body',
+    body: 'Line one\nLine two',
+    head: 'feature/inline',
+    base: 'master'
+  });
+
+  assert.ok(createCommand.includes('--description "Line one" "Line two"'), 'Body lines must be passed inline');
+  assert.ok(!createCommand.includes('@'), 'Description must not use the unsupported @file form');
+});
+
+test('sdw-scm-provider - GitHub checkPrStatus treats no checks as not passed', async () => {
+  const provider = createScmProvider('github', {
+    executor: () => {
+      const err = new Error('no checks reported on the develop branch');
+      err.stderr = 'no checks reported on the develop branch';
+      throw err;
+    }
+  });
+
+  const status = await provider.checkPrStatus(42);
+  assert.deepStrictEqual(status.checks, []);
+  assert.strictEqual(status.allPassed, false);
+  assert.strictEqual(status.completed, false);
+});
+
+test('sdw-scm-provider - GitHub REST fallback does not treat resolution markers as resolved', async () => {
+  const provider = createScmProvider('github', {
+    executor: (cmd) => {
+      if (cmd.includes('gh repo view')) {
+        return JSON.stringify({ owner: { login: 'fake-owner' }, name: 'fake-repo' });
+      }
+      if (cmd.includes('gh api graphql')) {
+        throw new Error('graphql unavailable');
+      }
+      if (cmd.includes('/comments')) {
+        return JSON.stringify([
+          {
+            id: 1,
+            in_reply_to_id: null,
+            body: '<!-- resolution-reply -->\nResolved review issue',
+            path: 'src/index.js',
+            line: 10,
+            user: { login: 'reviewer' },
+            created_at: '2026-10-19T00:00:00Z'
+          }
+        ]);
+      }
+      throw new Error(`Unexpected command: ${cmd}`);
+    }
+  });
+
+  const result = await provider.listReviewThreads(42);
+  assert.strictEqual(result.activeCount, 1, 'A REST marker must not resolve a GitHub thread');
+  assert.strictEqual(result.threads[0].isResolved, false);
+});
+
+test('sdw-scm-provider - GitHub REST resolveReviewThread reports unresolved', async () => {
+  const provider = createScmProvider('github', {
+    executor: (cmd) => {
+      if (cmd.includes('/replies')) return '{}';
+      throw new Error(`Unexpected command: ${cmd}`);
+    }
+  });
+
+  const result = await provider.resolveReviewThread({
+    prNumber: 42,
+    threadId: '123',
+    comment: 'fixed'
+  });
+
+  assert.strictEqual(result.resolved, false);
+  assert.match(result.reason, /PRRT_/);
+});
+
+test('sdw-scm-provider - ADO active thread with a resolution marker stays active', async () => {
+  const provider = createScmProvider('ado', {
+    executor: (cmd) => {
+      if (cmd.includes('pullRequestThreads')) {
+        return JSON.stringify({
+          value: [
+            {
+              id: 101,
+              status: 'active',
+              comments: [
+                { id: 1, content: '<!-- resolution-reply -->\nResolved review issue', author: { displayName: 'reviewer' } }
+              ]
+            }
+          ]
+        });
+      }
+      throw new Error(`Unexpected command: ${cmd}`);
+    }
+  });
+
+  const result = await provider.listReviewThreads(42);
+  assert.strictEqual(result.activeCount, 1);
+  assert.strictEqual(result.threads[0].isResolved, false);
 });

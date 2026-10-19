@@ -31,6 +31,7 @@ This repository uses Spec-Driven Workflow for spec management, configuration, an
   - Route configuration and environment inquiries to `sdw-config`.
   - Route specification authoring, formatting, validation, and indexing to `sdw-spec`.
   - Route specification implementation, orchestration, and delivery commits to `sdw-orch`.
+  - Route deep working-tree code review, fix planning, and slash commands (`/sdw-code-review`) to `sdw-code-review`.
   - Pass through general conversational or non-SDW code editing tasks without interception.
 ```
 
