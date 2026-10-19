@@ -149,6 +149,11 @@ const INTENT_RULES = {
     primaryKeywords: ['sdw-rules', 'shared rules', 'karpathy', 'simplicity first', 'scope enclosure', 'anti-overengineering'],
     secondaryKeywords: ['guideline', 'guidelines', 'yagni', 'surgical diff', 'traps log', 'audit-spec', 'log-trap', 'traps.md'],
     recommendedOption: 'Review behavioral rules, anti-patterns, or log traps using sdw-rules'
+  },
+  'sdw-security-checks': {
+    primaryKeywords: ['security-checks', 'security checks', 'secret leak', 'leak scan', 'credentials check', 'pre-commit security'],
+    secondaryKeywords: ['secrets', 'leaks', 'pii', 'credentials', 'api keys', 'securityChecksEnabled', 'allowlist secret', 'scan --staged'],
+    recommendedOption: 'Scan workspace or staged diff for secrets, credentials, and leaks using sdw-security-checks'
   }
 };
 

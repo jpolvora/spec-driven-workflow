@@ -42,6 +42,11 @@
       "description": "Automatically apply recommended defaults for unhandled grilling gaps when running non-interactively.",
       "default": true
     },
+    "securityChecksEnabled": {
+      "type": "boolean",
+      "description": "Enable pre-commit secrets and credentials leak scanning.",
+      "default": false
+    },
     "requiredBuild": {
       "type": "boolean",
       "description": "Enforce successful build verification in Step 8 before creating delivery commit or PR.",

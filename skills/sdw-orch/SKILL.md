@@ -46,12 +46,12 @@ When executing multiple specifications (`run <spec1> <spec2> ...` or batch queue
    Analyze complexity and emit DAG execution units. Subagents must adhere to `sdw-rules` simplicity first and surgical diff directives (minimum code to satisfy ACs). Run test suites (`npm test`) until all tests pass.
    - Done when: DAG tasks are generated, implementation code is written, and tests pass.
 
-4. **Evaluate Conformance Score & Review**
-   Compute conformance score (0-10) against touched files. If score < threshold (default 8/10), loop back with error feedback. Once passing, stage and commit the delivery code, then execute automated code review against `baseCommit`.
-   - Done when: Conformance score meets threshold and code review findings are resolved.
+4. **Evaluate Conformance Score & Security Gate**
+   Compute conformance score (0-10) against touched files. If score < threshold (default 8/10), loop back with error feedback. When `securityChecksEnabled` is true, run pre-commit secret/leak scanner (`sdw-security-checks`); block on HIGH findings unless overridden via `--skip-security`.
+   - Done when: Conformance score meets threshold and pre-commit security check passes or is bypassed.
 
 5. **Deliver Commit & Remote Push**
-   Execute `node skills/sdw-orch/scripts/sdw_orch.cjs run <specPath> --push` to create the delivery git commit, package pull request metadata, mark specification completed in `index.specs.md`, and push the active branch to remote origin. In multi-spec mode, advance immediately to the next queued specification without stopping.
+   Stage and commit delivery code, execute automated review, package pull request metadata, mark specification completed in `index.specs.md`, and push the active branch to remote origin. In multi-spec mode, advance immediately to the next queued specification without stopping.
    - Done when: Specification is marked completed in index, delivery commit exists on git log, and changes are pushed to remote origin.
 
 ## References

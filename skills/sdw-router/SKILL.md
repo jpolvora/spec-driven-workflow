@@ -29,6 +29,7 @@ Always-autoloaded entrypoint and traffic controller routing agent tasks across a
 | Spec authoring, EARS formatting, PRD index, validation, sync, archiving | `sdw-spec` | Specification lifecycle and quality gates |
 | Spec implementation, orchestration, DAG tasks, scoring, review, PR | `sdw-orch` | End-to-end implementation and delivery pipeline |
 | Behavioral rules, simplicity, YAGNI, anti-overengineering, trap log | `sdw-rules` | Shared engineering principles, simplicity, and traps |
+| Secret scanning, credentials leak check, pre-commit leak gate | `sdw-security-checks` | Pre-commit secrets and credentials leak scanner |
 | Unrecognized or general coding / conversation | *(Pass-through)* | Allows standard agent execution without intercepting |
 
 ## Steps

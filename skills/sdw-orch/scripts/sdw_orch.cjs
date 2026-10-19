@@ -44,7 +44,8 @@ function parseArgs(args) {
     step: null,
     json: false,
     latest: false,
-    unattended: false
+    unattended: false,
+    skipSecurity: false
   };
 
   const positional = [];
@@ -53,6 +54,7 @@ function parseArgs(args) {
     if (arg === '--json') result.json = true;
     else if (arg === '--unattended') result.unattended = true;
     else if (arg === '--interactive') result.unattended = false;
+    else if (arg === '--skip-security') result.skipSecurity = true;
     else if (arg === '--skip-review') result.skipReview = true;
     else if (arg === '--skip-pr') result.skipPr = true;
     else if (arg === '--poll-pr') result.pollPr = true;
@@ -97,6 +99,28 @@ function getBaseCommit(projectRoot) {
   }
 }
 
+function runSecurityGate(targetRoot, options = {}) {
+  try {
+    const secScanner = require('../../sdw-security-checks/scripts/sdw_security_checks.cjs');
+    if (secScanner && typeof secScanner.scan === 'function') {
+      return secScanner.scan({ root: targetRoot, staged: options.staged !== false });
+    }
+  } catch (e) {
+    return {
+      exitCode: 2,
+      severityCounts: { high: 0, medium: 0, advisory: 0 },
+      findings: [],
+      error: `Security scanner failed to load: ${e.message}`
+    };
+  }
+  return {
+    exitCode: 2,
+    severityCounts: { high: 0, medium: 0, advisory: 0 },
+    findings: [],
+    error: 'Security scanner module unavailable'
+  };
+}
+
 function loadProjectConfig(targetRoot) {
   try {
     const sdwConfig = require('../../sdw-config/scripts/sdw_config.cjs');
@@ -121,6 +145,7 @@ function loadProjectConfig(targetRoot) {
         scmCodeReviewEnabled: false,
         pushDelivery: false,
         stateDir: path.join(root, '.sdw', 'state').replace(/\\/g, '/'),
+        securityChecksEnabled: false,
         ...resolved
       };
     } catch (e) {}
@@ -132,7 +157,8 @@ function loadProjectConfig(targetRoot) {
     scmCodeReviewEnabled: false,
     pushDelivery: false,
     stateDir: path.join(root, '.sdw', 'state').replace(/\\/g, '/'),
-    autoResolveGaps: false
+    autoResolveGaps: false,
+    securityChecksEnabled: false
   };
 }
 
@@ -347,6 +373,33 @@ function cmdRun(options) {
       return 2;
     }
 
+    // Security checks gate (AC6, AC8, AC9, AC10, AC12)
+    const securityChecksEnabled = Boolean(config.securityChecksEnabled);
+    if (securityChecksEnabled) {
+      if (options.skipSecurity) {
+        console.log(`[Step 6: Security Gate] Pre-commit security check bypassed via --skip-security.`);
+        state.securityGate = { bypassed: true, reason: '--skip-security' };
+      } else {
+        console.log(`[Step 6: Security Gate] securityChecksEnabled=true; running pre-commit leak scan...`);
+        const scanResult = runSecurityGate(targetRoot, { staged: true });
+        state.securityGate = {
+          bypassed: false,
+          exitCode: scanResult.exitCode,
+          severityCounts: scanResult.severityCounts,
+          findings: scanResult.findings
+        };
+        if (scanResult.exitCode !== 0) {
+          console.error(`[Step 6: Security Gate] Commit blocked by security checks gate (exit code ${scanResult.exitCode}).`);
+          state = stateManager.updateStepState(targetRoot, state.runId, 6, 'security_blocked', scanResult);
+          state.status = 'failed';
+          stateManager.saveRunState(targetRoot, state);
+          options._runResult = { runId: state.runId, status: 'failed', error: 'Blocked by pre-commit security checks gate' };
+          return scanResult.exitCode;
+        }
+        console.log(`[Step 6: Security Gate] Pre-commit security check passed.`);
+      }
+    }
+
     state = stateManager.updateStepState(targetRoot, state.runId, 6, 'in_progress');
     let commitSha = null;
     try {
@@ -390,6 +443,15 @@ function cmdRun(options) {
       const fixed = reviewRunner.applyAutoFixes(reviewReport.findings, targetRoot);
       if (fixed.length === 0) {
         break;
+      }
+      // Security checks gate before review-fix commit (AC7)
+      if (Boolean(config.securityChecksEnabled) && !options.skipSecurity) {
+        console.log(`[Step 7: Security Gate] Running pre-commit leak scan before review-fix commit...`);
+        const scanResult = runSecurityGate(targetRoot, { staged: true });
+        if (scanResult.exitCode !== 0) {
+          console.error(`[Step 7: Security Gate] Review-fix commit blocked by security checks gate (exit code ${scanResult.exitCode}).`);
+          break;
+        }
       }
       try {
         execSync('git add -A', { cwd: targetRoot, stdio: 'ignore' });
@@ -609,6 +671,7 @@ Options:
   --simulate-failure     Simulate subagent unrecoverable failure for testing
   --latest               (status/resume) Target the most recent run state
   --push                 Push active branch and delivery commit to remote origin
+  --skip-security        Bypass pre-commit security checks gate (audit logged)
   --skip-review          Skip code review step
   --skip-pr              Skip pull request preparation step
   --force                Override quality gates or allow execution on archived specs

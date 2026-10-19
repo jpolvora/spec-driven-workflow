@@ -65,6 +65,7 @@ const DEFAULT_CONFIG = {
   pushDelivery: false,
   stateDir: '{projectRoot}/.sdw/state',
   autoResolveGaps: true,
+  securityChecksEnabled: false,
   requiredBuild: false,
   buildCommand: 'npm run build',
   runAllTests: false,
@@ -116,6 +117,11 @@ const DEFAULT_SCHEMA = {
       "type": "boolean",
       "description": "Automatically apply recommended defaults for unhandled grilling gaps when running non-interactively.",
       "default": true
+    },
+    "securityChecksEnabled": {
+      "type": "boolean",
+      "description": "Enable pre-commit secrets and credentials leak scanning.",
+      "default": false
     },
     "requiredBuild": {
       "type": "boolean",
@@ -204,6 +210,13 @@ function validateConfigSchema(config) {
   if ('autoResolveGaps' in config) {
     if (typeof config.autoResolveGaps !== 'boolean') {
       errors.push('Property "autoResolveGaps" must be a boolean.');
+    }
+  }
+
+  // securityChecksEnabled
+  if ('securityChecksEnabled' in config) {
+    if (typeof config.securityChecksEnabled !== 'boolean') {
+      errors.push('Property "securityChecksEnabled" must be a boolean.');
     }
   }
 

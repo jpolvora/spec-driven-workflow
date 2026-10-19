@@ -73,6 +73,11 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
       "description": "Automatically apply recommended defaults for unhandled grilling gaps when running non-interactively.",
       "default": true
     },
+    "securityChecksEnabled": {
+      "type": "boolean",
+      "description": "Enable pre-commit secrets and credentials leak scanning.",
+      "default": false
+    },
     "requiredBuild": {
       "type": "boolean",
       "description": "Enforce successful build verification in Step 8 before creating delivery commit or PR.",
@@ -119,6 +124,7 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
 | `pushDelivery` | `boolean` | `false` | Whether to automatically push delivery commits to remote origin |
 | `stateDir` | `string` | `"{projectRoot}/.sdw/state"` | Path to isolated execution run state directory (supports `{projectRoot}`) |
 | `autoResolveGaps` | `boolean` | `true` | Whether to auto-apply recommended grilling defaults when non-interactive |
+| `securityChecksEnabled` | `boolean` | `false` | Enable pre-commit secrets and credentials leak scanning |
 | `requiredBuild` | `boolean` | `false` | Enforce successful build verification in Step 8 before creating delivery commit or PR |
 | `buildCommand` | `string` | `"npm run build"` | Command to execute for build verification |
 | `runAllTests` | `boolean` | `false` | Enforce passing all test suites in Step 8 before creating delivery commit or PR |
@@ -141,6 +147,7 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
   "pushDelivery": false,
   "stateDir": "{projectRoot}/.sdw/state",
   "autoResolveGaps": true,
+  "securityChecksEnabled": false,
   "requiredBuild": false,
   "runAllTests": false
 }
