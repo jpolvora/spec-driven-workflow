@@ -39,9 +39,9 @@ function resolveSkillScript(targetRoot, skillName, scriptRelPath, options = {}) 
   return null;
 }
 
-function getSpecIndexHelper(targetRoot) {
+function getSpecIndexHelper(targetRoot, options = {}) {
   try {
-    const scriptPath = resolveSkillScript(targetRoot, 'sdw-spec', path.join('scripts', 'spec_index.cjs'));
+    const scriptPath = resolveSkillScript(targetRoot, 'sdw-spec', path.join('scripts', 'spec_index.cjs'), options);
     if (scriptPath) {
       return require(scriptPath);
     }
@@ -53,9 +53,9 @@ function getSpecIndexHelper(targetRoot) {
   }
 }
 
-function getScmProviderContract(targetRoot) {
+function getScmProviderContract(targetRoot, options = {}) {
   try {
-    const scriptPath = resolveSkillScript(targetRoot, 'sdw-spec', path.join('scripts', 'scm_provider_contract.cjs'));
+    const scriptPath = resolveSkillScript(targetRoot, 'sdw-spec', path.join('scripts', 'scm_provider_contract.cjs'), options);
     if (scriptPath) {
       return require(scriptPath);
     }
@@ -340,7 +340,7 @@ function collectDeliveryFiles(targetRoot, specSlug, state) {
 
 function runSecurityGate(targetRoot, options = {}) {
   try {
-    const scriptPath = resolveSkillScript(targetRoot, 'sdw-security-checks', path.join('scripts', 'sdw_security_checks.cjs'));
+    const scriptPath = resolveSkillScript(targetRoot, 'sdw-security-checks', path.join('scripts', 'sdw_security_checks.cjs'), options);
     const secScanner = scriptPath ? require(scriptPath) : require('../../sdw-security-checks/scripts/sdw_security_checks.cjs');
     if (secScanner && typeof secScanner.scan === 'function') {
       return secScanner.scan({ root: targetRoot, staged: options.staged !== false });
@@ -497,12 +497,12 @@ function runVerificationGates(targetRoot, config, options = {}) {
   return { passed, gates };
 }
 
-function loadProjectConfig(targetRoot) {
+function loadProjectConfig(targetRoot, options = {}) {
   try {
-    const scriptPath = resolveSkillScript(targetRoot, 'sdw-config', path.join('scripts', 'sdw_config.cjs'));
+    const scriptPath = resolveSkillScript(targetRoot, 'sdw-config', path.join('scripts', 'sdw_config.cjs'), options);
     const sdwConfig = scriptPath ? require(scriptPath) : require('../../sdw-config/scripts/sdw_config.cjs');
     if (sdwConfig && typeof sdwConfig.loadConfig === 'function') {
-      return sdwConfig.loadConfig(targetRoot);
+      return sdwConfig.loadConfig(targetRoot, options);
     }
   } catch (e) {}
 
@@ -576,7 +576,7 @@ function cmdRun(options) {
 
   let sdwConfig = null;
   try {
-    const sdwConfigScript = resolveSkillScript(targetRoot, 'sdw-config', path.join('scripts', 'sdw_config.cjs'));
+    const sdwConfigScript = resolveSkillScript(targetRoot, 'sdw-config', path.join('scripts', 'sdw_config.cjs'), options);
     sdwConfig = sdwConfigScript ? require(sdwConfigScript) : require('../../sdw-config/scripts/sdw_config.cjs');
   } catch (e) {}
   const skillsInfo = sdwConfig && typeof sdwConfig.resolveSkillsRoot === 'function'
@@ -588,7 +588,7 @@ function cmdRun(options) {
     return 1;
   }
 
-  const config = loadProjectConfig(targetRoot);
+  const config = loadProjectConfig(targetRoot, options);
   const effectiveMinScore = options.minScore !== undefined ? options.minScore : (config.scoreMin !== undefined ? config.scoreMin : 8);
 
   const resolvedSpec = resolveSpecPath(options.specPath, targetRoot, config);
@@ -1279,7 +1279,7 @@ function cmdRun(options) {
   // CLI runner (or subagent in handoff) and inspects the JSON report.
   if (startStep <= 7 && state.steps[7].status !== 'completed' && !options.skipReview) {
     state = stateManager.updateStepState(targetRoot, state.runId, 7, 'in_progress');
-    const resolvedCodeReviewScript = resolveSkillScript(targetRoot, 'sdw-code-review', path.join('scripts', 'sdw_code_review.cjs'));
+    const resolvedCodeReviewScript = resolveSkillScript(targetRoot, 'sdw-code-review', path.join('scripts', 'sdw_code_review.cjs'), options);
     const codeReviewScript = resolvedCodeReviewScript || path.resolve(__dirname, '../../sdw-code-review/scripts/sdw_code_review.cjs');
     const hasCodeReview = fs.existsSync(codeReviewScript);
 
@@ -1407,7 +1407,7 @@ function cmdRun(options) {
   }
 
   // Step 8: PR Preparation, Pre-PR Gates & Remote Comment Loop (AC5, AC6, AC7, AC8, AC9, AC10, AC11, AC12, AC14, AC15)
-  const resolvedShipPrScript = resolveSkillScript(targetRoot, 'sdw-ship-pr', path.join('scripts', 'sdw_ship_pr.cjs'));
+  const resolvedShipPrScript = resolveSkillScript(targetRoot, 'sdw-ship-pr', path.join('scripts', 'sdw_ship_pr.cjs'), options);
   const shipPrScript = resolvedShipPrScript || path.resolve(__dirname, '../../sdw-ship-pr/scripts/sdw_ship_pr.cjs');
   const hasShipPr = fs.existsSync(shipPrScript);
 
@@ -1774,7 +1774,7 @@ function cmdTaskFinish(options) {
     return 1;
   }
 
-  const config = loadProjectConfig(targetRoot);
+  const config = loadProjectConfig(targetRoot, options);
   const useWorktrees = options.worktrees ? true : (options.noWorktrees ? false : Boolean(config.useWorktrees));
 
   const dagTasks = (Array.isArray(state.dagTasks) && state.dagTasks.length > 0)
@@ -1981,7 +1981,7 @@ function cmdResume(options) {
     const incompleteTasks = dagTasks.filter(t => !completedTasks.includes(t.id));
 
     if (incompleteTasks.length > 0) {
-      const resumeConfig = loadProjectConfig(targetRoot);
+      const resumeConfig = loadProjectConfig(targetRoot, options);
       const implMode = options.implementationMode || (resumeConfig.implementation && resumeConfig.implementation.mode) || 'handoff';
       if (implMode === 'command') {
         console.log(`[sdw-orch resume] Command mode detected; re-entering Step 4 to dispatch the configured command.`);
@@ -2005,7 +2005,7 @@ function cmdResume(options) {
     }
 
     // All tasks completed. Execute build and test verification gates (AC20)
-    const config = loadProjectConfig(targetRoot);
+    const config = loadProjectConfig(targetRoot, options);
     console.log(`[sdw-orch resume] All ${dagTasks.length} DAG task(s) completed. Running verification gates...`);
     const gateResults = runVerificationGates(targetRoot, config, { ...options, runId: state.runId, slug: state.specSlug });
     state.steps[4].gates = gateResults.gates;

@@ -29,7 +29,7 @@ Baseline directory layout for consumer projects adopting Spec-Driven Workflow:
 
 ## Skills Installation Topologies
 
-SDW supports three installation topologies with automatic `{skillsRoot}` token resolution:
+SDW supports three installation topologies with automatic `{skillsRoot}` token resolution in `.sdw/config.json`:
 
 1. **Canonical Development Repository:** `{projectRoot}/skills/`
 2. **Consumer Project-Local Vendoring:** `{projectRoot}/.agents/skills/`

@@ -33,9 +33,13 @@ function hasSdwSkills(dir) {
     if (!stat.isDirectory()) return false;
     const entries = fs.readdirSync(dir);
     return entries.some(e => {
-      if (e.startsWith('sdw-')) return true;
-      const sub = path.join(dir, e, 'SKILL.md');
-      return fs.existsSync(sub);
+      if (!e.startsWith('sdw-')) return false;
+      try {
+        const skillDir = path.join(dir, e);
+        return fs.statSync(skillDir).isDirectory() && fs.existsSync(path.join(skillDir, 'SKILL.md'));
+      } catch (err) {
+        return false;
+      }
     });
   } catch (e) {
     return false;
@@ -63,7 +67,8 @@ function detectSkillsMode(skillsPath, targetRoot, homeDir) {
   if (normSkills === `${root}/skills`) return 'canonical';
   if (normSkills === `${root}/.agents/skills`) return 'local';
   const home = normalizePath(homeDir || os.homedir());
-  if (home && normSkills.startsWith(home)) return 'global';
+  const globalSkills = home ? normalizePath(path.join(home, '.agents', 'skills')) : '';
+  if (globalSkills && (normSkills === globalSkills || normSkills.startsWith(`${globalSkills}/`))) return 'global';
   return 'local';
 }
 
@@ -203,7 +208,8 @@ const DEFAULT_CONFIG = {
   runAllTests: false,
   testCommand: 'npm test',
   prePrCommand: '',
-  prePrInstructions: ''
+  prePrInstructions: '',
+  maxPreemptions: 3
 };
 
 const DEFAULT_SCHEMA = {
@@ -355,6 +361,12 @@ const DEFAULT_SCHEMA = {
       "type": "string",
       "description": "Optional project-specific instructions or checklist for agents to verify prior to PR submission.",
       "default": ""
+    },
+    "maxPreemptions": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Maximum concurrent-push adaptation budget for post-PR review convergence before draining rounds.",
+      "default": 3
     }
   },
   "additionalProperties": true
@@ -586,7 +598,14 @@ function loadConfig(targetRoot, options = {}) {
     }
   }
 
-  const skillsInfo = resolveSkillsRoot({ root, ...options });
+  const configuredSkillsRoot = typeof rawConfig.skillsRoot === 'string' && rawConfig.skillsRoot.trim()
+    ? normalizePath(path.resolve(root, rawConfig.skillsRoot.trim().replace(/\{projectRoot\}/g, normalizedRoot)))
+    : undefined;
+  const skillsInfo = resolveSkillsRoot({
+    root,
+    ...options,
+    skillsRoot: options.skillsRoot || configuredSkillsRoot
+  });
   const resolvedSkillsRoot = skillsInfo ? skillsInfo.skillsRoot : normalizedRoot;
 
   const merged = {
@@ -786,6 +805,28 @@ function cmdCheck(options) {
     }
   }
 
+  // Pre-resolve skillsInfo so {skillsRoot} can be expanded across checks (AC1, AC6)
+  const configuredSkillsRoot = parsedConfig && typeof parsedConfig.skillsRoot === 'string' && parsedConfig.skillsRoot.trim()
+    ? normalizePath(path.resolve(targetRoot, parsedConfig.skillsRoot.trim().replace(/\{projectRoot\}/g, normalizePath(targetRoot))))
+    : undefined;
+  const checkOptions = {
+    root: targetRoot,
+    ...options,
+    skillsRoot: options.skillsRoot || configuredSkillsRoot
+  };
+  if (options.callerDir === undefined && options.ignoreCaller === undefined) {
+    const enclosing = findEnclosingSkillsDir(__dirname);
+    const normTarget = normalizePath(targetRoot);
+    const normEnclosing = enclosing ? normalizePath(enclosing) : '';
+    const home = normalizePath(options.homeDir || os.homedir());
+    const globalSkills = home ? normalizePath(path.join(home, '.agents', 'skills')) : '';
+    const isGlobal = Boolean(globalSkills) && (normEnclosing === globalSkills || normEnclosing.startsWith(`${globalSkills}/`));
+    if (normEnclosing && !normEnclosing.startsWith(normTarget) && !isGlobal) {
+      checkOptions.callerDir = null;
+    }
+  }
+  const skillsInfo = resolveSkillsRoot(checkOptions);
+
   // 4. Validate specsDir key and path
   if (parsedConfig) {
     const hasSpecsDir = typeof parsedConfig.specsDir === 'string' && parsedConfig.specsDir.trim().length > 0;
@@ -799,7 +840,9 @@ function cmdCheck(options) {
       valid = false;
       errors.push('config.json missing required string property "specsDir".');
     } else {
-      const resolvedSpecs = parsedConfig.specsDir.replace(/\{projectRoot\}/g, normalizePath(targetRoot));
+      const resolvedSpecs = parsedConfig.specsDir
+        .replace(/\{projectRoot\}/g, normalizePath(targetRoot))
+        .replace(/\{skillsRoot\}/g, skillsInfo ? skillsInfo.skillsRoot : normalizePath(targetRoot));
       const specsExists = fs.existsSync(resolvedSpecs) && fs.statSync(resolvedSpecs).isDirectory();
       checks.push({
         name: 'specs_dir_exists_on_disk',
@@ -888,17 +931,6 @@ function cmdCheck(options) {
   }
 
   // 6. Check skillsRoot resolution (AC6, AC9)
-  const checkOptions = { root: targetRoot, ...options };
-  if (options.callerDir === undefined && options.ignoreCaller === undefined) {
-    const enclosing = findEnclosingSkillsDir(__dirname);
-    const normTarget = normalizePath(targetRoot);
-    const normEnclosing = enclosing ? normalizePath(enclosing) : '';
-    const home = normalizePath(options.homeDir || os.homedir());
-    if (normEnclosing && !normEnclosing.startsWith(normTarget) && !(home && normEnclosing.startsWith(home))) {
-      checkOptions.callerDir = null;
-    }
-  }
-  const skillsInfo = resolveSkillsRoot(checkOptions);
   const hasSkills = Boolean(skillsInfo && skillsInfo.exists);
   checks.push({
     name: 'skills_root_resolution',
@@ -972,7 +1004,14 @@ function cmdParse(options) {
   }
 
   const normalizedRoot = normalizePath(targetRoot);
-  const skillsInfo = resolveSkillsRoot({ root: targetRoot, ...options });
+  const configuredSkillsRoot = typeof rawConfig.skillsRoot === 'string' && rawConfig.skillsRoot.trim()
+    ? normalizePath(path.resolve(targetRoot, rawConfig.skillsRoot.trim().replace(/\{projectRoot\}/g, normalizedRoot)))
+    : undefined;
+  const skillsInfo = resolveSkillsRoot({
+    root: targetRoot,
+    ...options,
+    skillsRoot: options.skillsRoot || configuredSkillsRoot
+  });
   const resolvedSkillsRoot = skillsInfo ? skillsInfo.skillsRoot : normalizedRoot;
   const resolved = {};
 

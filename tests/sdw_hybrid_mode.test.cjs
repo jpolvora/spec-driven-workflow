@@ -346,3 +346,122 @@ test('AC10: sdw-orch dynamic script resolution locates helper scripts via resolv
     fs.rmSync(tmpGlobal, { recursive: true, force: true });
   }
 });
+
+test('Review finding fix: hasSdwSkills rejects directories containing only non-SDW skills and falls through to global', () => {
+  const tmpProject = createTempDir('sdw-non-sdw-proj-');
+  const tmpGlobal = createTempDir('sdw-non-sdw-global-');
+  try {
+    const localSkills = path.join(tmpProject, '.agents', 'skills');
+    const globalSkills = path.join(tmpGlobal, '.agents', 'skills');
+
+    // Create non-SDW skill locally (e.g. ws-memo, karpathy-guidelines)
+    createDummySkill(localSkills, 'ws-memo');
+    createDummySkill(localSkills, 'karpathy-guidelines');
+
+    // Create real SDW skill globally
+    createDummySkill(globalSkills, 'sdw-spec');
+
+    // Should NOT classify localSkills as SDW skills root, but fall through to global
+    const info = sdwConfig.resolveSkillsRoot({
+      root: tmpProject,
+      homeDir: tmpGlobal,
+      ignoreCaller: true
+    });
+
+    assert.ok(info);
+    assert.equal(info.mode, 'global');
+    assert.equal(info.skillsRoot, globalSkills.replace(/\\/g, '/'));
+  } finally {
+    fs.rmSync(tmpProject, { recursive: true, force: true });
+    fs.rmSync(tmpGlobal, { recursive: true, force: true });
+  }
+});
+
+test('Review finding fix: configured skillsRoot in config.json is honored by loadConfig, cmdCheck, and cmdParse', () => {
+  const tmpProject = createTempDir('sdw-cfg-root-proj-');
+  const customSkillsDir = createTempDir('sdw-cfg-custom-skills-');
+  try {
+    createDummySkill(customSkillsDir, 'sdw-spec');
+
+    const sdwDir = path.join(tmpProject, '.sdw');
+    fs.mkdirSync(sdwDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(sdwDir, 'config.json'),
+      JSON.stringify({
+        skillsRoot: customSkillsDir.replace(/\\/g, '/'),
+        specsDir: '{projectRoot}/.sdw/specs'
+      }, null, 2),
+      'utf8'
+    );
+    fs.mkdirSync(path.join(sdwDir, 'specs'), { recursive: true });
+    fs.writeFileSync(path.join(sdwDir, 'config.schema.json'), JSON.stringify({}, null, 2), 'utf8');
+    fs.writeFileSync(path.join(sdwDir, 'directory-structure.md'), '# structure', 'utf8');
+
+    // 1. loadConfig
+    const loaded = sdwConfig.loadConfig(tmpProject, { ignoreCaller: true });
+    assert.equal(loaded.skillsRoot, customSkillsDir.replace(/\\/g, '/'));
+
+    // 2. cmdCheck
+    const cliScript = path.resolve(__dirname, '../skills/sdw-config/scripts/sdw_config.cjs');
+    const checkProc = spawnSync(
+      process.execPath,
+      [cliScript, 'check', '--root', tmpProject, '--json'],
+      { encoding: 'utf8' }
+    );
+    assert.equal(checkProc.status, 0);
+    const checkData = JSON.parse(checkProc.stdout);
+    assert.equal(checkData.skillsRoot, customSkillsDir.replace(/\\/g, '/'));
+
+    // 3. cmdParse
+    const parseProc = spawnSync(
+      process.execPath,
+      [cliScript, 'parse', '--root', tmpProject, '--key', 'skillsRoot'],
+      { encoding: 'utf8' }
+    );
+    assert.equal(parseProc.status, 0);
+    assert.equal(parseProc.stdout.trim(), customSkillsDir.replace(/\\/g, '/'));
+  } finally {
+    fs.rmSync(tmpProject, { recursive: true, force: true });
+    fs.rmSync(customSkillsDir, { recursive: true, force: true });
+  }
+});
+
+test('Review finding fix: cmdCheck expands {skillsRoot} in specsDir validation', () => {
+  const tmpProject = createTempDir('sdw-specsdir-proj-');
+  const customSkillsDir = createTempDir('sdw-specsdir-skills-');
+  try {
+    createDummySkill(customSkillsDir, 'sdw-config');
+    const customSpecsDir = path.join(customSkillsDir, 'custom-specs');
+    fs.mkdirSync(customSpecsDir, { recursive: true });
+
+    const sdwDir = path.join(tmpProject, '.sdw');
+    fs.mkdirSync(sdwDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(sdwDir, 'config.json'),
+      JSON.stringify({
+        skillsRoot: customSkillsDir.replace(/\\/g, '/'),
+        specsDir: '{skillsRoot}/custom-specs'
+      }, null, 2),
+      'utf8'
+    );
+    fs.writeFileSync(path.join(sdwDir, 'config.schema.json'), JSON.stringify({}, null, 2), 'utf8');
+    fs.writeFileSync(path.join(sdwDir, 'directory-structure.md'), '# structure', 'utf8');
+
+    const cliScript = path.resolve(__dirname, '../skills/sdw-config/scripts/sdw_config.cjs');
+    const checkProc = spawnSync(
+      process.execPath,
+      [cliScript, 'check', '--root', tmpProject, '--json'],
+      { encoding: 'utf8' }
+    );
+    assert.equal(checkProc.status, 0);
+    const checkData = JSON.parse(checkProc.stdout);
+    assert.equal(checkData.valid, true);
+    const specsCheck = checkData.checks.find(c => c.name === 'specs_dir_exists_on_disk');
+    assert.ok(specsCheck);
+    assert.equal(specsCheck.passed, true);
+    assert.equal(specsCheck.target, customSpecsDir.replace(/\\/g, '/'));
+  } finally {
+    fs.rmSync(tmpProject, { recursive: true, force: true });
+    fs.rmSync(customSkillsDir, { recursive: true, force: true });
+  }
+});

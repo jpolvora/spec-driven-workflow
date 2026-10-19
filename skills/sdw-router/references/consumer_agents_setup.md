@@ -26,7 +26,7 @@ Add the following section to your repository's root `AGENTS.md` (or `.agents/AGE
 
 This repository uses Spec-Driven Workflow for spec management, configuration, and implementation.
 
-- **Autoload SDW Router:** At the start of every session or when receiving task instructions, inspect and apply `@{skillsRoot}/sdw-router/SKILL.md` (e.g., `@.agents/skills/sdw-router/SKILL.md` when vendored locally, or `@~/.agents/skills/sdw-router/SKILL.md` when running in hybrid mode with skills shared globally).
+- **Autoload SDW Router:** At the start of every session or when receiving task instructions, inspect and apply `@.agents/skills/sdw-router/SKILL.md` for vendored installs, or `@~/.agents/skills/sdw-router/SKILL.md` for hybrid/global installs. Replace the path with the resolved skills root for your topology.
 - **Routing Protocol:**
   - Route configuration and environment inquiries to `sdw-config`.
   - Route specification authoring, formatting, validation, and indexing to `sdw-spec`.
@@ -37,9 +37,11 @@ This repository uses Spec-Driven Workflow for spec management, configuration, an
 
 ### Installation Topology & `{skillsRoot}` Resolution
 
-SDW automatically determines the `{skillsRoot}` token based on your setup:
+Configure the autoload instruction in `AGENTS.md` by substituting the path corresponding to your installation topology:
 - **Local Mode (Vendored):** Skills live inside `{projectRoot}/.agents/skills/` (or `{projectRoot}/skills/` in SDW development). Autoload target: `@.agents/skills/sdw-router/SKILL.md`.
 - **Hybrid Mode (Global):** Skills are installed once globally in `$HOME/.agents/skills/` and shared across multiple projects, while each project retains its own isolated `.sdw/` directory. Autoload target: `@~/.agents/skills/sdw-router/SKILL.md`.
+
+*(Note: Within `.sdw/config.json`, the `{skillsRoot}` token is expanded automatically at runtime by the SDW CLI tools. However, Markdown instruction files like `AGENTS.md` are evaluated directly by agent harnesses, so concrete relative or tilde-prefixed paths must be specified explicitly.)*
 
 ---
 

@@ -89,7 +89,7 @@ function parseArgs(args) {
     json: false,
     maxIterations: 3,
     pollIntervalMs: 20000,
-    maxPreemptions: 3
+    maxPreemptions: null
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -559,7 +559,12 @@ async function runShipPr(options = {}, customExecutor = null) {
             } else {
               for (const [name, cls] of checkClasses) {
                 const prev = prevCheckClasses.get(name);
-                if ((prev === 'superseded' || prev === 'failed') && (cls === 'pending' || cls === 'passed')) {
+                const wasTerminal = prev === 'superseded' || prev === 'failed' || prev === 'passed';
+                if (wasTerminal && cls === 'pending') {
+                  preempted = true;
+                  break;
+                }
+                if ((prev === 'superseded' || prev === 'failed') && cls === 'passed') {
                   preempted = true;
                   break;
                 }

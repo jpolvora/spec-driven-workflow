@@ -341,7 +341,9 @@ class GitHubProvider extends ScmProvider {
         } else if (currentBody) {
           finalBody = currentBody;
         }
-      } catch (e) {}
+      } catch (e) {
+        throw new Error(`Failed to read existing pull request #${prNumber} description for append: ${e.message}`);
+      }
     }
 
     let tempBodyFile = null;
@@ -858,7 +860,9 @@ class AzureDevOpsProvider extends ScmProvider {
         } else if (currentBody) {
           finalBody = currentBody;
         }
-      } catch (e) {}
+      } catch (e) {
+        throw new Error(`Failed to read existing pull request #${prNumber} description for append: ${e.message}`);
+      }
     }
 
     try {
