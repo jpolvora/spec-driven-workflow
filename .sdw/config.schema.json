@@ -57,6 +57,12 @@
       "description": "Automatically create and activate an isolated feature branch derived from specification slug.",
       "default": false
     },
+    "scmProvider": {
+      "type": "string",
+      "enum": ["none", "ado", "github"],
+      "default": "none",
+      "description": "Configured SCM provider for issues, work items, and pull requests. Allowed: none, ado, github."
+    },
     "requiredBuild": {
       "type": "boolean",
       "description": "Enforce successful build verification in Step 8 before creating delivery commit or PR.",

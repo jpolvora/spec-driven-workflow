@@ -79,6 +79,15 @@ function createRunState(options) {
     worktrees: [],
     worktreeSkipReason: null,
     runtimeOverrides: options.runtimeOverrides || null,
+    scm: options.scm || {
+      provider: 'none',
+      resolvedFrom: 'default',
+      cliInstalled: null,
+      cliAuthenticated: null,
+      skipped: false,
+      skipReason: null,
+      errors: []
+    },
     deliveryCommit: null,
     reviewCommit: null,
     score: null,

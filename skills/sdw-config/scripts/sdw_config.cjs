@@ -3,6 +3,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { execSync } = require('child_process');
 
 function normalizePath(p) {
   return p.replace(/\\/g, '/');
@@ -68,6 +69,7 @@ const DEFAULT_CONFIG = {
   securityChecksEnabled: false,
   useWorktrees: false,
   useFeatureBranches: false,
+  scmProvider: 'none',
   requiredBuild: false,
   buildCommand: 'npm run build',
   runAllTests: false,
@@ -134,6 +136,12 @@ const DEFAULT_SCHEMA = {
       "type": "boolean",
       "description": "Automatically create and activate an isolated feature branch derived from specification slug.",
       "default": false
+    },
+    "scmProvider": {
+      "type": "string",
+      "enum": ["none", "ado", "github"],
+      "default": "none",
+      "description": "Configured SCM provider for issues, work items, and pull requests. Allowed: none, ado, github."
     },
     "requiredBuild": {
       "type": "boolean",
@@ -243,6 +251,14 @@ function validateConfigSchema(config) {
   if ('useFeatureBranches' in config) {
     if (typeof config.useFeatureBranches !== 'boolean') {
       errors.push('Property "useFeatureBranches" must be a boolean.');
+    }
+  }
+
+  // scmProvider (AC1, AC2)
+  if ('scmProvider' in config) {
+    const allowed = ['none', 'ado', 'github'];
+    if (typeof config.scmProvider !== 'string' || !allowed.includes(config.scmProvider)) {
+      errors.push(`Property "scmProvider" must be one of: ${allowed.join(', ')}.`);
     }
   }
 
@@ -514,6 +530,56 @@ function cmdCheck(options) {
       if (!specsExists) {
         valid = false;
         errors.push(`Configured specsDir does not exist on disk: ${resolvedSpecs}`);
+      }
+    }
+
+    // 4.5 Validate scmProvider CLI presence and authentication status (AC16)
+    const provider = parsedConfig.scmProvider || 'none';
+    if (provider === 'none') {
+      checks.push({
+        name: 'scm_provider_status',
+        target: 'scmProvider: none',
+        passed: true,
+        detail: 'SCM integration disabled (none)'
+      });
+    } else {
+      const binName = provider === 'github' ? 'gh' : 'az';
+      let installed = false;
+      try {
+        const probeCmd = process.platform === 'win32' ? `where ${binName}` : `command -v ${binName}`;
+        const out = execSync(probeCmd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+        installed = Boolean(out && out.trim());
+      } catch (e) {
+        installed = false;
+      }
+      checks.push({
+        name: `scm_cli_presence_${binName}`,
+        target: `CLI: ${binName}`,
+        passed: installed,
+        detail: installed ? `${binName} is installed on PATH` : `${binName} is NOT installed on PATH`
+      });
+      if (!installed) {
+        valid = false;
+        errors.push(`Configured SCM provider "${provider}" requires CLI "${binName}", but it is not installed on PATH.`);
+      } else {
+        let authenticated = false;
+        try {
+          const authCmd = binName === 'gh' ? 'gh auth status' : 'az account show';
+          execSync(authCmd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+          authenticated = true;
+        } catch (e) {
+          authenticated = false;
+        }
+        checks.push({
+          name: `scm_cli_authenticated_${binName}`,
+          target: `CLI auth: ${binName}`,
+          passed: authenticated,
+          detail: authenticated ? `${binName} is authenticated` : `${binName} is NOT authenticated`
+        });
+        if (!authenticated) {
+          valid = false;
+          errors.push(`Configured SCM provider "${provider}" CLI "${binName}" is not authenticated.`);
+        }
       }
     }
   }

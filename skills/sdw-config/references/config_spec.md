@@ -88,6 +88,12 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
       "description": "Automatically create and activate an isolated feature branch derived from specification slug.",
       "default": false
     },
+    "scmProvider": {
+      "type": "string",
+      "enum": ["none", "ado", "github"],
+      "default": "none",
+      "description": "Configured SCM provider for issues, work items, and pull requests. Allowed: none, ado, github."
+    },
     "requiredBuild": {
       "type": "boolean",
       "description": "Enforce successful build verification in Step 8 before creating delivery commit or PR.",
@@ -137,6 +143,7 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
 | `securityChecksEnabled` | `boolean` | `false` | Enable pre-commit secrets and credentials leak scanning |
 | `useWorktrees` | `boolean` | `false` | Enable per-task isolated git worktrees for dispatched subagents under `.sdw/worktrees/{runId}/` |
 | `useFeatureBranches` | `boolean` | `false` | Automatically create and activate an isolated feature branch derived from specification slug |
+| `scmProvider` | `string` | `"none"` | Configured SCM provider for issues, work items, and pull requests (`none`, `ado`, `github`) |
 | `requiredBuild` | `boolean` | `false` | Enforce successful build verification in Step 8 before creating delivery commit or PR |
 | `buildCommand` | `string` | `"npm run build"` | Command to execute for build verification |
 | `runAllTests` | `boolean` | `false` | Enforce passing all test suites in Step 8 before creating delivery commit or PR |
@@ -162,6 +169,7 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
   "securityChecksEnabled": false,
   "useWorktrees": false,
   "useFeatureBranches": false,
+  "scmProvider": "none",
   "requiredBuild": false,
   "runAllTests": false
 }

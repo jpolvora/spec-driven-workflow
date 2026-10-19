@@ -21,6 +21,14 @@ function getSpecIndexHelper() {
   }
 }
 
+function getScmProviderContract() {
+  try {
+    return require('../../sdw-spec/scripts/scm_provider_contract.cjs');
+  } catch (e) {
+    return null;
+  }
+}
+
 function parseArgs(args) {
   const result = {
     subcommand: null,
@@ -156,6 +164,7 @@ function loadProjectConfig(targetRoot) {
         securityChecksEnabled: false,
         useWorktrees: false,
         useFeatureBranches: false,
+        scmProvider: 'none',
         ...resolved
       };
     } catch (e) {}
@@ -170,7 +179,8 @@ function loadProjectConfig(targetRoot) {
     autoResolveGaps: false,
     securityChecksEnabled: false,
     useWorktrees: false,
-    useFeatureBranches: false
+    useFeatureBranches: false,
+    scmProvider: 'none'
   };
 }
 
@@ -333,13 +343,25 @@ function cmdRun(options) {
   const baseCommit = options.baseCommit || getBaseCommit(targetRoot);
   const startStep = options.startStep || (options.step ? options.step : 1);
 
-  // Initialize or restore Run State (AC1, AC2, AC9)
+  const scmProvider = config.scmProvider || 'none';
+  const scmState = {
+    provider: scmProvider,
+    resolvedFrom: 'config',
+    cliInstalled: null,
+    cliAuthenticated: null,
+    skipped: false,
+    skipReason: null,
+    errors: []
+  };
+
+  // Initialize or restore Run State (AC1, AC2, AC9, AC17)
   let state;
   if (options.runId && fs.existsSync(stateManager.getStateFilePath(targetRoot, options.runId))) {
     state = stateManager.loadRunState(targetRoot, options.runId);
     state.branch = activeBranch;
     state.baseBranch = baseBranch;
     state.branchReused = branchReused;
+    if (!state.scm) state.scm = scmState;
     if (runtimeOverrides) state.runtimeOverrides = runtimeOverrides;
     state = stateManager.saveRunState(targetRoot, state);
   } else {
@@ -352,7 +374,8 @@ function cmdRun(options) {
       branch: activeBranch,
       baseBranch,
       branchReused,
-      runtimeOverrides
+      runtimeOverrides,
+      scm: scmState
     });
   }
 
@@ -719,11 +742,34 @@ function cmdRun(options) {
       } catch (e) {}
     }
 
-    // Optional Remote Review Resolution Loop (AC15)
+    // Optional Remote Review Resolution Loop (AC14, AC15, AC20)
     const pollPr = options.pollPr !== undefined ? options.pollPr : (config.scmCodeReviewEnabled || false);
     if (pollPr) {
-      console.log(`[Step 8: PR Preparation] SCM code review loop enabled. Polling for reviewer feedback...`);
-      prPayload.pollEnabled = true;
+      const currentScm = state.scm || { provider: 'none', resolvedFrom: 'config', cliInstalled: null, cliAuthenticated: null, skipped: false, skipReason: null, errors: [] };
+      if (currentScm.provider === 'none') {
+        console.log(`[Step 8: PR Preparation] SCM polling skipped (scmProvider: none).`);
+        currentScm.skipped = true;
+        currentScm.skipReason = 'scmProvider is set to "none"';
+      } else {
+        const scmContract = getScmProviderContract();
+        const capability = scmContract ? scmContract.checkScmCapability(currentScm.provider) : { available: false, error: 'contract unavailable' };
+        currentScm.cliInstalled = capability.installed;
+        currentScm.cliAuthenticated = capability.authenticated;
+
+        if (!capability.available) {
+          console.warn(`[Step 8: PR Preparation] SCM polling skipped: ${capability.error}`);
+          currentScm.skipped = true;
+          currentScm.skipReason = capability.error;
+          if (!currentScm.errors) currentScm.errors = [];
+          currentScm.errors.push(capability.error);
+        } else {
+          console.log(`[Step 8: PR Preparation] SCM code review loop enabled via ${currentScm.provider} (${capability.bin}). Polling for reviewer feedback...`);
+          prPayload.pollEnabled = true;
+          prPayload.scmProvider = currentScm.provider;
+        }
+      }
+      state.scm = currentScm;
+      state = stateManager.saveRunState(targetRoot, state);
     }
 
     state = stateManager.updateStepState(targetRoot, state.runId, 8, 'completed', prPayload);
@@ -829,6 +875,12 @@ function cmdStatus(options) {
   console.log(`Spec:         ${state.specSlug}`);
   console.log(`Branch:       ${state.branch || 'None'}`);
   console.log(`Base Branch:  ${state.baseBranch || 'None'}`);
+  if (state.scm) {
+    const scmInfo = state.scm.skipped
+      ? `${state.scm.provider} (skipped: ${state.scm.skipReason})`
+      : state.scm.provider;
+    console.log(`SCM Provider: ${scmInfo}`);
+  }
   console.log(`Status:       ${state.status}`);
   console.log(`Current Step: ${state.currentStep}/${state.totalSteps}`);
   console.log(`Score:        ${state.score !== null ? `${state.score}/10` : 'Not evaluated yet'}`);
