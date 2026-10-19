@@ -93,6 +93,7 @@ test('sdw-ship-pr - AC4, AC5: pre-PR gate failure halts execution', async () => 
 
 test('sdw-ship-pr - AC16, AC17: Review convergence loop fixes issues, adds summary comment, and resolves thread', async () => {
   const calls = [];
+  let threadResolved = false;
   const fakeExecutor = (cmd) => {
     calls.push(cmd);
     if (cmd.includes('--input')) {
@@ -100,6 +101,10 @@ test('sdw-ship-pr - AC16, AC17: Review convergence loop fixes issues, adds summa
       if (match && fs.existsSync(match[1])) {
         const fileContent = fs.readFileSync(match[1], 'utf8');
         calls.push(fileContent);
+        if (fileContent.includes('resolveReviewThread')) {
+          threadResolved = true;
+          return JSON.stringify({ data: { resolveReviewThread: { thread: { isResolved: true } } } });
+        }
         if (fileContent.includes('reviewThreads')) {
           return JSON.stringify({
             data: {
@@ -109,7 +114,7 @@ test('sdw-ship-pr - AC16, AC17: Review convergence loop fixes issues, adds summa
                     nodes: [
                       {
                         id: 'PRRT_kwTEST123',
-                        isResolved: false,
+                        isResolved: threadResolved,
                         path: 'src/index.js',
                         line: 10,
                         comments: {
@@ -124,9 +129,6 @@ test('sdw-ship-pr - AC16, AC17: Review convergence loop fixes issues, adds summa
               }
             }
           });
-        }
-        if (fileContent.includes('resolveReviewThread')) {
-          return JSON.stringify({ data: { resolveReviewThread: { thread: { isResolved: true } } } });
         }
       }
     }

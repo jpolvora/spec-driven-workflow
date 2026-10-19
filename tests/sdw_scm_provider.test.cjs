@@ -555,4 +555,74 @@ test('sdw-scm-provider - AzureDevOpsProvider.queryWorkItems executes WIQL and ma
   assert.strictEqual(items[0].acceptanceCriteria.length, 1);
 });
 
+test('sdw-scm-provider - GitHubProvider.queryWorkItems maps issues and tags', async () => {
+  const provider = createScmProvider('github', {
+    executor: (cmd) => {
+      if (cmd.includes('gh issue list')) {
+        return JSON.stringify([{
+          number: 77,
+          title: 'Issue 77',
+          body: '- AC1: The system shall work properly.',
+          url: 'https://github.com/issues/77',
+          state: 'OPEN',
+          labels: [{ name: 'bug' }, { name: 'triage' }]
+        }]);
+      }
+      throw new Error(`Unexpected command: ${cmd}`);
+    }
+  });
+
+  const items = await provider.queryWorkItems({ state: 'open', limit: 5 });
+  assert.strictEqual(items.length, 1);
+  assert.strictEqual(items[0].id, '77');
+  assert.strictEqual(items[0].source, 'github');
+  assert.deepStrictEqual(items[0].tags, ['bug', 'triage']);
+  assert.strictEqual(items[0].acceptanceCriteria.length, 1);
+});
+
+test('sdw-scm-provider - createPullRequest aborts and throws on failed PR list (GitHub and ADO)', async () => {
+  const ghProvider = createScmProvider('github', {
+    executor: (cmd) => {
+      if (cmd.includes('gh pr list')) {
+        throw new Error('API rate limit exceeded');
+      }
+      return '';
+    }
+  });
+
+  await assert.rejects(
+    () => ghProvider.createPullRequest({ title: 'test', head: 'feat' }),
+    /Unable to verify existing pull request before creation/
+  );
+
+  const adoProvider = createScmProvider('ado', {
+    executor: (cmd) => {
+      if (cmd.includes('az repos pr list')) {
+        throw new Error('Connection timeout');
+      }
+      return '';
+    }
+  });
+
+  await assert.rejects(
+    () => adoProvider.createPullRequest({ title: 'test', head: 'feat' }),
+    /Unable to verify existing pull request before creation/
+  );
+});
+
+test('sdw-scm-provider - fetchWorkItem rejects non-numeric IDs for shell safety', async () => {
+  const ghProvider = createScmProvider('github', { executor: () => '' });
+  await assert.rejects(
+    () => ghProvider.fetchWorkItem('123; rm -rf /'),
+    /Item identifier must be a valid numeric ID/
+  );
+
+  const adoProvider = createScmProvider('ado', { executor: () => '' });
+  await assert.rejects(
+    () => adoProvider.fetchWorkItem('`malicious`'),
+    /Item identifier must be a valid numeric ID/
+  );
+});
+
+
 

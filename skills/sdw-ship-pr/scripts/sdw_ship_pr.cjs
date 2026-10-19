@@ -384,16 +384,36 @@ async function runShipPr(options = {}, customExecutor = null) {
                 log(`[sdw-ship-pr] Closed and resolved review thread ${thread.id} with resolution summary.`);
               }
             }
+
+            // Re-evaluate review threads after resolution
+            const updatedThreads = await provider.listReviewThreads(prResult.number);
+            report.reviewConvergence.activeThreads = updatedThreads.activeCount;
+            if (status.allPassed && updatedThreads.activeCount === 0) {
+              log('[sdw-ship-pr] All checks passed and 0 active review threads detected after resolution pass. Review converged successfully.');
+              converged = true;
+              report.reviewConvergence.converged = true;
+              break;
+            }
           }
 
           if (round >= maxRounds && !converged) {
             warn(`[sdw-ship-pr] Reached maximum review convergence rounds (${maxRounds}) with residual active threads.`);
+          } else if (!converged && options.pollIntervalMs) {
+            await new Promise(r => setTimeout(r, options.pollIntervalMs));
           }
         }
-      }
 
-      report.shipStatus = 'delivered';
-      report.success = true;
+        if (!converged && !dryRun) {
+          report.shipStatus = 'review_pending';
+          report.success = false;
+        } else {
+          report.shipStatus = 'delivered';
+          report.success = true;
+        }
+      } else {
+        report.shipStatus = 'delivered';
+        report.success = true;
+      }
     }
 
     // Step 5: State Persistence

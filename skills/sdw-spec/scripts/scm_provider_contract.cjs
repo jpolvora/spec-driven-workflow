@@ -106,12 +106,13 @@ function extractAcceptanceCriteria(text) {
  */
 class GitHubProvider extends ScmProvider {
   async fetchWorkItem(itemId) {
-    if (!itemId) {
-      throw new Error('Item identifier is required for GitHub fetchWorkItem.');
+    if (!itemId || !/^\d+$/.test(String(itemId).trim())) {
+      throw new Error(`Item identifier must be a valid numeric ID for GitHub fetchWorkItem: ${itemId}`);
     }
 
     try {
-      const cmd = `gh issue view ${itemId} --json number,title,body,url,state,labels`;
+      const safeId = String(itemId).trim();
+      const cmd = `gh issue view ${safeId} --json number,title,body,url,state,labels`;
       const stdout = this.executor(cmd);
       const data = JSON.parse(stdout);
 
@@ -120,12 +121,12 @@ class GitHubProvider extends ScmProvider {
       const labels = Array.isArray(data.labels) ? data.labels.map(l => (typeof l === 'string' ? l : l.name)) : [];
 
       return {
-        id: String(data.number || itemId),
+        id: String(data.number || safeId),
         title: data.title || '',
         description: body,
         acceptanceCriteria,
         source: 'github',
-        url: data.url || `https://github.com/issues/${itemId}`,
+        url: data.url || `https://github.com/issues/${safeId}`,
         state: (data.state || 'open').toLowerCase(),
         tags: labels
       };
@@ -137,9 +138,10 @@ class GitHubProvider extends ScmProvider {
 
   async queryWorkItems(query = {}) {
     try {
-      const stateFlag = query.state ? `--state ${query.state}` : '';
-      const limitFlag = query.limit ? `--limit ${query.limit}` : '--limit 20';
-      const cmd = `gh issue list ${stateFlag} ${limitFlag} --json number,title,body,url,state,labels`;
+      const stateFlag = query.state ? `--state ${String(query.state).replace(/[^a-zA-Z]/g, '')}` : '';
+      const limit = query.limit && /^\d+$/.test(String(query.limit)) ? query.limit : 20;
+      const limitFlag = `--limit ${limit}`;
+      const cmd = `gh issue list ${stateFlag} ${limitFlag} --json number,title,body,url,state,labels`.trim().replace(/\s+/g, ' ');
       const stdout = this.executor(cmd);
       const items = JSON.parse(stdout);
 
@@ -220,7 +222,7 @@ class GitHubProvider extends ScmProvider {
       }
       const baseArg = base ? `--base "${base}"` : '';
       const draftArg = draft ? '--draft' : '';
-      const cleanTitle = title.replace(/"/g, '\\"');
+      const cleanTitle = title.replace(/["`$\\]/g, '\\$&');
       const cmd = `gh pr create --head "${head}" ${baseArg} --title "${cleanTitle}" ${bodyArg} ${draftArg}`.trim().replace(/\s+/g, ' ');
       const prUrl = this.executor(cmd).trim();
 
@@ -329,8 +331,8 @@ class GitHubProvider extends ScmProvider {
                 author: c.author ? c.author.login : 'unknown',
                 createdAt: c.createdAt || ''
               }));
-              const hasResolution = t.isResolved || comments.some(c =>
-                c.body.includes('<!-- resolution-reply -->') || /resolved|fixed|closed/i.test(c.body)
+              const hasResolution = Boolean(t.isResolved) || comments.some(c =>
+                c.body.includes('<!-- resolution-reply -->')
               );
               return {
                 id: String(t.id),
@@ -383,8 +385,7 @@ class GitHubProvider extends ScmProvider {
 
       for (const [id, thread] of threadMap.entries()) {
         const hasResolution = thread.comments.some(c => 
-          c.body.includes('<!-- resolution-reply -->') || 
-          /resolved|fixed|closed/i.test(c.body)
+          c.body.includes('<!-- resolution-reply -->')
         );
         thread.isResolved = hasResolution;
       }
@@ -475,12 +476,13 @@ class GitHubProvider extends ScmProvider {
  */
 class AzureDevOpsProvider extends ScmProvider {
   async fetchWorkItem(itemId) {
-    if (!itemId) {
-      throw new Error('Item identifier is required for Azure DevOps fetchWorkItem.');
+    if (!itemId || !/^\d+$/.test(String(itemId).trim())) {
+      throw new Error(`Item identifier must be a valid numeric ID for Azure DevOps fetchWorkItem: ${itemId}`);
     }
 
     try {
-      const cmd = `az boards work-item show --id ${itemId} --output json`;
+      const safeId = String(itemId).trim();
+      const cmd = `az boards work-item show --id ${safeId} --output json`;
       const stdout = this.executor(cmd);
       const data = JSON.parse(stdout);
       const fields = data.fields || {};
@@ -504,7 +506,7 @@ class AzureDevOpsProvider extends ScmProvider {
       const tags = rawTags.split(';').map(t => t.trim()).filter(Boolean);
 
       return {
-        id: String(data.id || itemId),
+        id: String(data.id || safeId),
         title,
         description,
         acceptanceCriteria,
@@ -523,7 +525,7 @@ class AzureDevOpsProvider extends ScmProvider {
     try {
       let wiql = query.wiql;
       if (!wiql) {
-        const stateClause = query.state ? `WHERE [System.State] = '${query.state}'` : '';
+        const stateClause = query.state ? `WHERE [System.State] = '${String(query.state).replace(/[^a-zA-Z0-9_\s]/g, '')}'` : '';
         wiql = `SELECT [System.Id], [System.Title], [System.State] FROM WorkItems ${stateClause} ORDER BY [System.Id] DESC`;
       }
       const cmd = `az boards query --wiql "${wiql.replace(/"/g, '\\"')}" --output json`;
@@ -535,6 +537,7 @@ class AzureDevOpsProvider extends ScmProvider {
         const fullItem = await this.fetchWorkItem(item.id);
         results.push(fullItem);
       }
+
       return results;
     } catch (err) {
       const errMsg = err.stderr ? err.stderr.toString().trim() : err.message;
@@ -589,12 +592,22 @@ class AzureDevOpsProvider extends ScmProvider {
       };
     }
 
+    let tempBodyFile = null;
     try {
       const baseArg = base ? `--target-branch "${base}"` : '';
       const draftArg = draft ? '--draft true' : '';
-      const cleanTitle = title.replace(/"/g, '\\"');
-      const descArg = body ? `--description "${body.replace(/"/g, '\\"')}"` : '';
-      const workItemsArg = Array.isArray(workItems) && workItems.length > 0 ? `--work-items ${workItems.join(' ')}` : '';
+      const cleanTitle = title.replace(/["`$\\]/g, '\\$&');
+      let descArg = '';
+      if (body) {
+        const tmpDir = os.tmpdir();
+        tempBodyFile = path.join(tmpDir, `sdw-ado-pr-body-${Date.now()}-${Math.random().toString(36).slice(2)}.md`);
+        fs.writeFileSync(tempBodyFile, body, 'utf8');
+        descArg = `--description "@${tempBodyFile.replace(/\\/g, '/')}"`;
+      }
+      const validWorkItems = Array.isArray(workItems)
+        ? workItems.map(id => String(id).trim()).filter(id => /^\d+$/.test(id))
+        : [];
+      const workItemsArg = validWorkItems.length > 0 ? `--work-items ${validWorkItems.join(' ')}` : '';
       const cmd = `az repos pr create --source-branch "${head}" ${baseArg} --title "${cleanTitle}" ${descArg} ${draftArg} ${workItemsArg} --output json`.trim().replace(/\s+/g, ' ');
       const stdout = this.executor(cmd);
       const data = JSON.parse(stdout);
@@ -611,6 +624,10 @@ class AzureDevOpsProvider extends ScmProvider {
     } catch (err) {
       const errMsg = err.stderr ? err.stderr.toString().trim() : err.message;
       throw new Error(`Azure DevOps SCM Provider failed to create PR: ${errMsg}`);
+    } finally {
+      if (tempBodyFile && fs.existsSync(tempBodyFile)) {
+        try { fs.unlinkSync(tempBodyFile); } catch (e) {}
+      }
     }
   }
 
@@ -690,7 +707,7 @@ class AzureDevOpsProvider extends ScmProvider {
           createdAt: c.publishedDate || ''
         }));
         const isResolved = status === 'fixed' || status === 'closed' || status === 'bydesign' || status === 'wontfix' ||
-          comments.some(c => c.body.includes('<!-- resolution-reply -->') || /resolved|fixed|closed/i.test(c.body));
+          comments.some(c => c.body.includes('<!-- resolution-reply -->'));
 
         return {
           id: String(t.id),
