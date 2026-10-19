@@ -251,12 +251,14 @@ async function importRemoteSpec(options = {}) {
   const providerName = resolution.provider;
 
   // Check capability: CLI must be installed and authenticated (AC10, AC11)
-  const capability = checkScmCapability(providerName, options);
-  if (!capability.installed) {
-    throw new Error(`SCM Import Failed: Provider CLI "${capability.bin}" is not installed or not found on PATH. Please install "${capability.bin}" to enable ${providerName} imports.`);
-  }
-  if (!capability.authenticated) {
-    throw new Error(`SCM Import Failed: Provider CLI "${capability.bin}" is not authenticated. Detail: ${capability.error}`);
+  if (!options.scmProvider) {
+    const capability = checkScmCapability(providerName, options);
+    if (!capability.installed) {
+      throw new Error(`SCM Import Failed: Provider CLI "${capability.bin}" is not installed or not found on PATH. Please install "${capability.bin}" to enable ${providerName} imports.`);
+    }
+    if (!capability.authenticated) {
+      throw new Error(`SCM Import Failed: Provider CLI "${capability.bin}" is not authenticated. Detail: ${capability.error}`);
+    }
   }
 
   const provider = options.scmProvider || createScmProvider(providerName, options);
