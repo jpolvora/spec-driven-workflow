@@ -224,15 +224,40 @@ test('sdw-scm-provider - AC16: sdw-config check reports scmProvider and CLI capa
       cfg.scmProvider = 'invalid_scm';
       fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
 
+      // Reset the capture so the invalid run is asserted in isolation: the
+      // default none run already emits scm_provider_status with passed true.
+      jsonOutput = '';
       const resInvalid = sdwConfig.cmdCheck({ root: tmpDir, json: true });
       assert.strictEqual(resInvalid, 1, 'Check must fail on invalid scmProvider');
     } finally {
       console.log = origLog;
     }
-    assert.ok(jsonOutput.includes('"scm_provider_status"'));
+    const invalidReport = JSON.parse(jsonOutput);
+    const statusCheck = invalidReport.checks.find(c => c.name === 'scm_provider_status');
+    assert.ok(statusCheck, 'Invalid provider check must be reported');
+    assert.strictEqual(statusCheck.passed, false);
+    assert.match(statusCheck.detail, /Unsupported or invalid SCM provider/);
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
+});
+
+test('sdw-scm-provider - resolution guard strips the internal marker before validating', async () => {
+  const provider = createScmProvider('github', {
+    executor: () => { throw new Error('must not reach network'); }
+  });
+  await assert.rejects(
+    provider.resolveReviewThread({ prNumber: 1, threadId: 'PRRT_x', comment: '<!-- resolution-reply -->\nabc1234', dryRun: true }),
+    /cannot be empty or a bare commit hash/,
+    'marker plus bare hash must be rejected'
+  );
+  await assert.rejects(
+    provider.resolveReviewThread({ prNumber: 1, threadId: 'PRRT_x', comment: 'abc1234', dryRun: true }),
+    /cannot be empty or a bare commit hash/,
+    'bare hash must be rejected'
+  );
+  const ok = await provider.resolveReviewThread({ prNumber: 1, threadId: 'PRRT_x', comment: '<!-- resolution-reply -->\nFixed the guard.', dryRun: true });
+  assert.strictEqual(ok.resolved, true, 'marker plus explanation must be accepted');
 });
 
 test('sdw-scm-provider - AC14, AC15, AC17, AC20: Orchestrator Step 8 skips polling when scmProvider is none and records in state', () => {

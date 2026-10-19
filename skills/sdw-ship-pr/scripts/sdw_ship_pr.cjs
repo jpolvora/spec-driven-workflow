@@ -737,7 +737,9 @@ async function cmdResolveThread(options, customExecutor) {
   const comment = options.comment;
   if (!prNumber) throw new Error('--pr <prNumber> is required for resolve-thread.');
   if (!threadId) throw new Error('--thread <threadId> is required for resolve-thread.');
-  if (!String(comment || '').trim() || /^[0-9a-f]{7,40}$/i.test(String(comment).trim())) {
+  if (scmContract && scmContract.assertResolutionComment) {
+    scmContract.assertResolutionComment(comment);
+  } else if (!String(comment || '').trim() || /^[0-9a-f]{7,40}$/i.test(String(comment).trim())) {
     throw new Error('A resolution comment must explain the fix and cannot be empty or a bare commit hash.');
   }
 

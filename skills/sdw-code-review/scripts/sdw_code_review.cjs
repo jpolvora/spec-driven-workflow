@@ -611,7 +611,7 @@ function runCodeReview(options) {
   let reportPath = options.reportPath || options.report || null;
   if (reportPath) {
     reportPath = path.isAbsolute(reportPath) ? reportPath : path.resolve(projectRoot, reportPath);
-  } else {
+  } else if (!dryRun) {
     reportPath = defaultReportPath(projectRoot);
   }
 
@@ -632,13 +632,12 @@ function runCodeReview(options) {
     fixedFiles,
     plannedFixes: plannedAll.map(f => f.id),
     findings: reportFindings,
-    reportPath: normalizePath(path.relative(projectRoot, reportPath) || reportPath),
-    reportAbsPath: reportPath,
+    reportPath: reportPath ? normalizePath(path.relative(projectRoot, reportPath) || reportPath) : null,
+    reportAbsPath: reportPath || null,
     dryRun
   };
 
-  const explicitReport = Boolean(options.reportPath || options.report);
-  if (!dryRun || explicitReport) {
+  if (reportPath) {
     writeMarkdownReport(report, reportPath);
   }
   return report;
@@ -736,7 +735,11 @@ function main() {
     if (opts.json) {
       console.log(JSON.stringify(report, null, 2));
     } else {
-      log(`[sdw-code-review] Report written to ${report.reportPath}`);
+      if (report.reportAbsPath) {
+        log(`[sdw-code-review] Report written to ${report.reportPath}`);
+      } else {
+        log('[sdw-code-review] (dry-run) Report not written; no files modified.');
+      }
       if (report.passed) {
         const total = report.findings.filter(f => f.status === 'open').length;
         if (total === 0) log('[sdw-code-review] Code review passed with 0 findings.');
