@@ -109,15 +109,27 @@
 
 ---
 
-### 7. 🧪 Battle-Tested Quality & Zero-Flake Test Suite
+### 7. 🛡️ Orchestrator Refinement & Pre-PR Quality Gates
+
+*Consolidated technical planning and ironclad repository-level quality gates before PR publication.*
+
+- **Refinement Phase (Grilling + Technical Planning):** Step 2 merges adversarial decision gap analysis with constructive technical planning, producing a structured technical blueprint (`targetFiles`, `architecturalApproach`, `testPlan`) directly ingested by Step 3 DAG generation.
+- **Configurable Pre-PR Quality Gates (`requiredBuild`, `runAllTests`):** Opt-in build verification (`buildCommand`, default `npm run build`) and full test execution pass (`testCommand`, default `npm test`) executed as mandatory prerequisites in Step 8 before remote push or PR creation.
+- **Automated Surgical Fix Loop:** Autonomous remediation loop (up to 3 iterations) resolving build or test regressions with mandatory pre-commit secret leak checks before each fix commit.
+- **Project Pre-PR Lifecycle Hook:** Support for project-specific instructions (`prePrInstructions`) and automation commands (`prePrCommand`) for semantic version bumping, changelog updates, and documentation synchronization.
+
+---
+
+### 8. 🧪 Battle-Tested Quality & Zero-Flake Test Suite
 
 *Engineering rigor backed by 100% native automated tests.*
 
 - **Native Node.js Test Runner:** Built with `node:test` and `node:assert/strict` — zero third-party testing frameworks required.
-- **84 Comprehensive Test Scenarios:**
+- **93 Comprehensive Test Scenarios:**
   - `sdw_config.test.cjs`: Configuration parsing, schema validation, token expansion, and initialization gates.
   - `sdw_spec.test.cjs`: Index bootstrapping, EARS validation, synthesis, SCM provider contract, state synchronization, and archival quality gates.
   - `sdw_orch.test.cjs`: State machine transitions, derivation, grilling decision trees, DAG decomposition, scoring gates, code review auto-fixing, remote push publishing, and unattended multi-spec batch queue execution.
+  - `sdw_refinement_gates.test.cjs`: Step 2 Refinement state machine naming, technical blueprint ingestion into Step 3, config schema validation, build and test quality gates, automated fix retry loops, and pre-PR lifecycle hooks.
   - `sdw_branch_worktree.test.cjs`: Feature branch lifecycle, dirty tree refusal, branch reuse, worktree creation/cleanup, cherry-pick integration, and runtime overrides.
   - `sdw_scm_provider.test.cjs`: SCM provider resolution, capability checks, safe disable modes, strict CLI isolation (`gh` vs `az`), and orchestrator polling integration.
   - `sdw_router.test.cjs`: Minimal context budget enforcement (SKILL.md ≤ 120 lines), explicit invocations, keyword classification, tied-confidence disambiguation, missing directory resolution, and pass-through non-interference.
@@ -134,5 +146,4 @@ The following specifications are scheduled for upcoming execution phases:
 - **006 — Packaging & Vercel Skills Compatibility:** Standalone npm packaging, one-command installer, and seamless distribution across `.agents/skills/`.
 - **007 — SDW Memory Skill:** Integrated anti-regression project memory and vault trap retrieval.
 - **011 — GitHub Actions CI/CD Integration:** Automated workflow runs, agentic PR reviews, and skill distribution pipelines.
-- **013 — Refinement Step & Pre-PR Gates:** Refinement step merging grilling with technical planning, build/test gates, and pre-PR lifecycle hooks.
 - **014 — Step Artifacts Persistence:** Per-step human-auditable markdown artifacts persistence under `{stateDir}/{slug}/{runId}/`.

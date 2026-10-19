@@ -596,7 +596,8 @@ function cmdRun(options) {
       projectRoot: targetRoot,
       slug: specSlug,
       baseCommit: state.baseCommit,
-      minScore: effectiveMinScore
+      minScore: effectiveMinScore,
+      blueprint
     });
 
     console.log(`[Step 5: Conformance Scoring] Score: ${scoreReport.score}/10 (Required: ${effectiveMinScore}/10). Passed: ${scoreReport.passed}`);
