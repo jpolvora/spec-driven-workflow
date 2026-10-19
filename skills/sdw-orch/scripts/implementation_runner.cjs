@@ -229,11 +229,6 @@ function checkTaskChanges(targetRoot, taskWorktreeAbs, useWorktrees, filesChange
       }
     }
 
-    // Fallback: verify files in filesChanged exist on disk
-    if (filesChanged.length > 0) {
-      const allExist = filesChanged.every(f => fs.existsSync(path.resolve(root, f)));
-      if (allExist && statusOut) return true;
-    }
   } catch (e) {}
 
   return false;

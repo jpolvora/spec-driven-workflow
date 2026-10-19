@@ -283,11 +283,29 @@ async function runShipPr(options = {}, customExecutor = null) {
         try {
           const changed = stageChangedSince(executor, beforePrePr, projectRoot);
           if (changed.length > 0) {
+            // Scan the staged pre-PR changes before creating history.
+            if (config.securityChecksEnabled) {
+              let securityScanner = null;
+              try {
+                securityScanner = require('../../sdw-security-checks/scripts/sdw_security_checks.cjs');
+              } catch (e) {
+                securityScanner = null;
+              }
+              if (!securityScanner || typeof securityScanner.scan !== 'function') {
+                throw new Error('Security checks enabled but the sdw-security-checks scanner is unavailable.');
+              }
+              const scanResult = securityScanner.scan({ root: projectRoot, staged: true });
+              if (scanResult.exitCode !== 0) {
+                throw new Error(`Security checks failed on pre-PR changes: ${scanResult.message || 'blocking findings detected'}`);
+              }
+            }
+
             log(`[sdw-ship-pr] Committing ${changed.length} pre-PR change(s)...`);
             const commitMsg = specSlug && specSlug !== 'unspecified' ? `chore(${specSlug}): apply pre-pr requirements` : 'chore: apply pre-pr requirements';
             executor(`git commit -m "${commitMsg}"`);
           }
         } catch (modErr) {
+          if (String(modErr.message || '').includes('Security checks failed')) throw modErr;
           // non-git or commit error ignored
         }
       }
@@ -461,7 +479,7 @@ async function runShipPr(options = {}, customExecutor = null) {
 
           // Failing CI with no review threads still needs a fixer. Reuse the same
           // test/security/scoped-commit/push gates before polling again.
-          if (!status.allPassed && activeList.length === 0) {
+          if (failingChecks.length > 0 && activeList.length === 0) {
             if (reviewFixCommand) {
               log(`[sdw-ship-pr] ${failingChecks.length} failing check(s); applying reviewFixCommand...`);
               const beforeCheckFix = listChangedPaths(executor);

@@ -352,7 +352,7 @@ test('AC17, AC18, AC19, AC20, AC21, AC22: Verification gates run build/test, rec
     const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
     cfg.implementation = {
       mode: 'command',
-      command: 'node -e "const fs = require(\'fs\'); fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({ taskId: process.env.SDW_TASK_ID, acIds: [\'AC1\'], filesChanged: [\'.sdw/specs/gate-spec.md\'], summary: \'done\' }));"'
+      command: 'node -e "const fs = require(\'fs\'); fs.writeFileSync(\'gate-task.txt\', \'done\'); fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({ taskId: process.env.SDW_TASK_ID, acIds: [\'AC1\'], filesChanged: [\'gate-task.txt\'], summary: \'done\' }));"'
     };
     cfg.verification = {
       buildCommand: 'node -e "console.error(\'build error\'); process.exit(1);"',
@@ -602,6 +602,17 @@ test('sdw-orch rejects unsafe specification slugs before shell execution', () =>
     });
     assert.strictEqual(code, 1);
     assert.strictEqual(fs.existsSync(path.join(tmpDir, 'pwned')), false, 'Slug must never reach a shell');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('sdw-orch rejects unchanged claimed files even when unrelated dirt exists', () => {
+  const tmpDir = setupTestRepo();
+  try {
+    fs.writeFileSync(path.join(tmpDir, 'unrelated-scratch.txt'), 'dirty', 'utf8');
+    const changed = implementationRunner.checkTaskChanges(tmpDir, null, false, ['package.json']);
+    assert.strictEqual(changed, false, 'An unchanged claimed file must not pass because unrelated dirt exists');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
