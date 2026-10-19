@@ -586,3 +586,23 @@ test('AC33, AC34, AC35, AC36: Config schema validates implementation/verificatio
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('sdw-orch rejects unsafe specification slugs before shell execution', () => {
+  const tmpDir = setupTestRepo();
+  try {
+    const specPath = path.join(tmpDir, '.sdw', 'specs', 'unsafe.md');
+    fs.writeFileSync(specPath, '---\nslug: x$(touch pwned)\n---\n# Unsafe\n', 'utf8');
+    const code = sdwOrch.cmdRun({
+      root: tmpDir,
+      specPath,
+      skipPr: true,
+      skipReview: true,
+      skipSecurity: true,
+      noFeatureBranch: true
+    });
+    assert.strictEqual(code, 1);
+    assert.strictEqual(fs.existsSync(path.join(tmpDir, 'pwned')), false, 'Slug must never reach a shell');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

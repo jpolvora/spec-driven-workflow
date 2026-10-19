@@ -3,6 +3,12 @@ const path = require('path');
 const os = require('os');
 const { execSync } = require('child_process');
 
+function assertSafeRef(ref, label) {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(String(ref)) || String(ref).includes('..')) {
+    throw new Error(`Invalid ${label} branch name "${ref}".`);
+  }
+}
+
 /**
  * Base SCM Provider Contract
  */
@@ -169,6 +175,8 @@ class GitHubProvider extends ScmProvider {
     if (!title || !head) {
       throw new Error('title and head branch are required for GitHub createPullRequest.');
     }
+    assertSafeRef(head, 'head');
+    if (base) assertSafeRef(base, 'base');
 
     let existing;
     try {
@@ -461,7 +469,24 @@ class GitHubProvider extends ScmProvider {
           tempGqlFile = path.join(tmpDir, `sdw-gql-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
           fs.writeFileSync(tempGqlFile, payload, 'utf8');
 
-          this.executor(`gh api graphql --input "${tempGqlFile.replace(/\\/g, '/')}"`);
+          const stdout = this.executor(`gh api graphql --input "${tempGqlFile.replace(/\\/g, '/')}"`);
+          let response = {};
+          try {
+            response = JSON.parse(stdout || '{}');
+          } catch (parseErr) {
+            throw new Error(`GitHub resolveReviewThread returned invalid JSON: ${parseErr.message}`);
+          }
+          if (Array.isArray(response.errors) && response.errors.length > 0) {
+            const messages = response.errors.map(e => (e && e.message) || JSON.stringify(e)).join('; ');
+            throw new Error(`GraphQL mutation failed: ${messages}`);
+          }
+          const confirmed = response.data
+            && response.data.resolveReviewThread
+            && response.data.resolveReviewThread.thread
+            && response.data.resolveReviewThread.thread.isResolved === true;
+          if (!confirmed) {
+            throw new Error('GitHub resolveReviewThread mutation did not confirm resolution.');
+          }
           return {
             resolved: true,
             dryRun: false,
@@ -574,6 +599,8 @@ class AzureDevOpsProvider extends ScmProvider {
     if (!title || !head) {
       throw new Error('title and head branch are required for Azure DevOps createPullRequest.');
     }
+    assertSafeRef(head, 'head');
+    if (base) assertSafeRef(base, 'base');
 
     let existing;
     try {

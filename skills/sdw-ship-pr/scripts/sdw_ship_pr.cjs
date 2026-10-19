@@ -15,6 +15,26 @@ try {
   }
 }
 
+function assertSafeSlug(specSlug) {
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(String(specSlug))) {
+    throw new Error(
+      `Invalid specification slug "${specSlug}". Expected lowercase letters, digits, and hyphens (^[a-z0-9][a-z0-9-]*$).`
+    );
+  }
+}
+
+function assertSafeRef(ref, label) {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(String(ref)) || String(ref).includes('..')) {
+    throw new Error(`Invalid ${label} branch name "${ref}".`);
+  }
+}
+
+function resolveStateDir(projectRoot, config = {}) {
+  const configured = config.stateDir || '{projectRoot}/.sdw/state';
+  const raw = String(configured).replace(/\{projectRoot\}/g, projectRoot);
+  return path.isAbsolute(raw) ? path.normalize(raw) : path.resolve(projectRoot, raw);
+}
+
 /**
  * Parses CLI arguments
  */
@@ -89,9 +109,9 @@ function loadConfig(projectRoot = process.cwd()) {
 /**
  * Locates and reads run state file if runId is supplied
  */
-function locateStateFile(projectRoot, runId, specSlug = null) {
+function locateStateFile(projectRoot, runId, specSlug = null, config = {}) {
   if (!runId) return null;
-  const stateDir = path.join(projectRoot, '.sdw', 'state');
+  const stateDir = resolveStateDir(projectRoot, config);
   if (!fs.existsSync(stateDir)) return null;
 
   // Direct state file: .sdw/state/{runId}.state.json
@@ -153,6 +173,9 @@ async function runShipPr(options = {}, customExecutor = null) {
   }
 
   const specSlug = options.spec || null;
+  if (specSlug) assertSafeSlug(specSlug);
+  assertSafeRef(head, 'head');
+  assertSafeRef(base, 'base');
   const title = options.title || (specSlug ? `feat(${specSlug}): deliver ${specSlug}` : `feat: deliver changes from ${head}`);
   const body = options.body || (specSlug ? `Automated delivery for specification ${specSlug}.` : `Automated delivery pull request.`);
 
@@ -333,6 +356,22 @@ async function runShipPr(options = {}, customExecutor = null) {
           : Math.max(0, Number(options.pollIntervalMs) || 0);
         const reviewFixCommand = options.reviewFixCommand || config.reviewFixCommand || null;
         const testCommand = config.testCommand || (config.verification && config.verification.testCommand) || 'npm test';
+        const runReviewSecurityGate = () => {
+          if (!config.securityChecksEnabled || dryRun) return;
+          let securityScanner = null;
+          try {
+            securityScanner = require('../../sdw-security-checks/scripts/sdw_security_checks.cjs');
+          } catch (e) {
+            securityScanner = null;
+          }
+          if (!securityScanner || typeof securityScanner.scan !== 'function') {
+            throw new Error('Security checks enabled but the sdw-security-checks scanner is unavailable.');
+          }
+          const scanResult = securityScanner.scan({ root: projectRoot, staged: false });
+          if (scanResult.exitCode !== 0) {
+            throw new Error(`Security checks failed on review fix: ${scanResult.message || 'blocking findings detected'}`);
+          }
+        };
         let round = 0;
         let converged = false;
 
@@ -391,6 +430,7 @@ async function runShipPr(options = {}, customExecutor = null) {
                 break;
               }
               fixSummary = fixResult.summary || fixSummary;
+              runReviewSecurityGate();
               canResolve = true;
             } else if (reviewFixCommand) {
               log(`[sdw-ship-pr] Applying review fixes via reviewFixCommand: ${reviewFixCommand}`);
@@ -400,6 +440,8 @@ async function runShipPr(options = {}, customExecutor = null) {
                 log(`[sdw-ship-pr] Verifying review fixes with test command: ${testCommand}`);
                 executor(testCommand);
               }
+
+              runReviewSecurityGate();
 
               const fixChanges = executor('git status --porcelain').toString().trim();
               if (!fixChanges) {
@@ -443,10 +485,12 @@ async function runShipPr(options = {}, customExecutor = null) {
               }
             }
 
-            // Re-evaluate review threads after the resolution pass
+            // Re-evaluate checks and review threads after the resolution pass. The pre-fix status
+            // snapshot is stale once a commit is pushed.
+            const updatedStatus = await provider.checkPrStatus(prResult.number);
             const updatedThreads = await provider.listReviewThreads(prResult.number);
             report.reviewConvergence.activeThreads = updatedThreads.activeCount;
-            if (status.allPassed && updatedThreads.activeCount === 0) {
+            if (updatedStatus.allPassed && updatedThreads.activeCount === 0) {
               log('[sdw-ship-pr] All checks passed and 0 active review threads detected after resolution pass. Review converged successfully.');
               converged = true;
               report.reviewConvergence.converged = true;
@@ -476,7 +520,7 @@ async function runShipPr(options = {}, customExecutor = null) {
 
     // Step 5: State Persistence
     if (options.runId) {
-      const stateFilePath = locateStateFile(projectRoot, options.runId, specSlug);
+      const stateFilePath = locateStateFile(projectRoot, options.runId, specSlug, config);
       if (stateFilePath && fs.existsSync(stateFilePath)) {
         try {
           const stateData = JSON.parse(fs.readFileSync(stateFilePath, 'utf8'));
@@ -486,7 +530,7 @@ async function runShipPr(options = {}, customExecutor = null) {
           stateData.steps[8] = {
             step: 8,
             name: 'pr_preparation',
-            status: 'completed',
+            status: report.success ? 'completed' : 'failed',
             timestamp: new Date().toISOString(),
             artifact: existingStep8.artifact !== undefined ? existingStep8.artifact : null,
             output: {
@@ -515,7 +559,7 @@ async function runShipPr(options = {}, customExecutor = null) {
     report.error = err.message;
 
     if (options.runId) {
-      const stateFilePath = locateStateFile(projectRoot, options.runId, specSlug);
+      const stateFilePath = locateStateFile(projectRoot, options.runId, specSlug, config);
       if (stateFilePath && fs.existsSync(stateFilePath)) {
         try {
           const stateData = JSON.parse(fs.readFileSync(stateFilePath, 'utf8'));
@@ -553,7 +597,7 @@ if (require.main === module) {
           console.log(`  PR URL:       ${report.pullRequest.url}`);
         }
       }
-      process.exit(0);
+      process.exit(report.success ? 0 : 1);
     })
     .catch(err => {
       console.error(`\n[sdw-ship-pr] Error: ${err.message}`);

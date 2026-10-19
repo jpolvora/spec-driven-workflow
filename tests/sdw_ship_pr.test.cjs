@@ -383,3 +383,36 @@ test('sdw-ship-pr - active threads are not resolved without a verified fixer', a
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('sdw-ship-pr - locateStateFile honors the configured stateDir token', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-state-dir-'));
+  try {
+    const stateDir = path.join(tmpDir, 'build', 'state');
+    fs.mkdirSync(stateDir, { recursive: true });
+    const stateFile = path.join(stateDir, 'run-123.state.json');
+    fs.writeFileSync(stateFile, '{}', 'utf8');
+
+    const located = sdwShipPr.locateStateFile(tmpDir, 'run-123', null, {
+      stateDir: '{projectRoot}/build/state'
+    });
+    assert.strictEqual(located, stateFile);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('sdw-ship-pr - resolveReviewThread rejects GraphQL application errors', async () => {
+  const provider = createScmProvider('github', {
+    executor: (cmd) => {
+      if (cmd.includes('gh api graphql')) {
+        return JSON.stringify({ errors: [{ message: 'permission denied' }] });
+      }
+      throw new Error(`Unexpected command: ${cmd}`);
+    }
+  });
+
+  await assert.rejects(
+    () => provider.resolveReviewThread({ prNumber: 42, threadId: 'PRRT_kwTEST', comment: 'fixed' }),
+    /GraphQL mutation failed: permission denied/
+  );
+});
