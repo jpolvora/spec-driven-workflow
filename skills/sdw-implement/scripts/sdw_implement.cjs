@@ -12,6 +12,14 @@ const dagPlanner = require('./dag_planner.cjs');
 const scoreEvaluator = require('./score_evaluator.cjs');
 const reviewRunner = require('./review_runner.cjs');
 
+function getSpecIndexHelper() {
+  try {
+    return require('../../sdw-spec/scripts/spec_index.cjs');
+  } catch (e) {
+    return null;
+  }
+}
+
 function parseArgs(args) {
   const result = {
     subcommand: null,
@@ -24,6 +32,8 @@ function parseArgs(args) {
     pollPr: undefined,
     abortOnGaps: false,
     simulateFailure: false,
+    force: false,
+    allowArchived: false,
     step: null,
     json: false,
     latest: false
@@ -38,6 +48,8 @@ function parseArgs(args) {
     else if (arg === '--poll-pr') result.pollPr = true;
     else if (arg === '--abort-on-gaps') result.abortOnGaps = true;
     else if (arg === '--simulate-failure') result.simulateFailure = true;
+    else if (arg === '--force') result.force = true;
+    else if (arg === '--allow-archived') result.allowArchived = true;
     else if (arg === '--latest') result.latest = true;
     else if (arg === '--root') result.root = args[++i];
     else if (arg.startsWith('--root=')) result.root = arg.slice(7);
@@ -133,6 +145,29 @@ function cmdRun(options) {
 
   const rawSpecContent = fs.readFileSync(specFullPath, 'utf8');
   const specSlug = path.basename(specFullPath, path.extname(specFullPath)).replace(/^step-\d+-/, '');
+
+  // Specification Index Verification & Quality Gate (AC23, AC25)
+  const specIndex = getSpecIndexHelper();
+  if (specIndex) {
+    try {
+      const idxData = specIndex.readIndex({ root: targetRoot });
+      if (idxData && idxData.exists) {
+        const entry = idxData.entries.find(e => e.slug === specSlug || (specSlug && e.slug && e.slug.includes(specSlug)));
+        if (entry) {
+          // AC25: While a specification is marked archived, prevent execution unless override flag
+          if (entry.status === 'archived' && !options.force && !options.allowArchived) {
+            console.error(`[sdw-implement] Blocked: Specification "${specSlug}" is marked "archived" in index.specs.md. Execution prohibited unless --force or --allow-archived is provided.`);
+            return 1;
+          }
+          // AC23: Update or verify specification status as pending
+          if (entry.status !== 'completed' && entry.status !== 'archived') {
+            specIndex.updateSpecStatus(entry.slug, 'pending', { root: targetRoot });
+          }
+        }
+      }
+    } catch (err) {}
+  }
+
   const baseCommit = options.baseCommit || getBaseCommit(targetRoot);
   const startStep = options.startStep || (options.step ? options.step : 1);
 
@@ -356,6 +391,13 @@ function cmdRun(options) {
 
       console.log(`[Step 8: PR Preparation] Specification marked completed. PR package prepared: "${prPayload.title}".`);
       state = stateManager.updateStepState(targetRoot, state.runId, 8, 'completed', prPayload);
+
+      // AC24: Mark specification status as completed in index.specs.md
+      if (specIndex) {
+        try {
+          specIndex.updateSpecStatus(specSlug, 'completed', { root: targetRoot, validation: 'PASS' });
+        } catch (e) {}
+      }
     } else {
       state = stateManager.updateStepState(targetRoot, state.runId, 8, 'skipped', { reason: 'User requested skip' });
     }
@@ -456,6 +498,8 @@ Options:
   --latest            (status/resume) Target the most recent run state
   --skip-review       Skip code review step
   --skip-pr           Skip pull request preparation step
+  --force             Override quality gates or allow execution on archived specs
+  --allow-archived    Permit execution of specs marked archived in index.specs.md
   --json              Output response in JSON format
   -h, --help          Show help message
 `);

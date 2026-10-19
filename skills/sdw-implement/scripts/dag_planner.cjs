@@ -50,6 +50,18 @@ function generateDagPlan(specContent, options) {
       ];
     } else if (slug.includes('config')) {
       defaultTargetFiles = ['skills/sdw-config/scripts/sdw_config.cjs'];
+    } else if (slug.includes('spec')) {
+      defaultTargetFiles = [
+        'skills/sdw-spec/SKILL.md',
+        'skills/sdw-spec/scripts/sdw_spec.cjs',
+        'skills/sdw-spec/scripts/validate_spec.cjs',
+        'skills/sdw-spec/scripts/spec_index.cjs',
+        'skills/sdw-spec/scripts/spec_creator.cjs',
+        'skills/sdw-spec/scripts/scm_provider_contract.cjs',
+        'skills/sdw-spec/scripts/spec_sync.cjs',
+        'skills/sdw-spec/references/spec_standard.md',
+        'skills/sdw-spec/references/scm_contract.md'
+      ];
     }
   }
 
