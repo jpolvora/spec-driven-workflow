@@ -136,6 +136,15 @@ function getBaseCommit(projectRoot) {
   }
 }
 
+function isGitRepo(projectRoot) {
+  try {
+    const res = spawnSync('git', ['rev-parse', '--git-dir'], { cwd: projectRoot, stdio: 'ignore' });
+    return res.status === 0;
+  } catch (e) {
+    return false;
+  }
+}
+
 function assertSafeSlug(specSlug) {
   if (!/^[a-z0-9][a-z0-9-]*$/.test(String(specSlug))) {
     throw new Error(
@@ -216,6 +225,9 @@ function isGitTracked(targetRoot, rel) {
 }
 
 function stageAndCommitOnly(targetRoot, files, message) {
+  if (!isGitRepo(targetRoot)) {
+    return { committed: false, commitSha: null, files: [] };
+  }
   const clean = [...new Set((files || []).map(normalizeRel))]
     .filter(f => f && !f.includes('..') && !path.isAbsolute(f) && !/^[a-zA-Z]:/.test(f) && !isScopedExcluded(f));
   const stageable = [];
@@ -1054,6 +1066,9 @@ function cmdRun(options) {
     console.log(`[Step 5: Conformance Scoring] Score: ${scoreReport.score}/10 (Required: ${effectiveMinScore}/10). Passed: ${scoreReport.passed}`);
     console.log(`  Verified ACs: ${scoreReport.verifiedCount}/${scoreReport.totalAcs}`);
     console.log(`  Failing ACs:  ${scoreReport.failingCount}/${scoreReport.totalAcs}`);
+    if (scoreReport.passed && scoreReport.failingCount > 0) {
+      console.warn(`[Step 5: Conformance Scoring] Warning: ${scoreReport.failingCount} AC(s) failed verification despite meeting minScore threshold (${effectiveMinScore}/10).`);
+    }
 
     const step5Artifact = artifactWriter.writeStep5Artifact({
       targetRoot,
@@ -1165,24 +1180,29 @@ function cmdRun(options) {
         } catch (e) {}
       }
 
-      // Scoped delivery commit: stage only tracked spec files (evidence
-      // filesChanged + spec index). Unrelated worktree changes are left alone.
-      const deliveryFiles = collectDeliveryFiles(targetRoot, specSlug, state);
-      if (deliveryFiles.length > 0) {
-        console.log(`[Step 6: Delivery Commit] Staging scoped delivery files (${deliveryFiles.length}): ${deliveryFiles.join(', ')}`);
-        const res = stageAndCommitOnly(targetRoot, deliveryFiles, `feat(${specSlug}): implement ${specSlug}`);
-        commitSha = res.commitSha;
-        if (res.committed) {
-          console.log(`[Step 6: Delivery Commit] Created delivery commit ${commitSha}`);
-        } else {
-          console.log(`[Step 6: Delivery Commit] No scoped changes to commit; using commit ${commitSha}`);
-        }
+      if (!isGitRepo(targetRoot)) {
+        console.log(`[Step 6: Delivery Commit] Non-git workspace: delivery commit skipped.`);
+        commitSha = null;
       } else {
-        commitSha = getBaseCommit(targetRoot) || baseCommit;
-        console.log(`[Step 6: Delivery Commit] No tracked spec files to commit; using commit ${commitSha}`);
+        // Scoped delivery commit: stage only tracked spec files (evidence
+        // filesChanged + spec index). Unrelated worktree changes are left alone.
+        const deliveryFiles = collectDeliveryFiles(targetRoot, specSlug, state);
+        if (deliveryFiles.length > 0) {
+          console.log(`[Step 6: Delivery Commit] Staging scoped delivery files (${deliveryFiles.length}): ${deliveryFiles.join(', ')}`);
+          const res = stageAndCommitOnly(targetRoot, deliveryFiles, `feat(${specSlug}): implement ${specSlug}`);
+          commitSha = res.commitSha;
+          if (res.committed) {
+            console.log(`[Step 6: Delivery Commit] Created delivery commit ${commitSha}`);
+          } else {
+            console.log(`[Step 6: Delivery Commit] No scoped changes to commit; using commit ${commitSha}`);
+          }
+        } else {
+          commitSha = getBaseCommit(targetRoot) || baseCommit;
+          console.log(`[Step 6: Delivery Commit] No tracked spec files to commit; using commit ${commitSha}`);
+        }
       }
     } catch (err) {
-      console.log(`[Step 6: Delivery Commit] Git note: ${err.message}`);
+      console.error(`[Step 6: Delivery Commit] Git error: ${err.message}`);
       commitSha = getBaseCommit(targetRoot);
     }
     state.deliveryCommit = commitSha;
@@ -1322,11 +1342,11 @@ function cmdRun(options) {
   }
 
   // Step 8: PR Preparation, Pre-PR Gates & Remote Comment Loop (AC5, AC6, AC7, AC8, AC9, AC10, AC11, AC12, AC14, AC15)
+  const shipPrScript = path.resolve(__dirname, '../../sdw-ship-pr/scripts/sdw_ship_pr.cjs');
+  const hasShipPr = fs.existsSync(shipPrScript);
+
   if (startStep <= 8 && state.steps[8].status !== 'completed' && !options.skipPr) {
     state = stateManager.updateStepState(targetRoot, state.runId, 8, 'in_progress');
-
-    const shipPrScript = path.resolve(__dirname, '../../sdw-ship-pr/scripts/sdw_ship_pr.cjs');
-    const hasShipPr = fs.existsSync(shipPrScript);
 
     // If sdw-ship-pr is available and no unit-test fixer hooks are passed, delegate pre-PR gates to sdw-ship-pr as single owner
     if (!hasShipPr || options.testFixer || options.buildFixer || options.prePrHook) {
@@ -1606,22 +1626,26 @@ function cmdRun(options) {
   // Remote Push / Branch Publishing (--push or config.pushDelivery) fallback
   const shouldPush = options.push !== undefined ? options.push : (config && config.pushDelivery);
   if (shouldPush && !state.pushedBranch) {
-    try {
-      const remotes = execSync('git remote', { cwd: targetRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-      const currentBranch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: targetRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-      if (remotes && currentBranch && currentBranch !== 'HEAD') {
-        console.log(`[sdw-orch] Pushing delivery branch to origin/${currentBranch}...`);
-        git(targetRoot, ['push', 'origin', currentBranch], { stdio: 'inherit' });
-        state.pushedBranch = currentBranch;
-      } else if (!remotes) {
-        console.log(`[sdw-orch] Remote push skipped: no git remote configured.`);
+    if (!isGitRepo(targetRoot)) {
+      console.log(`[sdw-orch] Remote push skipped: not a git repository.`);
+    } else {
+      try {
+        const remotes = execSync('git remote', { cwd: targetRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+        const currentBranch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: targetRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+        if (remotes && currentBranch && currentBranch !== 'HEAD') {
+          console.log(`[sdw-orch] Pushing delivery branch to origin/${currentBranch}...`);
+          git(targetRoot, ['push', 'origin', currentBranch], { stdio: 'inherit' });
+          state.pushedBranch = currentBranch;
+        } else if (!remotes) {
+          console.log(`[sdw-orch] Remote push skipped: no git remote configured.`);
+        }
+      } catch (pushErr) {
+        console.error(`[sdw-orch] Warning: git push failed: ${pushErr.message}`);
+        if (!state.errors) state.errors = [];
+        state.errors.push({ step: 8, timestamp: new Date().toISOString(), error: `git push failed: ${pushErr.message}` });
       }
-    } catch (pushErr) {
-      console.error(`[sdw-orch] Warning: git push failed: ${pushErr.message}`);
-      if (!state.errors) state.errors = [];
-      state.errors.push({ step: 8, timestamp: new Date().toISOString(), error: `git push failed: ${pushErr.message}` });
     }
-  } else if (!shouldPush) {
+  } else if (!shouldPush && !options.skipPr && !hasShipPr) {
     console.log(`[Step 8: PR Preparation] Pre-PR verification passed. PR payload assembled (remote push disabled).`);
   }
 

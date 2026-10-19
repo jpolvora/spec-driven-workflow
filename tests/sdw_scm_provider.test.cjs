@@ -210,18 +210,26 @@ test('sdw-scm-provider - AC4, AC5, AC6: Import routes to configured provider and
 test('sdw-scm-provider - AC16: sdw-config check reports scmProvider and CLI capability', () => {
   const tmpDir = setupTestRepo();
   try {
-    // Default none
-    const resNone = sdwConfig.cmdCheck({ root: tmpDir, json: true });
-    assert.strictEqual(resNone, 0);
+    let jsonOutput = '';
+    const origLog = console.log;
+    console.log = (msg) => { jsonOutput += msg + '\n'; };
+    try {
+      // Default none
+      const resNone = sdwConfig.cmdCheck({ root: tmpDir, json: true });
+      assert.strictEqual(resNone, 0);
 
-    // Set invalid provider
-    const cfgPath = path.join(tmpDir, '.sdw', 'config.json');
-    const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
-    cfg.scmProvider = 'invalid_scm';
-    fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
+      // Set invalid provider
+      const cfgPath = path.join(tmpDir, '.sdw', 'config.json');
+      const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+      cfg.scmProvider = 'invalid_scm';
+      fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
 
-    const resInvalid = sdwConfig.cmdCheck({ root: tmpDir, json: true });
-    assert.strictEqual(resInvalid, 1, 'Check must fail on invalid scmProvider');
+      const resInvalid = sdwConfig.cmdCheck({ root: tmpDir, json: true });
+      assert.strictEqual(resInvalid, 1, 'Check must fail on invalid scmProvider');
+    } finally {
+      console.log = origLog;
+    }
+    assert.ok(jsonOutput.includes('"scm_provider_status"'));
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

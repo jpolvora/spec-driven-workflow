@@ -100,10 +100,9 @@ test('sdw-step-artifacts - AC1, AC2, AC3, AC4, AC5, AC6, AC7, AC12, AC13: Step 2
       skipSecurity: true,
       skipReview: true,
       unattended: true,
-      minScore: 0,
       implementation: {
         mode: 'command',
-        command: 'node -e "const fs = require(\'fs\'); fs.writeFileSync(\'artifact-task.txt\', \'done\'); fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({ taskId: process.env.SDW_TASK_ID, acIds: [\'AC1\'], filesChanged: [\'artifact-task.txt\'], summary: \'done\' }));"'
+        command: 'node -e "const fs = require(\'fs\'); const acs = process.env.SDW_AC_IDS ? process.env.SDW_AC_IDS.split(\',\').filter(Boolean) : [\'AC1\', \'AC2\']; fs.writeFileSync(\'artifact-task.txt\', \'done\'); fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({ taskId: process.env.SDW_TASK_ID, acIds: acs.length > 0 ? acs : [\'AC1\'], filesChanged: [\'artifact-task.txt\'], summary: \'done\' }));"'
       }
     });
 

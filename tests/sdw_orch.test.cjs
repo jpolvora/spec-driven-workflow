@@ -399,7 +399,6 @@ slug: push-feature
       root: tmpDir,
       specPath: '.sdw/specs/push-feature.md',
       push: true,
-      minScore: 0,
       skipReview: true,
       skipPr: false,
       implementation: {

@@ -339,6 +339,12 @@ function executeTaskCommand(options) {
   filteredEnv.SDW_WORKING_DIR = absWorkingDir;
   filteredEnv.SDW_TARGET_ROOT = absTargetRoot;
   filteredEnv.SDW_SPEC_SLUG = specSlug;
+  const acList = Array.isArray(task.coveredAcs)
+    ? task.coveredAcs
+    : (Array.isArray(task.acceptanceCriteria)
+      ? task.acceptanceCriteria
+      : (Array.isArray(task.acIds) ? task.acIds : []));
+  filteredEnv.SDW_AC_IDS = acList.join(',');
 
   const timeoutMs = implConfig.timeoutMs || 1800000;
 

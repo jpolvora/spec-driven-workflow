@@ -673,6 +673,7 @@ function cmdCheck(options) {
 
     // 4.5 Validate scmProvider CLI presence and authentication status (AC16)
     const provider = parsedConfig.scmProvider || 'none';
+    const executor = options.executor || ((cmd) => execSync(cmd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }));
     if (provider === 'none') {
       checks.push({
         name: 'scm_provider_status',
@@ -680,12 +681,12 @@ function cmdCheck(options) {
         passed: true,
         detail: 'SCM integration disabled (none)'
       });
-    } else {
+    } else if (provider === 'github' || provider === 'ado') {
       const binName = provider === 'github' ? 'gh' : 'az';
       let installed = false;
       try {
         const probeCmd = process.platform === 'win32' ? `where ${binName}` : `command -v ${binName}`;
-        const out = execSync(probeCmd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+        const out = executor(probeCmd);
         installed = Boolean(out && out.trim());
       } catch (e) {
         installed = false;
@@ -703,7 +704,7 @@ function cmdCheck(options) {
         let authenticated = false;
         try {
           const authCmd = binName === 'gh' ? 'gh auth status' : 'az account show';
-          execSync(authCmd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+          executor(authCmd);
           authenticated = true;
         } catch (e) {
           authenticated = false;
@@ -718,6 +719,17 @@ function cmdCheck(options) {
           valid = false;
           errors.push(`Configured SCM provider "${provider}" CLI "${binName}" is not authenticated.`);
         }
+      }
+    } else {
+      valid = false;
+      checks.push({
+        name: 'scm_provider_status',
+        target: `scmProvider: ${provider}`,
+        passed: false,
+        detail: `Unsupported or invalid SCM provider: ${provider}`
+      });
+      if (!errors.some(e => e.includes('scmProvider'))) {
+        errors.push(`Property "scmProvider" must be one of: none, ado, github.`);
       }
     }
   }

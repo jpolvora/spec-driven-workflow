@@ -389,12 +389,26 @@ None.
     // Also add a corrupted state file to test graceful handling (Negative scenario 7)
     fs.writeFileSync(path.join(stateDir, 'corrupted.state.json'), '{ invalid json ...', 'utf8');
 
-    // AC21: Dry-run preview does not mutate index on disk
-    const dryReport = syncIndex({ root: tmpDir, dryRun: true });
+    let warnedCorrupted = false;
+    const origWarn = console.warn;
+    console.warn = (msg) => {
+      if (String(msg).includes('corrupted.state.json')) warnedCorrupted = true;
+    };
+    let dryReport;
+    try {
+      // AC21: Dry-run preview does not mutate index on disk
+      dryReport = syncIndex({ root: tmpDir, dryRun: true });
+    } finally {
+      console.warn = origWarn;
+    }
+    assert.strictEqual(warnedCorrupted, true, 'Gracefully warned and skipped corrupted state file');
     assert.equal(dryReport.dryRun, true);
     assert.equal(dryReport.transitions.some(t => t.to === 'completed'), true);
     // On-disk still pending
     assert.equal(readIndex({ root: tmpDir }).entries[0].status, 'pending');
+
+    // Remove corrupted state file so subsequent index tests proceed cleanly
+    fs.unlinkSync(path.join(stateDir, 'corrupted.state.json'));
 
     // Live sync updates status to completed
     const liveReport = syncIndex({ root: tmpDir, dryRun: false });
