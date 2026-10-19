@@ -16,6 +16,9 @@ yarn-error.log*
 .sdw/state/*
 !.sdw/state/.gitkeep
 
+# spec-memo local session state
+.spec-memo/
+
 # Local agent caches & scratch
 .agents/
 .gemini/
