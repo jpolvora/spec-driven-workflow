@@ -230,7 +230,9 @@ function triggerSpecSync(targetRoot) {
   } catch (e) {}
 
   try {
-    execSync('node skills/sdw-spec/scripts/sdw_spec.cjs sync', {
+    const specScript = normalizePath(path.join(__dirname, '..', '..', 'sdw-spec', 'scripts', 'sdw_spec.cjs'));
+    if (!fs.existsSync(specScript)) return;
+    execSync(`node "${specScript}" sync`, {
       cwd: targetRoot,
       stdio: ['ignore', 'pipe', 'ignore'],
       encoding: 'utf8'

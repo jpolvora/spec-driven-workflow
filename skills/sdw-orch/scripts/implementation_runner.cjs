@@ -94,7 +94,7 @@ function renderTaskPrompt(options) {
 
   prompt += `## Task Finish Command\n`;
   prompt += `\`\`\`bash\n`;
-  prompt += `node skills/sdw-orch/scripts/sdw_orch.cjs task finish --run-id ${runId} --task ${task.id} --evidence ${evidenceFileRel}\n`;
+  prompt += `node "${normalizePath(path.join(__dirname, 'sdw_orch.cjs'))}" task finish --run-id ${runId} --task ${task.id} --evidence ${evidenceFileRel}\n`;
   prompt += `\`\`\`\n`;
 
   fs.writeFileSync(promptFileAbs, prompt, 'utf8');

@@ -540,7 +540,7 @@ function writeMarkdownReport(report, destPath) {
   } else {
     md += `Execute in order (surgical, one finding at a time):\n\n`;
     open.forEach(f => { md += `- [ ] ${f.id} (${f.severity}) \`${f.path}\` — ${f.fix}\n`; });
-    md += `\nRe-run \`node skills/sdw-code-review/scripts/sdw_code_review.cjs run --json\` until blocking findings reach 0.\n`;
+    md += `\nRe-run \`node "${normalizePath(__filename)}" run --json\` until blocking findings reach 0.\n`;
   }
 
   fs.writeFileSync(destPath, md, 'utf8');

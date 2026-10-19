@@ -893,7 +893,9 @@ function cmdCheck(options) {
 
     // 4.5 Validate scmProvider CLI presence and authentication status (AC16)
     const provider = parsedConfig.scmProvider || 'none';
-    const executor = options.executor || ((cmd) => execSync(cmd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }));
+    const executor = typeof options.executor === 'function'
+      ? options.executor
+      : ((cmd) => execSync(cmd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }));
     if (provider === 'none') {
       checks.push({
         name: 'scm_provider_status',

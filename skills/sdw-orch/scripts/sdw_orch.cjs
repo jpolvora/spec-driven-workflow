@@ -209,6 +209,12 @@ function normalizeRel(p) {
   return String(p || '').replace(/\\/g, '/').replace(/^\.\//, '');
 }
 
+// Emitted commands must work under any install topology (spec 026 AC10): resolve
+// this CLI from its own location instead of assuming {projectRoot}/skills exists.
+function orchCommandPath() {
+  return __filename.replace(/\\/g, '/');
+}
+
 function isScopedExcluded(rel) {
   const n = normalizeRel(rel);
   return n.startsWith('.sdw/state/') || n === '.sdw/state'
@@ -939,9 +945,9 @@ function cmdRun(options) {
       });
       console.log(`\n[Step 4: Implementation] Status: awaiting_implementation.`);
       console.log(`Please implement tasks respecting DAG dependencies and submit evidence with:`);
-      console.log(`  node skills/sdw-orch/scripts/sdw_orch.cjs task finish --run-id ${state.runId} --task <taskId> --evidence <evidencePath>`);
+      console.log(`  node "${orchCommandPath()}" task finish --run-id ${state.runId} --task <taskId> --evidence <evidencePath>`);
       console.log(`Once all tasks have accepted evidence, continue with:`);
-      console.log(`  node skills/sdw-orch/scripts/sdw_orch.cjs resume --run-id ${state.runId}`);
+      console.log(`  node "${orchCommandPath()}" resume --run-id ${state.runId}`);
 
       options._runResult = {
         runId: state.runId,
@@ -1945,7 +1951,7 @@ function cmdTaskFinish(options) {
       gates: state.steps[4].gates
     });
     console.log(`Step 4 completed successfully! Proceed to Step 5 by running:`);
-    console.log(`  node skills/sdw-orch/scripts/sdw_orch.cjs resume --run-id ${state.runId}`);
+    console.log(`  node "${orchCommandPath()}" resume --run-id ${state.runId}`);
   }
 
   options._finishResult = { runId: state.runId, taskId, status: 'completed' };
@@ -2022,7 +2028,7 @@ function cmdResume(options) {
         console.log(`  [${isDone ? 'COMPLETED' : 'PENDING'}] ${t.id}: ${t.title}`);
       });
       console.error(`\nPlease complete remaining tasks and submit accepted evidence via:`);
-      console.error(`  node skills/sdw-orch/scripts/sdw_orch.cjs task finish --run-id ${state.runId} --task <taskId> --evidence <evidencePath>`);
+      console.error(`  node "${orchCommandPath()}" task finish --run-id ${state.runId} --task <taskId> --evidence <evidencePath>`);
       return 4;
     }
 
