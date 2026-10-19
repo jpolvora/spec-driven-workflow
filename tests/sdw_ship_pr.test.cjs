@@ -384,6 +384,116 @@ test('sdw-ship-pr - active threads are not resolved without a verified fixer', a
   }
 });
 
+function setupPreemptionWorkspace(checkScript) {
+  const { tmpDir, config } = setupTestWorkspace();
+  config.scmProvider = 'github';
+  config.scmCodeReviewEnabled = true;
+  const calls = [];
+  const fakeExecutor = (cmd) => {
+    calls.push(cmd);
+    if (cmd.includes('pr checks')) {
+      return JSON.stringify(checkScript());
+    }
+    if (cmd.includes('reviewThreads')) {
+      const fileMatch = cmd.match(/--input\s+"([^"]+)"/);
+      if (fileMatch && fs.existsSync(fileMatch[1])) {
+        const fileContent = fs.readFileSync(fileMatch[1], 'utf8');
+        if (!fileContent.includes('reviewThreads')) return '';
+      }
+      return JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } });
+    }
+    if (cmd.includes('gh repo view')) {
+      return JSON.stringify({ owner: { login: 'fake-owner' }, name: 'fake-repo' });
+    }
+    if (cmd.includes('gh pr list')) {
+      return JSON.stringify([{ number: 42, url: 'https://github.com/fake-owner/fake-repo/pull/42', headRefName: 'develop', baseRefName: 'master' }]);
+    }
+    if (cmd.includes('where gh') || cmd.includes('command -v gh')) return '/usr/bin/gh';
+    if (cmd.includes('gh auth status')) return 'Logged in';
+    return '';
+  };
+  return { tmpDir, config, calls, fakeExecutor };
+}
+
+test('sdw-ship-pr - superseded checks are not treated as failures', async () => {
+  const { tmpDir, config, fakeExecutor } = setupPreemptionWorkspace(() => [
+    { name: 'review', state: 'cancelled', bucket: 'fail' },
+    { name: 'ci/build', state: 'pending', bucket: 'pending' }
+  ]);
+  try {
+    const report = await sdwShipPr.runShipPr({
+      projectRoot: tmpDir,
+      config,
+      head: 'develop',
+      base: 'master',
+      maxIterations: 1,
+      pollIntervalMs: 0
+    }, fakeExecutor);
+
+    assert.strictEqual(report.shipStatus, 'review_pending');
+    assert.deepStrictEqual(report.reviewConvergence.failingChecks, [], 'cancelled checks must not be reported as failing');
+    assert.strictEqual(report.reviewConvergence.supersededChecks.length, 1, 'cancelled check must be reported as superseded');
+    assert.strictEqual(report.reviewConvergence.preemptions, 0);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('sdw-ship-pr - concurrent push preemption resets the convergence window instead of halting', async () => {
+  const scripted = [
+    [{ name: 'review', state: 'cancelled', bucket: 'fail' }],
+    [{ name: 'review', state: 'pending', bucket: 'pending' }],
+    [{ name: 'review', state: 'pending', bucket: 'pending' }],
+    [{ name: 'review', state: 'pass', bucket: 'pass' }]
+  ];
+  let call = 0;
+  const { tmpDir, config, fakeExecutor } = setupPreemptionWorkspace(() => scripted[Math.min(call++, scripted.length - 1)]);
+  try {
+    const report = await sdwShipPr.runShipPr({
+      projectRoot: tmpDir,
+      config,
+      head: 'develop',
+      base: 'master',
+      maxIterations: 2,
+      pollIntervalMs: 0
+    }, fakeExecutor);
+
+    assert.strictEqual(report.reviewConvergence.preemptions, 1, 'superseded run must trigger one adaptation');
+    assert.strictEqual(report.reviewConvergence.converged, true, 'replacement run must be followed to convergence');
+    assert.strictEqual(report.success, true);
+    assert.strictEqual(report.shipStatus, 'delivered');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('sdw-ship-pr - preemption budget cap falls back to review_pending', async () => {
+  const scripted = [
+    [{ name: 'review', state: 'cancelled', bucket: 'fail' }],
+    [{ name: 'review', state: 'pending', bucket: 'pending' }],
+    [{ name: 'review', state: 'pass', bucket: 'pass' }]
+  ];
+  let call = 0;
+  const { tmpDir, config, fakeExecutor } = setupPreemptionWorkspace(() => scripted[Math.min(call++, scripted.length - 1)]);
+  try {
+    const report = await sdwShipPr.runShipPr({
+      projectRoot: tmpDir,
+      config,
+      head: 'develop',
+      base: 'master',
+      maxIterations: 2,
+      pollIntervalMs: 0,
+      maxPreemptions: 0
+    }, fakeExecutor);
+
+    assert.strictEqual(report.reviewConvergence.preemptions, 0, 'no adaptation allowed when budget is zero');
+    assert.strictEqual(report.shipStatus, 'review_pending');
+    assert.strictEqual(report.success, false);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test('sdw-ship-pr - locateStateFile honors the configured stateDir token', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-state-dir-'));
   try {

@@ -43,6 +43,7 @@ Preserve lean context budgets and modular separation of concerns. By extracting 
 - AC19: If an active review thread is addressed, then the system shall forbid resolving the thread without first pushing the fixing commit to the remote tracking branch.
 - AC20: If a thread resolution comment is posted, then the system shall reject empty, whitespace-only, or hash-only resolution comments.
 - AC21: Where a thread is resolved via `resolve-thread`, the system shall format the resolution comment with the standard prefix and commit reference.
+- AC22: When CI checks are superseded by a newer push during convergence, the system shall wait out the superseded checks, reset the convergence window up to the preemption budget, and continue polling instead of halting.
 
 ## Notes
 

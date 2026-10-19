@@ -73,6 +73,12 @@ When `scmCodeReviewEnabled: true` or `--poll-pr` is active, `sdw-ship-pr` execut
 - Polls `provider.checkPrStatus(prNumber)` and `provider.listReviewThreads(prNumber)`.
 - If all checks pass and `activeCount === 0`, marks review converged.
 
+### 4.2b Concurrent-Push Preemption Adaptation
+Concurrent pushes to the shipped head branch while polling are an allowed event, not a failure. The loop adapts instead of halting:
+- **Superseded checks are not failures:** `cancelled`, `cancel`, `timed_out`, and `startup_failure` states are reported as `supersededChecks` and waited out. Only `fail`, `failure`, and `action_required` feed the fixer/blocker path. A superseded `state` takes precedence over a coarse `bucket` value.
+- **Fresh window for the replacement run:** check states are snapshotted per round. When a check moves from a terminal state back to pending/passing, or the check set changes between rounds, a newer CI run replaced the observed one: the loop logs the preemption, resets the round counter, and follows the latest status. Resets are capped by `--max-preemptions` (default `3`, also readable from `maxPreemptions` config); beyond the cap the loop falls back to the normal exhaustion path (`review_pending`).
+- **No extra provider queries:** preemption is inferred from `checkPrStatus` state transitions already polled each round; no head-SHA lookup is required, so the behavior is identical for `github` and `ado`.
+
 ### 4.3 Cooperative & Proactive Analysis & Fixing
 When active review threads or failing checks are detected:
 1. **Analyze Root Cause & Defect Class:** Do not treat review comments as isolated line bugs. Name the underlying defect class (e.g. missing boundary check, unhandled promise rejection, type conversion issue, unrequested scope).
@@ -125,6 +131,8 @@ When invoked with `--json`, `sdw-ship-pr` emits JSON with the following structur
     "resolvedThreads": 2,
     "activeThreads": 0,
     "pendingThreads": [],
+    "preemptions": 0,
+    "supersededChecks": [],
     "issuesFixed": [
       {
         "threadId": "PRRT_kwTEST123",

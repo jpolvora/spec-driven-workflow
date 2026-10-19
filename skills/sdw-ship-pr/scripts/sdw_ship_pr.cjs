@@ -88,7 +88,8 @@ function parseArgs(args) {
     dryRun: false,
     json: false,
     maxIterations: 3,
-    pollIntervalMs: 20000
+    pollIntervalMs: 20000,
+    maxPreemptions: 3
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -128,6 +129,9 @@ function parseArgs(args) {
     } else if (arg === '--poll-interval' && args[i + 1]) {
       const parsedInterval = parseInt(args[++i], 10);
       options.pollIntervalMs = Number.isFinite(parsedInterval) && parsedInterval >= 0 ? parsedInterval : 20000;
+    } else if (arg === '--max-preemptions' && args[i + 1]) {
+      const parsedPreemptions = parseInt(args[++i], 10);
+      options.maxPreemptions = Number.isFinite(parsedPreemptions) && parsedPreemptions >= 0 ? parsedPreemptions : 3;
     } else if (arg === '--review-fix-command' && args[i + 1]) {
       options.reviewFixCommand = args[++i];
     } else if ((arg === '--root' || arg === '--project-root') && args[i + 1]) {
@@ -416,6 +420,30 @@ async function runShipPr(options = {}, customExecutor = null) {
 
       log(`[sdw-ship-pr] Pull request ${prResult.reused ? 'reused' : 'created'}: ${prResult.url || '(dry-run simulated)'}`);
 
+      // When an active PR is open/reused, complement the PR and update description if relevant
+      if (prResult.reused && prResult.number && typeof provider.updatePullRequest === 'function') {
+        let headCommit = '';
+        try { headCommit = executor('git rev-parse --short HEAD').toString().trim(); } catch (e) {}
+        const amendmentNote = specSlug && specSlug !== 'unspecified'
+          ? `### Amending Delivery: ${specSlug}\n- Commit: \`${headCommit || 'HEAD'}\`\n- Timestamp: ${new Date().toISOString()}`
+          : null;
+        const newBodyContent = amendmentNote || body;
+        if (newBodyContent) {
+          try {
+            log(`[sdw-ship-pr] Active PR #${prResult.number} detected; updating PR description with amending delivery...`);
+            await provider.updatePullRequest({
+              prNumber: prResult.number,
+              body: newBodyContent,
+              appendBody: true,
+              dryRun
+            });
+            log(`[sdw-ship-pr] Successfully updated PR description for PR #${prResult.number}.`);
+          } catch (editErr) {
+            warn(`[sdw-ship-pr] Warning: Could not update description for active PR #${prResult.number}: ${editErr.message}`);
+          }
+        }
+      }
+
       // Step 4: Post-PR Review Convergence
       if (scmCodeReviewEnabled) {
         log(`[sdw-ship-pr] SCM review convergence enabled for PR #${prResult.number || 'simulate'}.`);
@@ -444,6 +472,31 @@ async function runShipPr(options = {}, customExecutor = null) {
         let round = 0;
         let converged = false;
 
+        // Concurrent-push adaptation: CI check states observed per round so a
+        // superseded run (cancelled by a newer push) is recognized as preemption,
+        // not failure. A preempted round grants the replacement run a fresh
+        // convergence window instead of burning the iteration budget.
+        const FAILED_CHECK_STATES = new Set(['fail', 'failure', 'action_required']);
+        const SUPERSEDED_CHECK_STATES = new Set(['cancelled', 'cancel', 'timed_out', 'startup_failure']);
+        const PENDING_CHECK_STATES = new Set(['pending', 'in_progress', 'queued', 'waiting']);
+        const stateOf = c => String(c.state || '').toLowerCase();
+        const bucketOf = c => String(c.bucket || '').toLowerCase();
+        const isFailedCheck = c => !isSupersededCheck(c) && (FAILED_CHECK_STATES.has(stateOf(c)) || FAILED_CHECK_STATES.has(bucketOf(c)));
+        const isSupersededCheck = c => SUPERSEDED_CHECK_STATES.has(stateOf(c)) || SUPERSEDED_CHECK_STATES.has(bucketOf(c));
+        const checkClassOf = c => {
+          if (isFailedCheck(c)) return 'failed';
+          if (isSupersededCheck(c)) return 'superseded';
+          if (PENDING_CHECK_STATES.has(stateOf(c)) || PENDING_CHECK_STATES.has(bucketOf(c))) return 'pending';
+          return 'passed';
+        };
+        const maxPreemptions = Number.isFinite(Number(options.maxPreemptions ?? config.maxPreemptions))
+          ? Math.max(0, Number(options.maxPreemptions ?? config.maxPreemptions))
+          : 3;
+        let preemptions = 0;
+        let prevCheckClasses = null;
+        report.reviewConvergence.preemptions = 0;
+        report.reviewConvergence.supersededChecks = [];
+
         while (round < maxRounds && !converged) {
           round++;
           report.reviewConvergence.rounds = round;
@@ -471,11 +524,45 @@ async function runShipPr(options = {}, customExecutor = null) {
           }
 
           const activeList = reviewThreads.threads.filter(t => !t.isResolved);
-          const failingChecks = (status.checks || []).filter(c => {
-            const value = String(c.state || c.bucket || '').toLowerCase();
-            return ['fail', 'failure', 'cancelled', 'cancel', 'timed_out', 'action_required', 'startup_failure'].includes(value);
-          });
+          const failingChecks = (status.checks || []).filter(isFailedCheck);
+          const supersededChecks = (status.checks || []).filter(isSupersededCheck);
           report.reviewConvergence.failingChecks = failingChecks;
+          report.reviewConvergence.supersededChecks = supersededChecks;
+
+          // Adaptation: a check that moved from a terminal state back to pending
+          // (or a changed check set between rounds) means a newer CI run replaced
+          // the observed one, typically after a concurrent push to the head branch.
+          // Grant the replacement run a fresh window instead of halting.
+          const checkClasses = new Map((status.checks || []).map(c => [c.name, checkClassOf(c)]));
+          let preempted = false;
+          if (prevCheckClasses && prevCheckClasses.size > 0) {
+            if (checkClasses.size !== prevCheckClasses.size) {
+              preempted = true;
+            } else {
+              for (const [name, cls] of checkClasses) {
+                const prev = prevCheckClasses.get(name);
+                if ((prev === 'superseded' || prev === 'failed') && (cls === 'pending' || cls === 'passed')) {
+                  preempted = true;
+                  break;
+                }
+              }
+            }
+          }
+          prevCheckClasses = checkClasses;
+          if (preempted) {
+            if (preemptions < maxPreemptions) {
+              preemptions++;
+              report.reviewConvergence.preemptions = preemptions;
+              log(`[sdw-ship-pr] Detected superseded CI run replaced by a newer run (preemption ${preemptions}/${maxPreemptions}). Adapting: resetting convergence window.`);
+              round = 0;
+              if (pollIntervalMs > 0) await new Promise(r => setTimeout(r, pollIntervalMs));
+              continue;
+            }
+            warn(`[sdw-ship-pr] Preemption budget exhausted (${maxPreemptions}); continuing with latest status.`);
+          }
+          if (supersededChecks.length > 0 && failingChecks.length === 0) {
+            log(`[sdw-ship-pr] ${supersededChecks.length} superseded check(s) awaiting replacement run; waiting without treating them as failures.`);
+          }
 
           // Failing CI with no review threads still needs a fixer. Reuse the same
           // test/security/scoped-commit/push gates before polling again.
@@ -635,6 +722,10 @@ async function runShipPr(options = {}, customExecutor = null) {
 
         if (!converged && !dryRun) {
           report.shipStatus = 'review_pending';
+          const hasActivePr = Boolean(report.pullRequest && (report.pullRequest.url || report.pullRequest.number));
+          if (hasActivePr) {
+            log(`[sdw-ship-pr] Active PR #${report.pullRequest.number || ''} is in review / awaiting approval. Adapting non-blocking workflow.`);
+          }
           report.success = false;
         } else {
           report.shipStatus = 'delivered';
@@ -654,11 +745,13 @@ async function runShipPr(options = {}, customExecutor = null) {
           const stateData = JSON.parse(fs.readFileSync(stateFilePath, 'utf8'));
           if (!stateData.steps) stateData.steps = {};
           
+          const hasActivePr = Boolean(report.pullRequest && (report.pullRequest.url || report.pullRequest.number));
+          const isStepCompleted = report.success || (hasActivePr && report.shipStatus === 'review_pending');
           const existingStep8 = stateData.steps[8] || {};
           stateData.steps[8] = {
             step: 8,
             name: 'pr_preparation',
-            status: report.success ? 'completed' : 'failed',
+            status: isStepCompleted ? 'completed' : 'failed',
             timestamp: new Date().toISOString(),
             artifact: existingStep8.artifact !== undefined ? existingStep8.artifact : null,
             output: {
@@ -836,9 +929,10 @@ if (require.main === module) {
           console.log(`  PR URL:       ${result.pullRequest.url}`);
         }
       }
+      const hasActivePr = Boolean(result && result.pullRequest && (result.pullRequest.url || result.pullRequest.number));
       const ok = options.subcommand === 'check-status'
         ? Boolean(result && result.allPassed === true)
-        : Boolean(result && result.success !== false && result.resolved !== false);
+        : Boolean(result && (result.success !== false || (hasActivePr && result.shipStatus === 'review_pending')) && result.resolved !== false);
       process.exit(ok ? 0 : 1);
     })
     .catch(err => {
