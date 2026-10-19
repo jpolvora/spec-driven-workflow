@@ -418,3 +418,141 @@ test('sdw-scm-provider - createPullRequest on AzureDevOpsProvider (creation, reu
   assert.ok(dryRunRes.command.includes('az repos pr create'));
 });
 
+test('sdw-scm-provider - failed PR list does not create duplicate PR on GitHub or Azure DevOps', async () => {
+  // GitHub failure on pr list
+  const ghFailingListProvider = createScmProvider('github', {
+    executor: (cmd) => {
+      if (cmd.includes('gh pr list')) {
+        throw new Error('network timeout on gh pr list');
+      }
+      return 'https://github.com/org/repo/pull/123';
+    }
+  });
+
+  await assert.rejects(
+    async () => {
+      await ghFailingListProvider.createPullRequest({
+        title: 'feat: test',
+        head: 'feature/test',
+        base: 'master'
+      });
+    },
+    /Unable to verify existing pull request before creation: network timeout on gh pr list/
+  );
+
+  // Azure DevOps failure on pr list
+  const adoFailingListProvider = createScmProvider('ado', {
+    executor: (cmd) => {
+      if (cmd.includes('az repos pr list')) {
+        throw new Error('az repos pr list rate limited');
+      }
+      return JSON.stringify({ pullRequestId: 999 });
+    }
+  });
+
+  await assert.rejects(
+    async () => {
+      await adoFailingListProvider.createPullRequest({
+        title: 'feat: test ado',
+        head: 'feature/test-ado',
+        base: 'master'
+      });
+    },
+    /Unable to verify existing pull request before creation: az repos pr list rate limited/
+  );
+});
+
+test('sdw-scm-provider - GitHubProvider.queryWorkItems maps issues to work items', async () => {
+  const provider = createScmProvider('github', {
+    executor: (cmd) => {
+      if (cmd.includes('gh issue list')) {
+        return JSON.stringify([
+          {
+            number: 42,
+            title: 'Implement OAuth token refresh',
+            body: 'Detailed spec.\n\n## Acceptance Criteria\n- AC1: The system shall refresh expired tokens.\n- AC2: When token invalid, the system shall logout.',
+            url: 'https://github.com/org/repo/issues/42',
+            state: 'OPEN',
+            labels: [{ name: 'security' }, { name: 'auth' }]
+          }
+        ]);
+      }
+      throw new Error(`Unexpected command: ${cmd}`);
+    }
+  });
+
+  const items = await provider.queryWorkItems({ state: 'open', limit: 10 });
+  assert.strictEqual(items.length, 1);
+  assert.strictEqual(items[0].id, '42');
+  assert.strictEqual(items[0].title, 'Implement OAuth token refresh');
+  assert.strictEqual(items[0].source, 'github');
+  assert.strictEqual(items[0].state, 'open');
+  assert.deepStrictEqual(items[0].tags, ['security', 'auth']);
+  assert.strictEqual(items[0].acceptanceCriteria.length, 2);
+  assert.ok(items[0].acceptanceCriteria[0].includes('refresh expired tokens'));
+});
+
+test('sdw-scm-provider - AzureDevOpsProvider.fetchWorkItem converts HTML and extracts ACs', async () => {
+  const provider = createScmProvider('ado', {
+    executor: (cmd) => {
+      if (cmd.includes('az boards work-item show')) {
+        return JSON.stringify({
+          id: 555,
+          fields: {
+            'System.Title': 'Implement User Session Management',
+            'System.Description': '<p>This is HTML formatted description with &amp; entity.</p>',
+            'Microsoft.VSTS.Common.AcceptanceCriteria': '<ul><li>The system shall validate active session cookies.</li><li>When session expired, the system shall redirect to login.</li></ul>',
+            'System.State': 'Active',
+            'System.Tags': 'core; security'
+          }
+        });
+      }
+      throw new Error(`Unexpected command: ${cmd}`);
+    }
+  });
+
+  const item = await provider.fetchWorkItem('555');
+  assert.strictEqual(item.id, '555');
+  assert.strictEqual(item.source, 'azure-devops');
+  assert.strictEqual(item.title, 'Implement User Session Management');
+  assert.ok(item.description.includes('This is HTML formatted description with & entity.'));
+  assert.strictEqual(item.state, 'active');
+  assert.deepStrictEqual(item.tags, ['core', 'security']);
+  assert.strictEqual(item.acceptanceCriteria.length, 2);
+  assert.strictEqual(item.acceptanceCriteria[0], 'The system shall validate active session cookies.');
+  assert.strictEqual(item.acceptanceCriteria[1], 'When session expired, the system shall redirect to login.');
+});
+
+test('sdw-scm-provider - AzureDevOpsProvider.queryWorkItems executes WIQL and maps items', async () => {
+  const provider = createScmProvider('ado', {
+    executor: (cmd) => {
+      if (cmd.includes('az boards query')) {
+        return JSON.stringify([{ id: 888 }]);
+      }
+      if (cmd.includes('az boards work-item show --id 888')) {
+        return JSON.stringify({
+          id: 888,
+          fields: {
+            'System.Title': 'Query Work Item Title',
+            'System.Description': 'Simple text description',
+            'Microsoft.VSTS.Common.AcceptanceCriteria': '- AC1: The system shall query work items.',
+            'System.State': 'New',
+            'System.Tags': 'backend'
+          }
+        });
+      }
+      throw new Error(`Unexpected command: ${cmd}`);
+    }
+  });
+
+  const items = await provider.queryWorkItems({ state: 'new' });
+  assert.strictEqual(items.length, 1);
+  assert.strictEqual(items[0].id, '888');
+  assert.strictEqual(items[0].source, 'azure-devops');
+  assert.strictEqual(items[0].title, 'Query Work Item Title');
+  assert.strictEqual(items[0].state, 'new');
+  assert.deepStrictEqual(items[0].tags, ['backend']);
+  assert.strictEqual(items[0].acceptanceCriteria.length, 1);
+});
+
+

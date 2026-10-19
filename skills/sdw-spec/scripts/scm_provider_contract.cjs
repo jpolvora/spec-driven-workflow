@@ -156,25 +156,27 @@ class GitHubProvider extends ScmProvider {
       throw new Error('title and head branch are required for GitHub createPullRequest.');
     }
 
+    let existing;
     try {
       const baseFlag = base ? `--base "${base}"` : '';
       const checkCmd = `gh pr list --head "${head}" ${baseFlag} --state open --json number,url,title,headRefName,baseRefName`;
       const stdout = this.executor(checkCmd);
-      const existing = JSON.parse(stdout || '[]');
-      if (Array.isArray(existing) && existing.length > 0) {
-        const pr = existing[0];
-        return {
-          number: String(pr.number),
-          url: pr.url,
-          head: pr.headRefName || head,
-          base: pr.baseRefName || (base || 'main'),
-          title: pr.title || title,
-          reused: true,
-          dryRun: Boolean(dryRun)
-        };
-      }
+      existing = JSON.parse(stdout || '[]');
     } catch (err) {
-      // Continue to creation
+      throw new Error(`Unable to verify existing pull request before creation: ${err.message}`);
+    }
+
+    if (Array.isArray(existing) && existing.length > 0) {
+      const pr = existing[0];
+      return {
+        number: String(pr.number),
+        url: pr.url,
+        head: pr.headRefName || head,
+        base: pr.baseRefName || (base || 'main'),
+        title: pr.title || title,
+        reused: true,
+        dryRun: Boolean(dryRun)
+      };
     }
 
     if (dryRun) {
@@ -307,25 +309,27 @@ class AzureDevOpsProvider extends ScmProvider {
       throw new Error('title and head branch are required for Azure DevOps createPullRequest.');
     }
 
+    let existing;
     try {
       const baseFlag = base ? `--target-branch "${base}"` : '';
       const checkCmd = `az repos pr list --source-branch "${head}" ${baseFlag} --status active --output json`;
       const stdout = this.executor(checkCmd);
-      const existing = JSON.parse(stdout || '[]');
-      if (Array.isArray(existing) && existing.length > 0) {
-        const pr = existing[0];
-        return {
-          number: String(pr.pullRequestId || pr.id),
-          url: pr.url || (pr._links && pr._links.web && pr._links.web.href) || '',
-          head: pr.sourceRefName ? pr.sourceRefName.replace('refs/heads/', '') : head,
-          base: pr.targetRefName ? pr.targetRefName.replace('refs/heads/', '') : (base || 'main'),
-          title: pr.title || title,
-          reused: true,
-          dryRun: Boolean(dryRun)
-        };
-      }
+      existing = JSON.parse(stdout || '[]');
     } catch (err) {
-      // Continue to creation
+      throw new Error(`Unable to verify existing pull request before creation: ${err.message}`);
+    }
+
+    if (Array.isArray(existing) && existing.length > 0) {
+      const pr = existing[0];
+      return {
+        number: String(pr.pullRequestId || pr.id),
+        url: pr.url || (pr._links && pr._links.web && pr._links.web.href) || '',
+        head: pr.sourceRefName ? pr.sourceRefName.replace('refs/heads/', '') : head,
+        base: pr.targetRefName ? pr.targetRefName.replace('refs/heads/', '') : (base || 'main'),
+        title: pr.title || title,
+        reused: true,
+        dryRun: Boolean(dryRun)
+      };
     }
 
     if (dryRun) {

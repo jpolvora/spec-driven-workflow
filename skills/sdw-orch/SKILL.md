@@ -63,9 +63,9 @@ When executing multiple specifications (`run <spec1> <spec2> ...` or batch queue
    Compare branch changes to base commit, verifying rule invariants and clean syntax in an iterative loop (up to 3 auto-fix attempts).
    - Done when: Code review checks pass or fixes applied.
 
-8. **PR Preparation & Remote Push**
-   Assemble pull request payload, mark specification completed in `index.specs.md`, and push the active branch to remote origin (when `--push` or `pushDelivery` enabled).
-   - Done when: Specification is marked completed in index and changes pushed to remote.
+8. **PR Preparation, Delivery & Code Review Convergence**
+   Assemble pull request payload, mark specification completed in `index.specs.md`, push active branch to remote origin, and open/reuse PR via the SCM provider. After PR submission, enter the review convergence loop: await CI checks and automated code review results, inspect review comments/threads, apply surgical fixes, and push updates until checks pass and review threads converge.
+   - Done when: PR exists on remote SCM, CI checks pass, and code review comments are addressed or resolved.
 
 ## References
 
