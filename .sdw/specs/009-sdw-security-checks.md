@@ -81,6 +81,8 @@ The specification originated from the user request to promote the global leak-re
   - New CLI flag `--skip-security`; when used, the run state records `securityGate: { bypassed: true, reason: "--skip-security" }`.
   - Step 6/7 state output records the structured scan summary (`severityCounts`, `findings`, `exitCode`).
 - Cross-Skill References: `skills/sdw-implement/SKILL.md` cites the gate in step 4 of its workflow description; the future `sdw-router` skill routes secret-audit requests to `sdw-security-checks`.
+- Rename Compatibility (spec 004): when 004 is implemented, the gate applies to the canonical `skills/sdw-orch/scripts/sdw_orch.cjs`; the legacy `sdw_implement.cjs` shim must forward `--skip-security` and gate behavior unchanged.
+- Branch & Worktree Interaction (spec 010): the gate inspects the staged content of the primary working tree after worktree integration; no additional behavior is required.
 - Portability & Packaging: included under `skills/` so it is discoverable and installable via `npx skills add <repo> --skill sdw-security-checks`.
 
 ## Out of Scope

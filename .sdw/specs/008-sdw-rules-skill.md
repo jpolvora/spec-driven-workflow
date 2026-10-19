@@ -15,12 +15,12 @@ The Spec-Driven Workflow (SDW) emphasizes token efficiency, deterministic execut
 This specification introduces `sdw-rules`, a centralized, shared skill under `skills/sdw-rules/`. It provides a canonical source of truth for behavioral principles and engineering constraints across the entire SDW ecosystem. Rather than duplicating rules across individual skills (`sdw-config`, `sdw-spec`, `sdw-orch`, `sdw-router`, `sdw-memory`), downstream skills reference `sdw-rules` to enforce disciplined development.
 
 Inspired by Andrej Karpathy's coding observations (`karpathy-guidelines`), `ws-senior-developer`, and `ws-self-learning`, `sdw-rules` establishes four fundamental operational directives:
-1. **Think & Ask Before Acting:** Never assume or expand scope silently. When architectural enhancements or opportunities arise, halt and present them to the user via interactive clarification (`ask_question`), defaulting to the minimal requested scope.
+1. **Think & Ask Before Acting:** Never assume or expand scope silently. When architectural enhancements or opportunities arise, halt and present them to the user via interactive clarification using the host's question prompt mechanism (e.g. `ask_question` where supported) or a structured chat prompt, defaulting to the minimal requested scope.
 2. **Simplicity First (YAGNI):** Write the minimum code required to satisfy acceptance criteria. Prohibit speculative abstractions, single-use helper modules, and unnecessary configuration options. If a solution takes 50 lines but could be done in 20, choose 20.
 3. **Surgical Scope Enclosure:** Touch only what the task requires. Avoid modifying adjacent code, reformating working files, or refactoring functional logic.
 4. **Empirical Goal-Driven Verification:** Transform every requirement into a verifiable check, test, or empirical pass/fail signal.
 
-Additionally, `sdw-rules` incorporates a lightweight anti-regression trap log (`references/traps_log.md`), recording real session friction and overengineering mistakes to prevent repeating them across future workflow runs.
+Additionally, `sdw-rules` incorporates a lightweight anti-regression trap log, recorded at project scope in `.sdw/traps.md` (with `references/traps_log.md` retained as the schema template), capturing real session friction and overengineering mistakes to prevent repeating them across future workflow runs.
 
 ### Design Intent
 
@@ -52,19 +52,22 @@ The specification originated from the user request to prevent unsolicited specif
   - **Tier 2 (`references/`)**:
     - `karpathy_rules.md`: In-depth rationale, examples of minimal solutions vs. bloated solutions, and trade-off checklists.
     - `anti_patterns.md`: Catalog of common LLM traps (e.g. inventing unasked CLI tools, adding speculative parameters, refactoring adjacent code, premature generalisation).
-    - `traps_log.md`: Chronological log of real repository traps and anti-patterns encountered during development (e.g. *Trap 2026-10-19: Inferred unrequested native installer CLI when asked for Vercel skills compatibility*).
+    - `traps_log.md`: Schema template and seed content for the anti-regression log; live entries are written to project scope (`{projectRoot}/.sdw/traps.md`, see Notes) so installed skill directories remain read-only.
   - **Tier 3 (`scripts/sdw_rules.cjs`)**:
     - Zero-dependency Node.js 22 CommonJS script.
     - Subcommands:
       - `doctor`: Audits installed skills to verify they reference `sdw-rules` and adhere to context line budgets.
       - `audit-spec <specFile>`: Scans a specification for potential scope creep markers or excessive complexity.
-      - `log-trap --slug <slug> --title <title> --avoid <avoid> --action <action>`: Appends a new verified trap entry to `traps_log.md`.
+      - `log-trap --slug <slug> --title <title> --avoid <avoid> --action <action>`: Appends a new verified trap entry to `{projectRoot}/.sdw/traps.md`, delegating to `sdw_memory.cjs record` when project memory (spec 007) is enabled.
 - Downstream Integration Points:
   - In `skills/sdw-spec/SKILL.md`: Adds cross-reference instruction: *"When formulating or editing specifications, apply sdw-rules for scope enclosure. Never infer unprompted features without user-gate."*
   - In `skills/sdw-orch/SKILL.md`: Adds cross-reference instruction: *"Subagents must adhere to sdw-rules simplicity first and surgical diff directives. Minimum code to satisfy ACs."*
   - In `skills/sdw-router/SKILL.md`: Routes rule, guideline, or coding standard inquiries to `sdw-rules`.
 - Packaging & Portability:
   - Included under `skills/` so it is automatically discoverable and installable via `npx skills add <repo> --skill sdw-rules`.
+- Cross-Spec Memory Boundary (spec 007):
+  - `sdw-rules` records behavioral and rule-policy traps; `sdw-memory` records project runtime traps.
+  - When both are enabled, `MEMORY.md` is the single sink and `.sdw/traps.md` retains only rule-policy audit entries.
 
 ## Out of Scope
 
@@ -81,7 +84,7 @@ The specification originated from the user request to prevent unsolicited specif
 | Canonical location | `skills/sdw-rules/` | Conforms to SDW 3-tier skill layout standard | y |
 | Integration strategy | Cross-reference from existing skills | Eliminates duplicate prompt text while maintaining modularity | y |
 | Default clarification policy | Minimal requested scope as default | Enforces strict scope enclosure when opportunities arise | y |
-| Trap memory format | Append-only markdown table in `references/traps_log.md` | Simple, human-readable, zero-overhead storage | y |
+| Trap memory format | Append-only markdown table in `{projectRoot}/.sdw/traps.md` | Installed skill directories stay read-only; project scope keeps the log version-controlled and portable | y |
 | Runtime dependency policy | Standard library Node.js 22 CommonJS only | Adheres to repository architectural guidelines in AGENTS.md | y |
 
 ## Definition of Ready (DoR)

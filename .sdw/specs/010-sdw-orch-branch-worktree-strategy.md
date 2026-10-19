@@ -92,6 +92,8 @@ The specification originated from the user request to extend the orchestrator wi
 - Ordering Constraint: worktree integration completes within step 4; steps 5 (scoring), 6 (delivery commit), and 7 (review) continue to read the primary working tree, so no scoring or review logic changes are required.
 - Status Reporting (`cmdStatus`): print `Branch:`, `Base Branch:`, and a `Worktrees:` section listing task id, path, and status; JSON mode includes the same fields through the state file.
 - Directory Structure: `.sdw/worktrees/` joins the documented `.sdw/` layout as an ephemeral, ignored directory; run-scoped subdirectories (`{runId}/`) are removed by the workflow after successful integration.
+- Rename Compatibility (spec 004): when 004 is implemented, apply the branch and worktree logic to the canonical `skills/sdw-orch/scripts/sdw_orch.cjs`; the legacy shim must forward `--no-worktrees` and `--no-feature-branch` unchanged.
+- Batch Interaction (spec 005): each queued item activates its own feature branch; `--dry-run` must not create branches, worktrees, or commits; the active branch is recorded per queue entry in the batch manifest.
 
 ## Out of Scope
 

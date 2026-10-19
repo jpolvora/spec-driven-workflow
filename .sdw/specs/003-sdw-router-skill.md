@@ -23,7 +23,7 @@ Greenfield implementation for the Spec-Driven Workflow (SDW) initiative. It repl
 ## Acceptance Criteria
 
 - AC1: The system shall serve as an always-autoloaded entrypoint routing agent tasks across all available skills.
-- AC2: When referenced in a consumer project `AGENTS.md`, the system shall load on session start with minimal context budget.
+- AC2: When a consumer project references the router from its `AGENTS.md` instructions, the system shall activate with a minimal context budget.
 - AC3: When a prompt matches project configuration or environment verification intents, the system shall route execution to `sdw-config`.
 - AC4: When a prompt matches specification authoring, formatting, listing, or archiving intents, the system shall route execution to `sdw-spec`.
 - AC5: When a prompt matches specification implementation, orchestration, or resumption intents, the system shall route execution to `sdw-orch`.
@@ -31,9 +31,10 @@ Greenfield implementation for the Spec-Driven Workflow (SDW) initiative. It repl
 - AC7: While evaluating multiple candidate skill matches with equal confidence, the system shall query the user for clarification with a recommended default.
 - AC8: If a routed skill directory is missing or unreadable on disk, then the system shall report an actionable resolution error.
 - AC9: The system shall provide a deterministic command-line helper script to scan available skills and test prompt intent routing.
-- AC10: When scanning installed skills, the system shall discover skills in both the canonical repository directory and consumer project locations.
+- AC10: When scanning installed skills, the system shall discover skills in both the canonical repository directory and portable consumer installation directories.
 - AC11: The system shall document instructions and markdown reference snippets for consumer projects to configure the router in `AGENTS.md`.
 - AC12: If no recognized skill matches the user prompt, then the system shall allow standard agent execution without intercepting.
+- AC13: The system shall operate without dependencies on a specific harness runtime, vendor, or IDE integration.
 
 ## Original Issue Context
 
@@ -53,7 +54,7 @@ The user requested an initial specification for the `sdw-router` skill:
 - Execution precedence:
   1. Explicit user instructions / direct skill invocation in current turn (`/sdw-*` or `@sdw-*`).
   2. High-confidence intent keyword match from dispatch table.
-  3. Interactive clarification via `ask_question` with recommended option when confidence is tied.
+  3. Interactive clarification using the host's question prompt mechanism (e.g. `ask_question` where supported) or a structured chat prompt, always with a recommended default, when confidence is tied.
   4. Pass-through for generic conversational or coding prompts unrelated to SDW workflows.
 - All automation scripts must be implemented in Node.js 22 CommonJS (`.cjs`) using standard library modules only (`fs`, `path`, `process`).
 
@@ -73,6 +74,7 @@ The user requested an initial specification for the `sdw-router` skill:
 | Router loading announcement | Output `sdw-router loaded.` upon load | Complies with AGENTS.md Tier 1 heading standard | y |
 | Skill discovery search path | `{projectRoot}/skills` then `{projectRoot}/.agents/skills` | Seamlessly handles both development and installed consumer workspaces | y |
 | CLI script runtime | Node.js 22 CommonJS (`.cjs`) with zero npm dependencies | Conforms to AGENTS.md rule: standard library only | y |
+| Harness neutrality | Portable markdown routing with per-harness alias examples only | Satisfies the AGENTS.md agent & harness agnosticism rule | y |
 | Absent lifecycle dimensions | N/A because execution is local CLI/agent tool invocation | Local agent execution model | y |
 
 ## Definition of Ready (DoR)

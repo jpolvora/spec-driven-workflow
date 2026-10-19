@@ -61,6 +61,8 @@ The specification originated from the user requirement:
   ```
   - When `memory.enabled` is false or omitted, all memory query, recording, and hint injection steps in `sdw-orch` are bypassed.
   - Path defaults to `{projectRoot}/.sdw/MEMORY.md` if not explicitly customized.
+  - Configuration integration: `skills/sdw-config/scripts/sdw_config.cjs` gains the `memory` object in `DEFAULT_CONFIG`/`DEFAULT_SCHEMA` plus a nested type-validation branch (`enabled` boolean, `path` string, `maxQueryResults` integer); `.sdw/config.schema.json` and `skills/sdw-config/references/config_spec.md` document the same properties.
+  - Cross-spec boundary (spec 008): when `sdw-rules` is installed, `MEMORY.md` acts as the single sink; `.sdw/traps.md` is reserved for rule-policy audits and is used as the fallback when memory is disabled.
 
 - Standard Memory Entry Contract:
   Each entry in `MEMORY.md` adheres to a strict delimited block format:
@@ -137,7 +139,7 @@ The specification originated from the user requirement:
 |----------------|-------------|---------------------|
 | Workspace configuration | Baseline `.sdw/config.json` is initialized and valid | Run `node skills/sdw-config/scripts/sdw_config.cjs check` |
 | Specification validation | Specification passes authoring mode validation | Run `node skills/sdw-spec/scripts/validate_spec.cjs --mode=authoring .sdw/specs/007-sdw-memory-skill.md` |
-| Orchestrator baseline | Orchestrator skill structure is present in repository | Verify orchestrator scripts in `skills/sdw-orch/` or `skills/sdw-implement/` |
+| Orchestrator baseline | Orchestrator skill structure is present in repository | Verify orchestrator scripts in `skills/sdw-orch/` (canonical after spec 004) or the `skills/sdw-implement/` legacy shim |
 | Skill layout compliance | Skill architecture adheres to standard 3-tier structure | Validate planned paths under `skills/sdw-memory/` |
 | Node runtime compatibility | Environment provides Node.js 22 or higher | Run `node -v` check |
 

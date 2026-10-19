@@ -10,9 +10,9 @@ specDate: 2026-10-19
 
 ## Description
 
-The Spec-Driven Workflow (SDW) framework provides a lightweight, token-efficient methodology for specification management, project configuration, and orchestrated implementation. This specification establishes packaging verification and distribution compatibility for SDW skills exclusively via the Vercel Labs `skills` package manager (`npx skills`).
+The Spec-Driven Workflow (SDW) framework provides a lightweight, token-efficient methodology for specification management, project configuration, and orchestrated implementation. This specification establishes packaging verification and portable distribution for SDW skills. Distribution is optional convenience: the repository ships plain Markdown and Node.js files that any agent or harness can consume directly, while the open Vercel Labs `skills` package manager (`npx skills`) provides an additional one-command installation channel. No component may depend on a specific harness, vendor runtime, or IDE.
 
-Distributable skills reside under `skills/<skill-name>/` with standard `SKILL.md` entrypoints and YAML frontmatter. This enables developers and AI agents to discover, install, and update individual or bundled SDW skills (`sdw-config`, `sdw-orch`, `sdw-spec`, `sdw-router`) directly into agent customization directories (e.g., `.agents/skills/`) using `npx skills add` and `npx skills update`.
+Distributable skills reside under `skills/<skill-name>/` with standard `SKILL.md` entrypoints and YAML frontmatter. This enables developers and AI agents to discover, install, and update individual or bundled SDW skills (`sdw-config`, `sdw-spec`, `sdw-orch`, `sdw-router`, `sdw-memory`, `sdw-rules`, `sdw-security-checks`) into portable agent customization directories (e.g., `.agents/skills/`) using `npx skills add` and `npx skills update`.
 
 To ensure release stability, the repository provides a deterministic packaging verification script and an automated GitHub Actions CI/CD release workflow. When a version tag is pushed, the workflow runs test suites, validates all specifications, verifies skill structure conformance, and tags the release for discovery across the agent skills ecosystem.
 
@@ -92,12 +92,15 @@ The specification originated from the user draft in `.sdw/specs/006-packaging-in
     6. Publish release tag and release notes for `skills.sh` registry indexing.
 - Runtime Constraints:
   - All automation scripts must be implemented in Node.js 22 CommonJS (`.cjs`) using standard library modules only (`fs`, `path`, `process`, `child_process`).
+- Verification Scope & Extensibility:
+  - The skill tree listing above is illustrative, not exhaustive.
+  - Packaging verification is directory-driven: every folder under `skills/` is audited automatically, so future skills (`sdw-memory`, `sdw-rules`, `sdw-security-checks`) are covered without editing the verification script or the CI workflow.
 
 ## Out of Scope
 
 | Feature | Reason |
 |---------|--------|
-| Custom native installer or updater CLI tool | Installation and updates are handled exclusively via `npx skills` (`add` and `update`) |
+| Custom native installer or updater CLI tool | Installation and updates are handled via `npx skills` (`add`/`update`) or manual copy; no custom installer is authored |
 | Consumer workspace template scaffolding installer | Initial project configuration remains handled by `sdw-config` rather than a distribution installer |
 | Hosting a dedicated proprietary package registry | Discovery and distribution rely on GitHub and `skills.sh` |
 | Authoring verification scripts in non-Node runtimes | Standard library Node.js 22 CommonJS is mandatory per repository standards |
@@ -109,6 +112,7 @@ The specification originated from the user draft in `.sdw/specs/006-packaging-in
 | Skills packaging format | Standard `skills/<skill-name>/SKILL.md` layout | Natively discovered and supported by `vercel-labs/skills` | y |
 | Package manager mechanism | Exclusively `npx skills` | User requested omitting custom native installer tooling | y |
 | Release automation trigger | Git semantic tag push (`v*.*.*`) | Standard trigger for GitHub Actions CI/CD workflows | y |
+| Distribution dependency | Optional convenience only; skills remain plain files consumable by any agent | Satisfies the AGENTS.md agent & harness agnosticism rule while keeping `npx skills` support | y |
 | Packaging script dependency policy | Zero external runtime dependencies | Standard library Node.js 22 CommonJS only per AGENTS.md | y |
 
 ## Definition of Ready (DoR)

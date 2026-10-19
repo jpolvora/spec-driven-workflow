@@ -77,6 +77,7 @@ The user requested native multi-specification orchestration:
         "slug": "001-feature",
         "status": "completed",
         "runId": "run-1792386010000-001-feature",
+        "branch": "feature/001-feature",
         "deliveryCommit": "abc1234",
         "durationMs": 45000,
         "error": null
@@ -87,6 +88,7 @@ The user requested native multi-specification orchestration:
         "slug": "002-feature",
         "status": "in_progress",
         "runId": "run-1792386050000-002-feature",
+        "branch": "feature/002-feature",
         "deliveryCommit": null,
         "durationMs": null,
         "error": null
@@ -97,6 +99,9 @@ The user requested native multi-specification orchestration:
 - Subagent context fencing: each queue item is dispatched as an independent subagent or process execution, preventing token exhaustion and cross-task context contamination.
 - State directory resolution: reads `stateDir` from `.sdw/config.json`, falling back to `{projectRoot}/.sdw/state`.
 - All automation scripts must be implemented in Node.js 22 CommonJS (`.cjs`) using standard library modules only (`fs`, `path`, `process`, `child_process`).
+- Rename Compatibility (spec 004): batch execution targets the canonical `skills/sdw-orch/scripts/sdw_orch.cjs`; when 004 is not yet implemented it targets `skills/sdw-implement/scripts/sdw_implement.cjs`, and the legacy shim must forward `run`, `resume` and `resume-batch` unchanged.
+- Side-Effect-Free Dry Run: `--dry-run` validates and prints the batch plan only; it must not create branches, worktrees, commits, or `in_progress` batch manifests.
+- Branch & Worktree Interaction (spec 010): when `useFeatureBranches` or `useWorktrees` are enabled, each queued item executes on its own feature branch with per-task worktrees; the pre-flight clean-tree check applies between items and the active branch is recorded per queue entry.
 
 ## Out of Scope
 
