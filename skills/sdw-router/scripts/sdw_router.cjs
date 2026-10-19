@@ -159,6 +159,11 @@ const INTENT_RULES = {
     primaryKeywords: ['ship pr', 'ship-pr', 'create pr', 'open pr', 'submit pr', 'review convergence', 'pr review loop'],
     secondaryKeywords: ['ship', 'deliver pr', 'pre-pr', 'poll pr', 'resolve review', 'resolve thread', 'pull request review', 'converge'],
     recommendedOption: 'Ship pull request, check pre-PR requirements, and run review convergence using sdw-ship-pr'
+  },
+  'sdw-code-review': {
+    primaryKeywords: ['code-review', 'code review', 'review code', 'sdw-code-review', 'deep review'],
+    secondaryKeywords: ['review findings', 'fix review', 'review fix plan', 'run review', 'review working tree', 'blocking findings', 'code review report'],
+    recommendedOption: 'Run deep working-tree code review and fix planning using sdw-code-review'
   }
 };
 
@@ -237,7 +242,7 @@ function routePrompt(prompt, options) {
     }
   }
 
-  const knownExplicitSkills = ['sdw-config', 'sdw-spec', 'sdw-orch', 'sdw-router', 'sdw-rules', 'sdw-security-checks', 'sdw-ship-pr'];
+  const knownExplicitSkills = ['sdw-config', 'sdw-spec', 'sdw-orch', 'sdw-router', 'sdw-rules', 'sdw-security-checks', 'sdw-ship-pr', 'sdw-code-review'];
   for (const s of knownExplicitSkills) {
     if (new RegExp(`(?:^|\\s)[/@]?${s}\\b`, 'i').test(lower)) {
       // It was explicitly requested but might be missing on disk

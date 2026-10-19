@@ -139,10 +139,11 @@
 
 *Deterministic side-effect persistence capturing intermediate reasoning, task graphs, and verification evidence.*
 
-- **Human-Auditable Evidence:** Steps 2, 3, and 5 automatically persist structured Markdown artifacts under `.sdw/state/{slug}/{runId}/`, providing transparency without altering pipeline execution semantics.
+- **Human-Auditable Evidence:** Steps 2, 3, 5, and 7 automatically persist structured Markdown artifacts under `.sdw/state/{slug}/{runId}/`, providing transparency without altering pipeline execution semantics.
 - **Step 2 (Refinement Artifact `{slug}-step-2.md`):** Records detected decision gaps, resolutions applied per gap, the decision tree walk summary, and the full refined specification snapshot.
 - **Step 3 (DAG Generation Artifact `{slug}-step-3.md`):** Documents complexity analysis, task decomposition (dependencies, covered acceptance criteria, target files), and context-fenced task prompts.
 - **Step 5 (Scoring Artifact `{slug}-step-5.md`):** Summarizes implementation touched files, quantitative conformance score breakdown, verified criteria table, failing criteria table, and evaluator feedback.
+- **Step 7 (Delegated Review Artifact `{slug}-step-7.md`):** The `sdw-code-review` Markdown fix-plan report (header, findings table, detailed findings, executable fix plan) written via `--report`.
 - **State Linkage & Best-Effort Resilience:** The run state records `artifactsDir` and per-step `artifact` paths. Failures in artifact generation log warnings and record errors without halting delivery execution.
 
 ---
@@ -152,7 +153,8 @@
 *Engineering rigor backed by 100% native automated tests.*
 
 - **Native Node.js Test Runner:** Built with `node:test` and `node:assert/strict` — zero third-party testing frameworks required.
-- **125 Comprehensive Test Scenarios:**
+- **166 Comprehensive Test Scenarios:**
+  - `sdw_code_review.test.cjs`: Standalone execution, base auto-detection, report generation, surgical auto-fix, dry-run simulation, orchestrator delegation, router registration, and fail-closed negatives.
   - `sdw_config.test.cjs`: Configuration parsing, schema validation, token expansion, and initialization gates.
   - `sdw_spec.test.cjs`: Index bootstrapping, EARS validation, synthesis, SCM provider contract, state synchronization, and archival quality gates.
   - `sdw_orch.test.cjs`: State machine transitions, derivation, grilling decision trees, DAG decomposition, scoring gates, code review auto-fixing, remote push publishing, and unattended multi-spec batch queue execution.
@@ -180,6 +182,17 @@
 - **Local Review Dry Run (`npm run review:dry`):** Reproduces the CI reviewer locally against the current branch (`develop` → `master`) with the Custom stack prompt, a pinned `opencode-ai@1.19.1` dev dependency, the OS `OPENCODE_API_KEY` through the `opencode-go` provider, and `--dry-run` so no PR threads are created.
 - **Safe Review Convergence:** `sdw-ship-pr` waits between rounds (`--poll-interval`, default 20s) and refuses to resolve active review threads unless a `reviewFixCommand` or `threadFixer` applied and verified a fix; unresolved threads are reported as `review_pending`.
 - **Skills Distribution (`release.yml`):** Triggers on semantic version tags (`v*.*.*`) or manual dispatch (`verify_only`), repeating validation and tests before creating a GitHub release without build artifacts, keeping skills directly consumable via `npx skills`.
+
+### 12. 🔍 `sdw-code-review` — Standalone Deep Review, Fix Planning & Orchestrator Delegation
+
+*Lean, harness-agnostic working-tree code reviewer that doubles as the `sdw-orch` Step 7 authority.*
+
+- **Standalone & User-Invocable:** Directly runnable at any time (`node skills/sdw-code-review/scripts/sdw_code_review.cjs run|fix|doctor` / `/sdw-code-review`), or dispatched as a subagent/CLI runner under `sdw-orch` Step 7.
+- **Auto-Detected Base & Full-Tree Scope:** Resolves the comparison target via explicit `--base`, config `baseBranch`, tracking remotes (`origin/main|master`), local branches, merge-base, or initial commit; inspects committed (`base..HEAD`) plus uncommitted (staged, unstaged, untracked) diffs.
+- **Karpathy-Grounded Rules:** Enforces simplicity first (YAGNI, surgical scope, no speculative generality) and syntax hygiene (active `debugger`, unresolved TODOs, committed secrets, sensitive filenames) with Fowler-baseline smells (oversized diffs).
+- **Executable Report Contract:** Emits a Markdown fix plan (header, findings table, detailed hunks, ordered checklist) plus structured JSON (`passed`, `errorCount`, `warningCount`, `suggestionCount`, `findings` with stable `CR-001` IDs, severity, `file:line`, rule, and fix prescription).
+- **Surgical Auto-Fix & Dry-Run:** Applies minimal fixes (debugger removal) up to the iteration ceiling (default 3); `--dry-run` reports planned fixes without touching disk; blocking residuals exit non-zero.
+- **Orchestrator Delegation:** `sdw-orch` Step 7 holds no duplicated review logic — it dispatches the CLI, parses JSON, gates fix commits through `sdw-security-checks`, and persists `{slug}-step-7.md`.
 
 ---
 

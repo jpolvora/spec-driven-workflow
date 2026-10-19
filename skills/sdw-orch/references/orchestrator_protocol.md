@@ -47,7 +47,7 @@ Each execution session is completely isolated within a dedicated JSON state file
 4. **Implementation Dispatch:** Builds isolated prompts for subagents, preventing context pollution.
 5. **Conformance Scoring:** Compares diffs against AC requirements. If score < threshold (default 8/10), attaches feedback and triggers re-implementation loop.
 6. **Delivery Commit:** Creates an atomic, structured git commit for verified code.
-7. **Automated Code Review:** Compares current branch changes to `baseCommit`, verifying rule invariants and clean syntax in an iterative loop.
+7. **Delegated Code Review via sdw-code-review:** Dispatches subagent or CLI runner for `sdw-code-review`; inspects the generated JSON report (`passed`, `errorCount`, `warningCount`, `suggestionCount`, `findings`) to advance to Step 8, iterate surgical fixes (up to 3 attempts with security gate and scoped fix commits), or pause on residual blocking findings. `sdw-code-review` is the sole review authority.
 8. **PR Preparation, Delivery & Code Review Convergence:** Assembles pull request metadata, marks the spec completed, pushes the active branch to remote origin (when `--push` or `pushDelivery` enabled), opens or reuses the pull request via the SCM provider contract, and executes the post-delivery review convergence loop (monitoring CI checks and automated code reviews to fix comments until green).
 
 ## 3. Multi-Specification Batch Queue Lifecycle (`.sdw/state/batch-{batchId}.json`)
@@ -143,7 +143,8 @@ Intermediate outputs of human-auditable steps (2, 3, 5) are persisted as human-r
 - **Step 2 (Refinement):** `{slug}-step-2.md` contains metadata header, `## Decision Gaps & Resolutions` table, `## Decision Tree Walk` summary, and `## Refined Spec Snapshot`.
 - **Step 3 (DAG Generation):** `{slug}-step-3.md` contains metadata header, `## Complexity Analysis`, `## Task Decomposition` table, and `## Task Context Prompts` blocks.
 - **Step 5 (Conformance Scoring):** `{slug}-step-5.md` contains metadata header, `## Implementation Summary`, `## Conformance Score` evaluation, `## Verified Acceptance Criteria`, `## Failing Acceptance Criteria`, and `## Feedback`.
-- **Excluded Steps:** Steps 1, 4, 6, 7, and 8 do not emit step artifacts.
+- **Step 7 (Delegated Code Review):** `{slug}-step-7.md` is the `sdw-code-review` Markdown fix-plan report (header, findings table, detailed findings, fix plan) written via `--report`.
+- **Excluded Steps:** Steps 1, 4, 6, and 8 do not emit step artifacts.
 
 ### Resumption & Overwrite Policy
 - **Resumed Runs:** Reuses the existing `artifactsDir` from run state.
@@ -222,5 +223,17 @@ Step 8 delegates all final PR verification gates, remote publishing, SCM submiss
   - Consumes structured JSON report from `sdw-ship-pr`.
   - Records delivery outcome (`pullRequest`, `shipStatus`, `pushedBranch`, `reviewConvergence`) into `.sdw/state/{runId}.state.json`.
   - Transitions specification status to `completed` in `.sdw/specs/index.specs.md`.
+
+## 9. Delegated Code Review via sdw-code-review (Step 7)
+
+Step 7 delegates all working-tree review execution to the standalone `sdw-code-review` skill. The orchestrator holds no duplicated review instructions.
+
+### Delegation Contract
+- **Invocation:** `node skills/sdw-code-review/scripts/sdw_code_review.cjs run --target <root> [--base <ref>] --report <artifactsDir>/<slug>-step-7.md [--fix] [--json]`
+  (or subagent dispatch in handoff mode with the same CLI contract).
+- **Base Resolution:** Explicit `--base` (run `baseCommit`) when available; otherwise `sdw-code-review` auto-detects via config `baseBranch`, tracking remotes, local branches, merge-base, or initial commit.
+- **Report Consumption:** Parses JSON (`passed`, `errorCount`/`criticalCount`, `warningCount`, `suggestionCount`, `blockingCount`, `findings` with `id`, `severity`, `path`, `rule`, `fix`, `status`).
+- **Fix Iteration:** While blocking findings remain and fixable findings exist (up to 3 iterations): run with `--fix`, gate via `sdw-security-checks`, commit only fixer-touched files (`fix(<slug>): apply automated review fixes (iteration N)`), re-verify without `--fix`.
+- **Outcome:** `passed` advances to Step 8; residual blocking records `review_failed` and halts; artifact path recorded in `state.steps[7].artifact`.
 
 

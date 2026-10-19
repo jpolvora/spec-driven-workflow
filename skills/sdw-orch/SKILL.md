@@ -59,9 +59,11 @@ When executing multiple specifications (`run <spec1> <spec2> ...` or batch queue
    Refuse delivery commit if Step 4 is incomplete, any task unaccepted, or any gate failed. Run pre-commit secret leak scan (`sdw-security-checks`) when enabled. Stage and commit only tracked spec files (accepted evidence `filesChanged` + `index.specs.md`); unrelated worktree changes are never staged.
    - Done when: Step 4 quality guards pass, pre-commit security check passes, and scoped delivery commit exists.
 
-7. **Automated Code Review Loop**
-   Compare branch changes to base commit, verifying rule invariants and clean syntax in an iterative loop (up to 3 auto-fix attempts).
-   - Done when: Code review checks pass or fixes applied.
+7. **Delegated Code Review via sdw-code-review**
+   Dispatch subagent or CLI runner for `sdw-code-review`; inspect generated report to advance to Step 8 or trigger fix iteration.
+   - Run: `node skills/sdw-code-review/scripts/sdw_code_review.cjs run --target <root> [--base <ref>] --report <artifact> [--fix] [--json]`
+   - `sdw-code-review` is the sole code review authority; no duplicated internal review instructions.
+   - Done when: Report shows 0 blocking findings (`critical`/`warning`) or fix ceiling reached with residual recorded.
 
 8. **PR Preparation, Delivery & Review Convergence**
    Delegate pull request preparation, pre-PR verification gates, remote publishing, SCM submission, and post-PR review convergence to `sdw-ship-pr`. Pass active run ID, specification slug, and CLI options (`--push`, `--poll-pr`, `--dry-run`).

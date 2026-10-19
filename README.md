@@ -112,6 +112,7 @@ spec-driven-workflow/
 │   ├── traps.md                  # Central anti-regression trap log
 │   └── worktrees/                # Ephemeral per-task git worktrees for isolated subagents
 ├── skills/                       # Canonical source of truth for all skills
+│   ├── sdw-code-review/          # Standalone deep working-tree review & fix planning
 │   ├── sdw-config/               # Project configuration & verification skill
 │   ├── sdw-orch/                 # End-to-end workflow orchestrator skill
 │   ├── sdw-router/               # Always-autoloaded entrypoint and skill router
@@ -121,6 +122,7 @@ spec-driven-workflow/
 │   └── sdw-spec/                 # Spec authoring, validation, sync, and index manager
 ├── tests/                        # Automated unit & integration test suites
 │   ├── sdw_branch_worktree.test.cjs
+│   ├── sdw_code_review.test.cjs
 │   ├── sdw_config.test.cjs
 │   ├── sdw_github_actions.test.cjs
 │   ├── sdw_orch.test.cjs
@@ -245,6 +247,21 @@ node skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs --head develop --dry-run --json
 
 # Ship and run review convergence loop with resolution summary comments
 node skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs --head develop --push --poll-pr
+```
+
+### Using `sdw-code-review` (Deep Review & Fix Planning)
+
+The `sdw-code-review` skill deeply analyzes committed and uncommitted working-tree changes against an auto-detected base branch, and doubles as the `sdw-orch` Step 7 delegation target:
+
+```bash
+# Review working tree and HEAD diffs (auto-detected base), write Markdown fix plan
+node skills/sdw-code-review/scripts/sdw_code_review.cjs run
+
+# Review with surgical auto-fixes (up to 3 iterations) and JSON output
+node skills/sdw-code-review/scripts/sdw_code_review.cjs fix --json
+
+# Simulate fixes without modifying files
+node skills/sdw-code-review/scripts/sdw_code_review.cjs run --fix --dry-run --json
 ```
 
 ### Local Agentic Code Review Dry Run

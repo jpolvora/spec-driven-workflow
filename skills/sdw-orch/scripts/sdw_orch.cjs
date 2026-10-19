@@ -10,7 +10,6 @@ const specDerivation = require('./spec_derivation.cjs');
 const specGrilling = require('./spec_grilling.cjs');
 const dagPlanner = require('./dag_planner.cjs');
 const scoreEvaluator = require('./score_evaluator.cjs');
-const reviewRunner = require('./review_runner.cjs');
 const batchRunner = require('./batch_runner.cjs');
 const artifactWriter = require('./artifact_writer.cjs');
 const implementationRunner = require('./implementation_runner.cjs');
@@ -1191,48 +1190,133 @@ function cmdRun(options) {
     state = stateManager.updateStepState(targetRoot, state.runId, 6, 'completed', { deliveryCommit: commitSha });
   }
 
-  // Step 7: Automated Code Review Loop (AC12, AC13)
+  // Step 7: Delegated Code Review via sdw-code-review (Spec 025)
+  // Sole review authority is skills/sdw-code-review; orchestrator dispatches
+  // CLI runner (or subagent in handoff) and inspects the JSON report.
   if (startStep <= 7 && state.steps[7].status !== 'completed' && !options.skipReview) {
     state = stateManager.updateStepState(targetRoot, state.runId, 7, 'in_progress');
-    let reviewReport = reviewRunner.runAutomatedReview({ projectRoot: targetRoot, baseCommit: state.baseCommit });
-    console.log(`[Step 7: Automated Review] ${reviewReport.summary}`);
+    const codeReviewScript = path.resolve(__dirname, '../../sdw-code-review/scripts/sdw_code_review.cjs');
+    const hasCodeReview = fs.existsSync(codeReviewScript);
+
+    if (!hasCodeReview) {
+      const msg = `sdw-code-review skill missing at "${codeReviewScript}". Run packaging installer to restore skills/.`;
+      console.error(`[Step 7: Delegated Review] ${msg}`);
+      state = stateManager.updateStepState(targetRoot, state.runId, 7, 'review_failed', { error: msg });
+      state.status = 'failed';
+      stateManager.saveRunState(targetRoot, state);
+      options._runResult = { runId: state.runId, status: 'failed', error: msg };
+      return 1;
+    }
+
+    let artifactsDirAbs = null;
+    try {
+      artifactsDirAbs = artifactWriter.ensureArtifactDir(targetRoot, specSlug, state.runId, state.artifactsDir);
+    } catch (e) { artifactsDirAbs = null; }
+    const reportAbsPath = artifactsDirAbs
+      ? path.join(artifactsDirAbs, `${specSlug}-step-7.md`)
+      : path.join(targetRoot, '.sdw', 'state', 'code-review.report.md');
+
+    function parseReviewJson(stdout) {
+      try {
+        const t = String(stdout || '').trim();
+        if (!t) return null;
+        const s = t.indexOf('{');
+        const e = t.lastIndexOf('}');
+        if (s !== -1 && e !== -1 && e > s) return JSON.parse(t.slice(s, e + 1));
+        return JSON.parse(t);
+      } catch (err) { return null; }
+    }
+
+    function invokeCodeReviewCli(useFix) {
+      const cliArgs = [codeReviewScript, 'run', '--target', targetRoot, '--report', reportAbsPath, '--json', '--max-iterations', '1'];
+      if (state.baseCommit) cliArgs.push('--base', state.baseCommit);
+      if (useFix) cliArgs.push('--fix');
+      try {
+        const proc = spawnSync(process.execPath, cliArgs, { cwd: targetRoot, encoding: 'utf8' });
+        const parsed = parseReviewJson(proc.stdout);
+        if (parsed) return { report: parsed, exitCode: proc.status };
+      } catch (e) {}
+      return null;
+    }
+
+    function invokeCodeReviewModule(useFix) {
+      try {
+        const cr = require('../../sdw-code-review/scripts/sdw_code_review.cjs');
+        const report = cr.runCodeReview({
+          projectRoot: targetRoot,
+          base: state.baseCommit || null,
+          report: reportAbsPath,
+          fix: Boolean(useFix),
+          dryRun: false,
+          maxIterations: 1
+        });
+        return { report, exitCode: report.passed ? 0 : 1 };
+      } catch (e) { return null; }
+    }
+
+    function invokeReview(useFix) {
+      return invokeCodeReviewCli(useFix) || invokeCodeReviewModule(useFix);
+    }
+
+    console.log(`[Step 7: Delegated Review] Dispatching sdw-code-review (CLI) against base '${state.baseCommit || 'auto'}'...`);
+    let first = invokeReview(false);
+    if (!first || !first.report) {
+      const msg = 'sdw-code-review invocation failed with no parsable JSON report.';
+      console.error(`[Step 7: Delegated Review] ${msg}`);
+      state = stateManager.updateStepState(targetRoot, state.runId, 7, 'review_failed', { error: msg });
+      state.status = 'failed';
+      stateManager.saveRunState(targetRoot, state);
+      options._runResult = { runId: state.runId, status: 'failed', error: msg };
+      return 1;
+    }
+    let reviewReport = first.report;
+    console.log(`[Step 7: Delegated Review] ${reviewReport.passed ? 'Code review passed.' : `Code review failed with ${reviewReport.blockingCount || 0} blocking finding(s).`} Report: ${reviewReport.reportPath || reportAbsPath}`);
 
     let reviewLoop = 0;
-    while (!reviewReport.passed && reviewLoop < 3) {
+    while (reviewReport && !reviewReport.passed && reviewLoop < 3) {
+      const fixable = (reviewReport.findings || []).filter(f => f.fixable && f.status === 'open');
+      if (fixable.length === 0) break;
       reviewLoop++;
-      console.log(`[Step 7: Automated Review] Applying auto-fixes for iteration ${reviewLoop}...`);
-      const fixed = reviewRunner.applyAutoFixes(reviewReport.findings, targetRoot);
-      if (fixed.length === 0) {
+      console.log(`[Step 7: Delegated Review] Applying auto-fixes for iteration ${reviewLoop}...`);
+      const fixRes = invokeReview(true);
+      if (!fixRes || !fixRes.report) break;
+      const fixedFiles = fixRes.report.fixedFiles || [];
+      if (fixedFiles.length === 0) {
+        reviewReport = fixRes.report;
         break;
       }
-      // Security checks gate before review-fix commit (AC7)
       if (Boolean(config.securityChecksEnabled) && !options.skipSecurity) {
         console.log(`[Step 7: Security Gate] Running pre-commit leak scan before review-fix commit...`);
-        // Review fixes are unstaged; scan the worktree so the gate sees them before staging.
         const scanResult = runSecurityGate(targetRoot, { staged: false });
         if (scanResult.exitCode !== 0) {
           console.error(`[Step 7: Security Gate] Review-fix commit blocked by security checks gate (exit code ${scanResult.exitCode}).`);
+          reviewReport = fixRes.report;
           break;
         }
       }
       try {
-        // Scoped review-fix commit: only files the auto-fixer touched.
-        stageAndCommitOnly(targetRoot, fixed, `fix(${specSlug}): apply automated review fixes (iteration ${reviewLoop})`);
+        stageAndCommitOnly(targetRoot, fixedFiles, `fix(${specSlug}): apply automated review fixes (iteration ${reviewLoop})`);
       } catch (e) {}
-      reviewReport = reviewRunner.runAutomatedReview({ projectRoot: targetRoot, baseCommit: state.baseCommit });
+      const verify = invokeReview(false);
+      reviewReport = (verify && verify.report) ? verify.report : fixRes.report;
     }
 
     state.reviewIteration = reviewLoop;
+    let artifactRel = null;
+    try {
+      artifactRel = path.relative(targetRoot, reportAbsPath).replace(/\\/g, '/');
+    } catch (e) { artifactRel = null; }
     if (!reviewReport.passed) {
-      console.error(`[Step 7: Automated Review] Review loop halted with unresolved errors.`);
-      state = stateManager.updateStepState(targetRoot, state.runId, 7, 'review_failed', reviewReport);
+      console.error(`[Step 7: Delegated Review] Review loop halted with unresolved errors.`);
+      state = stateManager.updateStepState(targetRoot, state.runId, 7, 'review_failed', reviewReport, null, artifactRel ? { artifact: artifactRel } : undefined);
       state.status = 'failed';
       stateManager.saveRunState(targetRoot, state);
+      options._runResult = { runId: state.runId, status: 'failed', error: 'Unresolved code review findings' };
       return 1;
     }
 
     state.reviewCommit = getBaseCommit(targetRoot);
-    state = stateManager.updateStepState(targetRoot, state.runId, 7, 'completed', reviewReport);
+    state = stateManager.updateStepState(targetRoot, state.runId, 7, 'completed', reviewReport, null, artifactRel ? { artifact: artifactRel } : undefined);
   } else if (options.skipReview) {
     state = stateManager.updateStepState(targetRoot, state.runId, 7, 'skipped', { reason: 'Skipped via --skip-review' });
   }

@@ -79,6 +79,17 @@ When evaluating a user turn, the router applies four strict precedence tiers:
   - "Open a PR on GitHub and resolve reviewer comments"
   - "Run PR review convergence loop on PR #3"
 
+### Skill: `sdw-code-review`
+- **Domain**: Standalone deep working-tree code review, actionable fix planning, and orchestrator Step 7 delegation.
+- **Explicit Invocations**: `/sdw-code-review`, `@sdw-code-review`, `sdw-code-review`, `/code-review`, `@code-review`, `code-review`
+- **Trigger Keywords**:
+  - `code review`, `code-review`, `review code`, `deep review`, `sdw-code-review`
+  - `review findings`, `fix review`, `review fix plan`, `run review`, `blocking findings`, `code review report`
+- **Typical Prompts**:
+  - "Run a deep code review on current working tree changes"
+  - "Review code changes against the base branch and plan fixes"
+  - "Check review findings and apply surgical fixes"
+
 ---
 
 ## 3. Disambiguation on Tied Confidence
