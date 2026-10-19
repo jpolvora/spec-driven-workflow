@@ -120,16 +120,29 @@
 
 ---
 
-### 8. 🧪 Battle-Tested Quality & Zero-Flake Test Suite
+### 8. 📜 Human-Auditable Step Artifacts Persistence
+
+*Deterministic side-effect persistence capturing intermediate reasoning, task graphs, and verification evidence.*
+
+- **Human-Auditable Evidence:** Steps 2, 3, and 5 automatically persist structured Markdown artifacts under `.sdw/state/{slug}/{runId}/`, providing transparency without altering pipeline execution semantics.
+- **Step 2 (Refinement Artifact `{slug}-step-2.md`):** Records detected decision gaps, resolutions applied per gap, the decision tree walk summary, and the full refined specification snapshot.
+- **Step 3 (DAG Generation Artifact `{slug}-step-3.md`):** Documents complexity analysis, task decomposition (dependencies, covered acceptance criteria, target files), and context-fenced task prompts.
+- **Step 5 (Scoring Artifact `{slug}-step-5.md`):** Summarizes implementation touched files, quantitative conformance score breakdown, verified criteria table, failing criteria table, and evaluator feedback.
+- **State Linkage & Best-Effort Resilience:** The run state records `artifactsDir` and per-step `artifact` paths. Failures in artifact generation log warnings and record errors without halting delivery execution.
+
+---
+
+### 9. 🧪 Battle-Tested Quality & Zero-Flake Test Suite
 
 *Engineering rigor backed by 100% native automated tests.*
 
 - **Native Node.js Test Runner:** Built with `node:test` and `node:assert/strict` — zero third-party testing frameworks required.
-- **93 Comprehensive Test Scenarios:**
+- **97 Comprehensive Test Scenarios:**
   - `sdw_config.test.cjs`: Configuration parsing, schema validation, token expansion, and initialization gates.
   - `sdw_spec.test.cjs`: Index bootstrapping, EARS validation, synthesis, SCM provider contract, state synchronization, and archival quality gates.
   - `sdw_orch.test.cjs`: State machine transitions, derivation, grilling decision trees, DAG decomposition, scoring gates, code review auto-fixing, remote push publishing, and unattended multi-spec batch queue execution.
   - `sdw_refinement_gates.test.cjs`: Step 2 Refinement state machine naming, technical blueprint ingestion into Step 3, config schema validation, build and test quality gates, automated fix retry loops, and pre-PR lifecycle hooks.
+  - `sdw_step_artifacts.test.cjs`: Intermediate step artifact persistence (steps 2, 3, 5), directory isolation (`.sdw/state/{slug}/{runId}/`), run state linkage, deterministic overwrite on re-execution, and resilient failure handling.
   - `sdw_branch_worktree.test.cjs`: Feature branch lifecycle, dirty tree refusal, branch reuse, worktree creation/cleanup, cherry-pick integration, and runtime overrides.
   - `sdw_scm_provider.test.cjs`: SCM provider resolution, capability checks, safe disable modes, strict CLI isolation (`gh` vs `az`), and orchestrator polling integration.
   - `sdw_router.test.cjs`: Minimal context budget enforcement (SKILL.md ≤ 120 lines), explicit invocations, keyword classification, tied-confidence disambiguation, missing directory resolution, and pass-through non-interference.
@@ -146,4 +159,3 @@ The following specifications are scheduled for upcoming execution phases:
 - **006 — Packaging & Vercel Skills Compatibility:** Standalone npm packaging, one-command installer, and seamless distribution across `.agents/skills/`.
 - **007 — SDW Memory Skill:** Integrated anti-regression project memory and vault trap retrieval.
 - **011 — GitHub Actions CI/CD Integration:** Automated workflow runs, agentic PR reviews, and skill distribution pipelines.
-- **014 — Step Artifacts Persistence:** Per-step human-auditable markdown artifacts persistence under `{stateDir}/{slug}/{runId}/`.

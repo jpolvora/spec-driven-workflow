@@ -45,16 +45,16 @@ flowchart TD
    - Translates human goals into clear, technical, agentic specifications.
    - *Optimization:* This step is automatically skipped if the input specification is already formatted for agentic execution.
 
-2. **Grilling Round (Ambiguity & Gap Elimination)**
+2. **Refinement Round (Grilling + Technical Planning)**
    - Executes an exhaustive decision tree walk over the spec to detect underspecified logic, unhandled edge cases, and missing constraints.
    - Proactively queries project context, codebase structure, memory, and architectural rules to resolve gaps autonomously.
-   - For decisions requiring human authority, triggers an interactive user prompt (`ask_question`), clearly presenting the gap, available options, and a recommended default.
-   - Produces a refined, ambiguity-free specification ready for implementation.
+   - Generates a structured technical blueprint (`targetFiles`, `architecturalApproach`, `testPlan`) and persists the human-auditable refinement artifact `{slug}-step-2.md`.
+   - For decisions requiring human authority in interactive mode, prompts the user (`ask_question`) with recommended defaults.
 
 3. **Complexity Analysis & DAG Task Decomposition**
-   - Assesses technical scope, dependencies, and risk factors.
-   - Generates a Directed Acyclic Graph (DAG) dividing the work into discrete, atomic execution units.
-   - Simple changes produce a single execution unit; complex features produce sequential or parallel execution units.
+   - Assesses technical scope, dependencies, and risk factors, directly ingesting the Step 2 technical blueprint.
+   - Generates a Directed Acyclic Graph (DAG) dividing the work into discrete, atomic execution units with context prompts.
+   - Persists the DAG plan artifact `{slug}-step-3.md`. Supports isolated git worktrees (`useWorktrees: true`) for multi-task plans.
 
 4. **Isolated Subagent Dispatch & Implementation**
    - Dispatches focused subagents according to the DAG definition.
@@ -62,8 +62,8 @@ flowchart TD
 
 5. **Conformance Scoring Loop**
    - Evaluates implementation output by quantitatively comparing the resulting diffs and touched files against the refined spec's acceptance criteria.
-   - If the score falls below the required threshold (e.g. `< 8/10`), the orchestrator loops back to implementation, attaching exact observations and gap findings to prevent repeating the same errors.
-   - Re-implementation repeats until the quality bar is verified.
+   - Persists the preliminary implementation report artifact `{slug}-step-5.md` with verified criteria and conformance score breakdown.
+   - If the score falls below the required threshold (e.g. `< 8/10`), loops back with gap observations.
 
 6. **Delivery Commit**
    - Once quality is assured by the conformance score, creates an atomic, structured delivery git commit.
@@ -73,9 +73,10 @@ flowchart TD
    - Evaluates project-specific coding standards, architectural invariants, security risks, and regressions.
    - If warnings or findings are reported, applies targeted surgical fixes and creates updated commits in an iterative loop until all findings are resolved.
 
-8. **PR Preparation & Remote Review Resolution Loop**
-   - Associates work items/tasks, marks the feature spec as completed, and opens/updates the Pull Request.
-   - *Optional Remote Review Loop:* If enabled, schedules a monitoring timer to poll for PR reviewer comments. When comments are posted, the orchestrator analyzes the feedback, implements surgical fixes, pushes commits, and responds with resolution summaries until all threads are resolved.
+8. **Pre-PR Quality Gates, PR Preparation & Remote Review Resolution Loop**
+   - Runs opt-in build verification (`requiredBuild`, `buildCommand`) and full test execution pass (`runAllTests`, `testCommand`) with an automated surgical fix loop (up to 3 attempts) and secret leak scanning.
+   - Executes optional project-specific pre-PR commands (`prePrCommand`) and instructions (`prePrInstructions`).
+   - Marks the feature spec as completed, assembles PR metadata, and pushes to remote origin when `--push` is enabled.
 
 ---
 
@@ -87,11 +88,12 @@ spec-driven-workflow/
 │   ├── config.json               # Default configuration schema
 │   ├── directory-structure.md    # Layout rules & documentation
 │   └── specs/                    # Storage directory for feature specifications
-│       ├── 001-sdw-implement-initial-version.md
-│       ├── 002-sdw-spec-management.md
-│       ├── 003-sdw-router-skill.md
-│       └── index.specs.md        # Central specification index
-│   └── traps.md                  # Central anti-regression trap log
+│       ├── index.specs.md        # Central specification index
+│       └── *.md                  # Canonical feature specifications
+│   ├── state/                    # Ephemeral execution run state and step artifacts
+│   │   └── {slug}/{runId}/       # Human-auditable step artifacts ({slug}-step-{N}.md)
+│   ├── traps.md                  # Central anti-regression trap log
+│   └── worktrees/                # Ephemeral per-task git worktrees for isolated subagents
 ├── skills/                       # Canonical source of truth for all skills
 │   ├── sdw-config/               # Project configuration & verification skill
 │   ├── sdw-orch/                 # End-to-end workflow orchestrator skill
@@ -100,12 +102,16 @@ spec-driven-workflow/
 │   ├── sdw-security-checks/      # Pre-commit secrets and credentials leak scanner
 │   └── sdw-spec/                 # Spec authoring, validation, sync, and index manager
 ├── tests/                        # Automated unit & integration test suites
+│   ├── sdw_branch_worktree.test.cjs
 │   ├── sdw_config.test.cjs
 │   ├── sdw_orch.test.cjs
+│   ├── sdw_refinement_gates.test.cjs
 │   ├── sdw_router.test.cjs
 │   ├── sdw_rules.test.cjs
+│   ├── sdw_scm_provider.test.cjs
 │   ├── sdw_security_checks.test.cjs
-│   └── sdw_spec.test.cjs
+│   ├── sdw_spec.test.cjs
+│   └── sdw_step_artifacts.test.cjs
 ├── AGENTS.md                     # Mandatory rules and protocols for AI agents
 ├── FEATURES.md                   # Feature showcase and architecture presentation
 └── README.md                     # Project documentation and architecture guide
