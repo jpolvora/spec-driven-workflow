@@ -42,6 +42,22 @@ class ScmProvider {
     return this.createPullRequest(options);
   }
 
+  async findActivePullRequest(options = {}) {
+    throw new Error('findActivePullRequest must be implemented by provider.');
+  }
+
+  async findActivePr(options = {}) {
+    return this.findActivePullRequest(options);
+  }
+
+  async updatePullRequest(options = {}) {
+    throw new Error('updatePullRequest must be implemented by provider.');
+  }
+
+  async updatePr(options = {}) {
+    return this.updatePullRequest(options);
+  }
+
   async listReviewThreads(prIdentifier) {
     throw new Error('listReviewThreads must be implemented by provider.');
   }
@@ -184,6 +200,30 @@ class GitHubProvider extends ScmProvider {
     }
   }
 
+  async findActivePullRequest(options = {}) {
+    const { head, base } = options;
+    if (!head) throw new Error('head branch is required for GitHub findActivePullRequest.');
+    assertSafeRef(head, 'head');
+    if (base) assertSafeRef(base, 'base');
+
+    const baseFlag = base ? `--base "${base}"` : '';
+    const checkCmd = `gh pr list --head "${head}" ${baseFlag} --state open --json number,url,title,headRefName,baseRefName`;
+    const stdout = this.executor(checkCmd);
+    const existing = JSON.parse(stdout || '[]');
+    if (Array.isArray(existing) && existing.length > 0) {
+      const pr = existing[0];
+      return {
+        number: String(pr.number),
+        url: pr.url,
+        head: pr.headRefName || head,
+        base: pr.baseRefName || (base || 'main'),
+        title: pr.title || '',
+        state: 'open'
+      };
+    }
+    return null;
+  }
+
   async createPullRequest(options = {}) {
     const { title, body = '', head, base, draft = false, dryRun = false } = options;
     if (!title || !head) {
@@ -192,31 +232,23 @@ class GitHubProvider extends ScmProvider {
     assertSafeRef(head, 'head');
     if (base) assertSafeRef(base, 'base');
 
-    let existing;
     try {
-      const baseFlag = base ? `--base "${base}"` : '';
-      const checkCmd = `gh pr list --head "${head}" ${baseFlag} --state open --json number,url,title,headRefName,baseRefName`;
-      const stdout = this.executor(checkCmd);
-      existing = JSON.parse(stdout || '[]');
+      const activePr = await this.findActivePullRequest({ head, base });
+      if (activePr) {
+        return {
+          number: activePr.number,
+          url: activePr.url,
+          head: activePr.head,
+          base: activePr.base,
+          title: activePr.title || title,
+          reused: true,
+          dryRun: Boolean(dryRun)
+        };
+      }
     } catch (err) {
-      if (dryRun) {
-        existing = [];
-      } else {
+      if (!dryRun) {
         throw new Error(`Unable to verify existing pull request before creation: ${err.message}`);
       }
-    }
-
-    if (Array.isArray(existing) && existing.length > 0) {
-      const pr = existing[0];
-      return {
-        number: String(pr.number),
-        url: pr.url,
-        head: pr.headRefName || head,
-        base: pr.baseRefName || (base || 'main'),
-        title: pr.title || title,
-        reused: true,
-        dryRun: Boolean(dryRun)
-      };
     }
 
     if (dryRun) {
@@ -262,7 +294,77 @@ class GitHubProvider extends ScmProvider {
       };
     } catch (err) {
       const errMsg = err.stderr ? err.stderr.toString().trim() : err.message;
+      const alreadyExistsMatch = errMsg.match(/already exists:\s*(https:\/\/[^\s]+)/i);
+      if (alreadyExistsMatch) {
+        const existingUrl = alreadyExistsMatch[1];
+        const numMatch = existingUrl.match(/\/pull\/(\d+)/);
+        return {
+          number: numMatch ? String(numMatch[1]) : null,
+          url: existingUrl,
+          head,
+          base: base || 'main',
+          title,
+          reused: true,
+          dryRun: false
+        };
+      }
       throw new Error(`GitHub SCM Provider failed to create PR: ${errMsg}`);
+    } finally {
+      if (tempBodyFile && fs.existsSync(tempBodyFile)) {
+        try { fs.unlinkSync(tempBodyFile); } catch (e) {}
+      }
+    }
+  }
+
+  async updatePullRequest(options = {}) {
+    const { prNumber, title, body, appendBody = true, dryRun = false } = options;
+    if (!prNumber) {
+      throw new Error('prNumber is required for GitHub updatePullRequest.');
+    }
+
+    if (dryRun) {
+      return {
+        number: String(prNumber),
+        updated: true,
+        dryRun: true
+      };
+    }
+
+    let finalBody = body;
+    if (appendBody && body) {
+      try {
+        const viewCmd = `gh pr view ${prNumber} --json body`;
+        const viewOut = JSON.parse(this.executor(viewCmd) || '{}');
+        const currentBody = viewOut.body || '';
+        if (currentBody && !currentBody.includes(body.trim())) {
+          finalBody = `${currentBody.trim()}\n\n---\n\n${body.trim()}`;
+        } else if (currentBody) {
+          finalBody = currentBody;
+        }
+      } catch (e) {}
+    }
+
+    let tempBodyFile = null;
+    try {
+      let bodyArg = '';
+      if (finalBody) {
+        const tmpDir = os.tmpdir();
+        tempBodyFile = path.join(tmpDir, `sdw-pr-update-${Date.now()}-${Math.random().toString(36).slice(2)}.md`);
+        fs.writeFileSync(tempBodyFile, finalBody, 'utf8');
+        bodyArg = `--body-file "${tempBodyFile.replace(/\\/g, '/')}"`;
+      }
+      const titleArg = title ? `--title "${title.replace(/["`$\\]/g, '\\$&')}"` : '';
+      if (bodyArg || titleArg) {
+        this.executor(`gh pr edit ${prNumber} ${titleArg} ${bodyArg}`.trim());
+      }
+      return {
+        number: String(prNumber),
+        updated: true,
+        dryRun: false
+      };
+    } catch (err) {
+      const errMsg = err.stderr ? err.stderr.toString().trim() : err.message;
+      throw new Error(`GitHub SCM Provider failed to update PR: ${errMsg}`);
     } finally {
       if (tempBodyFile && fs.existsSync(tempBodyFile)) {
         try { fs.unlinkSync(tempBodyFile); } catch (e) {}
@@ -614,6 +716,30 @@ class AzureDevOpsProvider extends ScmProvider {
     }
   }
 
+  async findActivePullRequest(options = {}) {
+    const { head, base } = options;
+    if (!head) throw new Error('head branch is required for Azure DevOps findActivePullRequest.');
+    assertSafeRef(head, 'head');
+    if (base) assertSafeRef(base, 'base');
+
+    const baseFlag = base ? `--target-branch "${base}"` : '';
+    const checkCmd = `az repos pr list --source-branch "${head}" ${baseFlag} --status active --output json`;
+    const stdout = this.executor(checkCmd);
+    const existing = JSON.parse(stdout || '[]');
+    if (Array.isArray(existing) && existing.length > 0) {
+      const pr = existing[0];
+      return {
+        number: String(pr.pullRequestId || pr.id),
+        url: pr.url || (pr._links && pr._links.web && pr._links.web.href) || '',
+        head: pr.sourceRefName ? pr.sourceRefName.replace('refs/heads/', '') : head,
+        base: pr.targetRefName ? pr.targetRefName.replace('refs/heads/', '') : (base || 'main'),
+        title: pr.title || '',
+        state: 'active'
+      };
+    }
+    return null;
+  }
+
   async createPullRequest(options = {}) {
     const { title, body = '', head, base, draft = false, dryRun = false, workItems = [] } = options;
     if (!title || !head) {
@@ -622,31 +748,23 @@ class AzureDevOpsProvider extends ScmProvider {
     assertSafeRef(head, 'head');
     if (base) assertSafeRef(base, 'base');
 
-    let existing;
     try {
-      const baseFlag = base ? `--target-branch "${base}"` : '';
-      const checkCmd = `az repos pr list --source-branch "${head}" ${baseFlag} --status active --output json`;
-      const stdout = this.executor(checkCmd);
-      existing = JSON.parse(stdout || '[]');
+      const activePr = await this.findActivePullRequest({ head, base });
+      if (activePr) {
+        return {
+          number: activePr.number,
+          url: activePr.url,
+          head: activePr.head,
+          base: activePr.base,
+          title: activePr.title || title,
+          reused: true,
+          dryRun: Boolean(dryRun)
+        };
+      }
     } catch (err) {
-      if (dryRun) {
-        existing = [];
-      } else {
+      if (!dryRun) {
         throw new Error(`Unable to verify existing pull request before creation: ${err.message}`);
       }
-    }
-
-    if (Array.isArray(existing) && existing.length > 0) {
-      const pr = existing[0];
-      return {
-        number: String(pr.pullRequestId || pr.id),
-        url: pr.url || (pr._links && pr._links.web && pr._links.web.href) || '',
-        head: pr.sourceRefName ? pr.sourceRefName.replace('refs/heads/', '') : head,
-        base: pr.targetRefName ? pr.targetRefName.replace('refs/heads/', '') : (base || 'main'),
-        title: pr.title || title,
-        reused: true,
-        dryRun: Boolean(dryRun)
-      };
     }
 
     if (dryRun) {
@@ -695,11 +813,73 @@ class AzureDevOpsProvider extends ScmProvider {
       };
     } catch (err) {
       const errMsg = err.stderr ? err.stderr.toString().trim() : err.message;
+      const existingMatch = errMsg.match(/(?:existing pull request is|already exists[^\d]*)(\d+)/i);
+      if (existingMatch) {
+        const existingId = existingMatch[1];
+        return {
+          number: String(existingId),
+          url: '',
+          head,
+          base: base || 'main',
+          title,
+          reused: true,
+          dryRun: false
+        };
+      }
       throw new Error(`Azure DevOps SCM Provider failed to create PR: ${errMsg}`);
     } finally {
       if (tempBodyFile && fs.existsSync(tempBodyFile)) {
         try { fs.unlinkSync(tempBodyFile); } catch (e) {}
       }
+    }
+  }
+
+  async updatePullRequest(options = {}) {
+    const { prNumber, title, body, appendBody = true, dryRun = false } = options;
+    if (!prNumber) {
+      throw new Error('prNumber is required for Azure DevOps updatePullRequest.');
+    }
+
+    if (dryRun) {
+      return {
+        number: String(prNumber),
+        updated: true,
+        dryRun: true
+      };
+    }
+
+    let finalBody = body;
+    if (appendBody && body) {
+      try {
+        const viewCmd = `az repos pr show --id ${prNumber} --query description -o tsv`;
+        const currentBody = (this.executor(viewCmd) || '').trim();
+        if (currentBody && !currentBody.includes(body.trim())) {
+          finalBody = `${currentBody}\n\n---\n\n${body.trim()}`;
+        } else if (currentBody) {
+          finalBody = currentBody;
+        }
+      } catch (e) {}
+    }
+
+    try {
+      let descArg = '';
+      if (finalBody) {
+        const quoteArg = value => `"${String(value).replace(/(["\\$`])/g, '\\$1')}"`;
+        const bodyLines = String(finalBody).split(/\r?\n/);
+        descArg = `--description ${bodyLines.map(quoteArg).join(' ')}`;
+      }
+      const titleArg = title ? `--title "${title.replace(/["`$\\]/g, '\\$&')}"` : '';
+      if (descArg || titleArg) {
+        this.executor(`az repos pr update --id ${prNumber} ${titleArg} ${descArg}`.trim());
+      }
+      return {
+        number: String(prNumber),
+        updated: true,
+        dryRun: false
+      };
+    } catch (err) {
+      const errMsg = err.stderr ? err.stderr.toString().trim() : err.message;
+      throw new Error(`Azure DevOps SCM Provider failed to update PR: ${errMsg}`);
     }
   }
 

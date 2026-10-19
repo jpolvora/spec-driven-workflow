@@ -37,9 +37,11 @@ Before publishing branches or creating remote pull requests, `sdw-ship-pr` evalu
    - Reads `scmProvider` from `.sdw/config.json`.
    - If `none`: PR creation is skipped. Standalone delivery is marked complete locally.
    - If `github` or `ado`: SCM CLI capability (`gh` or `az`) is verified.
-2. **Idempotent Reuse:**
+2. **Idempotent Reuse & Active PR Adaptation:**
    - Queries open pull requests matching head branch into base branch (`gh pr list --head ...` or `az repos pr list --source-branch ...`).
    - If an open PR already exists, reuses the existing PR number and URL without creating duplicates.
+   - **Complementing Active PR:** Commits are pushed to the existing branch, and the PR description is updated with an amending delivery section (`### Amending Delivery: {specSlug}\n- Commit: \`{sha}\`\n- Timestamp: {iso}`).
+   - **Non-blocking Adaptation:** While amending an active PR undergoing code review or awaiting approval is not a recommended practice, the system adapts as a non-blocking operation rather than halting or failing. If review convergence ends while checks or approvals are pending, it records `shipStatus: review_pending`, marks delivery completed in state, and exits 0 cleanly.
 3. **Creation Payload:**
    - `title`: Extracted from specification title or `--title`.
    - `body`: Markdown PR body describing delivered features, referenced issue number, and verification summary.

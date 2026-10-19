@@ -226,7 +226,7 @@ async function runShipPr(options = {}, customExecutor = null) {
     }
   }
 
-  const specSlug = options.spec || null;
+  const specSlug = options.spec || options.specSlug || null;
   if (specSlug) assertSafeSlug(specSlug);
   assertSafeRef(head, 'head');
   assertSafeRef(base, 'base');
@@ -356,6 +356,24 @@ async function runShipPr(options = {}, customExecutor = null) {
       report.prePrPassed = true;
     }
 
+    // Check if an active PR is already open for this branch
+    let activePrEarly = null;
+    let providerEarly = null;
+    if (scmProviderName !== 'none' && scmContract) {
+      try {
+        const capability = scmContract.checkScmCapability(scmProviderName, { executor });
+        if (capability.available || dryRun) {
+          providerEarly = scmContract.createScmProvider(scmProviderName, { executor });
+          if (typeof providerEarly.findActivePullRequest === 'function') {
+            activePrEarly = await providerEarly.findActivePullRequest({ head, base });
+            if (activePrEarly) {
+              log(`[sdw-ship-pr] Active PR #${activePrEarly.number} detected (${activePrEarly.url || 'open'}). Notice: Amending an active pull request while review/approval is pending is not a recommended practice, but adapting as a non-blocking operation: complementing PR with new commits and delivery details.`);
+            }
+          }
+        }
+      } catch (e) {}
+    }
+
     // Step 2: Remote Branch Publishing
     if (pushDelivery) {
       if (dryRun) {
@@ -371,7 +389,7 @@ async function runShipPr(options = {}, customExecutor = null) {
         if (!hasRemote) {
           log('[sdw-ship-pr] Remote push skipped: no git remote configured.');
         } else {
-          log(`[sdw-ship-pr] Pushing branch ${head} to remote origin...`);
+          log(`[sdw-ship-pr] Pushing branch ${head} to remote origin${activePrEarly ? ` (complementing active PR #${activePrEarly.number})` : ''}...`);
           try {
             executor(`git push -u origin ${head}`);
             report.pushed = true;
@@ -398,7 +416,7 @@ async function runShipPr(options = {}, customExecutor = null) {
       }
 
       log(`[sdw-ship-pr] Preparing pull request via ${scmProviderName}...`);
-      const provider = scmContract.createScmProvider(scmProviderName, { executor });
+      const provider = providerEarly || scmContract.createScmProvider(scmProviderName, { executor });
 
       const prResult = await provider.createPullRequest({
         title,
@@ -430,7 +448,7 @@ async function runShipPr(options = {}, customExecutor = null) {
         const newBodyContent = amendmentNote || body;
         if (newBodyContent) {
           try {
-            log(`[sdw-ship-pr] Active PR #${prResult.number} detected; updating PR description with amending delivery...`);
+            log(`[sdw-ship-pr] Notice: Amending an active pull request while review/approval is pending is not a recommended practice, but adapting as a non-blocking operation: complementing PR #${prResult.number} description with amending delivery...`);
             await provider.updatePullRequest({
               prNumber: prResult.number,
               body: newBodyContent,
@@ -724,7 +742,9 @@ async function runShipPr(options = {}, customExecutor = null) {
           report.shipStatus = 'review_pending';
           const hasActivePr = Boolean(report.pullRequest && (report.pullRequest.url || report.pullRequest.number));
           if (hasActivePr) {
-            log(`[sdw-ship-pr] Active PR #${report.pullRequest.number || ''} is in review / awaiting approval. Adapting non-blocking workflow.`);
+            log(`[sdw-ship-pr] Active PR #${report.pullRequest.number || ''} is in review / awaiting approval. Notice: Amending an active pull request while review/approval is pending is not a recommended practice; adapting non-blocking workflow.`);
+            report.nonBlocking = true;
+            report.adaptedActivePr = true;
           }
           report.success = false;
         } else {
@@ -758,6 +778,8 @@ async function runShipPr(options = {}, customExecutor = null) {
               ...(existingStep8.output || {}),
               pullRequest: report.pullRequest,
               shipStatus: report.shipStatus,
+              nonBlocking: Boolean(report.nonBlocking),
+              adaptedActivePr: Boolean(report.adaptedActivePr),
               pushedBranch: report.pushed ? head : null,
               reviewConvergence: report.reviewConvergence
             }

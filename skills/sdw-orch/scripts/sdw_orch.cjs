@@ -15,19 +15,28 @@ const artifactWriter = require('./artifact_writer.cjs');
 const implementationRunner = require('./implementation_runner.cjs');
 const evidenceValidator = require('./evidence_validator.cjs');
 
-function resolveSkillScript(targetRoot, skillName, scriptRelPath) {
+function resolveSkillScript(targetRoot, skillName, scriptRelPath, options = {}) {
   try {
     const sdwConfig = require('../../sdw-config/scripts/sdw_config.cjs');
     if (sdwConfig && typeof sdwConfig.resolveSkillsRoot === 'function') {
-      const info = sdwConfig.resolveSkillsRoot({ root: targetRoot, callerDir: __dirname });
+      const info = sdwConfig.resolveSkillsRoot({
+        root: targetRoot,
+        callerDir: options.callerDir !== undefined ? options.callerDir : __dirname,
+        homeDir: options.homeDir,
+        ignoreCaller: options.ignoreCaller,
+        skillsRoot: options.skillsRoot
+      });
       if (info && info.skillsRoot) {
         const candidate = path.join(info.skillsRoot, skillName, scriptRelPath);
         if (fs.existsSync(candidate)) return candidate;
       }
     }
   } catch (e) {}
-  const fallback = path.resolve(__dirname, '../../', skillName, scriptRelPath);
-  return fs.existsSync(fallback) ? fallback : null;
+  if (!options.ignoreCaller) {
+    const fallback = path.resolve(__dirname, '../../', skillName, scriptRelPath);
+    return fs.existsSync(fallback) ? fallback : null;
+  }
+  return null;
 }
 
 function getSpecIndexHelper(targetRoot) {
@@ -1638,8 +1647,12 @@ function cmdRun(options) {
         }
 
         if (shipResult) {
-          if (shipResult.success === false || shipResult.shipStatus === 'failed') {
+          const hasActivePr = Boolean(shipResult.pullRequest && (shipResult.pullRequest.url || shipResult.pullRequest.number));
+          if (shipResult.shipStatus === 'failed' || (shipResult.success === false && !hasActivePr)) {
             throw new Error(shipResult.error || 'sdw-ship-pr reported delivery failure');
+          }
+          if (hasActivePr && shipResult.shipStatus === 'review_pending') {
+            console.log(`[sdw-orch Step 8] Active pull request #${shipResult.pullRequest.number || ''} is in review / awaiting approval (${shipResult.pullRequest.url || ''}). Notice: Amending an active pull request while review/approval is pending is not a recommended practice; adapting non-blocking workflow.`);
           }
           if (shipResult.pullRequest) {
             state.pullRequest = shipResult.pullRequest;
@@ -2206,5 +2219,6 @@ module.exports = {
   stageAndCommitOnly,
   getStatusFiles,
   snapshotStats,
-  diffSinceSnapshot
+  diffSinceSnapshot,
+  resolveSkillScript
 };

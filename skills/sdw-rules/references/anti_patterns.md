@@ -28,3 +28,8 @@ This catalog details recurring pitfalls observed in LLM agent code and specifies
 - **Symptom:** Authoring acceptance criteria like `The system shall do X, Y, and Z while handling errors gracefully.`
 - **Why it hurts:** Hard to score deterministically (0–10); hides failure states.
 - **Directive:** Atomic EARS criteria. One condition, one response, one verification method.
+
+## 6. Acting Without Explicit Instruction
+- **Symptom:** Treating a topic statement, observation, or design musing (e.g. "I am changing the way X handles Y") as authorization to implement, edit files, or commit, without the user ever issuing a command or approving a plan.
+- **Why it hurts:** Produces unrequested work and irreversible side effects (commits, pushes, mutations); forces the user to review or revert actions they never asked for; erodes trust in agent autonomy boundaries.
+- **Directive:** Act only on an explicit user command or an approved plan. When intent is ambiguous in any way, stop and ask for clarification first. Never infer authorization, and never decide on the user's behalf.

@@ -70,10 +70,11 @@ Detailed protocol: [`references/ship_protocol.md`](references/ship_protocol.md).
 1. When `scmProvider` is `none`: skip remote PR creation, log local delivery readiness, and return exit 0.
 2. When `scmProvider` is `github` or `ado`:
    - Assemble PR title and body from specification or CLI parameters.
-   - Query open PRs matching `<head>` into `<base>` using the unified SCM provider contract.
-   - If an open PR exists, reuse its number and URL.
+   - Query open PRs matching `<head>` into `<base>` using the unified SCM provider contract (`findActivePullRequest`).
+   - If an open PR exists, reuse its number and URL. Complement the active PR: push commits to the PR branch and update the PR description with the amending delivery details (`### Amending Delivery: {specSlug}`).
+   - While amending an active PR undergoing review/approval is not a recommended practice, adapt as a non-blocking operation: continue the delivery process without failing or blocking.
    - Otherwise, create a new pull request via `provider.createPullRequest({ title, body, head, base, dryRun })`.
-- Done when: Pull request number and URL are captured or reused, or SCM creation skipped cleanly.
+- Done when: Pull request number and URL are captured or reused, description amended if reused, or SCM creation skipped cleanly.
 
 ### Step 5: Post-PR Review Convergence (Cooperative & Proactive Fix Cycle)
 1. When `scmCodeReviewEnabled: true` or `--poll-pr` passed (and `scmProvider != "none"`):

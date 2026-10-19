@@ -888,7 +888,17 @@ function cmdCheck(options) {
   }
 
   // 6. Check skillsRoot resolution (AC6, AC9)
-  const skillsInfo = resolveSkillsRoot({ root: targetRoot, ...options });
+  const checkOptions = { root: targetRoot, ...options };
+  if (options.callerDir === undefined && options.ignoreCaller === undefined) {
+    const enclosing = findEnclosingSkillsDir(__dirname);
+    const normTarget = normalizePath(targetRoot);
+    const normEnclosing = enclosing ? normalizePath(enclosing) : '';
+    const home = normalizePath(options.homeDir || os.homedir());
+    if (normEnclosing && !normEnclosing.startsWith(normTarget) && !(home && normEnclosing.startsWith(home))) {
+      checkOptions.callerDir = null;
+    }
+  }
+  const skillsInfo = resolveSkillsRoot(checkOptions);
   const hasSkills = Boolean(skillsInfo && skillsInfo.exists);
   checks.push({
     name: 'skills_root_resolution',

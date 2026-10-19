@@ -9,12 +9,13 @@ const { execSync, spawnSync } = require('child_process');
 
 const sdwConfig = require('../skills/sdw-config/scripts/sdw_config.cjs');
 const sdwRouter = require('../skills/sdw-router/scripts/sdw_router.cjs');
+const sdwOrch = require('../skills/sdw-orch/scripts/sdw_orch.cjs');
 
 function createTempDir(prefix = 'sdw-hybrid-test-') {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
-function createDummySkill(skillsDir, skillName) {
+function createDummySkill(skillsDir, skillName, scriptName = null) {
   const target = path.join(skillsDir, skillName);
   fs.mkdirSync(path.join(target, 'scripts'), { recursive: true });
   fs.writeFileSync(
@@ -22,8 +23,9 @@ function createDummySkill(skillsDir, skillName) {
     `---\nname: ${skillName}\ndescription: Test skill ${skillName}\nversion: 1.0.0\n---\n# ${skillName}\n\n> When this skill is loaded, output "${skillName} loaded."\n`,
     'utf8'
   );
+  const defaultScriptName = `${skillName.replace(/-/g, '_')}.cjs`;
   fs.writeFileSync(
-    path.join(target, 'scripts', `${skillName}.cjs`),
+    path.join(target, 'scripts', scriptName || defaultScriptName),
     `'use strict';\nmodule.exports = { name: '${skillName}' };\n`,
     'utf8'
   );
@@ -186,7 +188,10 @@ test('AC6: sdw-config check validates and reports resolved skills root and activ
     const checkProc = spawnSync(
       process.execPath,
       [cliScript, 'check', '--root', tmpProject, '--skills-root', globalSkills, '--json'],
-      { encoding: 'utf8' }
+      {
+        encoding: 'utf8',
+        env: { ...process.env, HOME: tmpGlobal, USERPROFILE: tmpGlobal }
+      }
     );
 
     assert.equal(checkProc.status, 0);
@@ -256,14 +261,20 @@ test('AC9: Missing skills directory aborts execution with exit code 1', () => {
   const tmpProject = createTempDir('sdw-ac9-proj-');
   const emptyGlobal = createTempDir('sdw-ac9-global-');
   try {
-    // Init config but provide no skills locally or globally
+    // Init config with valid specsDir but provide no skills locally or globally
     const sdwDir = path.join(tmpProject, '.sdw');
     fs.mkdirSync(sdwDir, { recursive: true });
-    fs.writeFileSync(path.join(sdwDir, 'config.json'), JSON.stringify({}, null, 2), 'utf8');
+    fs.writeFileSync(
+      path.join(sdwDir, 'config.json'),
+      JSON.stringify({
+        specsDir: path.join(tmpProject, '.sdw', 'specs').replace(/\\/g, '/')
+      }, null, 2),
+      'utf8'
+    );
     fs.writeFileSync(path.join(sdwDir, 'config.schema.json'), JSON.stringify({}, null, 2), 'utf8');
     fs.writeFileSync(path.join(sdwDir, 'directory-structure.md'), '# test', 'utf8');
 
-    // 1. sdw-config check fails with code 1
+    // 1. sdw-config check fails with code 1 specifically on skills_root_resolution
     const cliConfig = path.resolve(__dirname, '../skills/sdw-config/scripts/sdw_config.cjs');
     const checkProc = spawnSync(
       process.execPath,
@@ -276,6 +287,9 @@ test('AC9: Missing skills directory aborts execution with exit code 1', () => {
     assert.equal(checkProc.status, 1, 'sdw-config check aborts with code 1 when no skills exist');
     const checkData = JSON.parse(checkProc.stdout);
     assert.equal(checkData.valid, false);
+    const skillsCheck = checkData.checks.find(c => c.name === 'skills_root_resolution');
+    assert.ok(skillsCheck);
+    assert.equal(skillsCheck.passed, false, 'skills_root_resolution check must fail when no skills exist');
 
     // 2. sdw-router doctor fails with code 1
     const cliRouter = path.resolve(__dirname, '../skills/sdw-router/scripts/sdw_router.cjs');
@@ -314,11 +328,19 @@ test('AC10: sdw-orch dynamic script resolution locates helper scripts via resolv
     assert.equal(info.skillsRoot, globalSkills.replace(/\\/g, '/'));
     assert.equal(info.mode, 'global');
 
-    // Verify scripts exist under resolved skillsRoot
-    const crScript = path.join(info.skillsRoot, 'sdw-code-review', 'scripts', 'sdw-code-review.cjs');
-    const shipScript = path.join(info.skillsRoot, 'sdw-ship-pr', 'scripts', 'sdw-ship-pr.cjs');
-    assert.ok(fs.existsSync(crScript));
-    assert.ok(fs.existsSync(shipScript));
+    // Verify scripts resolve via sdw-orch's resolveSkillScript helper
+    const crScript = sdwOrch.resolveSkillScript(tmpProject, 'sdw-code-review', path.join('scripts', 'sdw_code_review.cjs'), {
+      homeDir: tmpGlobal,
+      ignoreCaller: true
+    });
+    const shipScript = sdwOrch.resolveSkillScript(tmpProject, 'sdw-ship-pr', path.join('scripts', 'sdw_ship_pr.cjs'), {
+      homeDir: tmpGlobal,
+      ignoreCaller: true
+    });
+    assert.ok(crScript, 'sdw-code-review script must resolve from global skills');
+    assert.equal(crScript, path.join(globalSkills, 'sdw-code-review', 'scripts', 'sdw_code_review.cjs'));
+    assert.ok(shipScript, 'sdw-ship-pr script must resolve from global skills');
+    assert.equal(shipScript, path.join(globalSkills, 'sdw-ship-pr', 'scripts', 'sdw_ship_pr.cjs'));
   } finally {
     fs.rmSync(tmpProject, { recursive: true, force: true });
     fs.rmSync(tmpGlobal, { recursive: true, force: true });
