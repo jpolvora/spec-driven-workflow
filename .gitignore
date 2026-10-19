@@ -28,9 +28,11 @@ Desktop.ini
 
 # IDE & Editor Settings (allow project configs if needed)
 .idea/
+.vscode/
 *.sublime-project
 *.sublime-workspace
 
 # spec-memo runtime state & workflow-skills harness config (never commit)
 .spec-memo/
 .ws/
+/config.json

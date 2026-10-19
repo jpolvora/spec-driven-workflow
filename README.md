@@ -15,6 +15,8 @@ A streamlined, deterministic framework for spec-driven software development with
 
 SDW standardizes how developers specify, refine, implement, review, and ship features across both local workspaces and remote trackers (GitHub, Azure DevOps).
 
+> 📖 **Feature Showcase:** For an in-depth, presentation-style breakdown of all implemented capabilities, subsystems, and the product roadmap, see [FEATURES.md](FEATURES.md).
+
 ---
 
 ## 2. The Core Workflow Orchestrator: `sdw-orch`
@@ -85,14 +87,22 @@ spec-driven-workflow/
 │   ├── config.json               # Default configuration schema
 │   ├── directory-structure.md    # Layout rules & documentation
 │   └── specs/                    # Storage directory for feature specifications
-│       └── 001-sdw-implement-initial-version.md
+│       ├── 001-sdw-implement-initial-version.md
+│       ├── 002-sdw-spec-management.md
+│       ├── 003-sdw-router-skill.md
+│       └── index.specs.md        # Central specification index
 ├── skills/                       # Canonical source of truth for all skills
 │   ├── sdw-config/               # Project configuration & verification skill
-│   │   ├── SKILL.md              # 3-Tier Tier 1 instructions
-│   │   ├── references/           # Tier 2 reference schemas & contracts
-│   │   └── scripts/              # Tier 3 deterministic Node.js helpers (sdw_config.cjs)
-│   └── sdw-orch/                 # Orchestrator skill (in development)
+│   ├── sdw-orch/                 # End-to-end workflow orchestrator skill
+│   ├── sdw-router/               # Always-autoloaded entrypoint and skill router
+│   └── sdw-spec/                 # Spec authoring, validation, sync, and index manager
+├── tests/                        # Automated unit & integration test suites
+│   ├── sdw_config.test.cjs
+│   ├── sdw_orch.test.cjs
+│   ├── sdw_router.test.cjs
+│   └── sdw_spec.test.cjs
 ├── AGENTS.md                     # Mandatory rules and protocols for AI agents
+├── FEATURES.md                   # Feature showcase and architecture presentation
 └── README.md                     # Project documentation and architecture guide
 ```
 
@@ -106,9 +116,24 @@ spec-driven-workflow/
 
 ## 4. Getting Started
 
-### Using `sdw-config`
+### Using `sdw-router` (Autoload & Routing)
 
-The `sdw-config` skill manages the `.sdw/` workspace infrastructure in any project:
+The `sdw-router` skill is an always-applied router that inspects prompts and dispatches to specialized skills:
+
+```bash
+# Analyze prompt intent or explicit invocations (/sdw-*)
+node skills/sdw-router/scripts/sdw_router.cjs route "<prompt>" [--json]
+
+# Scan available skills across canonical (skills/) and consumer (.agents/skills/) paths
+node skills/sdw-router/scripts/sdw_router.cjs scan [--json]
+
+# Audit skills integrity and directory health
+node skills/sdw-router/scripts/sdw_router.cjs doctor [--json]
+```
+
+### Using `sdw-config` (Workspace Configuration)
+
+The `sdw-config` skill manages the `.sdw/` workspace infrastructure:
 
 ```bash
 # Initialize .sdw/ structure in current or target repository
@@ -121,14 +146,37 @@ node skills/sdw-config/scripts/sdw_config.cjs check [--root <path>] [--json]
 node skills/sdw-config/scripts/sdw_config.cjs parse [--root <path>] [--json]
 ```
 
-### Creating Specifications
+### Using `sdw-spec` (Specification Management)
 
-Specifications reside in `.sdw/specs/` using EARS-formatted acceptance criteria:
+The `sdw-spec` skill manages specification authoring, formatting, validation, and lifecycle:
 
 ```bash
-# Validate specification formatting and authoring readiness
-node C:/Users/jpolv/.gemini/config/skills/ws-spec-format/scripts/validate_spec.cjs --mode=authoring .sdw/specs/<spec-name>.md
+# Synthesize a new specification from free-text requirements
+node skills/sdw-spec/scripts/sdw_spec.cjs new "<requirements>"
+
+# Validate specification formatting and EARS syntax readiness
+node skills/sdw-spec/scripts/validate_spec.cjs --mode=authoring .sdw/specs/<spec-name>.md
+
+# Reconcile index.specs.md with active on-disk specifications and run states
+node skills/sdw-spec/scripts/sdw_spec.cjs sync
+
+# List all specifications and their validation health
+node skills/sdw-spec/scripts/sdw_spec.cjs list
 ```
+
+### Using `sdw-orch` (Workflow Orchestrator)
+
+The `sdw-orch` skill executes the end-to-end 8-step delivery workflow:
+
+```bash
+# Execute the full delivery pipeline for a specification
+node skills/sdw-orch/scripts/sdw_orch.cjs run .sdw/specs/<spec-name>.md [--push]
+
+# Resume an interrupted or paused run
+node skills/sdw-orch/scripts/sdw_orch.cjs resume [--run-id <runId>]
+
+# Inspect status of active execution
+node skills/sdw-orch/scripts/sdw_orch.cjs status
 
 ---
 

@@ -117,3 +117,24 @@ Instructions and skills specific to the development environment are sourced from
 2. **Autoload spec-memo runtime skills (`@.agents/skills/ws-memo/SKILL.md`):**
    - Load [`@.agents/skills/ws-memo/SKILL.md`](.agents/skills/ws-memo/SKILL.md) at the start of **every session**, after the Karpathy guidelines.
    - `ws-memo` is the only entry point for vault memory operations;
+
+   
+## 7. Spec-Driven Workflow (SDW) Autoload
+
+This repository uses Spec-Driven Workflow for spec management, configuration, and implementation.
+
+- **Autoload SDW Router:** At the start of every session or when receiving task instructions, inspect and apply `skills/sdw-router/SKILL.md`.
+- **Routing Protocol:**
+  - Route configuration and environment inquiries to `sdw-config`.
+  - Route specification authoring, formatting, validation, and indexing to `sdw-spec`.
+  - Route specification implementation, orchestration, and delivery commits to `sdw-orch`.
+  - Pass through general conversational or non-SDW code editing tasks without interception.
+
+## 8. Additional specific development lifecycle instructions
+
+** After each prompt/task/workflow executed by agents, analyze if changes impact on documentation, instructions, skills routers files. Ensure files, references, paths, nomenclatures are always up to date reflecting the latest changes.
+** If new features are implemented in the project, make sure README.md, AGENTS.md, FEATURES.md are in sync.
+** Do not forget to update `.sdw/directory-structure.md` file to reflect updated layout for the consumer project as evolves
+** Never reference files with hardcoded full OS paths. Use always relative paths to the project root.
+** When dealing with paths and files references, use token paths and resolve correctly.
+
