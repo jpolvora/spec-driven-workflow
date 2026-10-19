@@ -15,7 +15,28 @@ const artifactWriter = require('./artifact_writer.cjs');
 const implementationRunner = require('./implementation_runner.cjs');
 const evidenceValidator = require('./evidence_validator.cjs');
 
-function getSpecIndexHelper() {
+function resolveSkillScript(targetRoot, skillName, scriptRelPath) {
+  try {
+    const sdwConfig = require('../../sdw-config/scripts/sdw_config.cjs');
+    if (sdwConfig && typeof sdwConfig.resolveSkillsRoot === 'function') {
+      const info = sdwConfig.resolveSkillsRoot({ root: targetRoot, callerDir: __dirname });
+      if (info && info.skillsRoot) {
+        const candidate = path.join(info.skillsRoot, skillName, scriptRelPath);
+        if (fs.existsSync(candidate)) return candidate;
+      }
+    }
+  } catch (e) {}
+  const fallback = path.resolve(__dirname, '../../', skillName, scriptRelPath);
+  return fs.existsSync(fallback) ? fallback : null;
+}
+
+function getSpecIndexHelper(targetRoot) {
+  try {
+    const scriptPath = resolveSkillScript(targetRoot, 'sdw-spec', path.join('scripts', 'spec_index.cjs'));
+    if (scriptPath) {
+      return require(scriptPath);
+    }
+  } catch (e) {}
   try {
     return require('../../sdw-spec/scripts/spec_index.cjs');
   } catch (e) {
@@ -23,7 +44,13 @@ function getSpecIndexHelper() {
   }
 }
 
-function getScmProviderContract() {
+function getScmProviderContract(targetRoot) {
+  try {
+    const scriptPath = resolveSkillScript(targetRoot, 'sdw-spec', path.join('scripts', 'scm_provider_contract.cjs'));
+    if (scriptPath) {
+      return require(scriptPath);
+    }
+  } catch (e) {}
   try {
     return require('../../sdw-spec/scripts/scm_provider_contract.cjs');
   } catch (e) {
@@ -62,6 +89,7 @@ function parseArgs(args) {
     featureBranch: false,
     taskId: null,
     evidencePath: null,
+    skillsRoot: null,
     implementationMode: null
   };
 
@@ -92,6 +120,8 @@ function parseArgs(args) {
     else if (arg.startsWith('--batch-id=')) result.batchId = arg.slice(11);
     else if (arg === '--root') result.root = args[++i];
     else if (arg.startsWith('--root=')) result.root = arg.slice(7);
+    else if (arg === '--skills-root') result.skillsRoot = args[++i];
+    else if (arg.startsWith('--skills-root=')) result.skillsRoot = arg.slice(14);
     else if (arg === '--run-id') result.runId = args[++i];
     else if (arg.startsWith('--run-id=')) result.runId = arg.slice(9);
     else if (arg === '--task' || arg === '--task-id') result.taskId = args[++i];
@@ -293,7 +323,8 @@ function collectDeliveryFiles(targetRoot, specSlug, state) {
 
 function runSecurityGate(targetRoot, options = {}) {
   try {
-    const secScanner = require('../../sdw-security-checks/scripts/sdw_security_checks.cjs');
+    const scriptPath = resolveSkillScript(targetRoot, 'sdw-security-checks', path.join('scripts', 'sdw_security_checks.cjs'));
+    const secScanner = scriptPath ? require(scriptPath) : require('../../sdw-security-checks/scripts/sdw_security_checks.cjs');
     if (secScanner && typeof secScanner.scan === 'function') {
       return secScanner.scan({ root: targetRoot, staged: options.staged !== false });
     }
@@ -451,7 +482,8 @@ function runVerificationGates(targetRoot, config, options = {}) {
 
 function loadProjectConfig(targetRoot) {
   try {
-    const sdwConfig = require('../../sdw-config/scripts/sdw_config.cjs');
+    const scriptPath = resolveSkillScript(targetRoot, 'sdw-config', path.join('scripts', 'sdw_config.cjs'));
+    const sdwConfig = scriptPath ? require(scriptPath) : require('../../sdw-config/scripts/sdw_config.cjs');
     if (sdwConfig && typeof sdwConfig.loadConfig === 'function') {
       return sdwConfig.loadConfig(targetRoot);
     }
@@ -524,6 +556,21 @@ function resolveSpecPath(specInput, targetRoot, config) {
 
 function cmdRun(options) {
   const targetRoot = options.root ? path.resolve(options.root) : process.cwd();
+
+  let sdwConfig = null;
+  try {
+    const sdwConfigScript = resolveSkillScript(targetRoot, 'sdw-config', path.join('scripts', 'sdw_config.cjs'));
+    sdwConfig = sdwConfigScript ? require(sdwConfigScript) : require('../../sdw-config/scripts/sdw_config.cjs');
+  } catch (e) {}
+  const skillsInfo = sdwConfig && typeof sdwConfig.resolveSkillsRoot === 'function'
+    ? sdwConfig.resolveSkillsRoot({ root: targetRoot, callerDir: __dirname, skillsRoot: options.skillsRoot })
+    : null;
+  if (!skillsInfo || !skillsInfo.exists) {
+    console.error('Error: No valid skills directory found on disk (checked project-local and global $HOME/.agents/skills).');
+    options._runResult = { error: 'Missing skills directory on disk' };
+    return 1;
+  }
+
   const config = loadProjectConfig(targetRoot);
   const effectiveMinScore = options.minScore !== undefined ? options.minScore : (config.scoreMin !== undefined ? config.scoreMin : 8);
 
@@ -548,7 +595,7 @@ function cmdRun(options) {
   }
 
   // Quality check: inspect index.specs.md status if available
-  const specIndex = getSpecIndexHelper();
+  const specIndex = getSpecIndexHelper(targetRoot);
   if (specIndex) {
     try {
       const idxData = specIndex.readIndex({ root: targetRoot });
@@ -1215,7 +1262,8 @@ function cmdRun(options) {
   // CLI runner (or subagent in handoff) and inspects the JSON report.
   if (startStep <= 7 && state.steps[7].status !== 'completed' && !options.skipReview) {
     state = stateManager.updateStepState(targetRoot, state.runId, 7, 'in_progress');
-    const codeReviewScript = path.resolve(__dirname, '../../sdw-code-review/scripts/sdw_code_review.cjs');
+    const resolvedCodeReviewScript = resolveSkillScript(targetRoot, 'sdw-code-review', path.join('scripts', 'sdw_code_review.cjs'));
+    const codeReviewScript = resolvedCodeReviewScript || path.resolve(__dirname, '../../sdw-code-review/scripts/sdw_code_review.cjs');
     const hasCodeReview = fs.existsSync(codeReviewScript);
 
     if (!hasCodeReview) {
@@ -1261,7 +1309,7 @@ function cmdRun(options) {
 
     function invokeCodeReviewModule(useFix) {
       try {
-        const cr = require('../../sdw-code-review/scripts/sdw_code_review.cjs');
+        const cr = require(codeReviewScript);
         const report = cr.runCodeReview({
           projectRoot: targetRoot,
           base: state.baseCommit || null,
@@ -1342,7 +1390,8 @@ function cmdRun(options) {
   }
 
   // Step 8: PR Preparation, Pre-PR Gates & Remote Comment Loop (AC5, AC6, AC7, AC8, AC9, AC10, AC11, AC12, AC14, AC15)
-  const shipPrScript = path.resolve(__dirname, '../../sdw-ship-pr/scripts/sdw_ship_pr.cjs');
+  const resolvedShipPrScript = resolveSkillScript(targetRoot, 'sdw-ship-pr', path.join('scripts', 'sdw_ship_pr.cjs'));
+  const shipPrScript = resolvedShipPrScript || path.resolve(__dirname, '../../sdw-ship-pr/scripts/sdw_ship_pr.cjs');
   const hasShipPr = fs.existsSync(shipPrScript);
 
   if (startStep <= 8 && state.steps[8].status !== 'completed' && !options.skipPr) {
@@ -1518,7 +1567,7 @@ function cmdRun(options) {
       currentScm.skipped = true;
       currentScm.skipReason = 'scmProvider is set to "none"';
     } else {
-      const scmContract = getScmProviderContract();
+      const scmContract = getScmProviderContract(targetRoot);
       const capability = scmContract ? scmContract.checkScmCapability(currentScm.provider) : { available: false, error: 'contract unavailable' };
       currentScm.cliInstalled = capability.installed;
       currentScm.cliAuthenticated = capability.authenticated;

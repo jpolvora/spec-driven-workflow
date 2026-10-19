@@ -26,3 +26,13 @@ Baseline directory layout for consumer projects adopting Spec-Driven Workflow:
 - **`.sdw/state/`**: Dedicated directory for isolated execution run state files (`run-*.state.json`) and per-run step artifacts (`.sdw/state/{slug}/{runId}/{slug}-step-{N}.md`).
 - **`.sdw/traps.md`**: Central anti-regression trap log capturing session friction, scope enclosure rules, and architectural traps.
 - **`.sdw/worktrees/`**: Ephemeral per-task worktrees (`.sdw/worktrees/{runId}/{taskId}`) used when `useWorktrees: true`. Ignored by git.
+
+## Skills Installation Topologies
+
+SDW supports three installation topologies with automatic `{skillsRoot}` token resolution:
+
+1. **Canonical Development Repository:** `{projectRoot}/skills/`
+2. **Consumer Project-Local Vendoring:** `{projectRoot}/.agents/skills/`
+3. **User-Wide Shared Installation (Hybrid Mode):** `$HOME/.agents/skills/`
+
+In **Hybrid Mode**, skills are installed once globally under `$HOME/.agents/skills/` and shared across all projects on the workstation, while each consumer project strictly maintains its own isolated `.sdw/` directory. All configuration (`.sdw/config.json`), specs (`.sdw/specs/`), and run states (`.sdw/state/`) remain local to the consumer repository and never leak into global storage.

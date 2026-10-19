@@ -12,7 +12,7 @@
     },
     "specsDir": {
       "type": "string",
-      "description": "Path to the directory containing feature specifications. Supports token {projectRoot}.",
+      "description": "Path to the directory containing feature specifications. Supports tokens {projectRoot} and {skillsRoot}.",
       "default": "{projectRoot}/.sdw/specs"
     },
     "scoreMin": {
@@ -34,8 +34,12 @@
     },
     "stateDir": {
       "type": "string",
-      "description": "Path to the directory storing run session state files. Supports token {projectRoot}.",
+      "description": "Path to the directory storing run session state files. Supports tokens {projectRoot} and {skillsRoot}.",
       "default": "{projectRoot}/.sdw/state"
+    },
+    "skillsRoot": {
+      "type": "string",
+      "description": "Path to the active skills directory. Supports tokens {projectRoot} and {skillsRoot}."
     },
     "autoResolveGaps": {
       "type": "boolean",
