@@ -96,18 +96,31 @@
 
 ---
 
-### 6. 🧪 Battle-Tested Quality & Zero-Flake Test Suite
+### 6. 🔒 `sdw-security-checks` — Configurable Pre-Commit Secrets & Leak Gate
+
+*Deterministic, zero-dependency secret detection and leak prevention guarding against credential leaks before git commits.*
+
+- **Zero External Runtime Dependencies:** Pure Node.js 22 standard library regex scanner over git inventories; no `ripgrep` or external binary required.
+- **Configurable Workflow Gate (`securityChecksEnabled`):** Opt-in via `.sdw/config.json`. When enabled, enforces pre-commit inspections at delivery commit (Step 6) and review-fix commit (Step 7).
+- **Confidence Model & Fail-Closed Semantics:** HIGH findings (API keys, AWS credentials, Slack tokens, private keys, database passwords, `.env` files) block commits; MEDIUM findings warn; scanner failures fail closed.
+- **Redacted Audit Reporting:** Findings report file path, line number, pattern type, and severity without exposing raw secret values in output or logs.
+- **Suppression & Bypass Pragma:** False-positive suppression via `# pragma: allowlist secret` and auditable operator bypass via `--skip-security` recorded in run state.
+
+---
+
+### 7. 🧪 Battle-Tested Quality & Zero-Flake Test Suite
 
 *Engineering rigor backed by 100% native automated tests.*
 
 - **Native Node.js Test Runner:** Built with `node:test` and `node:assert/strict` — zero third-party testing frameworks required.
-- **57 Comprehensive Test Scenarios:**
+- **68 Comprehensive Test Scenarios:**
   - `sdw_config.test.cjs`: Configuration parsing, schema validation, token expansion, and initialization gates.
   - `sdw_spec.test.cjs`: Index bootstrapping, EARS validation, synthesis, SCM provider contract, state synchronization, and archival quality gates.
   - `sdw_orch.test.cjs`: State machine transitions, derivation, grilling decision trees, DAG decomposition, scoring gates, code review auto-fixing, remote push publishing, and unattended multi-spec batch queue execution.
   - `sdw_router.test.cjs`: Minimal context budget enforcement (SKILL.md ≤ 120 lines), explicit invocations, keyword classification, tied-confidence disambiguation, missing directory resolution, and pass-through non-interference.
   - `sdw_rules.test.cjs`: Three-tier progressive disclosure, announcement banners, Karpathy simplicity principles, doctor compliance verification, scope creep audits, and trap logging.
-- **Sub-Second Execution:** Entire test suite runs in ~1.5 seconds with 100% pass rate.
+  - `sdw_security_checks.test.cjs`: Secrets scanning, staged diff inspection, redaction hygiene, pragma suppression, fail-closed gate handling, and orchestrator bypass verification.
+- **Sub-Second Execution:** Entire test suite runs in ~3.5 seconds with 100% pass rate.
 
 ---
 
@@ -117,7 +130,6 @@ The following specifications are scheduled for upcoming execution phases:
 
 - **006 — Packaging & Vercel Skills Compatibility:** Standalone npm packaging, one-command installer, and seamless distribution across `.agents/skills/`.
 - **007 — SDW Memory Skill:** Integrated anti-regression project memory and vault trap retrieval.
-- **009 — SDW Security Checks:** Configurable pre-commit secret leak scanners and PII protection gates.
 - **010 — Branch & Worktree Strategy:** Configurable feature branches and per-task isolated worktrees.
 - **011 — GitHub Actions CI/CD Integration:** Automated workflow runs, agentic PR reviews, and skill distribution pipelines.
 - **012 — SCM Provider Selection:** Granular GitHub / Azure DevOps routing with fail-safe disable modes.

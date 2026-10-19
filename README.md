@@ -97,12 +97,14 @@ spec-driven-workflow/
 │   ├── sdw-orch/                 # End-to-end workflow orchestrator skill
 │   ├── sdw-router/               # Always-autoloaded entrypoint and skill router
 │   ├── sdw-rules/                # Shared behavioral rules, simplicity & anti-overengineering
+│   ├── sdw-security-checks/      # Pre-commit secrets and credentials leak scanner
 │   └── sdw-spec/                 # Spec authoring, validation, sync, and index manager
 ├── tests/                        # Automated unit & integration test suites
 │   ├── sdw_config.test.cjs
 │   ├── sdw_orch.test.cjs
 │   ├── sdw_router.test.cjs
 │   ├── sdw_rules.test.cjs
+│   ├── sdw_security_checks.test.cjs
 │   └── sdw_spec.test.cjs
 ├── AGENTS.md                     # Mandatory rules and protocols for AI agents
 ├── FEATURES.md                   # Feature showcase and architecture presentation
@@ -186,6 +188,21 @@ node skills/sdw-orch/scripts/sdw_orch.cjs resume-batch [batchId]
 
 # Inspect status of active execution
 node skills/sdw-orch/scripts/sdw_orch.cjs status
+```
+
+### Using `sdw-security-checks` (Secrets & Credentials Gate)
+
+The `sdw-security-checks` skill guards against committing sensitive tokens and credentials:
+
+```bash
+# Scan working tree (ignore-aware) for secrets and leaks
+node skills/sdw-security-checks/scripts/sdw_security_checks.cjs scan
+
+# Scan staged changes only (git diff --cached)
+node skills/sdw-security-checks/scripts/sdw_security_checks.cjs scan --staged
+
+# Emit structured JSON report
+node skills/sdw-security-checks/scripts/sdw_security_checks.cjs scan --staged --json
 ```
 
 ## 5. License & Contribution
