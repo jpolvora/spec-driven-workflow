@@ -180,6 +180,7 @@ function cmdRun(options) {
     state = stateManager.updateStepState(targetRoot, state.runId, 5, 'in_progress');
     scoreReport = scoreEvaluator.evaluateScore(effectiveSpecContent, {
       projectRoot: targetRoot,
+      slug: specSlug,
       baseCommit: state.baseCommit,
       minScore: options.minScore
     });

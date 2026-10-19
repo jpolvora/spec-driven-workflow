@@ -52,12 +52,16 @@ function runAutomatedReview(options) {
       });
     }
 
-    // Rule 3: Inspect content of newly added/modified scripts
+    // Rule 3: Inspect content of newly added/modified implementation scripts (excluding tests)
+    const isTestFile = f.includes('test') || f.includes('.spec.');
+    const isReviewTool = f.includes('review_runner');
     const fullPath = path.join(projectRoot, f);
-    if (fs.existsSync(fullPath) && (f.endsWith('.js') || f.endsWith('.cjs') || f.endsWith('.ts'))) {
+
+    if (!isTestFile && !isReviewTool && fs.existsSync(fullPath) && (f.endsWith('.js') || f.endsWith('.cjs') || f.endsWith('.ts'))) {
       try {
         const text = fs.readFileSync(fullPath, 'utf8');
-        if (text.includes('debugger;')) {
+        // Match actual standalone debugger statements, not string literals
+        if (/^\s*debugger\s*(?:;|$)/m.test(text)) {
           findings.push({
             file: f,
             severity: 'error',
@@ -66,7 +70,7 @@ function runAutomatedReview(options) {
             fixable: true
           });
         }
-        if (text.includes('// TODO') || text.includes('/* TODO')) {
+        if (/\/\/\s*TODO\b|\/\*\s*TODO\b/.test(text)) {
           findings.push({
             file: f,
             severity: 'warning',

@@ -30,7 +30,8 @@ function analyzeComplexity(specContent) {
 function generateDagPlan(specContent, options) {
   const complexity = analyzeComplexity(specContent);
   const acs = parseAcceptanceCriteria(specContent);
-  const slug = (options && options.slug) || 'task';
+  const slugMatch = specContent ? specContent.match(/slug:\s*([^\r\n]+)/) : null;
+  const slug = (options && options.slug) || (slugMatch ? slugMatch[1].trim() : 'task');
 
   const tasks = [];
 

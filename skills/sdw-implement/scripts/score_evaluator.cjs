@@ -21,7 +21,10 @@ function getTouchedFiles(baseCommit, projectRoot) {
 
     // Also include currently modified or untracked files
     const statusOut = execSync('git status --porcelain', { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-    statusOut.split('\n').map(l => l.trim().replace(/^..\s+/, '')).filter(Boolean).forEach(f => fileSet.add(f));
+    statusOut.split('\n')
+      .map(l => l.trim().replace(/^[A-Z?]{1,2}\s+/, ''))
+      .filter(Boolean)
+      .forEach(f => fileSet.add(f));
   } catch (err) {
     // Git errors ignored
   }
@@ -72,7 +75,20 @@ function evaluateScore(specContent, options) {
   let combinedContent = diffContent;
   const filesToCheck = new Set([...touchedFiles, ...((options && options.targetFiles) || [])]);
   
-  // Also check skills/ and src/ default locations if targetFiles not explicitly provided
+  // Include targetFiles from DAG decomposition
+  try {
+    const { generateDagPlan } = require('./dag_planner.cjs');
+    const dag = generateDagPlan(specContent, options);
+    if (dag && dag.tasks) {
+      for (const t of dag.tasks) {
+        if (t.targetFiles) {
+          t.targetFiles.forEach(f => filesToCheck.add(f));
+        }
+      }
+    }
+  } catch (e) {}
+
+  // Also check skills/ and .sdw/ default locations if targetFiles still empty
   if (filesToCheck.size === 0) {
     const defaultSearchDirs = ['skills/sdw-implement/scripts', 'skills/sdw-implement', '.sdw'];
     for (const d of defaultSearchDirs) {
