@@ -5,6 +5,7 @@
   "scmCodeReviewEnabled": true,
   "pushDelivery": true,
   "stateDir": "{projectRoot}/.sdw/state",
+  "skillsRoot": "{projectRoot}/skills",
   "autoResolveGaps": true,
   "securityChecksEnabled": true,
   "useWorktrees": false,
@@ -35,5 +36,6 @@
   "testCommand": "npm test",
   "prePrCommand": "",
   "prePrInstructions": "",
-  "reviewFixCommand": ""
+  "reviewFixCommand": "",
+  "maxPreemptions": 3
 }
