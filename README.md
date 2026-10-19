@@ -1,5 +1,7 @@
 # Spec-Driven Workflow (SDW)
 
+[![Agentic Code Review](https://github.com/jpolvora/spec-driven-workflow/actions/workflows/agentic-code-review.yml/badge.svg)](https://github.com/jpolvora/spec-driven-workflow/actions/workflows/agentic-code-review.yml)
+
 A streamlined, deterministic framework for spec-driven software development with AI coding agents.
 
 ---
