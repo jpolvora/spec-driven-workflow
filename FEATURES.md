@@ -66,6 +66,7 @@
   7. **Automated SCM Code Review Loop:** Inspects committed diffs for forbidden scripts, credential leaks, active debugger statements, and unresolved TODOs, applying auto-fixes iteratively.
   8. **PR Packaging & Remote Publishing:** Compiles PR payloads, updates the specification index to `completed`, and pushes delivery branches to remote origins.
 - **Run State Isolation & Resumption:** Persists active run state in `.sdw/state/{runId}.state.json`, enabling seamless pauses, status inspections, and one-click resumption from interrupted steps.
+- **Multi-Specification Batch Queue Execution:** Enqueue and sequentially execute multiple specifications (`sdw-orch run spec1 spec2 ...`) with strict context fencing, batch manifest tracking (`.sdw/state/batch-{id}.json`), failure policies (`--continue-on-error`), dry-run pre-flight validation (`--dry-run`), and automated resumption (`resume-batch`).
 
 ---
 

@@ -142,7 +142,7 @@ const INTENT_RULES = {
   },
   'sdw-orch': {
     primaryKeywords: ['orch', 'orchestrator', 'orchestration', 'implement spec', 'specification implementation', 'workflow execution'],
-    secondaryKeywords: ['workflow', 'implement', 'implementation', 'resumption', 'run spec', 'resume', 'status', 'dag', 'conformance', 'delivery commit', 'automated review', 'pull request', 'push'],
+    secondaryKeywords: ['workflow', 'implement', 'implementation', 'resumption', 'run spec', 'resume', 'status', 'dag', 'conformance', 'delivery commit', 'automated review', 'pull request', 'push', 'batch', 'resume-batch', 'multi-spec'],
     recommendedOption: 'Orchestrate end-to-end implementation and delivery using sdw-orch'
   }
 };

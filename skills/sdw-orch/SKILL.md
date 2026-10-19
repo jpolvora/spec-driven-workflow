@@ -18,8 +18,9 @@ Orchestrates spec execution from input requirement to delivery commit, automated
 
 ## Subcommands
 
-- `run <specPath>`: Executes the full 8-step workflow pipeline for the target specification.
+- `run <specPath...>`: Executes the full 8-step workflow pipeline for single specification or multi-spec sequential batch queue.
 - `resume`: Resumes an interrupted or paused run from its last recorded step in `.sdw/state/{runId}.state.json`.
+- `resume-batch [batchId]`: Resumes an interrupted or halted batch queue from the first non-completed specification.
 - `status`: Displays current execution progress, conformance score, and step status.
 
 ## Steps
