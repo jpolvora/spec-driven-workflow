@@ -25,3 +25,4 @@ Central repository index tracking specification lifecycle states, metadata, and 
 | 011 | 011-github-actions-integration | GitHub Actions Integration — CI, Agentic Code Review, and Skills Distribution | pending | local | 2026-10-19 | PASS | - |
 | 012 | 012-scm-provider-selection | SCM Provider Selection — Explicit GitHub/Azure DevOps Routing with Safe Disable | pending | local | 2026-10-19 | PASS | - |
 | 013 | 013-sdw-orch-refinement-and-pre-pr-gates | SDW Orchestrator Refinement Step & Pre-PR Verification Gates | pending | local | 2026-10-19 | PASS | - |
+| 014 | 014-sdw-orch-step-artifacts-persistence | SDW Orchestrator Step Artifacts Persistence | pending | local | 2026-10-19 | PASS | - |
