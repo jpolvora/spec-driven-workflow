@@ -10,19 +10,20 @@ specDate: 2026-10-19
 
 ## Description
 
-The `sdw-spec` skill is a specification lifecycle, authoring, and formatting manager integrated directly with the `sdw-orch` orchestrator. It establishes canonical formatting standards, validates frontmatter and acceptance criteria against strict EARS syntax, and maintains a centralized specification index (`{specsDir}/index.specs.md`).
+The `sdw-spec` skill is a specification lifecycle, authoring, synchronization, and formatting manager integrated directly with the `sdw-orch` orchestrator. It establishes canonical formatting standards, validates frontmatter and acceptance criteria against strict EARS syntax, and maintains a centralized specification index (`{specsDir}/index.specs.md`).
 
 The skill provides subcommands for comprehensive specification workflows:
 - `init`: Bootstraps `{specsDir}/index.specs.md` with standard tables and status definitions (`pending`, `completed`, `archived`).
 - `list`: Displays registered specifications with statuses and validation health.
 - `new`: Ingests free-text requirements and synthesizes well-formatted canonical specifications with autoincremented numerical prefixes (`001`, `002`, ..., `00N`).
 - `import`: Imports remote tracker items from GitHub issues or Azure DevOps work items using a unified SCM provider contract and reformulates them into local canonical specifications.
+- `sync`: Reconciles `index.specs.md` against on-disk specification files and orchestrator run state files in `.sdw/state/`, updating statuses and discovering untracked specifications.
 - `validate`: Enforces authoring-mode validation against YAML frontmatter, section hierarchy, and EARS syntax rules.
 - `archive`: Transitions completed specifications to `archived` in `index.specs.md`.
 
 ### Design Intent
 
-Greenfield implementation for the Spec-Driven Workflow (SDW) initiative. It unifies specification formatting rules, SCM tracker importation, and lifecycle tracking from prior workflow frameworks into a streamlined, token-efficient skill that enforces deterministic formatting standards without superfluous prompt overhead.
+Greenfield implementation for the Spec-Driven Workflow (SDW) initiative. It unifies specification formatting rules, SCM tracker importation, state file status synchronization, and lifecycle tracking from prior workflow frameworks into a streamlined, token-efficient skill that enforces deterministic formatting standards without superfluous prompt overhead.
 
 ## Acceptance Criteria
 
@@ -43,9 +44,14 @@ Greenfield implementation for the Spec-Driven Workflow (SDW) initiative. It unif
 - AC15: When a remote work item is retrieved via the `import` subcommand, the system shall transform it into a canonical specification with the appropriate source attribute, autoincremented prefix, and EARS acceptance criteria.
 - AC16: If the requested remote work item cannot be retrieved by the SCM provider, then the system shall report an actionable error and halt without creating a partial specification.
 - AC17: If an imported work item already has an existing specification in `{specsDir}`, then the system shall reject overwriting the existing specification unless the `--force` flag is provided.
-- AC18: When `sdw-orch` initiates execution for a specification, the system shall update or verify the specification status as `pending` in `index.specs.md`.
-- AC19: When `sdw-orch` completes pull request preparation and delivery, the system shall mark the specification status as `completed` in `index.specs.md`.
-- AC20: While a specification is marked `archived` in `index.specs.md`, the system shall prevent `sdw-orch` execution unless an override flag is explicitly provided.
+- AC18: When the `sync` subcommand is executed, the system shall reconcile `{specsDir}/index.specs.md` against specification files on disk and orchestrator run state files.
+- AC19: When a specification has completed orchestrator execution state or delivery commit evidence, the `sync` subcommand shall update the specification status to `completed` in `index.specs.md`.
+- AC20: Where untracked specification files exist in `{specsDir}`, the `sync` subcommand shall register them in `index.specs.md` with status `pending`.
+- AC21: Where a dry-run flag is provided to the `sync` subcommand via `--dry-run`, the system shall preview all proposed status transitions without modifying `index.specs.md`.
+- AC22: If a specification listed in `index.specs.md` is not found on disk, then the `sync` subcommand shall flag the entry as missing without deleting historical audit rows.
+- AC23: When `sdw-orch` initiates execution for a specification, the system shall update or verify the specification status as `pending` in `index.specs.md`.
+- AC24: When `sdw-orch` completes pull request preparation and delivery, the system shall mark the specification status as `completed` in `index.specs.md`.
+- AC25: While a specification is marked `archived` in `index.specs.md`, the system shall prevent `sdw-orch` execution unless an override flag is explicitly provided.
 
 ## Original Issue Context
 
@@ -54,6 +60,8 @@ The user requested the `sdw-spec` skill and subsequent enhancements:
 > create a spec for specify the sdw-spec skill for managing specs integrated with sdw-implement skill. bring to this project the same standards and rules for formatting specs. add subcommands list, archive, init (init a index.specs.md) for mark specs status pending, completed, archived.
 >
 > I forgot to mention including a sdw-spec import which will depends on a specific scm client integration (azure devops and github), which both should implement a contract which will enforce the same operations for any scm provider. Also need a sdw-spec new subcommand allowing free text as parameter to help user add a new spec well writen following sdw spec standards. Enhance sdw-spec for autoincrement prefix every new spec 001, 002, 00N).
+>
+> forgot to mentioning to add a sdw-spec sync which will update index.specs.md state file checking and updating specs status. update spec
 
 ## Notes
 
@@ -62,6 +70,14 @@ The user requested the `sdw-spec` skill and subsequent enhancements:
   - Scans `{specsDir}` for filenames matching `/^(\d{3})-.*\.md$/`.
   - Determines highest existing integer value; increments by 1; zero-pads to 3 digits (e.g. `001`, `002`, ..., `010`).
   - If no numbered specifications exist, initial prefix defaults to `001`.
+- Specification index reconciliation rules (`sync` subcommand):
+  - Traverses `{stateDir}` (resolved from `.sdw/config.json`, default `.sdw/state`) looking for `*.state.json` files.
+  - Matches each specification slug with corresponding run states to check latest execution phase.
+  - If latest run state has `status === 'completed'` or recorded `deliveryCommit`, marks specification status `completed` in `index.specs.md`.
+  - If latest run state is active or in progress (`status === 'in_progress'`), marks specification status `pending`.
+  - Preserves `archived` specifications unless an unarchive flag is supplied.
+  - Scans `{specsDir}` for any unindexed `*.md` files and appends them to the index table with status `pending`.
+  - Re-evaluates authoring validation health for each indexed specification.
 - Required section hierarchy:
   - `## Description`
   - `### Design Intent`
@@ -93,7 +109,7 @@ The user requested the `sdw-spec` skill and subsequent enhancements:
 
 | Feature | Reason |
 |---------|--------|
-| Mutating remote issue/work item state during import | Import is strictly a read operation to create a local specification |
+| Mutating remote issue/work item state during import or sync | Import and sync are strictly read/reconciliation operations |
 | Automatic physical deletion of specification files upon archiving | Specs must be retained for auditing and historical traceability |
 | Interactive graphical user interface for spec editing | Skill operates through deterministic CLI commands and agent prompts |
 | Real-time multi-user bidirectional sync with remote trackers | Handled via periodic explicit import or dedicated SCM hooks |
@@ -123,8 +139,8 @@ The user requested the `sdw-spec` skill and subsequent enhancements:
 
 ### Telemetry & Observable Signals
 
-- Standard tabular output on `list` command showing spec slugs, titles, statuses, and validation pass/fail.
-- Console confirmation messages upon `init`, `new`, `import`, `validate`, and `archive` invocations.
+- Standard tabular output on `list` and `sync` commands showing spec slugs, titles, statuses, and validation pass/fail.
+- Console confirmation messages upon `init`, `new`, `import`, `sync`, `validate`, and `archive` invocations.
 - Updated markdown table rows in `{specsDir}/index.specs.md`.
 - Machine-readable JSON output when invoked with `--json`.
 
@@ -135,4 +151,6 @@ The user requested the `sdw-spec` skill and subsequent enhancements:
 - Uncompleted spec archive refusal: when attempting to archive a specification with status `pending` without `--force`, the command must reject the action.
 - SCM provider retrieval failure: when `import` is invoked for a non-existent remote work item ID, the command must report an error and not create an orphaned or empty specification file.
 - SCM duplicate import refusal: when attempting to import a remote work item whose corresponding specification already exists on disk, the system must abort unless `--force` is specified.
+- Sync dry-run purity: when `sync --dry-run` is executed, the system must report proposed changes while ensuring the on-disk `index.specs.md` remains bit-for-bit unchanged.
+- Corrupted run state handling: when an invalid JSON state file exists in `{stateDir}`, `sync` must log a descriptive warning and continue reconciling remaining specifications without terminating abruptly.
 - Execution block on archived spec: when `sdw-orch` is triggered on a spec marked `archived`, the orchestrator must halt and warn the user.
