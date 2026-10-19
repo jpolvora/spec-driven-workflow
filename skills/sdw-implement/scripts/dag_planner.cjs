@@ -1,0 +1,89 @@
+'use strict';
+
+function parseAcceptanceCriteria(specContent) {
+  const matches = [...specContent.matchAll(/^- (AC\d+):\s*(.+)$/gm)];
+  return matches.map(m => ({
+    id: m[1],
+    text: m[2].trim()
+  }));
+}
+
+function analyzeComplexity(specContent) {
+  const acs = parseAcceptanceCriteria(specContent);
+  const touchpoints = [];
+
+  if (/cli|command|subcommand|flags/i.test(specContent)) touchpoints.push('cli');
+  if (/state|persistence|json|database|store/i.test(specContent)) touchpoints.push('state');
+  if (/git|commit|review|diff/i.test(specContent)) touchpoints.push('vcs');
+  if (/pr|pull request|comments/i.test(specContent)) touchpoints.push('pr');
+  if (/ui|view|frontend|component/i.test(specContent)) touchpoints.push('ui');
+
+  const isComplex = acs.length > 5 || touchpoints.length >= 3;
+  return {
+    acCount: acs.length,
+    touchpoints,
+    level: isComplex ? 'complex' : 'simple',
+    isComplex
+  };
+}
+
+function generateDagPlan(specContent, options) {
+  const complexity = analyzeComplexity(specContent);
+  const acs = parseAcceptanceCriteria(specContent);
+  const slug = (options && options.slug) || 'task';
+
+  const tasks = [];
+
+  if (!complexity.isComplex || acs.length <= 3) {
+    // Single execution unit
+    tasks.push({
+      id: 'task-1',
+      title: `Implement ${slug}`,
+      description: 'Execute implementation for all specified acceptance criteria in an isolated unit.',
+      coveredAcs: acs.map(a => a.id),
+      dependencies: [],
+      targetFiles: (options && options.targetFiles) || [],
+      contextPrompt: `You are implementing the feature "${slug}". Focus strictly on the following acceptance criteria:\n` +
+        acs.map(a => `- ${a.id}: ${a.text}`).join('\n')
+    });
+  } else {
+    // Multi-task DAG decomposition
+    // Task 1: Core foundation / state / data models
+    const t1Acs = acs.slice(0, Math.ceil(acs.length / 2));
+    const t2Acs = acs.slice(Math.ceil(acs.length / 2));
+
+    tasks.push({
+      id: 'task-1',
+      title: `${slug} — Core Logic & Foundation`,
+      description: 'Implement core modules, state management, and baseline logic.',
+      coveredAcs: t1Acs.map(a => a.id),
+      dependencies: [],
+      targetFiles: [],
+      contextPrompt: `You are implementing Task 1 (Core Logic) for "${slug}". Focus strictly on:\n` +
+        t1Acs.map(a => `- ${a.id}: ${a.text}`).join('\n')
+    });
+
+    tasks.push({
+      id: 'task-2',
+      title: `${slug} — Workflows, Verification & PR Integration`,
+      description: 'Implement downstream workflow loops, reviews, and integrations.',
+      coveredAcs: t2Acs.map(a => a.id),
+      dependencies: ['task-1'],
+      targetFiles: [],
+      contextPrompt: `You are implementing Task 2 (Workflows & Integration) for "${slug}". Focus strictly on:\n` +
+        t2Acs.map(a => `- ${a.id}: ${a.text}`).join('\n')
+    });
+  }
+
+  return {
+    complexity,
+    totalTasks: tasks.length,
+    tasks
+  };
+}
+
+module.exports = {
+  parseAcceptanceCriteria,
+  analyzeComplexity,
+  generateDagPlan
+};

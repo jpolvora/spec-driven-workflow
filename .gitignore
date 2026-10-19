@@ -1,0 +1,40 @@
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Environment & Secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# Ephemeral SDW Run State (keep directory structure and specs tracked)
+.sdw/state/*
+!.sdw/state/.gitkeep
+
+# Local agent caches & scratch
+.agents/
+.gemini/
+.cursor/
+.claude/
+scratch/
+*.tmp
+*.bak
+
+# Testing & Coverage
+coverage/
+.nyc_output/
+
+# OS Artifacts
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# IDE & Editor Settings (allow project configs if needed)
+.idea/
+*.sublime-project
+*.sublime-workspace

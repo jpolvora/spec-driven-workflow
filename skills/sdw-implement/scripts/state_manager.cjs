@@ -1,0 +1,145 @@
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
+
+function normalizePath(p) {
+  return p.replace(/\\/g, '/');
+}
+
+function resolveStateDir(targetRoot) {
+  const root = targetRoot ? path.resolve(targetRoot) : process.cwd();
+  const stateDir = path.join(root, '.sdw', 'state');
+  if (!fs.existsSync(stateDir)) {
+    fs.mkdirSync(stateDir, { recursive: true });
+  }
+  return stateDir;
+}
+
+function generateRunId(specSlug) {
+  const cleanSlug = (specSlug || 'unnamed').replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 30);
+  const timestamp = Date.now();
+  return `run-${timestamp}-${cleanSlug}`;
+}
+
+function getStateFilePath(targetRoot, runId) {
+  const stateDir = resolveStateDir(targetRoot);
+  return path.join(stateDir, `${runId}.state.json`);
+}
+
+function createRunState(options) {
+  const targetRoot = options.root ? path.resolve(options.root) : process.cwd();
+  const specPath = options.specPath ? normalizePath(path.resolve(targetRoot, options.specPath)) : null;
+  const specSlug = options.slug || (specPath ? path.basename(specPath, path.extname(specPath)).replace(/^step-\d+-/, '') : 'spec');
+  const runId = options.runId || generateRunId(specSlug);
+  const stateFilePath = getStateFilePath(targetRoot, runId);
+
+  const state = {
+    runId,
+    specSlug,
+    specPath,
+    projectRoot: normalizePath(targetRoot),
+    status: 'in_progress', // 'in_progress' | 'paused' | 'completed' | 'failed'
+    currentStep: 1,
+    totalSteps: 8,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    baseCommit: options.baseCommit || null,
+    deliveryCommit: null,
+    reviewCommit: null,
+    score: null,
+    scoreIteration: 0,
+    reviewIteration: 0,
+    dagTasks: [],
+    steps: {
+      1: { name: 'derivation', status: 'pending', startedAt: null, completedAt: null, output: null },
+      2: { name: 'grilling', status: 'pending', startedAt: null, completedAt: null, output: null },
+      3: { name: 'dag_generation', status: 'pending', startedAt: null, completedAt: null, output: null },
+      4: { name: 'implementation', status: 'pending', startedAt: null, completedAt: null, output: null },
+      5: { name: 'scoring', status: 'pending', startedAt: null, completedAt: null, output: null },
+      6: { name: 'delivery_commit', status: 'pending', startedAt: null, completedAt: null, output: null },
+      7: { name: 'code_review', status: 'pending', startedAt: null, completedAt: null, output: null },
+      8: { name: 'pr_preparation', status: 'pending', startedAt: null, completedAt: null, output: null }
+    },
+    handoffs: {},
+    errors: []
+  };
+
+  fs.writeFileSync(stateFilePath, JSON.stringify(state, null, 2) + '\n', 'utf8');
+  return state;
+}
+
+function loadRunState(targetRoot, runId) {
+  const stateFilePath = getStateFilePath(targetRoot, runId);
+  if (!fs.existsSync(stateFilePath)) {
+    throw new Error(`State file not found for runId "${runId}" at ${normalizePath(stateFilePath)}`);
+  }
+  try {
+    const raw = fs.readFileSync(stateFilePath, 'utf8');
+    return JSON.parse(raw);
+  } catch (err) {
+    throw new Error(`Corrupted state file for runId "${runId}": ${err.message}`);
+  }
+}
+
+function findLatestRunState(targetRoot) {
+  const stateDir = resolveStateDir(targetRoot);
+  const files = fs.readdirSync(stateDir).filter(f => f.endsWith('.state.json'));
+  if (files.length === 0) return null;
+
+  files.sort((a, b) => {
+    const statA = fs.statSync(path.join(stateDir, a));
+    const statB = fs.statSync(path.join(stateDir, b));
+    return statB.mtimeMs - statA.mtimeMs;
+  });
+
+  const latestFile = path.join(stateDir, files[0]);
+  return JSON.parse(fs.readFileSync(latestFile, 'utf8'));
+}
+
+function saveRunState(targetRoot, state) {
+  const stateFilePath = getStateFilePath(targetRoot, state.runId);
+  state.updatedAt = new Date().toISOString();
+  fs.writeFileSync(stateFilePath, JSON.stringify(state, null, 2) + '\n', 'utf8');
+  return state;
+}
+
+function updateStepState(targetRoot, runId, stepNum, status, outputData, error) {
+  const state = loadRunState(targetRoot, runId);
+  const now = new Date().toISOString();
+  if (!state.steps[stepNum]) {
+    state.steps[stepNum] = { name: `step_${stepNum}`, status: 'pending' };
+  }
+
+  const stepObj = state.steps[stepNum];
+  stepObj.status = status;
+  if (status === 'in_progress' && !stepObj.startedAt) {
+    stepObj.startedAt = now;
+  }
+  if (status === 'completed' || status === 'skipped') {
+    stepObj.completedAt = now;
+  }
+  if (outputData !== undefined) {
+    stepObj.output = outputData;
+  }
+  if (error) {
+    stepObj.error = error;
+    state.errors.push({ step: stepNum, timestamp: now, error: String(error) });
+    state.status = 'failed';
+  }
+
+  state.currentStep = stepNum;
+  return saveRunState(targetRoot, state);
+}
+
+module.exports = {
+  normalizePath,
+  resolveStateDir,
+  generateRunId,
+  getStateFilePath,
+  createRunState,
+  loadRunState,
+  findLatestRunState,
+  saveRunState,
+  updateStepState
+};
