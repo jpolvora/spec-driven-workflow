@@ -258,9 +258,19 @@ class GitHubProvider extends ScmProvider {
       try {
         stdout = this.executor(cmd);
       } catch (execErr) {
-        // gh pr checks exits with 1 (failing) or 8 (pending), but still emits valid JSON on stdout
-        if (execErr && execErr.stdout) {
-          stdout = typeof execErr.stdout === 'string' ? execErr.stdout : execErr.stdout.toString('utf8');
+        // gh pr checks exits with 1 (failing) or 8 (pending), but still emits valid JSON on stdout.
+        const output = execErr && execErr.stdout
+          ? (typeof execErr.stdout === 'string' ? execErr.stdout : execErr.stdout.toString('utf8'))
+          : '';
+        const stderr = execErr && execErr.stderr
+          ? (typeof execErr.stderr === 'string' ? execErr.stderr : execErr.stderr.toString('utf8'))
+          : '';
+        const message = execErr && execErr.message ? String(execErr.message) : '';
+        if (output.trim()) {
+          stdout = output;
+        } else if (/no checks reported/i.test(stderr) || /no checks reported/i.test(message)) {
+          // The branch has no check runs yet (for example between a push and workflow scheduling).
+          stdout = '[]';
         } else {
           throw execErr;
         }
@@ -298,7 +308,7 @@ class GitHubProvider extends ScmProvider {
         allPassed,
         pendingCount,
         failedCount,
-        completed: pendingCount === 0
+        completed: checks.length > 0 && pendingCount === 0
       };
     } catch (err) {
       const errMsg = err.stderr ? err.stderr.toString().trim() : err.message;

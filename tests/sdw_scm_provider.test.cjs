@@ -668,3 +668,18 @@ test('sdw-scm-provider - Azure createPullRequest passes description inline inste
   assert.ok(createCommand.includes('--description "Line one" "Line two"'), 'Body lines must be passed inline');
   assert.ok(!createCommand.includes('@'), 'Description must not use the unsupported @file form');
 });
+
+test('sdw-scm-provider - GitHub checkPrStatus treats no checks as not passed', async () => {
+  const provider = createScmProvider('github', {
+    executor: () => {
+      const err = new Error('no checks reported on the develop branch');
+      err.stderr = 'no checks reported on the develop branch';
+      throw err;
+    }
+  });
+
+  const status = await provider.checkPrStatus(42);
+  assert.deepStrictEqual(status.checks, []);
+  assert.strictEqual(status.allPassed, false);
+  assert.strictEqual(status.completed, false);
+});
