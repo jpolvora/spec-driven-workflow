@@ -217,6 +217,7 @@ const DEFAULT_CONFIG = {
   testCommand: 'npm test',
   prePrCommand: '',
   prePrInstructions: '',
+  reviewFixCommand: '',
   maxPreemptions: 3
 };
 
@@ -368,6 +369,11 @@ const DEFAULT_SCHEMA = {
     "prePrInstructions": {
       "type": "string",
       "description": "Optional project-specific instructions or checklist for agents to verify prior to PR submission.",
+      "default": ""
+    },
+    "reviewFixCommand": {
+      "type": "string",
+      "description": "Optional command that applies review-thread fixes. When unset, sdw-ship-pr never resolves active threads automatically.",
       "default": ""
     },
     "maxPreemptions": {
@@ -583,6 +589,13 @@ function validateConfigSchema(config) {
   if ('prePrInstructions' in config) {
     if (typeof config.prePrInstructions !== 'string') {
       errors.push('Property "prePrInstructions" must be a string.');
+    }
+  }
+
+  // reviewFixCommand
+  if ('reviewFixCommand' in config) {
+    if (typeof config.reviewFixCommand !== 'string') {
+      errors.push('Property "reviewFixCommand" must be a string.');
     }
   }
 

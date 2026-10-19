@@ -219,7 +219,7 @@ function routePrompt(prompt, options) {
             confidence: 1.0,
             reason: 'explicit_invocation',
             hasError: true,
-            error: `Routed skill "${skill.name}" directory is missing or unreadable on disk at "${skill.path}". Please ensure the skill is installed under skills/ or .agents/skills/.`
+            error: `Routed skill "${skill.name}" directory is missing or unreadable on disk at "${skill.path}". Please ensure the skill is installed under skills/, .agents/skills/, or $HOME/.agents/skills/.`
           };
         }
 
@@ -432,7 +432,7 @@ Usage:
   node sdw_router.cjs <subcommand> [options]
 
 Subcommands:
-  scan                   Discover and list all installed skills in canonical & consumer directories
+  scan                   Discover and list all installed skills in canonical, consumer, and global ($HOME/.agents/skills) directories
   route <prompt>         Analyze prompt intent, detect explicit invocations, or pass-through
   doctor                 Run router health check and diagnostic audit on skills integrity
 

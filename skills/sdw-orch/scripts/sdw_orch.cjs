@@ -589,6 +589,10 @@ function cmdRun(options) {
   }
 
   const config = loadProjectConfig(targetRoot, options);
+  // AC10: honor the skills root resolved from .sdw/config.json for dynamic script resolution
+  const resolveOptions = (config && config.skillsRoot && !options.skillsRoot)
+    ? { ...options, skillsRoot: config.skillsRoot }
+    : options;
   const effectiveMinScore = options.minScore !== undefined ? options.minScore : (config.scoreMin !== undefined ? config.scoreMin : 8);
 
   const resolvedSpec = resolveSpecPath(options.specPath, targetRoot, config);
@@ -612,7 +616,7 @@ function cmdRun(options) {
   }
 
   // Quality check: inspect index.specs.md status if available
-  const specIndex = getSpecIndexHelper(targetRoot);
+  const specIndex = getSpecIndexHelper(targetRoot, resolveOptions);
   if (specIndex) {
     try {
       const idxData = specIndex.readIndex({ root: targetRoot });
@@ -1279,7 +1283,7 @@ function cmdRun(options) {
   // CLI runner (or subagent in handoff) and inspects the JSON report.
   if (startStep <= 7 && state.steps[7].status !== 'completed' && !options.skipReview) {
     state = stateManager.updateStepState(targetRoot, state.runId, 7, 'in_progress');
-    const resolvedCodeReviewScript = resolveSkillScript(targetRoot, 'sdw-code-review', path.join('scripts', 'sdw_code_review.cjs'), options);
+    const resolvedCodeReviewScript = resolveSkillScript(targetRoot, 'sdw-code-review', path.join('scripts', 'sdw_code_review.cjs'), resolveOptions);
     const codeReviewScript = resolvedCodeReviewScript || path.resolve(__dirname, '../../sdw-code-review/scripts/sdw_code_review.cjs');
     const hasCodeReview = fs.existsSync(codeReviewScript);
 
@@ -1407,7 +1411,7 @@ function cmdRun(options) {
   }
 
   // Step 8: PR Preparation, Pre-PR Gates & Remote Comment Loop (AC5, AC6, AC7, AC8, AC9, AC10, AC11, AC12, AC14, AC15)
-  const resolvedShipPrScript = resolveSkillScript(targetRoot, 'sdw-ship-pr', path.join('scripts', 'sdw_ship_pr.cjs'), options);
+  const resolvedShipPrScript = resolveSkillScript(targetRoot, 'sdw-ship-pr', path.join('scripts', 'sdw_ship_pr.cjs'), resolveOptions);
   const shipPrScript = resolvedShipPrScript || path.resolve(__dirname, '../../sdw-ship-pr/scripts/sdw_ship_pr.cjs');
   const hasShipPr = fs.existsSync(shipPrScript);
 
@@ -1584,7 +1588,7 @@ function cmdRun(options) {
       currentScm.skipped = true;
       currentScm.skipReason = 'scmProvider is set to "none"';
     } else {
-      const scmContract = getScmProviderContract(targetRoot);
+      const scmContract = getScmProviderContract(targetRoot, resolveOptions);
       const capability = scmContract ? scmContract.checkScmCapability(currentScm.provider) : { available: false, error: 'contract unavailable' };
       currentScm.cliInstalled = capability.installed;
       currentScm.cliAuthenticated = capability.authenticated;
