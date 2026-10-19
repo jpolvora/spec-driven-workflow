@@ -1,5 +1,6 @@
-'use strict';
-
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
 const { execSync } = require('child_process');
 
 /**
@@ -25,6 +26,14 @@ class ScmProvider {
 
   async queryWorkItems(query) {
     throw new Error('queryWorkItems must be implemented by provider.');
+  }
+
+  async createPullRequest(options = {}) {
+    throw new Error('createPullRequest must be implemented by provider.');
+  }
+
+  async createPr(options = {}) {
+    return this.createPullRequest(options);
   }
 }
 
@@ -140,6 +149,84 @@ class GitHubProvider extends ScmProvider {
       throw new Error(`GitHub SCM Provider failed to query issues: ${errMsg}`);
     }
   }
+
+  async createPullRequest(options = {}) {
+    const { title, body = '', head, base, draft = false, dryRun = false } = options;
+    if (!title || !head) {
+      throw new Error('title and head branch are required for GitHub createPullRequest.');
+    }
+
+    try {
+      const baseFlag = base ? `--base "${base}"` : '';
+      const checkCmd = `gh pr list --head "${head}" ${baseFlag} --state open --json number,url,title,headRefName,baseRefName`;
+      const stdout = this.executor(checkCmd);
+      const existing = JSON.parse(stdout || '[]');
+      if (Array.isArray(existing) && existing.length > 0) {
+        const pr = existing[0];
+        return {
+          number: String(pr.number),
+          url: pr.url,
+          head: pr.headRefName || head,
+          base: pr.baseRefName || (base || 'main'),
+          title: pr.title || title,
+          reused: true,
+          dryRun: Boolean(dryRun)
+        };
+      }
+    } catch (err) {
+      // Continue to creation
+    }
+
+    if (dryRun) {
+      return {
+        number: null,
+        url: null,
+        head,
+        base: base || 'main',
+        title,
+        body,
+        reused: false,
+        dryRun: true,
+        command: `gh pr create --head "${head}" ${base ? `--base "${base}"` : ''} --title "${title}"`
+      };
+    }
+
+    let tempBodyFile = null;
+    try {
+      let bodyArg = '';
+      if (body) {
+        const tmpDir = os.tmpdir();
+        tempBodyFile = path.join(tmpDir, `sdw-pr-body-${Date.now()}-${Math.random().toString(36).slice(2)}.md`);
+        fs.writeFileSync(tempBodyFile, body, 'utf8');
+        bodyArg = `--body-file "${tempBodyFile.replace(/\\/g, '/')}"`;
+      }
+      const baseArg = base ? `--base "${base}"` : '';
+      const draftArg = draft ? '--draft' : '';
+      const cleanTitle = title.replace(/"/g, '\\"');
+      const cmd = `gh pr create --head "${head}" ${baseArg} --title "${cleanTitle}" ${bodyArg} ${draftArg}`.trim().replace(/\s+/g, ' ');
+      const prUrl = this.executor(cmd).trim();
+
+      const numMatch = prUrl.match(/\/pull\/(\d+)/);
+      const prNumber = numMatch ? numMatch[1] : null;
+
+      return {
+        number: prNumber ? String(prNumber) : null,
+        url: prUrl,
+        head,
+        base: base || 'main',
+        title,
+        reused: false,
+        dryRun: false
+      };
+    } catch (err) {
+      const errMsg = err.stderr ? err.stderr.toString().trim() : err.message;
+      throw new Error(`GitHub SCM Provider failed to create PR: ${errMsg}`);
+    } finally {
+      if (tempBodyFile && fs.existsSync(tempBodyFile)) {
+        try { fs.unlinkSync(tempBodyFile); } catch (e) {}
+      }
+    }
+  }
 }
 
 /**
@@ -211,6 +298,72 @@ class AzureDevOpsProvider extends ScmProvider {
     } catch (err) {
       const errMsg = err.stderr ? err.stderr.toString().trim() : err.message;
       throw new Error(`Azure DevOps SCM Provider failed to query work items: ${errMsg}`);
+    }
+  }
+
+  async createPullRequest(options = {}) {
+    const { title, body = '', head, base, draft = false, dryRun = false, workItems = [] } = options;
+    if (!title || !head) {
+      throw new Error('title and head branch are required for Azure DevOps createPullRequest.');
+    }
+
+    try {
+      const baseFlag = base ? `--target-branch "${base}"` : '';
+      const checkCmd = `az repos pr list --source-branch "${head}" ${baseFlag} --status active --output json`;
+      const stdout = this.executor(checkCmd);
+      const existing = JSON.parse(stdout || '[]');
+      if (Array.isArray(existing) && existing.length > 0) {
+        const pr = existing[0];
+        return {
+          number: String(pr.pullRequestId || pr.id),
+          url: pr.url || (pr._links && pr._links.web && pr._links.web.href) || '',
+          head: pr.sourceRefName ? pr.sourceRefName.replace('refs/heads/', '') : head,
+          base: pr.targetRefName ? pr.targetRefName.replace('refs/heads/', '') : (base || 'main'),
+          title: pr.title || title,
+          reused: true,
+          dryRun: Boolean(dryRun)
+        };
+      }
+    } catch (err) {
+      // Continue to creation
+    }
+
+    if (dryRun) {
+      return {
+        number: null,
+        url: null,
+        head,
+        base: base || 'main',
+        title,
+        body,
+        reused: false,
+        dryRun: true,
+        command: `az repos pr create --source-branch "${head}" ${base ? `--target-branch "${base}"` : ''} --title "${title}"`
+      };
+    }
+
+    try {
+      const baseArg = base ? `--target-branch "${base}"` : '';
+      const draftArg = draft ? '--draft true' : '';
+      const cleanTitle = title.replace(/"/g, '\\"');
+      const descArg = body ? `--description "${body.replace(/"/g, '\\"')}"` : '';
+      const workItemsArg = Array.isArray(workItems) && workItems.length > 0 ? `--work-items ${workItems.join(' ')}` : '';
+      const cmd = `az repos pr create --source-branch "${head}" ${baseArg} --title "${cleanTitle}" ${descArg} ${draftArg} ${workItemsArg} --output json`.trim().replace(/\s+/g, ' ');
+      const stdout = this.executor(cmd);
+      const data = JSON.parse(stdout);
+
+      return {
+        number: String(data.pullRequestId || data.id),
+        url: data.url || (data._links && data._links.web && data._links.web.href) || '',
+        head,
+        base: base || 'main',
+        title,
+        reused: false,
+        dryRun: false
+      };
+    } catch (err) {
+      const errMsg = err.stderr ? err.stderr.toString().trim() : err.message;
+      throw new Error(`Azure DevOps SCM Provider failed to create PR: ${errMsg}`);
     }
   }
 }

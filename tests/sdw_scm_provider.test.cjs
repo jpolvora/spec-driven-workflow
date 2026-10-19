@@ -295,3 +295,126 @@ None
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('sdw-scm-provider - createPullRequest on GitHubProvider (creation, reuse, and dry-run)', async () => {
+  const provider = createScmProvider('github', {
+    executor: (cmd) => {
+      if (cmd.includes('gh pr list')) {
+        return JSON.stringify([]);
+      }
+      if (cmd.includes('gh pr create')) {
+        return 'https://github.com/jpolvora/spec-driven-workflow/pull/99\n';
+      }
+      throw new Error(`Unexpected command: ${cmd}`);
+    }
+  });
+
+  // Creation
+  const res = await provider.createPullRequest({
+    title: 'feat: add new feature',
+    body: '## Description\nNew feature details',
+    head: 'feature/new-feature',
+    base: 'master'
+  });
+  assert.strictEqual(res.number, '99');
+  assert.strictEqual(res.url, 'https://github.com/jpolvora/spec-driven-workflow/pull/99');
+  assert.strictEqual(res.reused, false);
+  assert.strictEqual(res.dryRun, false);
+
+  // Reuse when PR already exists
+  const reuseProvider = createScmProvider('github', {
+    executor: (cmd) => {
+      if (cmd.includes('gh pr list')) {
+        return JSON.stringify([{
+          number: 101,
+          url: 'https://github.com/jpolvora/spec-driven-workflow/pull/101',
+          title: 'Existing PR',
+          headRefName: 'feature/existing',
+          baseRefName: 'master'
+        }]);
+      }
+      throw new Error(`Unexpected command: ${cmd}`);
+    }
+  });
+  const reuseRes = await reuseProvider.createPr({
+    title: 'New PR title',
+    head: 'feature/existing',
+    base: 'master'
+  });
+  assert.strictEqual(reuseRes.number, '101');
+  assert.strictEqual(reuseRes.reused, true);
+
+  // Dry run
+  const dryRunRes = await provider.createPullRequest({
+    title: 'feat: dry run test',
+    head: 'feature/dry-run',
+    base: 'master',
+    dryRun: true
+  });
+  assert.strictEqual(dryRunRes.dryRun, true);
+  assert.strictEqual(dryRunRes.reused, false);
+  assert.ok(dryRunRes.command.includes('gh pr create'));
+});
+
+test('sdw-scm-provider - createPullRequest on AzureDevOpsProvider (creation, reuse, and dry-run)', async () => {
+  const provider = createScmProvider('ado', {
+    executor: (cmd) => {
+      if (cmd.includes('az repos pr list')) {
+        return JSON.stringify([]);
+      }
+      if (cmd.includes('az repos pr create')) {
+        return JSON.stringify({
+          pullRequestId: 202,
+          url: 'https://dev.azure.com/org/proj/_git/repo/pullrequest/202'
+        });
+      }
+      throw new Error(`Unexpected command: ${cmd}`);
+    }
+  });
+
+  // Creation
+  const res = await provider.createPullRequest({
+    title: 'feat: add ado feature',
+    body: 'Details',
+    head: 'feature/ado-test',
+    base: 'master'
+  });
+  assert.strictEqual(res.number, '202');
+  assert.strictEqual(res.reused, false);
+  assert.strictEqual(res.dryRun, false);
+
+  // Reuse when PR exists
+  const reuseProvider = createScmProvider('ado', {
+    executor: (cmd) => {
+      if (cmd.includes('az repos pr list')) {
+        return JSON.stringify([{
+          pullRequestId: 205,
+          url: 'https://dev.azure.com/org/proj/_git/repo/pullrequest/205',
+          title: 'Existing ADO PR',
+          sourceRefName: 'refs/heads/feature/ado-test',
+          targetRefName: 'refs/heads/master'
+        }]);
+      }
+      throw new Error(`Unexpected command: ${cmd}`);
+    }
+  });
+  const reuseRes = await reuseProvider.createPr({
+    title: 'New title',
+    head: 'feature/ado-test',
+    base: 'master'
+  });
+  assert.strictEqual(reuseRes.number, '205');
+  assert.strictEqual(reuseRes.reused, true);
+
+  // Dry run
+  const dryRunRes = await provider.createPullRequest({
+    title: 'feat: ado dry run',
+    head: 'feature/ado-test',
+    base: 'master',
+    dryRun: true
+  });
+  assert.strictEqual(dryRunRes.dryRun, true);
+  assert.strictEqual(dryRunRes.reused, false);
+  assert.ok(dryRunRes.command.includes('az repos pr create'));
+});
+
