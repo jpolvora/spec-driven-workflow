@@ -133,15 +133,10 @@ function cmdRun(options) {
     minScore: options.minScore
   });
 
+  state = stateManager.updateStepState(targetRoot, state.runId, 5, 'completed', scoreReport);
   state.score = scoreReport.score;
   state.scoreIteration = 1;
-  console.log(`[Step 5: Scoring] Conformance score: ${scoreReport.score}/10 (Required: ${options.minScore}/10).`);
-
-  if (!scoreReport.passed) {
-    console.log(`[Step 5: Scoring Loop] Score below threshold. Feedback:`);
-    console.log(scoreReport.feedback);
-  }
-  state = stateManager.updateStepState(targetRoot, state.runId, 5, 'completed', scoreReport);
+  state = stateManager.saveRunState(targetRoot, state);
 
   // Step 6: Delivery Commit (AC11)
   state = stateManager.updateStepState(targetRoot, state.runId, 6, 'in_progress');
@@ -314,4 +309,13 @@ function main() {
   process.exit(code);
 }
 
-main();
+if (require.main === module) {
+  main();
+}
+
+module.exports = {
+  cmdRun,
+  cmdResume,
+  cmdStatus,
+  showHelp
+};

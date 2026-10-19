@@ -372,4 +372,13 @@ function main() {
   process.exit(exitCode);
 }
 
-main();
+if (require.main === module) {
+  main();
+}
+
+module.exports = {
+  cmdInit,
+  cmdCheck,
+  cmdParse,
+  showHelp
+};

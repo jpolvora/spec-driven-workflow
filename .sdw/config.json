@@ -1,4 +1,5 @@
 {
     "specsDir": "{projectRoot}/.sdw/specs",
-    "scmCodeReviewEnabled": false
+    "scmCodeReviewEnabled": false,
+    "scoreMin": 8
 }
