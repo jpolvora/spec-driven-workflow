@@ -66,7 +66,7 @@ test('AC6, AC7, AC8, AC9, AC10, AC16, AC17 & AC20: Agentic Code Review workflow'
   assert.ok(content.includes('vars.SDW_CODE_REVIEW_ENGINE'), 'Must check SDW_CODE_REVIEW_ENGINE');
   assert.ok(content.includes("'opencode'"), 'Default engine must be opencode');
   assert.ok(content.includes('vars.SDW_CODE_REVIEW_MODEL'), 'Must check SDW_CODE_REVIEW_MODEL');
-  assert.ok(content.includes("'opencode-go/deepseek-v4.1-flash'"), 'Default model must be opencode-go/deepseek-v4.1-flash');
+  assert.ok(content.includes("'opencode-go/claude-haiku-5-5'"), 'Default model must be opencode-go/claude-haiku-5-5');
   assert.ok(content.includes('vars.SDW_CODE_REVIEW_VARIANT'), 'Must check SDW_CODE_REVIEW_VARIANT');
   assert.ok(content.includes("'medium'"), 'Default variant must be medium');
 

@@ -4,7 +4,7 @@ name: Agentic Code Review
 #
 # Repository Variables (configure via Settings -> Secrets and variables -> Actions -> Variables):
 #   - SDW_CODE_REVIEW_ENGINE: Review engine ('opencode' or 'cursor-sdk', default: 'opencode')
-#   - SDW_CODE_REVIEW_MODEL: Model identifier (default: 'opencode-go/deepseek-v4.1-flash')
+#   - SDW_CODE_REVIEW_MODEL: Model identifier (default: 'opencode-go/claude-haiku-5-5')
 #   - SDW_CODE_REVIEW_VARIANT: Review variant/intensity (default: 'medium')
 #   - SDW_CODE_REVIEW_MAX_ROUNDS: PR review round budget before human handoff (default: '20')
 #
@@ -40,7 +40,7 @@ concurrency:
 
 env:
   REVIEW_ENGINE: ${{ vars.SDW_CODE_REVIEW_ENGINE || 'opencode' }}
-  REVIEW_MODEL: ${{ vars.SDW_CODE_REVIEW_MODEL || 'opencode-go/deepseek-v4.1-flash' }}
+  REVIEW_MODEL: ${{ vars.SDW_CODE_REVIEW_MODEL || 'opencode-go/claude-haiku-5-5' }}
   REVIEW_VARIANT: ${{ vars.SDW_CODE_REVIEW_VARIANT || 'medium' }}
 
 jobs:
