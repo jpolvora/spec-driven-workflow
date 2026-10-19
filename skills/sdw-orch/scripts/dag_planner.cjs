@@ -35,9 +35,20 @@ function generateDagPlan(specContent, options) {
 
   const tasks = [];
 
-  // Infer default target files from slug
-  let defaultTargetFiles = (options && options.targetFiles) || [];
-  if (defaultTargetFiles.length === 0) {
+  // Ingest technical blueprint from Step 2 (AC3)
+  let defaultTargetFiles = [];
+  let architecturalApproach = null;
+  let testPlan = null;
+
+  if (options && options.blueprint && Array.isArray(options.blueprint.targetFiles) && options.blueprint.targetFiles.length > 0) {
+    defaultTargetFiles = options.blueprint.targetFiles;
+    architecturalApproach = options.blueprint.architecturalApproach;
+    testPlan = options.blueprint.testPlan;
+  } else if (options && options.targetFiles && options.targetFiles.length > 0) {
+    defaultTargetFiles = options.targetFiles;
+  } else {
+    // Missing blueprint in Step 2: log observable warning and fallback gracefully to heuristic file inference
+    console.warn('[Step 3: DAG Generation] Warning: Step 2 refinement blueprint missing or has no targetFiles; falling back to heuristic file inference.');
     if (slug.includes('orch') || slug.includes('implement')) {
       defaultTargetFiles = [
         'skills/sdw-orch/scripts/sdw_orch.cjs',

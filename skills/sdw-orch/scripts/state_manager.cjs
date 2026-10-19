@@ -96,7 +96,7 @@ function createRunState(options) {
     dagTasks: [],
     steps: {
       1: { name: 'derivation', status: 'pending', startedAt: null, completedAt: null, output: null },
-      2: { name: 'grilling', status: 'pending', startedAt: null, completedAt: null, output: null },
+      2: { name: 'refinement', status: 'pending', startedAt: null, completedAt: null, output: null },
       3: { name: 'dag_generation', status: 'pending', startedAt: null, completedAt: null, output: null },
       4: { name: 'implementation', status: 'pending', startedAt: null, completedAt: null, output: null },
       5: { name: 'scoring', status: 'pending', startedAt: null, completedAt: null, output: null },
