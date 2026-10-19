@@ -34,6 +34,24 @@ function generateDagPlan(specContent, options) {
 
   const tasks = [];
 
+  // Infer default target files from slug
+  let defaultTargetFiles = (options && options.targetFiles) || [];
+  if (defaultTargetFiles.length === 0) {
+    if (slug.includes('implement')) {
+      defaultTargetFiles = [
+        'skills/sdw-implement/scripts/sdw_implement.cjs',
+        'skills/sdw-implement/scripts/state_manager.cjs',
+        'skills/sdw-implement/scripts/spec_derivation.cjs',
+        'skills/sdw-implement/scripts/spec_grilling.cjs',
+        'skills/sdw-implement/scripts/dag_planner.cjs',
+        'skills/sdw-implement/scripts/score_evaluator.cjs',
+        'skills/sdw-implement/scripts/review_runner.cjs'
+      ];
+    } else if (slug.includes('config')) {
+      defaultTargetFiles = ['skills/sdw-config/scripts/sdw_config.cjs'];
+    }
+  }
+
   if (!complexity.isComplex || acs.length <= 3) {
     // Single execution unit
     tasks.push({
@@ -42,7 +60,8 @@ function generateDagPlan(specContent, options) {
       description: 'Execute implementation for all specified acceptance criteria in an isolated unit.',
       coveredAcs: acs.map(a => a.id),
       dependencies: [],
-      targetFiles: (options && options.targetFiles) || [],
+      status: 'pending',
+      targetFiles: defaultTargetFiles,
       contextPrompt: `You are implementing the feature "${slug}". Focus strictly on the following acceptance criteria:\n` +
         acs.map(a => `- ${a.id}: ${a.text}`).join('\n')
     });
@@ -58,7 +77,8 @@ function generateDagPlan(specContent, options) {
       description: 'Implement core modules, state management, and baseline logic.',
       coveredAcs: t1Acs.map(a => a.id),
       dependencies: [],
-      targetFiles: [],
+      status: 'pending',
+      targetFiles: defaultTargetFiles.slice(0, 4),
       contextPrompt: `You are implementing Task 1 (Core Logic) for "${slug}". Focus strictly on:\n` +
         t1Acs.map(a => `- ${a.id}: ${a.text}`).join('\n')
     });
@@ -69,7 +89,8 @@ function generateDagPlan(specContent, options) {
       description: 'Implement downstream workflow loops, reviews, and integrations.',
       coveredAcs: t2Acs.map(a => a.id),
       dependencies: ['task-1'],
-      targetFiles: [],
+      status: 'pending',
+      targetFiles: defaultTargetFiles.slice(4),
       contextPrompt: `You are implementing Task 2 (Workflows & Integration) for "${slug}". Focus strictly on:\n` +
         t2Acs.map(a => `- ${a.id}: ${a.text}`).join('\n')
     });

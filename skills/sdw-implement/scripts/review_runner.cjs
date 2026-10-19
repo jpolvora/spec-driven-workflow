@@ -4,26 +4,30 @@ const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
+function getFilesToReview(baseCommit, projectRoot) {
+  const fileSet = new Set();
+  try {
+    if (baseCommit) {
+      const diffCommitted = execSync(`git diff --name-only ${baseCommit} HEAD`, { cwd: projectRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      diffCommitted.split('\n').map(l => l.trim()).filter(Boolean).forEach(f => fileSet.add(f));
+
+      const diffUncommitted = execSync(`git diff --name-only ${baseCommit}`, { cwd: projectRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      diffUncommitted.split('\n').map(l => l.trim()).filter(Boolean).forEach(f => fileSet.add(f));
+    }
+    const statusOut = execSync('git status --porcelain', { cwd: projectRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    statusOut.split('\n').map(l => l.trim().replace(/^..\s+/, '')).filter(Boolean).forEach(f => fileSet.add(f));
+  } catch (err) {
+    // ignore
+  }
+  return Array.from(fileSet);
+}
+
 function runAutomatedReview(options) {
   const projectRoot = (options && options.projectRoot) || process.cwd();
   const baseCommit = (options && options.baseCommit) || null;
 
   const findings = [];
-
-  let touchedFiles = [];
-  try {
-    let cmd = 'git status --porcelain';
-    if (baseCommit) {
-      cmd = `git diff --name-only ${baseCommit}`;
-    }
-    const output = execSync(cmd, { cwd: projectRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-    touchedFiles = output
-      .split('\n')
-      .map(l => l.trim().replace(/^..\s+/, ''))
-      .filter(Boolean);
-  } catch (err) {
-    // git error or not committed
-  }
+  const touchedFiles = getFilesToReview(baseCommit, projectRoot);
 
   // Rule 1: No .py files inside skills/
   for (const f of touchedFiles) {
@@ -32,7 +36,8 @@ function runAutomatedReview(options) {
         file: f,
         severity: 'error',
         rule: 'no_python_in_skills',
-        message: 'Skills must only use Node.js CommonJS (.cjs) helpers. Python scripts are prohibited.'
+        message: 'Skills must only use Node.js CommonJS (.cjs) helpers. Python scripts are prohibited.',
+        fixable: false
       });
     }
 
@@ -42,7 +47,8 @@ function runAutomatedReview(options) {
         file: f,
         severity: 'warning',
         rule: 'potential_secret_leak',
-        message: `File name "${f}" suggests sensitive credential or token data.`
+        message: `File name "${f}" suggests sensitive credential or token data.`,
+        fixable: false
       });
     }
 
@@ -56,7 +62,8 @@ function runAutomatedReview(options) {
             file: f,
             severity: 'error',
             rule: 'no_debugger_statements',
-            message: 'Found active "debugger;" statement.'
+            message: 'Found active "debugger;" statement.',
+            fixable: true
           });
         }
         if (text.includes('// TODO') || text.includes('/* TODO')) {
@@ -64,7 +71,8 @@ function runAutomatedReview(options) {
             file: f,
             severity: 'warning',
             rule: 'unresolved_todos',
-            message: 'Unresolved TODO comment detected in implementation code.'
+            message: 'Unresolved TODO comment detected in implementation code.',
+            fixable: false
           });
         }
       } catch (e) {
@@ -89,6 +97,26 @@ function runAutomatedReview(options) {
   };
 }
 
+function applyAutoFixes(findings, projectRoot) {
+  const fixedFiles = [];
+  for (const finding of findings) {
+    if (finding.rule === 'no_debugger_statements' && finding.fixable) {
+      const fullPath = path.join(projectRoot, finding.file);
+      if (fs.existsSync(fullPath)) {
+        try {
+          let text = fs.readFileSync(fullPath, 'utf8');
+          text = text.replace(/^\s*debugger;\s*$/gm, '');
+          fs.writeFileSync(fullPath, text, 'utf8');
+          fixedFiles.push(finding.file);
+        } catch (e) {}
+      }
+    }
+  }
+  return fixedFiles;
+}
+
 module.exports = {
-  runAutomatedReview
+  getFilesToReview,
+  runAutomatedReview,
+  applyAutoFixes
 };

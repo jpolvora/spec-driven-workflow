@@ -34,6 +34,16 @@ function createRunState(options) {
   const runId = options.runId || generateRunId(specSlug);
   const stateFilePath = getStateFilePath(targetRoot, runId);
 
+  // If state already exists for this runId and overwrite is not forced, return existing state
+  if (!options.overwrite && fs.existsSync(stateFilePath)) {
+    try {
+      const existing = JSON.parse(fs.readFileSync(stateFilePath, 'utf8'));
+      return existing;
+    } catch (e) {
+      // If corrupted, recreate
+    }
+  }
+
   const state = {
     runId,
     specSlug,
@@ -104,6 +114,28 @@ function saveRunState(targetRoot, state) {
   return state;
 }
 
+function getResumptionStep(state) {
+  for (let s = 1; s <= state.totalSteps; s++) {
+    const stepObj = state.steps[s];
+    if (!stepObj || (stepObj.status !== 'completed' && stepObj.status !== 'skipped')) {
+      return s;
+    }
+  }
+  return state.totalSteps;
+}
+
+function recordError(targetRoot, runId, stepNum, errorMessage) {
+  const state = loadRunState(targetRoot, runId);
+  const now = new Date().toISOString();
+  state.errors.push({ step: stepNum, timestamp: now, error: String(errorMessage) });
+  state.status = 'failed';
+  if (state.steps[stepNum]) {
+    state.steps[stepNum].status = 'failed';
+    state.steps[stepNum].error = String(errorMessage);
+  }
+  return saveRunState(targetRoot, state);
+}
+
 function updateStepState(targetRoot, runId, stepNum, status, outputData, error) {
   const state = loadRunState(targetRoot, runId);
   const now = new Date().toISOString();
@@ -141,5 +173,7 @@ module.exports = {
   loadRunState,
   findLatestRunState,
   saveRunState,
+  getResumptionStep,
+  recordError,
   updateStepState
 };

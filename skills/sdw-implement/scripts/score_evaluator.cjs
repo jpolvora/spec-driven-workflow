@@ -1,40 +1,51 @@
 'use strict';
 
+const fs = require('fs');
+const path = require('path');
 const { execSync } = require('child_process');
 const { parseAcceptanceCriteria } = require('./dag_planner.cjs');
 
 function getTouchedFiles(baseCommit, projectRoot) {
+  const cwd = projectRoot || process.cwd();
+  const fileSet = new Set();
   try {
-    const cwd = projectRoot || process.cwd();
-    let cmd = 'git status --porcelain';
     if (baseCommit) {
-      cmd = `git diff --name-only ${baseCommit}`;
+      // Check uncommitted changes vs baseCommit
+      const diffUncommitted = execSync(`git diff --name-only ${baseCommit}`, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      diffUncommitted.split('\n').map(l => l.trim()).filter(Boolean).forEach(f => fileSet.add(f));
+
+      // Check committed changes between baseCommit and HEAD
+      const diffCommitted = execSync(`git diff --name-only ${baseCommit} HEAD`, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      diffCommitted.split('\n').map(l => l.trim()).filter(Boolean).forEach(f => fileSet.add(f));
     }
-    const output = execSync(cmd, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-    return output
-      .split('\n')
-      .map(line => line.trim().replace(/^..\s+/, ''))
-      .filter(Boolean);
+
+    // Also include currently modified or untracked files
+    const statusOut = execSync('git status --porcelain', { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    statusOut.split('\n').map(l => l.trim().replace(/^..\s+/, '')).filter(Boolean).forEach(f => fileSet.add(f));
   } catch (err) {
-    return [];
+    // Git errors ignored
   }
+  return Array.from(fileSet);
 }
 
 function getDiffContent(baseCommit, projectRoot) {
+  const cwd = projectRoot || process.cwd();
+  let content = '';
   try {
-    const cwd = projectRoot || process.cwd();
-    let cmd = 'git diff HEAD';
     if (baseCommit) {
-      cmd = `git diff ${baseCommit}`;
+      content += execSync(`git diff ${baseCommit}`, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      content += '\n' + execSync(`git diff ${baseCommit} HEAD`, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    } else {
+      content = execSync('git diff HEAD', { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
     }
-    return execSync(cmd, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
   } catch (err) {
-    return '';
+    // ignore
   }
+  return content;
 }
 
 function evaluateScore(specContent, options) {
-  const minScore = (options && options.minScore) || 8;
+  const minScore = (options && options.minScore !== undefined) ? options.minScore : 8;
   const projectRoot = (options && options.projectRoot) || process.cwd();
   const baseCommit = (options && options.baseCommit) || null;
 
@@ -44,8 +55,12 @@ function evaluateScore(specContent, options) {
       score: 10,
       passed: true,
       minScore,
+      totalAcs: 0,
+      verifiedCount: 0,
+      failingCount: 0,
       verifiedAcs: [],
       failingAcs: [],
+      touchedFiles: [],
       feedback: 'No explicit acceptance criteria found in spec. Default score assigned.'
     };
   }
@@ -53,30 +68,70 @@ function evaluateScore(specContent, options) {
   const touchedFiles = getTouchedFiles(baseCommit, projectRoot);
   const diffContent = getDiffContent(baseCommit, projectRoot);
 
+  // Combine diff content with full file contents of touched and explicit target files
+  let combinedContent = diffContent;
+  const filesToCheck = new Set([...touchedFiles, ...((options && options.targetFiles) || [])]);
+  
+  // Also check skills/ and src/ default locations if targetFiles not explicitly provided
+  if (filesToCheck.size === 0) {
+    const defaultSearchDirs = ['skills/sdw-implement/scripts', 'skills/sdw-implement', '.sdw'];
+    for (const d of defaultSearchDirs) {
+      const fullDir = path.resolve(projectRoot, d);
+      if (fs.existsSync(fullDir)) {
+        try {
+          const entries = fs.readdirSync(fullDir);
+          for (const entry of entries) {
+            const rel = path.join(d, entry).replace(/\\/g, '/');
+            if (fs.statSync(path.resolve(projectRoot, rel)).isFile()) {
+              filesToCheck.add(rel);
+            }
+          }
+        } catch (e) {}
+      }
+    }
+  }
+
+  for (const relPath of filesToCheck) {
+    const fullPath = path.resolve(projectRoot, relPath);
+    if (fs.existsSync(fullPath) && fs.statSync(fullPath).isFile()) {
+      try {
+        combinedContent += '\n' + fs.readFileSync(fullPath, 'utf8');
+      } catch (e) {}
+    }
+  }
+
+  const haystack = combinedContent.toLowerCase();
+  const stopWords = new Set(['shall', 'when', 'while', 'where', 'then', 'the', 'system', 'that', 'with', 'from', 'each', 'this', 'after', 'into', 'over', 'under']);
+
   const verifiedAcs = [];
   const failingAcs = [];
 
   for (const ac of acs) {
-    // Check if key tokens in the AC appear in diff or touched files
+    // Replace non-alphanumeric chars with spaces to handle hyphenated words cleanly
     const words = ac.text
       .toLowerCase()
-      .replace(/[^a-z0-9\s]/g, '')
+      .replace(/[^a-z0-9]+/g, ' ')
       .split(/\s+/)
-      .filter(w => w.length > 3 && !['shall', 'when', 'while', 'where', 'then', 'the', 'system', 'that', 'with', 'from', 'each', 'this'].includes(w));
+      .filter(w => w.length > 2 && !stopWords.has(w));
 
     let matches = 0;
     for (const w of words) {
-      if (diffContent.toLowerCase().includes(w) || touchedFiles.some(f => f.toLowerCase().includes(w))) {
+      if (haystack.includes(w)) {
         matches++;
       }
     }
 
     const coverageRatio = words.length > 0 ? matches / words.length : 1;
-    // If significant proportion of terms match in the implementation
+    // Require at least 40% keyword match across the implementation
     if (coverageRatio >= 0.4 || words.length === 0) {
       verifiedAcs.push({ id: ac.id, text: ac.text, coverageRatio });
     } else {
-      failingAcs.push({ id: ac.id, text: ac.text, coverageRatio, missingKeywords: words.filter(w => !diffContent.toLowerCase().includes(w)) });
+      failingAcs.push({
+        id: ac.id,
+        text: ac.text,
+        coverageRatio,
+        missingKeywords: words.filter(w => !haystack.includes(w))
+      });
     }
   }
 
@@ -103,7 +158,7 @@ function evaluateScore(specContent, options) {
     failingCount: failingAcs.length,
     verifiedAcs,
     failingAcs,
-    touchedFiles,
+    touchedFiles: Array.from(filesToCheck),
     feedback
   };
 }

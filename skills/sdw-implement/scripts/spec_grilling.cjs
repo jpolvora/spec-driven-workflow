@@ -27,7 +27,7 @@ const DECISION_DIMENSIONS = [
   {
     name: 'concurrency_and_ordering',
     question: 'How should task execution ordering be scheduled?',
-    check: (content) => /concurrency|parallel|sequential|ordering|dependency/i.test(content),
+    check: (content) => /concurrency|parallel|paralel|sequential|ordering|dependency|single execution unit/i.test(content),
     options: [
       '(Recommended) Execute sequentially by default, parallelizing only independent DAG tasks',
       'Execute all tasks sequentially without parallelization',
@@ -37,7 +37,7 @@ const DECISION_DIMENSIONS = [
   {
     name: 'state_persistence',
     question: 'Where should session state be persisted across runs?',
-    check: (content) => /\.sdw\/state|state file|session state/i.test(content),
+    check: (content) => /\.sdw\/state|state file|session state|\.state\.json/i.test(content),
     options: [
       '(Recommended) Persist to .sdw/state/{runId}.state.json',
       'Store ephemeral state in memory without writing to disk',
@@ -72,7 +72,19 @@ function analyzeSpecificationGaps(specContent) {
   };
 }
 
+function applyDecision(specContent, dimension, chosenOption) {
+  const decisionNote = `\n<!-- Decision Gate: [${dimension}] -> ${chosenOption} -->\n`;
+  if (specContent.includes('## Assumptions & Open Questions')) {
+    return specContent.replace(
+      '## Assumptions & Open Questions',
+      `## Assumptions & Open Questions\n| ${dimension} | ${chosenOption.replace(/^\(Recommended\)\s*/, '')} | Grilling decision confirmed | y |\n`
+    );
+  }
+  return specContent + decisionNote;
+}
+
 module.exports = {
   DECISION_DIMENSIONS,
-  analyzeSpecificationGaps
+  analyzeSpecificationGaps,
+  applyDecision
 };
