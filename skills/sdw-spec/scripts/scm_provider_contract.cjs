@@ -756,8 +756,9 @@ class AzureDevOpsProvider extends ScmProvider {
           author: (c.author && (c.author.displayName || c.author.uniqueName)) || 'unknown',
           createdAt: c.publishedDate || ''
         }));
-        const isResolved = status === 'fixed' || status === 'closed' || status === 'bydesign' || status === 'wontfix' ||
-          comments.some(c => c.body.includes('<!-- resolution-reply -->'));
+        // Azure DevOps thread status is authoritative. A resolution reply marker must not
+        // hide an active thread that branch policy still blocks.
+        const isResolved = status === 'fixed' || status === 'closed' || status === 'bydesign' || status === 'wontfix';
 
         return {
           id: String(t.id),

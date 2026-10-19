@@ -732,3 +732,28 @@ test('sdw-scm-provider - GitHub REST resolveReviewThread reports unresolved', as
   assert.strictEqual(result.resolved, false);
   assert.match(result.reason, /PRRT_/);
 });
+
+test('sdw-scm-provider - ADO active thread with a resolution marker stays active', async () => {
+  const provider = createScmProvider('ado', {
+    executor: (cmd) => {
+      if (cmd.includes('pullRequestThreads')) {
+        return JSON.stringify({
+          value: [
+            {
+              id: 101,
+              status: 'active',
+              comments: [
+                { id: 1, content: '<!-- resolution-reply -->\nResolved review issue', author: { displayName: 'reviewer' } }
+              ]
+            }
+          ]
+        });
+      }
+      throw new Error(`Unexpected command: ${cmd}`);
+    }
+  });
+
+  const result = await provider.listReviewThreads(42);
+  assert.strictEqual(result.activeCount, 1);
+  assert.strictEqual(result.threads[0].isResolved, false);
+});

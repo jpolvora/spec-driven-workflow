@@ -530,3 +530,34 @@ test('sdw-ship-pr - resolveReviewThread does not duplicate the resolution marker
   const count = (result.comment.match(/<!-- resolution-reply -->/g) || []).length;
   assert.strictEqual(count, 1, 'marker must appear exactly once even when the caller pre-prefixes it');
 });
+
+test('sdw-ship-pr - prePrCommand commit stages only files it created', async () => {
+  const { tmpDir, config } = setupTestWorkspace();
+  execSync('git init', { cwd: tmpDir, stdio: 'ignore' });
+  execSync('git config user.name "SDW Tester"', { cwd: tmpDir, stdio: 'ignore' });
+  execSync('git config user.email "tester@sdw.org"', { cwd: tmpDir, stdio: 'ignore' });
+  fs.writeFileSync(path.join(tmpDir, 'baseline.txt'), 'baseline', 'utf8');
+  execSync('git add -A', { cwd: tmpDir, stdio: 'ignore' });
+  execSync('git commit -m "baseline"', { cwd: tmpDir, stdio: 'ignore' });
+  fs.writeFileSync(path.join(tmpDir, 'unrelated.txt'), 'keep me uncommitted', 'utf8');
+
+  config.prePrCommand = 'node -e "require(\'fs\').writeFileSync(\'generated.txt\',\'x\')"';
+
+  try {
+    const report = await sdwShipPr.runShipPr({
+      projectRoot: tmpDir,
+      config,
+      head: 'develop',
+      base: 'master'
+    });
+
+    assert.strictEqual(report.success, true);
+    const committed = execSync('git show --name-only --format= HEAD', { cwd: tmpDir, encoding: 'utf8' });
+    assert.match(committed, /generated\.txt/);
+    assert.doesNotMatch(committed, /unrelated\.txt/);
+    const status = execSync('git status --porcelain', { cwd: tmpDir, encoding: 'utf8' });
+    assert.match(status, /unrelated\.txt/);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

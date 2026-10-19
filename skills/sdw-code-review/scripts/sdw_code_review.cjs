@@ -9,6 +9,15 @@ function normalizePath(p) {
   return String(p || '').replace(/\\/g, '/');
 }
 
+function runGit(projectRoot, args) {
+  const result = spawnSync('git', args, {
+    cwd: projectRoot,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore']
+  });
+  return result.status === 0 ? String(result.stdout || '') : '';
+}
+
 function findProjectRoot(startDir) {
   let curr = path.resolve(startDir || process.cwd());
   while (true) {
@@ -183,11 +192,11 @@ function getChangedFiles(options) {
 
   if (base) {
     try {
-      const out = execSync(`git diff --name-only ${base} HEAD`, { cwd: projectRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      const out = runGit(projectRoot, ['diff', '--name-only', base, 'HEAD']);
       out.split('\n').map(l => l.trim()).filter(Boolean).forEach(f => fileSet.add(normalizePath(f)));
     } catch (e) {}
     try {
-      const out2 = execSync(`git diff --name-only ${base}`, { cwd: projectRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      const out2 = runGit(projectRoot, ['diff', '--name-only', base]);
       out2.split('\n').map(l => l.trim()).filter(Boolean).forEach(f => fileSet.add(normalizePath(f)));
     } catch (e) {}
   }
@@ -252,7 +261,7 @@ function getAddedLines(projectRoot, base, file) {
     return 0;
   }
   try {
-    const out = execSync(`git diff --numstat ${base} -- "${file}"`, { cwd: projectRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    const out = runGit(projectRoot, ['diff', '--numstat', base, '--', file]).trim();
     if (out) {
       const first = out.split('\n')[0].split('\t');
       const added = parseInt(first[0], 10);

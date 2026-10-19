@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
+const { execSync, spawnSync } = require('child_process');
 
 // Import SCM provider contract from sdw-spec
 let scmContract;
@@ -33,6 +33,38 @@ function resolveStateDir(projectRoot, config = {}) {
   const configured = config.stateDir || '{projectRoot}/.sdw/state';
   const raw = String(configured).replace(/\{projectRoot\}/g, projectRoot);
   return path.isAbsolute(raw) ? path.normalize(raw) : path.resolve(projectRoot, raw);
+}
+
+function listChangedPaths(executor) {
+  let out = '';
+  try {
+    out = String(executor('git status --porcelain -uall') || '');
+  } catch (e) {
+    return new Set();
+  }
+  const paths = new Set();
+  for (const line of out.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    let file = line.slice(3).trim();
+    const arrow = file.indexOf(' -> ');
+    if (arrow !== -1) file = file.slice(arrow + 4);
+    file = file.replace(/^"(.*)"$/, '$1');
+    if (file) paths.add(file);
+  }
+  return paths;
+}
+
+function stageChangedSince(executor, before, projectRoot) {
+  const after = listChangedPaths(executor);
+  const changed = Array.from(after).filter(file => !before.has(file));
+  if (changed.length === 0) return [];
+
+  // argv form: filenames are never interpreted by a shell.
+  const result = spawnSync('git', ['add', '--', ...changed], { cwd: projectRoot, stdio: 'ignore' });
+  if (result.status !== 0) {
+    throw new Error('Failed to stage the changed files for the scoped commit.');
+  }
+  return changed;
 }
 
 /**
@@ -216,6 +248,7 @@ async function runShipPr(options = {}, customExecutor = null) {
       resolvedThreads: 0,
       activeThreads: 0,
       pendingThreads: [],
+      failingChecks: [],
       issuesFixed: []
     },
     shipStatus: 'pending',
@@ -239,18 +272,18 @@ async function runShipPr(options = {}, customExecutor = null) {
     } else {
       if (config.prePrCommand) {
         log(`[sdw-ship-pr] Running prePrCommand: "${config.prePrCommand}"...`);
+        const beforePrePr = listChangedPaths(executor);
         try {
           executor(config.prePrCommand, { timeout: verificationTimeoutMs });
         } catch (cmdErr) {
           throw new Error(`prePrCommand failed: ${cmdErr.message}`);
         }
 
-        // Stage and commit pre-PR modifications if generated
+        // Stage only files produced by the command; never sweep unrelated worktree changes.
         try {
-          const modStatus = executor('git status --porcelain').toString().trim();
-          if (modStatus) {
-            log('[sdw-ship-pr] Staging and committing pre-PR modifications...');
-            executor('git add -A');
+          const changed = stageChangedSince(executor, beforePrePr, projectRoot);
+          if (changed.length > 0) {
+            log(`[sdw-ship-pr] Committing ${changed.length} pre-PR change(s)...`);
             const commitMsg = specSlug && specSlug !== 'unspecified' ? `chore(${specSlug}): apply pre-pr requirements` : 'chore: apply pre-pr requirements';
             executor(`git commit -m "${commitMsg}"`);
           }
@@ -419,8 +452,49 @@ async function runShipPr(options = {}, customExecutor = null) {
             break;
           }
 
-          // If active threads exist, resolve them
           const activeList = reviewThreads.threads.filter(t => !t.isResolved);
+          const failingChecks = (status.checks || []).filter(c => {
+            const value = String(c.state || c.bucket || '').toLowerCase();
+            return ['fail', 'failure', 'cancelled', 'cancel', 'timed_out', 'action_required', 'startup_failure'].includes(value);
+          });
+          report.reviewConvergence.failingChecks = failingChecks;
+
+          // Failing CI with no review threads still needs a fixer. Reuse the same
+          // test/security/scoped-commit/push gates before polling again.
+          if (!status.allPassed && activeList.length === 0) {
+            if (reviewFixCommand) {
+              log(`[sdw-ship-pr] ${failingChecks.length} failing check(s); applying reviewFixCommand...`);
+              const beforeCheckFix = listChangedPaths(executor);
+              executor(reviewFixCommand);
+              if (config.runAllTests) executor(testCommand);
+              runReviewSecurityGate();
+              const changed = stageChangedSince(executor, beforeCheckFix, projectRoot);
+              if (changed.length > 0) {
+                executor('git commit -m "fix(review): address failing checks"');
+                executor(`git push origin ${head}`);
+                continue;
+              }
+              warn('[sdw-ship-pr] reviewFixCommand produced no changes for the failing checks.');
+            } else if (typeof options.threadFixer === 'function') {
+              const fixResult = await options.threadFixer({
+                provider,
+                prNumber: prResult.number,
+                threads: [],
+                checks: failingChecks,
+                projectRoot,
+                executor
+              });
+              if (fixResult && fixResult.fixed === true) {
+                runReviewSecurityGate();
+                continue;
+              }
+              warn('[sdw-ship-pr] threadFixer did not confirm a fix for the failing checks.');
+            } else {
+              warn(`[sdw-ship-pr] ${failingChecks.length} failing check(s) with no configured fixer; leaving them as blockers.`);
+            }
+          }
+
+          // If active threads exist, resolve them
           if (activeList.length > 0) {
             log(`[sdw-ship-pr] Detected ${activeList.length} active review thread(s).`);
 
@@ -433,9 +507,10 @@ async function runShipPr(options = {}, customExecutor = null) {
 
             let fixSummary = 'Applied and verified the requested review fix.';
             let canResolve = false;
+            let fixResult = null;
             if (typeof options.threadFixer === 'function') {
               // The caller owns applying, testing, committing, and pushing the fix.
-              const fixResult = await options.threadFixer({
+              fixResult = await options.threadFixer({
                 provider,
                 prNumber: prResult.number,
                 threads: activeList,
@@ -452,6 +527,7 @@ async function runShipPr(options = {}, customExecutor = null) {
               canResolve = true;
             } else if (reviewFixCommand) {
               log(`[sdw-ship-pr] Applying review fixes via reviewFixCommand: ${reviewFixCommand}`);
+              const beforeReviewFix = listChangedPaths(executor);
               executor(reviewFixCommand);
 
               if (config.runAllTests) {
@@ -461,14 +537,13 @@ async function runShipPr(options = {}, customExecutor = null) {
 
               runReviewSecurityGate();
 
-              const fixChanges = executor('git status --porcelain').toString().trim();
-              if (!fixChanges) {
+              const changed = stageChangedSince(executor, beforeReviewFix, projectRoot);
+              if (changed.length === 0) {
                 warn('[sdw-ship-pr] reviewFixCommand produced no changes; refusing to resolve review threads.');
                 report.reviewConvergence.pendingThreads = pendingThreads;
                 break;
               }
 
-              executor('git add -A');
               executor('git commit -m "fix(review): address review feedback"');
               executor(`git push origin ${head}`);
               canResolve = true;
@@ -493,7 +568,7 @@ async function runShipPr(options = {}, customExecutor = null) {
               } catch (e) {}
 
               for (const thread of activeList) {
-                const perThreadSummary = (typeof fixResult !== 'undefined' && fixResult && fixResult.resolutions && fixResult.resolutions[thread.id])
+                const perThreadSummary = (fixResult && fixResult.resolutions && fixResult.resolutions[thread.id])
                   || fixSummary;
                 const commitLine = commitSha ? `Fixed in commit ${commitSha}.\n\n` : '';
                 const summaryNote = `<!-- resolution-reply -->\nResolved review issue: applied fix and verified acceptance criteria.\n\n${commitLine}Summary: ${perThreadSummary}`;

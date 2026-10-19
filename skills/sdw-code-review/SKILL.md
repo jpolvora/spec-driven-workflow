@@ -35,7 +35,7 @@ uncommitted working-tree changes against an auto-detected base branch, applying
 
 2. **Execute Deterministic Review**
    Scan diffs for debugger statements, unresolved TODOs, secret leaks, Python in
-   `skills/`, unrequested markers, leftover `console.log`, and oversized diffs.
+   `skills/`, unrequested markers, and oversized diffs.
    Assign stable IDs (`CR-001`), severity, `file:line`, rule citation, and fix plan.
    - Run: `node skills/sdw-code-review/scripts/sdw_code_review.cjs run --target <path> --report <reportPath> [--fix] [--dry-run] [--json]`
    - Done when: Helper exits `0` (no `critical`/`warning`) or `1` (blocking or invalid input).
