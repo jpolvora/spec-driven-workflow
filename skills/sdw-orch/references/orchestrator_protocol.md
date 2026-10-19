@@ -203,3 +203,29 @@ Step 4 replaces dummy placeholder behavior with a deterministic implementation e
 ### Batch Queue Pause
 - When a batch item halts with code 4 (`awaiting_implementation`), the batch queue pauses, marks the item `awaiting_implementation`, saves manifest with status `paused`, and exits with code 4.
 
+## 8. PR Delivery & Code Review Convergence Protocol (Step 8)
+
+Step 8 executes final preparation, delivery, and optional post-PR code review convergence, respecting options configured in `.sdw/config.json`.
+
+### Configuration Evaluation
+The step resolves the following keys from `.sdw/config.json`:
+- `scmProvider` (`"none" | "ado" | "github"`): Determines active provider. When `"none"`, remote PR creation and review polling are skipped.
+- `pushDelivery` (boolean, default: `false`): When `true` (or `--push` flag), pushes the active delivery branch to `origin`.
+- `scmCodeReviewEnabled` (boolean, default: `false`): Controls whether the orchestrator enters the remote review polling and fix convergence loop.
+- `prePrCommand` (string): Optional shell command executed before PR preparation.
+- `prePrInstructions` (string): Optional project checklist evaluated prior to PR submission.
+
+### Lifecycle & Verification Flow
+1. **Pre-PR Lifecycle Hooks:** If `prePrInstructions` is present, it is logged/evaluated. If `prePrCommand` is configured, it executes in project root. Any generated modifications are validated via `sdw-security-checks` and committed.
+2. **Pre-PR Quality Verification:** If `requiredBuild` or `runAllTests` are enabled, build and test commands run with up to 3 surgical fix attempts.
+3. **Index Completion & PR Assembly:** The specification is marked `completed` in `index.specs.md`. The pull request payload is generated.
+4. **Remote Push & PR Creation:** If `pushDelivery` is enabled, the branch is pushed to remote origin. If `scmProvider` is active (`github` or `ado`), the provider's `createPullRequest` intent opens or reuses an existing open pull request.
+5. **Post-PR Review Convergence Loop:** When `scmCodeReviewEnabled: true` (or `--poll-pr` CLI flag), the agent enters the review convergence loop:
+   - Awaits completion of remote CI workflows and automated/agentic code review runs (`gh pr checks` / `check-pr-status`).
+   - Queries review comments and active threads from the remote provider (`gh pr view --comments` / `gh api` / `list-threads`).
+   - Critically evaluates review feedback against specification ACs, architecture, and simplicity guidelines (`sdw-rules`).
+   - If actionable comments, defects, or test gaps are identified, applies surgical fixes, verifies with the test suite (`npm test`), commits the review fixes, pushes to the remote branch, and iterates until review threads are resolved and checks pass green.
+   - If a review comment is technically invalid, inconsistent with the specification, or counter-productive, provides explicit technical refutation with evidence.
+   - When `scmCodeReviewEnabled: false`, remote review polling is skipped and the run completes immediately following PR assembly/creation.
+
+

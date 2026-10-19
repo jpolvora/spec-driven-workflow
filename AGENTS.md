@@ -44,14 +44,8 @@ Mandatory repository rules and development guidelines for all AI agents working 
    - Do not author compatibility shims, deprecation wrappers, migration layers, or dual-support branches for superseded behavior.
    - This is a deliberate phase policy; the maintainer will update this rule when the project's compatibility behavior changes.
 
-7. **Version Control & Post-PR Delivery Lifecycle Protocol:**
-   - **SDW Orchestrator Workflows (`sdw-orch`):** When executing an orchestrator workflow (`sdw-orch`), creating the delivery commit in Step 6, pushing changes to the active remote branch in Step 8 (or via `--push`), and opening/updating the Pull Request via the active SCM provider is **mandatory and pre-authorized** as an integral part of the delivery lifecycle.
-   - **Mandatory Post-PR Code Review & Convergence Loop:** After submitting or updating a Pull Request for an implemented specification, the agent MUST NOT stop prematurely. The agent must enter the code-review monitoring loop:
-     1. Await completion of remote CI workflows and automated/agentic code review runs (`gh pr checks <PR>` / `check-pr-status`).
-     2. Query review comments and active threads from the remote provider (`gh pr view <PR> --comments` / `gh api` / `list-threads`).
-     3. Critically evaluate review feedback against the specification's acceptance criteria, architecture, and simplicity guidelines (`sdw-rules`).
-     4. If actionable comments, defects, edge cases, or test gaps are identified, execute surgical fixes, verify with the test suite (`npm test`), commit the review fixes, push to the remote branch, and iterate until review threads are resolved and checks pass green.
-     5. If a review comment is technically invalid, inconsistent with the specification, or counter-productive, provide explicit technical refutation with evidence.
+7. **Version Control Execution Protocol:**
+   - **SDW Orchestrator Workflows (`sdw-orch`):** When executing an orchestrator workflow (`sdw-orch`), creating the delivery commit in Step 6 and pushing changes to the active remote branch in Step 8 (or via `--push`) is **mandatory and pre-authorized** as an integral part of the delivery lifecycle.
    - **Standalone / Ad-Hoc Agent Requests:** For ad-hoc queries, explorations, and isolated refactorings outside of `sdw-orch`, never run `git commit` or `git push` unless the user explicitly requested it in their prompt; leave changes in the working tree and report them.
 
 ---
