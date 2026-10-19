@@ -318,6 +318,14 @@ function collectDeliveryFiles(targetRoot, specSlug, state) {
   try {
     if (fs.existsSync(path.join(path.resolve(targetRoot), fallbackIdx))) files.add(fallbackIdx);
   } catch (e) {}
+  if (state && state.specPath) {
+    try {
+      const relSpec = normalizeRel(path.relative(path.resolve(targetRoot), path.resolve(state.specPath)));
+      if (relSpec && !relSpec.includes('..') && !isScopedExcluded(relSpec) && fs.existsSync(path.resolve(targetRoot, relSpec))) {
+        files.add(relSpec);
+      }
+    } catch (e) {}
+  }
   return [...files].sort();
 }
 
