@@ -91,15 +91,18 @@ spec-driven-workflow/
 │       ├── 002-sdw-spec-management.md
 │       ├── 003-sdw-router-skill.md
 │       └── index.specs.md        # Central specification index
+│   └── traps.md                  # Central anti-regression trap log
 ├── skills/                       # Canonical source of truth for all skills
 │   ├── sdw-config/               # Project configuration & verification skill
 │   ├── sdw-orch/                 # End-to-end workflow orchestrator skill
 │   ├── sdw-router/               # Always-autoloaded entrypoint and skill router
+│   ├── sdw-rules/                # Shared behavioral rules, simplicity & anti-overengineering
 │   └── sdw-spec/                 # Spec authoring, validation, sync, and index manager
 ├── tests/                        # Automated unit & integration test suites
 │   ├── sdw_config.test.cjs
 │   ├── sdw_orch.test.cjs
 │   ├── sdw_router.test.cjs
+│   ├── sdw_rules.test.cjs
 │   └── sdw_spec.test.cjs
 ├── AGENTS.md                     # Mandatory rules and protocols for AI agents
 ├── FEATURES.md                   # Feature showcase and architecture presentation

@@ -81,17 +81,33 @@
 
 ---
 
-### 5. 🧪 Battle-Tested Quality & Zero-Flake Test Suite
+### 5. 📏 `sdw-rules` — Shared Behavioral Rules, Simplicity & Anti-Overengineering
+
+*Canonical engineering discipline codifying simplicity first, surgical scope enclosure, and anti-regression traps.*
+
+- **Ultra-Lean Context Budget:** Compact Tier 1 `SKILL.md` (≤ 80 lines) codifies the 4 core pillars with an announcement banner and zero prompt bloat.
+- **Think & Ask Before Acting:** Prohibits silent scope expansion. When architectural opportunities arise, halts and presents an interactive clarification gate (`ask_question`), defaulting to minimal scope.
+- **Simplicity First (YAGNI):** Enforces writing minimum code required to satisfy ACs. Explicitly rejects speculative abstractions, complex class registries, and unused helper modules.
+- **Surgical Diff Hygiene:** Restricts modifications strictly to files and lines required by the current task, prohibiting adjacent reformatting or unnecessary refactoring.
+- **Empirical Goal-Driven Verification:** Directs multi-step tasks to define clear, verifiable success criteria and tests before declaring completion.
+- **Deterministic Compliance Doctor (`doctor`):** Audits installed skills for context line budgets (≤ 120 lines) and cross-references from downstream core skills (`sdw-spec`, `sdw-orch`).
+- **Specification Scope Auditor (`audit-spec`):** Scans specifications for speculative scope creep markers, composite ACs, or missing Out of Scope boundaries.
+- **Anti-Regression Trap Log (`log-trap`):** Appends verified friction and overengineering lessons to `.sdw/traps.md` at project scope to prevent repeating mistakes.
+
+---
+
+### 6. 🧪 Battle-Tested Quality & Zero-Flake Test Suite
 
 *Engineering rigor backed by 100% native automated tests.*
 
 - **Native Node.js Test Runner:** Built with `node:test` and `node:assert/strict` — zero third-party testing frameworks required.
-- **40 Comprehensive Test Scenarios:**
+- **56 Comprehensive Test Scenarios:**
   - `sdw_config.test.cjs`: Configuration parsing, schema validation, token expansion, and initialization gates.
   - `sdw_spec.test.cjs`: Index bootstrapping, EARS validation, synthesis, SCM provider contract, state synchronization, and archival quality gates.
-  - `sdw_orch.test.cjs`: State machine transitions, derivation, grilling decision trees, DAG decomposition, scoring gates, code review auto-fixing, and remote push publishing.
+  - `sdw_orch.test.cjs`: State machine transitions, derivation, grilling decision trees, DAG decomposition, scoring gates, code review auto-fixing, remote push publishing, and multi-spec batch queue execution.
   - `sdw_router.test.cjs`: Minimal context budget enforcement (SKILL.md ≤ 120 lines), explicit invocations, keyword classification, tied-confidence disambiguation, missing directory resolution, and pass-through non-interference.
-- **Sub-Second Execution:** Entire test suite runs in ~1.2 seconds with 100% pass rate.
+  - `sdw_rules.test.cjs`: Three-tier progressive disclosure, announcement banners, Karpathy simplicity principles, doctor compliance verification, scope creep audits, and trap logging.
+- **Sub-Second Execution:** Entire test suite runs in ~1.5 seconds with 100% pass rate.
 
 ---
 
@@ -99,11 +115,11 @@
 
 The following specifications are scheduled for upcoming execution phases:
 
-- **005 — Multi-Spec Batch Execution:** Parallel and sequential pipeline batching for multi-feature delivery.
 - **006 — Packaging & Vercel Skills Compatibility:** Standalone npm packaging, one-command installer, and seamless distribution across `.agents/skills/`.
 - **007 — SDW Memory Skill:** Integrated anti-regression project memory and vault trap retrieval.
-- **008 — SDW Rules Shared Skill:** Shared behavioral constraints for simplicity, scope enclosure, and anti-overengineering.
 - **009 — SDW Security Checks:** Configurable pre-commit secret leak scanners and PII protection gates.
 - **010 — Branch & Worktree Strategy:** Configurable feature branches and per-task isolated worktrees.
 - **011 — GitHub Actions CI/CD Integration:** Automated workflow runs, agentic PR reviews, and skill distribution pipelines.
 - **012 — SCM Provider Selection:** Granular GitHub / Azure DevOps routing with fail-safe disable modes.
+- **013 — Refinement Step & Pre-PR Gates:** Refinement step merging grilling with technical planning, build/test gates, and pre-PR lifecycle hooks.
+- **014 — Step Artifacts Persistence:** Per-step human-auditable markdown artifacts persistence under `{stateDir}/{slug}/{runId}/`.
