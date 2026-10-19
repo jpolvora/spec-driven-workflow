@@ -35,6 +35,18 @@ class ScmProvider {
   async createPr(options = {}) {
     return this.createPullRequest(options);
   }
+
+  async listReviewThreads(prIdentifier) {
+    throw new Error('listReviewThreads must be implemented by provider.');
+  }
+
+  async resolveReviewThread(options = {}) {
+    throw new Error('resolveReviewThread must be implemented by provider.');
+  }
+
+  async checkPrStatus(prIdentifier) {
+    throw new Error('checkPrStatus must be implemented by provider.');
+  }
 }
 
 /**
@@ -163,7 +175,11 @@ class GitHubProvider extends ScmProvider {
       const stdout = this.executor(checkCmd);
       existing = JSON.parse(stdout || '[]');
     } catch (err) {
-      throw new Error(`Unable to verify existing pull request before creation: ${err.message}`);
+      if (dryRun) {
+        existing = [];
+      } else {
+        throw new Error(`Unable to verify existing pull request before creation: ${err.message}`);
+      }
     }
 
     if (Array.isArray(existing) && existing.length > 0) {
@@ -227,6 +243,183 @@ class GitHubProvider extends ScmProvider {
       if (tempBodyFile && fs.existsSync(tempBodyFile)) {
         try { fs.unlinkSync(tempBodyFile); } catch (e) {}
       }
+    }
+  }
+
+  async checkPrStatus(prIdentifier) {
+    if (!prIdentifier) {
+      throw new Error('prIdentifier is required for GitHub checkPrStatus.');
+    }
+    try {
+      const cmd = `gh pr checks ${prIdentifier} --json name,state,bucket,link`;
+      const stdout = this.executor(cmd);
+      let checks = [];
+      try {
+        checks = JSON.parse(stdout || '[]');
+      } catch (parseErr) {
+        const lines = (stdout || '').split('\n').filter(l => l.trim());
+        checks = lines.map(line => {
+          const parts = line.split(/\s+/);
+          return { name: parts[0] || 'check', state: parts[1] || 'unknown', bucket: parts[1] || 'unknown' };
+        });
+      }
+      const pendingCount = checks.filter(c => c.state === 'pending' || c.bucket === 'pending' || c.state === 'in_progress').length;
+      const failedCount = checks.filter(c => c.state === 'fail' || c.bucket === 'fail' || c.state === 'failure').length;
+      const allPassed = checks.length > 0 && pendingCount === 0 && failedCount === 0;
+
+      return {
+        checks,
+        allPassed,
+        pendingCount,
+        failedCount,
+        completed: pendingCount === 0
+      };
+    } catch (err) {
+      const errMsg = err.stderr ? err.stderr.toString().trim() : err.message;
+      throw new Error(`GitHub checkPrStatus failed: ${errMsg}`);
+    }
+  }
+
+  async listReviewThreads(prIdentifier) {
+    if (!prIdentifier) {
+      throw new Error('prIdentifier is required for GitHub listReviewThreads.');
+    }
+
+    // Attempt GraphQL first for native threads and PRRT_ IDs
+    try {
+      const repoOut = this.executor('gh repo view --json owner,name');
+      const repoData = JSON.parse(repoOut || '{}');
+      const owner = repoData.owner ? (repoData.owner.login || repoData.owner) : null;
+      const name = repoData.name;
+      if (owner && name) {
+        const query = `query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { reviewThreads(first: 50) { nodes { id isResolved path line comments(first: 50) { nodes { id databaseId body author { login } createdAt } } } } } } }`;
+        const cmd = `gh api graphql -f query='${query}' -F owner="${owner}" -F name="${name}" -F number=${Number(prIdentifier)}`;
+        const stdout = this.executor(cmd);
+        const data = JSON.parse(stdout || '{}');
+        const rawThreads = data.data && data.data.repository && data.data.repository.pullRequest && data.data.repository.pullRequest.reviewThreads && data.data.repository.pullRequest.reviewThreads.nodes;
+        if (Array.isArray(rawThreads)) {
+          const threads = rawThreads.map(t => {
+            const comments = (t.comments && t.comments.nodes ? t.comments.nodes : []).map(c => ({
+              id: String(c.id),
+              databaseId: c.databaseId ? String(c.databaseId) : null,
+              body: c.body || '',
+              author: c.author ? c.author.login : 'unknown',
+              createdAt: c.createdAt || ''
+            }));
+            const hasResolution = t.isResolved || comments.some(c =>
+              c.body.includes('<!-- resolution-reply -->') || /resolved|fixed|closed/i.test(c.body)
+            );
+            return {
+              id: String(t.id),
+              path: t.path,
+              line: t.line,
+              isResolved: hasResolution,
+              comments
+            };
+          });
+          return {
+            threads,
+            activeCount: threads.filter(t => !t.isResolved).length
+          };
+        }
+      }
+    } catch (gqlErr) {
+      // Fallback to REST comments
+    }
+
+    try {
+      const cmd = `gh api repos/:owner/:repo/pulls/${prIdentifier}/comments`;
+      const stdout = this.executor(cmd);
+      const comments = JSON.parse(stdout || '[]');
+      
+      const threadMap = new Map();
+      for (const c of comments) {
+        const threadId = c.in_reply_to_id ? String(c.in_reply_to_id) : String(c.id);
+        if (!threadMap.has(threadId)) {
+          threadMap.set(threadId, {
+            id: threadId,
+            path: c.path,
+            line: c.line,
+            isResolved: false,
+            comments: []
+          });
+        }
+        threadMap.get(threadId).comments.push({
+          id: String(c.id),
+          databaseId: String(c.id),
+          body: c.body,
+          author: c.user ? c.user.login : 'unknown',
+          createdAt: c.created_at
+        });
+      }
+
+      for (const [id, thread] of threadMap.entries()) {
+        const hasResolution = thread.comments.some(c => 
+          c.body.includes('<!-- resolution-reply -->') || 
+          /resolved|fixed|closed/i.test(c.body)
+        );
+        thread.isResolved = hasResolution;
+      }
+
+      const threads = Array.from(threadMap.values());
+      const activeCount = threads.filter(t => !t.isResolved).length;
+
+      return {
+        threads,
+        activeCount
+      };
+    } catch (err) {
+      const errMsg = err.stderr ? err.stderr.toString().trim() : err.message;
+      throw new Error(`GitHub listReviewThreads failed: ${errMsg}`);
+    }
+  }
+
+  async resolveReviewThread(options = {}) {
+    const { prNumber, threadId, commentId, comment, model, dryRun = false } = options;
+    if (!comment) {
+      throw new Error('comment describing resolution is required for resolveReviewThread.');
+    }
+
+    if (dryRun) {
+      return {
+        resolved: true,
+        dryRun: true,
+        threadId: threadId || commentId,
+        comment
+      };
+    }
+
+    const note = model ? `${comment}\n\n---\nLLM model: ${model}` : comment;
+    const bodyWithMarker = `<!-- resolution-reply -->\n${note}`;
+
+    try {
+      if (threadId && String(threadId).startsWith('PRRT_')) {
+        const mutation = `mutation($threadId: ID!, $body: String!) { addPullRequestReviewThreadReply(input: { pullRequestReviewThreadId: $threadId, body: $body }) { comment { id } } resolveReviewThread(input: { threadId: $threadId }) { thread { isResolved } } }`;
+        this.executor(`gh api graphql -f query='${mutation}' -F threadId="${threadId}" -F body="${bodyWithMarker.replace(/"/g, '\\"')}"`);
+        return {
+          resolved: true,
+          dryRun: false,
+          threadId,
+          comment: bodyWithMarker
+        };
+      }
+
+      const targetId = commentId || threadId;
+      if (!targetId || !prNumber) {
+        throw new Error('prNumber and either threadId or commentId are required to reply/resolve.');
+      }
+
+      const cmd = `gh api repos/:owner/:repo/pulls/${prNumber}/comments/${targetId}/replies -f body="${bodyWithMarker.replace(/"/g, '\\"')}"`;
+      this.executor(cmd);
+      return {
+        resolved: true,
+        dryRun: false,
+        threadId: String(targetId),
+        comment: bodyWithMarker
+      };
+    } catch (err) {
+      const errMsg = err.stderr ? err.stderr.toString().trim() : err.message;
+      throw new Error(`GitHub resolveReviewThread failed: ${errMsg}`);
     }
   }
 }
@@ -316,7 +509,11 @@ class AzureDevOpsProvider extends ScmProvider {
       const stdout = this.executor(checkCmd);
       existing = JSON.parse(stdout || '[]');
     } catch (err) {
-      throw new Error(`Unable to verify existing pull request before creation: ${err.message}`);
+      if (dryRun) {
+        existing = [];
+      } else {
+        throw new Error(`Unable to verify existing pull request before creation: ${err.message}`);
+      }
     }
 
     if (Array.isArray(existing) && existing.length > 0) {
@@ -368,6 +565,163 @@ class AzureDevOpsProvider extends ScmProvider {
     } catch (err) {
       const errMsg = err.stderr ? err.stderr.toString().trim() : err.message;
       throw new Error(`Azure DevOps SCM Provider failed to create PR: ${errMsg}`);
+    }
+  }
+
+  async checkPrStatus(prIdentifier) {
+    if (!prIdentifier) {
+      throw new Error('prIdentifier is required for Azure DevOps checkPrStatus.');
+    }
+    try {
+      const cmd = `az repos pr policy list --id ${prIdentifier} --output json`;
+      const stdout = this.executor(cmd);
+      let policies = [];
+      try {
+        policies = JSON.parse(stdout || '[]');
+      } catch (e) {
+        policies = [];
+      }
+
+      const pendingCount = policies.filter(p => {
+        const s = String(p.status || '').toLowerCase();
+        return s === 'running' || s === 'queued' || s === 'in_progress';
+      }).length;
+
+      const failedCount = policies.filter(p => {
+        const s = String(p.status || '').toLowerCase();
+        return s === 'rejected' || s === 'broken' || s === 'failed';
+      }).length;
+
+      let allPassed = policies.length > 0 && pendingCount === 0 && failedCount === 0;
+
+      // If no explicit policies, verify PR is active
+      if (policies.length === 0) {
+        try {
+          const showCmd = `az repos pr show --id ${prIdentifier} --output json`;
+          const showStdout = this.executor(showCmd);
+          const prData = JSON.parse(showStdout || '{}');
+          const status = String(prData.status || '').toLowerCase();
+          allPassed = status === 'active';
+        } catch (e) {
+          allPassed = true;
+        }
+      }
+
+      return {
+        checks: policies.map(p => ({
+          name: (p.configuration && p.configuration.type && p.configuration.type.displayName) || String(p.id || 'policy'),
+          state: p.status || 'unknown',
+          status: p.status || 'unknown'
+        })),
+        allPassed,
+        pendingCount,
+        failedCount,
+        completed: pendingCount === 0
+      };
+    } catch (err) {
+      const errMsg = err.stderr ? err.stderr.toString().trim() : err.message;
+      throw new Error(`Azure DevOps checkPrStatus failed: ${errMsg}`);
+    }
+  }
+
+  async listReviewThreads(prIdentifier) {
+    if (!prIdentifier) {
+      throw new Error('prIdentifier is required for Azure DevOps listReviewThreads.');
+    }
+    try {
+      const cmd = `az devops invoke --area git --resource pullRequestThreads --route-parameters pullRequestId=${prIdentifier} --http-method GET -o json`;
+      const stdout = this.executor(cmd);
+      const res = JSON.parse(stdout || '{"value":[]}');
+      const rawThreads = Array.isArray(res) ? res : (res.value || []);
+
+      const threads = rawThreads.map(t => {
+        const status = String(t.status || 'active').toLowerCase();
+        const comments = (t.comments || []).map(c => ({
+          id: String(c.id),
+          databaseId: String(c.id),
+          body: c.content || '',
+          author: (c.author && (c.author.displayName || c.author.uniqueName)) || 'unknown',
+          createdAt: c.publishedDate || ''
+        }));
+        const isResolved = status === 'fixed' || status === 'closed' || status === 'bydesign' || status === 'wontfix' ||
+          comments.some(c => c.body.includes('<!-- resolution-reply -->') || /resolved|fixed|closed/i.test(c.body));
+
+        return {
+          id: String(t.id),
+          status: t.status,
+          isResolved,
+          comments
+        };
+      });
+
+      const activeCount = threads.filter(t => !t.isResolved).length;
+      return {
+        threads,
+        activeCount
+      };
+    } catch (err) {
+      const errMsg = err.stderr ? err.stderr.toString().trim() : err.message;
+      throw new Error(`Azure DevOps listReviewThreads failed: ${errMsg}`);
+    }
+  }
+
+  async resolveReviewThread(options = {}) {
+    const { prNumber, threadId, comment, model, dryRun = false } = options;
+    if (!comment) {
+      throw new Error('comment describing resolution is required for resolveReviewThread.');
+    }
+    if (!threadId || !prNumber) {
+      throw new Error('prNumber and threadId are required for Azure DevOps resolveReviewThread.');
+    }
+
+    if (dryRun) {
+      return {
+        resolved: true,
+        dryRun: true,
+        threadId: String(threadId),
+        comment
+      };
+    }
+
+    const note = model ? `${comment}\n\n---\nLLM model: ${model}` : comment;
+    const bodyWithMarker = `<!-- resolution-reply -->\n${note}`;
+
+    let tempFile = null;
+    try {
+      // 1. Add reply comment to the review thread
+      const commentPayload = JSON.stringify({
+        content: bodyWithMarker,
+        parentCommentId: 1,
+        commentType: 1
+      });
+      const tmpDir = os.tmpdir();
+      tempFile = path.join(tmpDir, `sdw-ado-thread-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
+      fs.writeFileSync(tempFile, commentPayload, 'utf8');
+
+      const addCommentCmd = `az devops invoke --area git --resource pullRequestThreadComments --route-parameters pullRequestId=${prNumber} threadId=${threadId} --http-method POST --in-file "${tempFile.replace(/\\/g, '/')}" -o json`;
+      this.executor(addCommentCmd);
+
+      // 2. Update thread status to 'fixed' (code 2 in ADO: 1=active, 2=fixed, 3=wontFix, 4=closed)
+      const threadPatchPayload = JSON.stringify({
+        status: 2
+      });
+      fs.writeFileSync(tempFile, threadPatchPayload, 'utf8');
+      const updateThreadCmd = `az devops invoke --area git --resource pullRequestThreads --route-parameters pullRequestId=${prNumber} threadId=${threadId} --http-method PATCH --in-file "${tempFile.replace(/\\/g, '/')}" -o json`;
+      this.executor(updateThreadCmd);
+
+      return {
+        resolved: true,
+        dryRun: false,
+        threadId: String(threadId),
+        comment: bodyWithMarker
+      };
+    } catch (err) {
+      const errMsg = err.stderr ? err.stderr.toString().trim() : err.message;
+      throw new Error(`Azure DevOps resolveReviewThread failed: ${errMsg}`);
+    } finally {
+      if (tempFile && fs.existsSync(tempFile)) {
+        try { fs.unlinkSync(tempFile); } catch (e) {}
+      }
     }
   }
 }

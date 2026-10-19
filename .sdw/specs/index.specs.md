@@ -35,3 +35,4 @@ Central repository index tracking specification lifecycle states, metadata, and 
 | 021 | 021-sdw-monitor-telemetry | SDW Live Run Monitor and Append-Only Telemetry | pending | local | 2026-10-19 | PASS | - |
 | 022 | 022-sdw-harness-diagnostics | SDW Harness Diagnostics, Workflow Simulation, and Context Budget Audit | pending | local | 2026-10-19 | PASS | - |
 | 023 | 023-sdw-reporting-suite | SDW Delivery Reporting — Activity, Standup, and Spec Explanation | pending | local | 2026-10-19 | PASS | - |
+| 024 | 024-sdw-ship-pr | SDW Ship PR Skill — Standalone Delivery, SCM Submission, and Review Convergence | completed | local | 2026-10-19 | PASS | - |

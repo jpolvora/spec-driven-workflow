@@ -113,6 +113,7 @@ spec-driven-workflow/
 │   ├── sdw-router/               # Always-autoloaded entrypoint and skill router
 │   ├── sdw-rules/                # Shared behavioral rules, simplicity & anti-overengineering
 │   ├── sdw-security-checks/      # Pre-commit secrets and credentials leak scanner
+│   ├── sdw-ship-pr/              # Standalone PR shipping & review convergence skill
 │   └── sdw-spec/                 # Spec authoring, validation, sync, and index manager
 ├── tests/                        # Automated unit & integration test suites
 │   ├── sdw_branch_worktree.test.cjs
@@ -125,6 +126,7 @@ spec-driven-workflow/
 │   ├── sdw_rules.test.cjs
 │   ├── sdw_scm_provider.test.cjs
 │   ├── sdw_security_checks.test.cjs
+│   ├── sdw_ship_pr.test.cjs
 │   ├── sdw_spec.test.cjs
 │   └── sdw_step_artifacts.test.cjs
 ├── AGENTS.md                     # Mandatory rules and protocols for AI agents
@@ -224,6 +226,21 @@ node skills/sdw-security-checks/scripts/sdw_security_checks.cjs scan --staged
 
 # Emit structured JSON report
 node skills/sdw-security-checks/scripts/sdw_security_checks.cjs scan --staged --json
+```
+
+### Using `sdw-ship-pr` (PR Shipping & Review Convergence)
+
+The `sdw-ship-pr` skill executes pre-PR verification, publishes branches, creates/reuses PRs, and runs automated review convergence:
+
+```bash
+# Execute standalone PR shipping with pre-PR verification
+node skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs --head <branch> --base <baseBranch>
+
+# Dry-run simulation without git push or remote mutations
+node skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs --head develop --dry-run --json
+
+# Ship and run review convergence loop with resolution summary comments
+node skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs --head develop --push --poll-pr
 ```
 
 ## 5. License & Contribution

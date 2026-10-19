@@ -1246,34 +1246,79 @@ function cmdRun(options) {
       } catch (e) {}
     }
 
-    // Optional Remote Review Resolution Loop (AC14, AC15, AC20)
+    // Optional Remote Review Resolution Loop & SCM Provider state (AC14, AC15, AC20)
     const pollPr = options.pollPr !== undefined ? options.pollPr : (config.scmCodeReviewEnabled || false);
-    if (pollPr) {
-      const currentScm = state.scm || { provider: 'none', resolvedFrom: 'config', cliInstalled: null, cliAuthenticated: null, skipped: false, skipReason: null, errors: [] };
-      if (currentScm.provider === 'none') {
-        console.log(`[Step 8: PR Preparation] SCM polling skipped (scmProvider: none).`);
-        currentScm.skipped = true;
-        currentScm.skipReason = 'scmProvider is set to "none"';
-      } else {
-        const scmContract = getScmProviderContract();
-        const capability = scmContract ? scmContract.checkScmCapability(currentScm.provider) : { available: false, error: 'contract unavailable' };
-        currentScm.cliInstalled = capability.installed;
-        currentScm.cliAuthenticated = capability.authenticated;
+    const currentScm = state.scm || { provider: config.scmProvider || 'none', resolvedFrom: 'config', cliInstalled: null, cliAuthenticated: null, skipped: false, skipReason: null, errors: [] };
+    if (currentScm.provider === 'none') {
+      console.log(`[Step 8: PR Preparation] SCM polling skipped (scmProvider: none).`);
+      currentScm.skipped = true;
+      currentScm.skipReason = 'scmProvider is set to "none"';
+    } else {
+      const scmContract = getScmProviderContract();
+      const capability = scmContract ? scmContract.checkScmCapability(currentScm.provider) : { available: false, error: 'contract unavailable' };
+      currentScm.cliInstalled = capability.installed;
+      currentScm.cliAuthenticated = capability.authenticated;
 
-        if (!capability.available) {
-          console.warn(`[Step 8: PR Preparation] SCM polling skipped: ${capability.error}`);
-          currentScm.skipped = true;
-          currentScm.skipReason = capability.error;
-          if (!currentScm.errors) currentScm.errors = [];
-          currentScm.errors.push(capability.error);
-        } else {
-          console.log(`[Step 8: PR Preparation] SCM code review loop enabled via ${currentScm.provider} (${capability.bin}). Polling for reviewer feedback...`);
-          prPayload.pollEnabled = true;
-          prPayload.scmProvider = currentScm.provider;
-        }
+      if (!capability.available) {
+        console.warn(`[Step 8: PR Preparation] SCM polling skipped: ${capability.error}`);
+        currentScm.skipped = true;
+        currentScm.skipReason = capability.error;
+        if (!currentScm.errors) currentScm.errors = [];
+        currentScm.errors.push(capability.error);
+      } else if (pollPr) {
+        console.log(`[Step 8: PR Preparation] SCM code review loop enabled via ${currentScm.provider} (${capability.bin}). Polling for reviewer feedback...`);
+        prPayload.pollEnabled = true;
+        prPayload.scmProvider = currentScm.provider;
       }
-      state.scm = currentScm;
-      state = stateManager.saveRunState(targetRoot, state);
+    }
+    state.scm = currentScm;
+    state = stateManager.saveRunState(targetRoot, state);
+
+    // Delegate PR delivery, SCM submission, and review convergence to sdw-ship-pr (AC12, AC13)
+    const shipPrScript = path.resolve(__dirname, '../../sdw-ship-pr/scripts/sdw_ship_pr.cjs');
+    if (fs.existsSync(shipPrScript)) {
+      try {
+        console.log(`[sdw-orch Step 8] Delegating delivery to sdw-ship-pr...`);
+        const runArgs = [
+          `"${shipPrScript}"`,
+          `--run-id "${state.runId}"`,
+          `--spec "${specSlug}"`,
+          `--root "${targetRoot.replace(/\\/g, '/')}"`,
+          options.push || config.pushDelivery ? '--push' : '',
+          pollPr ? '--poll-pr' : '',
+          options.dryRun ? '--dry-run' : '',
+          '--json'
+        ].filter(Boolean).join(' ');
+
+        const shipStdout = execSync(`node ${runArgs}`, {
+          cwd: targetRoot,
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'pipe']
+        });
+
+        let shipResult = null;
+        try {
+          shipResult = JSON.parse(shipStdout);
+        } catch (e) {}
+
+        if (shipResult) {
+          if (shipResult.pullRequest) {
+            state.pullRequest = shipResult.pullRequest;
+            prPayload.pullRequest = shipResult.pullRequest;
+          }
+          state.shipStatus = shipResult.shipStatus;
+          prPayload.shipStatus = shipResult.shipStatus;
+          if (shipResult.pushed) {
+            state.pushedBranch = shipResult.head;
+            prPayload.pushedBranch = shipResult.head;
+          }
+          prPayload.reviewConvergence = shipResult.reviewConvergence;
+        }
+      } catch (shipErr) {
+        console.warn(`[sdw-orch Step 8] Note from sdw-ship-pr: ${shipErr.message}`);
+        if (!state.errors) state.errors = [];
+        state.errors.push({ step: 8, timestamp: new Date().toISOString(), error: shipErr.message });
+      }
     }
 
     state = stateManager.updateStepState(targetRoot, state.runId, 8, 'completed', prPayload);
@@ -1281,9 +1326,9 @@ function cmdRun(options) {
     state = stateManager.updateStepState(targetRoot, state.runId, 8, 'skipped', { reason: 'Skipped via --skip-pr' });
   }
 
-  // Remote Push / Branch Publishing (--push or config.pushDelivery) (AC14)
+  // Remote Push / Branch Publishing (--push or config.pushDelivery) fallback
   const shouldPush = options.push !== undefined ? options.push : (config && config.pushDelivery);
-  if (shouldPush) {
+  if (shouldPush && !state.pushedBranch) {
     try {
       const remotes = execSync('git remote', { cwd: targetRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
       const currentBranch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: targetRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
@@ -1299,7 +1344,7 @@ function cmdRun(options) {
       if (!state.errors) state.errors = [];
       state.errors.push({ step: 8, timestamp: new Date().toISOString(), error: `git push failed: ${pushErr.message}` });
     }
-  } else {
+  } else if (!shouldPush) {
     console.log(`[Step 8: PR Preparation] Pre-PR verification passed. PR payload assembled (remote push disabled).`);
   }
 

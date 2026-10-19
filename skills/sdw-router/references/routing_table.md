@@ -68,6 +68,17 @@ When evaluating a user turn, the router applies four strict precedence tiers:
   - "Resume interrupted run run-1792396125490"
   - "Check status of the current orchestrator execution"
 
+### Skill: `sdw-ship-pr`
+- **Domain**: Pull request preparation, pre-PR requirement checks, remote branch publishing, SCM PR creation/reuse, and automated review convergence.
+- **Explicit Invocations**: `/sdw-ship-pr`, `@sdw-ship-pr`, `sdw-ship-pr`, `/ship-pr`, `@ship-pr`, `ship-pr`
+- **Trigger Keywords**:
+  - `ship pr`, `ship-pr`, `create pr`, `open pr`, `submit pr`, `deliver pr`
+  - `pre-pr`, `poll pr`, `resolve review`, `resolve thread`, `review convergence`, `converge`
+- **Typical Prompts**:
+  - "Check pre-PR requirements and ship a pull request for develop"
+  - "Open a PR on GitHub and resolve reviewer comments"
+  - "Run PR review convergence loop on PR #3"
+
 ---
 
 ## 3. Disambiguation on Tied Confidence

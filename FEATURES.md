@@ -98,7 +98,21 @@
 
 ---
 
-### 6. 🔒 `sdw-security-checks` — Configurable Pre-Commit Secrets & Leak Gate
+### 6. 🚢 `sdw-ship-pr` — Standalone Delivery, SCM Submission & Review Convergence
+
+*End-to-end PR shipping, pre-PR requirement checks, remote publishing, and automated review convergence.*
+
+- **Standalone & Delegated Invocation:** Directly invokable standalone (`node skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs` / `/sdw-ship-pr`) at any time, or delegated by `sdw-orch` Step 8.
+- **Pre-PR Quality Verification Gates:** Evaluates `prePrInstructions`, `prePrCommand`, `requiredBuild`, `runAllTests`, and `securityChecksEnabled` from `.sdw/config.json`.
+- **Remote Branch Publishing:** Synchronizes the active branch to remote origin (`pushDelivery: true` or `--push`).
+- **Unified SCM PR Creation & Idempotency:** Agnostically creates or reuses open PRs for GitHub and Azure DevOps, or cleanly bypasses remote submission when `scmProvider: "none"`.
+- **Automated Review Convergence Loop:** Polls CI checks (`checkPrStatus`) and active review threads (`listReviewThreads`) up to the configured iteration ceiling.
+- **Resolution Summary Comment & Thread Close:** For every resolved review issue, posts a technical summary comment describing what changed and why, atomically resolving the thread on the remote SCM provider (GitHub GraphQL mutation or Azure DevOps PATCH).
+- **Zero-Mutation Dry-Run Simulation:** Simulates pre-PR checks, branch push, PR creation, and review polling without remote mutations when `--dry-run` is active.
+
+---
+
+### 7. 🔒 `sdw-security-checks` — Configurable Pre-Commit Secrets & Leak Gate
 
 *Deterministic, zero-dependency secret detection and leak prevention guarding against credential leaks before git commits.*
 
@@ -110,7 +124,7 @@
 
 ---
 
-### 7. 🛡️ Orchestrator Refinement & Pre-PR Quality Gates
+### 8. 🛡️ Orchestrator Refinement & Pre-PR Quality Gates
 
 *Consolidated technical planning and ironclad repository-level quality gates before PR publication.*
 
@@ -121,7 +135,7 @@
 
 ---
 
-### 8. 📜 Human-Auditable Step Artifacts Persistence
+### 9. 📜 Human-Auditable Step Artifacts Persistence
 
 *Deterministic side-effect persistence capturing intermediate reasoning, task graphs, and verification evidence.*
 
@@ -133,15 +147,16 @@
 
 ---
 
-### 9. 🧪 Battle-Tested Quality & Zero-Flake Test Suite
+### 10. 🧪 Battle-Tested Quality & Zero-Flake Test Suite
 
 *Engineering rigor backed by 100% native automated tests.*
 
 - **Native Node.js Test Runner:** Built with `node:test` and `node:assert/strict` — zero third-party testing frameworks required.
-- **97 Comprehensive Test Scenarios:**
+- **125 Comprehensive Test Scenarios:**
   - `sdw_config.test.cjs`: Configuration parsing, schema validation, token expansion, and initialization gates.
   - `sdw_spec.test.cjs`: Index bootstrapping, EARS validation, synthesis, SCM provider contract, state synchronization, and archival quality gates.
   - `sdw_orch.test.cjs`: State machine transitions, derivation, grilling decision trees, DAG decomposition, scoring gates, code review auto-fixing, remote push publishing, and unattended multi-spec batch queue execution.
+  - `sdw_ship_pr.test.cjs`: Standalone PR shipping, dry-run simulation, pre-PR requirement checks, review convergence with summary comments, and orchestrator delegation.
   - `sdw_refinement_gates.test.cjs`: Step 2 Refinement state machine naming, technical blueprint ingestion into Step 3, config schema validation, build and test quality gates, automated fix retry loops, and pre-PR lifecycle hooks.
   - `sdw_step_artifacts.test.cjs`: Intermediate step artifact persistence (steps 2, 3, 5), directory isolation (`.sdw/state/{slug}/{runId}/`), run state linkage, deterministic overwrite on re-execution, and resilient failure handling.
   - `sdw_branch_worktree.test.cjs`: Feature branch lifecycle, dirty tree refusal, branch reuse, worktree creation/cleanup, cherry-pick integration, and runtime overrides.
@@ -153,7 +168,7 @@
 
 ---
 
-### 10. 🤖 GitHub Actions CI/CD, Agentic Code Review & Skills Distribution
+### 11. 🤖 GitHub Actions CI/CD, Agentic Code Review & Skills Distribution
 
 *Zero-dependency CI verification, fork-resilient agentic PR reviews, and vendor-neutral skills distribution.*
 
