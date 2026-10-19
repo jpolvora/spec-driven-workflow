@@ -1,0 +1,101 @@
+# SDW Router Dispatch Table & Routing Rules
+
+This document details the intent classification matrix, resolution precedence, and ambiguity handling used by `sdw-router`.
+
+## 1. Resolution Precedence
+
+When evaluating a user turn, the router applies four strict precedence tiers:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ 1. Explicit Invocation (/sdw-*, @sdw-*, exact skill name)  │
+└──────────────────────────────┬──────────────────────────────┘
+                               │ (if not explicit)
+                               ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 2. High-Confidence Keyword & Semantic Intent Match          │
+└──────────────────────────────┬──────────────────────────────┘
+                               │ (if tied confidence)
+                               ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 3. User Clarification Gate (Options + Recommended Default)  │
+└──────────────────────────────┬──────────────────────────────┘
+                               │ (if no match)
+                               ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 4. Passive Non-Interference Pass-Through                    │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 2. Intent Dispatch Matrix
+
+### Skill: `sdw-config`
+- **Domain**: Workspace initialization, environment verification, and configuration parsing.
+- **Explicit Invocations**: `/sdw-config`, `@sdw-config`, `sdw-config`
+- **Trigger Keywords**:
+  - `config`, `configuration`, `initialize workspace`, `init sdw`, `check config`
+  - `parse config`, `environment verification`, `config.json`, `directory-structure.md`
+  - `sdw settings`, `verify environment`, `setup sdw`
+- **Typical Prompts**:
+  - "Check the .sdw workspace configuration"
+  - "Initialize SDW in this repository"
+  - "Parse config.json to resolve directory tokens"
+
+### Skill: `sdw-spec`
+- **Domain**: Specification lifecycle, authoring, EARS validation, index synchronization, and archiving.
+- **Explicit Invocations**: `/sdw-spec`, `@sdw-spec`, `sdw-spec`
+- **Trigger Keywords**:
+  - `spec`, `specification`, `author spec`, `new spec`, `format spec`
+  - `ears syntax`, `validate spec`, `list specs`, `sync specs`, `import spec`
+  - `archive spec`, `index.specs.md`, `prd index`, `spec lifecycle`
+- **Typical Prompts**:
+  - "Draft a new feature specification for user authentication"
+  - "Validate our specs against the EARS acceptance criteria format"
+  - "Sync index.specs.md with active on-disk specifications"
+  - "Archive completed specification 001"
+
+### Skill: `sdw-orch`
+- **Domain**: End-to-end specification implementation, subagent DAG orchestration, conformance scoring, code review, and delivery push.
+- **Explicit Invocations**: `/sdw-orch`, `@sdw-orch`, `sdw-orch`, `/orch`, `@orch`, `orch`
+- **Trigger Keywords**:
+  - `orchestrate`, `orchestrator`, `implement spec`, `run spec`, `workflow execution`
+  - `resume run`, `orch status`, `dag tasks`, `conformance score`, `delivery commit`
+  - `automated code review`, `review loop`, `remote push`, `pr preparation`
+- **Typical Prompts**:
+  - "Start workflow to implement spec 003-sdw-router-skill"
+  - "Resume interrupted run run-1792396125490"
+  - "Check status of the current orchestrator execution"
+
+---
+
+## 3. Disambiguation on Tied Confidence
+
+When a user prompt exhibits equal confidence across multiple candidate skills (e.g. asking to "review the spec implementation requirements"), the router stops and queries the user for clarification with an explicit recommendation.
+
+- **Host Question Integration**: Uses host-specific question mechanisms (such as `ask_question` in Antigravity/Gemini or an interactive chat prompt in CLI/Cursor).
+- **Format**:
+  - Candidate options formatted as selectable responses.
+  - Recommended default marked with `(Recommended)`.
+- **Example Prompt**:
+  - Question: "Did you want to manage the specification or orchestrate its implementation?"
+  - Options:
+    1. "(Recommended) Implement and orchestrate the spec using sdw-orch"
+    2. "Author or validate the specification using sdw-spec"
+
+---
+
+## 4. Passive Non-Interference (Pass-Through)
+
+The router is designed to be completely unobtrusive:
+- When a prompt is unrelated to SDW workflows (e.g., "Fix CSS padding in navbar", "Refactor calculateTotal function", "Write a python script to process CSV"), the router returns `{ matched: false, passThrough: true }`.
+- Execution proceeds to the host agent's standard code editing and reasoning capabilities without interception.
+
+---
+
+## 5. Missing Skill Directory Handling
+
+If an intent matches a skill whose directory does not exist or is unreadable on disk:
+- The router fails closed with an actionable error.
+- Example message: `[sdw-router] Error: Routed skill "sdw-orch" directory not found at "skills/sdw-orch" or ".agents/skills/sdw-orch". Run packaging installer to restore skills.`

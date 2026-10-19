@@ -325,6 +325,13 @@ function cmdRun(options) {
     state = stateManager.updateStepState(targetRoot, state.runId, 6, 'in_progress');
     let commitSha = null;
     try {
+      // Mark spec as completed in index.specs.md prior to staging delivery commit (AC24)
+      if (specIndex) {
+        try {
+          specIndex.updateSpecStatus(specSlug, 'completed', { root: targetRoot });
+        } catch (e) {}
+      }
+
       const statusOut = execSync('git status --porcelain', { cwd: targetRoot, encoding: 'utf8' }).trim();
       if (statusOut) {
         console.log(`[Step 6: Delivery Commit] Staging and committing implementation changes...`);

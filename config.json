@@ -1,0 +1,48 @@
+{
+  "version": "0.1.0",
+  "defaultRemote": "origin",
+  "enableTelemetry": true,
+  "telemetry": {
+    "maxFileSizeMb": 10,
+    "flushIntervalMs": 500,
+    "maxQueueSize": 50
+  },
+  "ttl": {
+    "scratchDays": 7,
+    "reviewDays": 14
+  },
+  "bootstrap": {
+    "maxBytes": 65536,
+    "maxTraps": 50
+  },
+  "ai": {
+    "enabled": false,
+    "provider": "cursor-sdk",
+    "model": "composer-2.5",
+    "apiKeyEnv": "CURSOR_API_KEY",
+    "timeoutMs": 60000,
+    "rankTopK": 20,
+    "maxConcurrent": 1,
+    "opsLogMaxBytes": 16384,
+    "opsLogMaxFileSizeMb": 10
+  },
+  "ports": {
+    "sse": 3123,
+    "status": 3124,
+    "canvas": 3125
+  },
+  "mode": "hybrid",
+  "remote": {
+    "url": "http://192.168.0.3:3123"
+  },
+  "vaultGit": {
+    "enabled": true,
+    "remoteUrl": "http://192.168.0.102:8085/jone/spec-memo-vault.git",
+    "branch": "master"
+  },
+  "projectAliases": {
+    "dev.azure.com-7focus-marchanteerp-_git-marchanteerp": "dev.azure.com-7focus-marchanteerp-marchanteerp",
+    "dev.azure.com-7focus-marchanteerp-marchanterp": "dev.azure.com-7focus-marchanteerp-marchanteerp",
+    "192.168.0.102-jone-workflowos": "workflow-os"
+  }
+}

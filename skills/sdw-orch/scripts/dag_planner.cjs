@@ -50,6 +50,13 @@ function generateDagPlan(specContent, options) {
       ];
     } else if (slug.includes('config')) {
       defaultTargetFiles = ['skills/sdw-config/scripts/sdw_config.cjs'];
+    } else if (slug.includes('router')) {
+      defaultTargetFiles = [
+        'skills/sdw-router/SKILL.md',
+        'skills/sdw-router/references/routing_table.md',
+        'skills/sdw-router/references/consumer_agents_setup.md',
+        'skills/sdw-router/scripts/sdw_router.cjs'
+      ];
     } else if (slug.includes('spec')) {
       defaultTargetFiles = [
         'skills/sdw-spec/SKILL.md',

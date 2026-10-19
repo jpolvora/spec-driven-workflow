@@ -1,0 +1,485 @@
+#!/usr/bin/env node
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
+
+/**
+ * Finds the project root by locating .git, .sdw, or package.json, or skills directory.
+ */
+function findProjectRoot(startDir) {
+  let curr = path.resolve(startDir || process.cwd());
+  while (true) {
+    if (fs.existsSync(path.join(curr, '.sdw')) ||
+        fs.existsSync(path.join(curr, '.git')) ||
+        fs.existsSync(path.join(curr, 'skills')) ||
+        fs.existsSync(path.join(curr, 'package.json'))) {
+      return curr;
+    }
+    const parent = path.dirname(curr);
+    if (parent === curr) break;
+    curr = parent;
+  }
+  return path.resolve(startDir || process.cwd());
+}
+
+/**
+ * Parses simple YAML frontmatter from a markdown file without external dependencies.
+ */
+function parseFrontmatter(content) {
+  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!match) return {};
+  const yamlBlock = match[1];
+  const result = {};
+
+  const lines = yamlBlock.split(/\r?\n/);
+  let currentKey = null;
+  let isArray = false;
+
+  for (const line of lines) {
+    const keyMatch = line.match(/^([a-zA-Z0-9_-]+):\s*(.*)$/);
+    if (keyMatch) {
+      currentKey = keyMatch[1];
+      const val = keyMatch[2].trim();
+      if (val === '') {
+        result[currentKey] = [];
+        isArray = true;
+      } else {
+        result[currentKey] = val.replace(/^["']|["']$/g, '');
+        isArray = false;
+      }
+    } else if (isArray && currentKey && /^\s*-\s*(.+)$/.test(line)) {
+      const itemMatch = line.match(/^\s*-\s*(.+)$/);
+      if (itemMatch) {
+        result[currentKey].push(itemMatch[1].trim().replace(/^["']|["']$/g, ''));
+      }
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Scans available skills in both canonical (skills/) and consumer (.agents/skills/) directories.
+ */
+function scanSkills(options) {
+  const root = path.resolve((options && options.root) || findProjectRoot());
+  const discovered = new Map();
+
+  const searchLocations = [
+    { dir: path.join(root, 'skills'), type: 'canonical' },
+    { dir: path.join(root, '.agents', 'skills'), type: 'consumer' }
+  ];
+
+  for (const loc of searchLocations) {
+    if (fs.existsSync(loc.dir)) {
+      try {
+        const entries = fs.readdirSync(loc.dir);
+        for (const entry of entries) {
+          const skillPath = path.join(loc.dir, entry).replace(/\\/g, '/');
+          let stat;
+          try {
+            stat = fs.statSync(skillPath);
+          } catch (e) {
+            continue;
+          }
+
+          if (stat.isDirectory()) {
+            const skillMdPath = path.join(skillPath, 'SKILL.md').replace(/\\/g, '/');
+            const hasSkillMd = fs.existsSync(skillMdPath);
+            let metadata = {};
+
+            if (hasSkillMd) {
+              try {
+                const content = fs.readFileSync(skillMdPath, 'utf8');
+                metadata = parseFrontmatter(content);
+              } catch (e) {
+                metadata.readError = e.message;
+              }
+            }
+
+            const skillName = metadata.name || entry;
+            // Prefer canonical if duplicate exists
+            if (!discovered.has(skillName) || loc.type === 'canonical') {
+              discovered.set(skillName, {
+                name: skillName,
+                dirName: entry,
+                path: skillPath,
+                skillMdPath,
+                hasSkillMd,
+                locationType: loc.type,
+                version: metadata.version || '0.1.0',
+                description: metadata.description || '',
+                invocationNames: metadata.invocation_names || [skillName],
+                exists: true,
+                readable: hasSkillMd && !metadata.readError
+              });
+            }
+          }
+        }
+      } catch (err) {
+        // Directory read error
+      }
+    }
+  }
+
+  return Array.from(discovered.values());
+}
+
+/**
+ * Routing keyword intent rules and weights
+ */
+const INTENT_RULES = {
+  'sdw-config': {
+    primaryKeywords: ['config', 'configuration', 'config.json', 'directory-structure', 'environment verification'],
+    secondaryKeywords: ['init', 'check', 'parse', 'setup', 'settings', 'dry-run', 'scaffold'],
+    recommendedOption: 'Initialize or verify workspace configuration using sdw-config'
+  },
+  'sdw-spec': {
+    primaryKeywords: ['spec', 'specification', 'index.specs.md', 'prd index', 'ears', 'authoring'],
+    secondaryKeywords: ['new spec', 'import spec', 'list specs', 'sync specs', 'validate spec', 'archive spec', 'formatting', 'acceptance criteria', 'format spec'],
+    recommendedOption: 'Author, validate, or synchronize specifications using sdw-spec'
+  },
+  'sdw-orch': {
+    primaryKeywords: ['orch', 'orchestrator', 'orchestration', 'implement spec', 'specification implementation', 'workflow execution'],
+    secondaryKeywords: ['workflow', 'implement', 'implementation', 'resumption', 'run spec', 'resume', 'status', 'dag', 'conformance', 'delivery commit', 'automated review', 'pull request', 'push'],
+    recommendedOption: 'Orchestrate end-to-end implementation and delivery using sdw-orch'
+  }
+};
+
+/**
+ * Evaluates a user prompt and determines target skill, confidence, and ambiguity status.
+ */
+function routePrompt(prompt, options) {
+  if (!prompt || typeof prompt !== 'string') {
+    return {
+      matched: false,
+      passThrough: true,
+      error: 'Empty or invalid prompt supplied.'
+    };
+  }
+
+  const root = path.resolve((options && options.root) || findProjectRoot());
+  const availableSkills = (options && options.skills) || scanSkills({ root });
+  const normalized = prompt.trim();
+  const lower = normalized.toLowerCase();
+
+  // 1. Explicit Invocation Check (AC6)
+  // Check for patterns like /sdw-config, @sdw-spec, sdw-orch, /orch, @orch
+  for (const skill of availableSkills) {
+    const explicitPatterns = [
+      new RegExp(`(?:^|\\s)[/@]?${skill.name}\\b`, 'i'),
+      new RegExp(`(?:^|\\s)@(?:skills/|\\.agents/skills/)?${skill.name}\\b`, 'i')
+    ];
+
+    if (Array.isArray(skill.invocationNames)) {
+      for (const inv of skill.invocationNames) {
+        explicitPatterns.push(new RegExp(`(?:^|\\s)[/@]?${inv}\\b`, 'i'));
+      }
+    }
+
+    for (const pat of explicitPatterns) {
+      if (pat.test(lower)) {
+        // Disk existence check (AC8)
+        const isReadable = fs.existsSync(skill.path) && skill.hasSkillMd;
+        if (!isReadable) {
+          return {
+            matched: true,
+            targetSkill: skill.name,
+            confidence: 1.0,
+            reason: 'explicit_invocation',
+            hasError: true,
+            error: `Routed skill "${skill.name}" directory is missing or unreadable on disk at "${skill.path}". Please ensure the skill is installed under skills/ or .agents/skills/.`
+          };
+        }
+
+        return {
+          matched: true,
+          targetSkill: skill.name,
+          confidence: 1.0,
+          reason: 'explicit_invocation',
+          skill,
+          isAmbiguous: false
+        };
+      }
+    }
+  }
+
+  // Also check for explicit standalone invocation words or /sdw-* / @sdw-* pattern even if not in scanned list
+  const explicitSdwMatch = lower.match(/(?:^|\s)[/@](sdw-[a-zA-Z0-9_-]+)\b/);
+  if (explicitSdwMatch) {
+    const sdwName = explicitSdwMatch[1];
+    const existing = availableSkills.find(sk => sk.name === sdwName);
+    if (!existing) {
+      return {
+        matched: true,
+        targetSkill: sdwName,
+        confidence: 1.0,
+        reason: 'explicit_invocation',
+        hasError: true,
+        error: `Routed skill "${sdwName}" directory is missing or unreadable on disk at "skills/${sdwName}" or ".agents/skills/${sdwName}". Please ensure the skill is installed.`
+      };
+    }
+  }
+
+  const knownExplicitSkills = ['sdw-config', 'sdw-spec', 'sdw-orch', 'sdw-router'];
+  for (const s of knownExplicitSkills) {
+    if (new RegExp(`(?:^|\\s)[/@]?${s}\\b`, 'i').test(lower)) {
+      // It was explicitly requested but might be missing on disk
+      const existing = availableSkills.find(sk => sk.name === s);
+      if (!existing) {
+        return {
+          matched: true,
+          targetSkill: s,
+          confidence: 1.0,
+          reason: 'explicit_invocation',
+          hasError: true,
+          error: `Routed skill "${s}" directory is missing or unreadable on disk. Please ensure the skill is installed under skills/ or .agents/skills/.`
+        };
+      }
+    }
+  }
+
+  // 2. Keyword & Intent Scoring (AC3, AC4, AC5)
+  const scores = {};
+  for (const [skillName, rules] of Object.entries(INTENT_RULES)) {
+    let score = 0;
+    for (const pk of rules.primaryKeywords) {
+      if (lower.includes(pk)) score += 3;
+    }
+    for (const sk of rules.secondaryKeywords) {
+      if (lower.includes(sk)) score += 1;
+    }
+    scores[skillName] = score;
+  }
+
+  // Find candidate matches with scores > 0
+  const scoredEntries = Object.entries(scores)
+    .filter(([_, score]) => score > 0)
+    .sort((a, b) => b[1] - a[1]);
+
+  // 3. Passive Non-Interference Pass-Through (AC12)
+  if (scoredEntries.length === 0) {
+    return {
+      matched: false,
+      passThrough: true,
+      prompt: normalized,
+      reason: 'No recognized SDW skill intent in prompt; passing through cleanly.'
+    };
+  }
+
+  const topScore = scoredEntries[0][1];
+  const topCandidates = scoredEntries.filter(([_, s]) => s === topScore);
+
+  // 4. Ambiguity Resolution on Tied Confidence (AC7)
+  if (topCandidates.length > 1) {
+    // Determine recommended default
+    // If orch and spec are tied, orch is recommended for implementation
+    let recommendedDefault = topCandidates[0][0];
+    if (topCandidates.some(c => c[0] === 'sdw-orch')) {
+      recommendedDefault = 'sdw-orch';
+    }
+
+    const optionsList = topCandidates.map(([name]) => {
+      const isRec = name === recommendedDefault;
+      const desc = INTENT_RULES[name]?.recommendedOption || `Execute ${name}`;
+      return isRec ? `(Recommended) ${desc}` : desc;
+    });
+
+    return {
+      matched: true,
+      isAmbiguous: true,
+      confidence: 0.5,
+      candidates: topCandidates.map(c => c[0]),
+      recommendedDefault,
+      clarification: {
+        question: `Your request contains matching terms for multiple skills with equal confidence. How would you like to proceed?`,
+        options: optionsList,
+        recommendedDefault
+      }
+    };
+  }
+
+  // Single winning candidate
+  const winningSkillName = topCandidates[0][0];
+  const targetSkillInfo = availableSkills.find(s => s.name === winningSkillName);
+
+  // Check if directory exists on disk (AC8)
+  if (!targetSkillInfo || !fs.existsSync(targetSkillInfo.path) || !targetSkillInfo.hasSkillMd) {
+    return {
+      matched: true,
+      targetSkill: winningSkillName,
+      confidence: Math.min(1.0, topScore / 6),
+      reason: 'intent_match',
+      hasError: true,
+      error: `Routed skill "${winningSkillName}" directory is missing or unreadable on disk at "${targetSkillInfo ? targetSkillInfo.path : 'skills/' + winningSkillName}". Please ensure the skill is installed under skills/ or .agents/skills/.`
+    };
+  }
+
+  return {
+    matched: true,
+    targetSkill: winningSkillName,
+    confidence: Math.min(1.0, topScore / 6),
+    reason: 'intent_match',
+    skill: targetSkillInfo,
+    isAmbiguous: false
+  };
+}
+
+/**
+ * Health check & diagnostic report for the router.
+ */
+function doctorCheck(options) {
+  const root = path.resolve((options && options.root) || findProjectRoot());
+  const skills = scanSkills({ root });
+  const issues = [];
+
+  const expectedSkills = ['sdw-config', 'sdw-spec', 'sdw-orch', 'sdw-router'];
+
+  for (const expected of expectedSkills) {
+    const found = skills.find(s => s.name === expected);
+    if (!found) {
+      issues.push({
+        severity: 'warning',
+        skill: expected,
+        message: `Expected skill "${expected}" not found in canonical skills/ or consumer .agents/skills/.`
+      });
+    } else {
+      if (!found.hasSkillMd) {
+        issues.push({
+          severity: 'error',
+          skill: expected,
+          message: `Skill directory "${found.path}" is missing SKILL.md.`
+        });
+      }
+      if (!found.readable) {
+        issues.push({
+          severity: 'error',
+          skill: expected,
+          message: `SKILL.md at "${found.skillMdPath}" could not be read or parsed.`
+        });
+      }
+    }
+  }
+
+  return {
+    passed: issues.filter(i => i.severity === 'error').length === 0,
+    root,
+    skillsCount: skills.length,
+    skills: skills.map(s => ({
+      name: s.name,
+      locationType: s.locationType,
+      path: s.path,
+      version: s.version,
+      hasSkillMd: s.hasSkillMd
+    })),
+    issues
+  };
+}
+
+// CLI Execution Entry Point
+function main() {
+  const args = process.argv.slice(2);
+  const jsonMode = args.includes('--json');
+  const rootIndex = args.indexOf('--root');
+  const customRoot = rootIndex !== -1 ? args[rootIndex + 1] : null;
+
+  const positional = args.filter(a => !a.startsWith('--') && (rootIndex === -1 || a !== args[rootIndex + 1]));
+  const subcommand = positional[0];
+
+  if (!subcommand || subcommand === '--help' || subcommand === 'help') {
+    console.log(`Spec-Driven Workflow — Router CLI (sdw-router)
+
+Usage:
+  node sdw_router.cjs <subcommand> [options]
+
+Subcommands:
+  scan                   Discover and list all installed skills in canonical & consumer directories
+  route <prompt>         Analyze prompt intent, detect explicit invocations, or pass-through
+  doctor                 Run router health check and diagnostic audit on skills integrity
+
+Options:
+  --root <path>          Specify custom project root (default: auto-detected)
+  --json                 Output structured JSON payload
+  --help                 Show this help message
+`);
+    process.exit(0);
+  }
+
+  if (subcommand === 'scan') {
+    const skills = scanSkills({ root: customRoot });
+    if (jsonMode) {
+      console.log(JSON.stringify({ total: skills.length, skills }, null, 2));
+    } else {
+      console.log(`[sdw-router] Discovered ${skills.length} available skill(s):`);
+      skills.forEach(s => {
+        console.log(`  * ${s.name} (${s.locationType}) -> ${s.path} [SKILL.md: ${s.hasSkillMd ? 'YES' : 'MISSING'}]`);
+      });
+    }
+    process.exit(0);
+  }
+
+  if (subcommand === 'route') {
+    const promptText = positional.slice(1).join(' ');
+    if (!promptText) {
+      console.error('Error: "route" subcommand requires a prompt argument.');
+      process.exit(1);
+    }
+
+    const result = routePrompt(promptText, { root: customRoot });
+    if (jsonMode) {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      if (result.hasError) {
+        console.error(`[sdw-router] Error: ${result.error}`);
+        process.exit(1);
+      } else if (result.passThrough) {
+        console.log(`[sdw-router] Pass-through: No SDW workflow intent detected. Standard execution allowed.`);
+      } else if (result.isAmbiguous) {
+        console.log(`[sdw-router] Ambiguous Intent Detected: Candidates [${result.candidates.join(', ')}]`);
+        console.log(`  Question: ${result.clarification.question}`);
+        result.clarification.options.forEach((opt, idx) => console.log(`  ${idx + 1}. ${opt}`));
+      } else {
+        console.log(`[sdw-router] Routing intent to "${result.targetSkill}" (confidence: ${result.confidence.toFixed(2)}, reason: ${result.reason})`);
+      }
+    }
+    process.exit(result.hasError ? 1 : 0);
+  }
+
+  if (subcommand === 'doctor') {
+    const report = doctorCheck({ root: customRoot });
+    if (jsonMode) {
+      console.log(JSON.stringify(report, null, 2));
+    } else {
+      console.log(`[sdw-router doctor] Audit completed. Skills discovered: ${report.skillsCount}`);
+      report.skills.forEach(s => {
+        console.log(`  - ${s.name} [${s.locationType}]: ${s.path}`);
+      });
+      if (report.issues.length > 0) {
+        console.log('\nIssues detected:');
+        report.issues.forEach(i => {
+          console.log(`  [${i.severity.toUpperCase()}] ${i.skill}: ${i.message}`);
+        });
+      } else {
+        console.log('\nRouter health check: ALL CHECKS PASSED.');
+      }
+    }
+    process.exit(report.passed ? 0 : 1);
+  }
+
+  console.error(`Unknown subcommand: "${subcommand}". Use --help for usage instructions.`);
+  process.exit(1);
+}
+
+if (require.main === module) {
+  main();
+}
+
+module.exports = {
+  findProjectRoot,
+  parseFrontmatter,
+  scanSkills,
+  routePrompt,
+  doctorCheck,
+  INTENT_RULES
+};
