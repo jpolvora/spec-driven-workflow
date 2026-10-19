@@ -70,7 +70,8 @@ function runAutomatedReview(options) {
     warningCount: 0,
     totalFindings: 0,
     findings: [],
-    summary: 'sdw-code-review module unavailable.'
+    summary: 'sdw-code-review module unavailable.',
+    error: 'sdw-code-review module unavailable.'
   };
 }
 

@@ -579,16 +579,21 @@ function cmdRun(options) {
     const sdwConfigScript = resolveSkillScript(targetRoot, 'sdw-config', path.join('scripts', 'sdw_config.cjs'), options);
     sdwConfig = sdwConfigScript ? require(sdwConfigScript) : require('../../sdw-config/scripts/sdw_config.cjs');
   } catch (e) {}
+  const config = loadProjectConfig(targetRoot, options);
+  // AC9/AC10: fail closed, but resolve configuration first so a configured
+  // skillsRoot (or {skillsRoot} token) is honored instead of only CLI options.
+  const detectedSkillsRoot = config && config.skillsMode && config.skillsMode !== 'unknown'
+    ? config.skillsRoot
+    : undefined;
   const skillsInfo = sdwConfig && typeof sdwConfig.resolveSkillsRoot === 'function'
-    ? sdwConfig.resolveSkillsRoot({ root: targetRoot, callerDir: __dirname, skillsRoot: options.skillsRoot })
+    ? sdwConfig.resolveSkillsRoot({ root: targetRoot, callerDir: __dirname, skillsRoot: options.skillsRoot || detectedSkillsRoot })
     : null;
   if (!skillsInfo || !skillsInfo.exists) {
-    console.error('Error: No valid skills directory found on disk (checked project-local and global $HOME/.agents/skills).');
+    console.error('Error: No valid skills directory found on disk (checked configured skillsRoot, project-local, and global $HOME/.agents/skills).');
     options._runResult = { error: 'Missing skills directory on disk' };
     return 1;
   }
 
-  const config = loadProjectConfig(targetRoot, options);
   // AC10: honor the skills root resolved from .sdw/config.json for dynamic script resolution
   const resolveOptions = (config && config.skillsRoot && !options.skillsRoot)
     ? { ...options, skillsRoot: config.skillsRoot }

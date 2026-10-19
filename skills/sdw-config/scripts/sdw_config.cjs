@@ -77,14 +77,12 @@ function resolveSkillsRoot(options = {}) {
   const explicit = options.skillsRoot || process.env.SDW_SKILLS_ROOT;
   if (explicit && typeof explicit === 'string' && explicit.trim()) {
     const norm = normalizePath(path.resolve(explicit.trim()));
-    let isDir = false;
-    try { isDir = fs.statSync(norm).isDirectory(); } catch (e) { isDir = false; }
-    if (!isDir) {
+    if (!hasSdwSkills(norm)) {
       return {
         skillsRoot: norm,
         mode: 'unknown',
         exists: false,
-        error: `Configured skillsRoot does not exist or is not a directory: ${norm}`
+        error: `Configured skillsRoot is not a valid SDW skills directory: ${norm}`
       };
     }
     return {
@@ -402,6 +400,16 @@ Baseline directory layout for consumer projects adopting Spec-Driven Workflow:
     ├── traps.md                 # Central anti-regression trap log
     └── worktrees/               # Ephemeral per-task git worktrees for isolated subagents
 \`\`\`
+
+## Skills Installation Topologies
+
+SDW supports three installation topologies with automatic \`{skillsRoot}\` token resolution in \`.sdw/config.json\`:
+
+1. **Canonical Development Repository:** \`{projectRoot}/skills/\`
+2. **Consumer Project-Local Vendoring:** \`{projectRoot}/.agents/skills/\`
+3. **User-Wide Shared Installation (Hybrid Mode):** \`$HOME/.agents/skills/\`
+
+In **Hybrid Mode**, skills are installed once globally under \`$HOME/.agents/skills/\` and shared across all projects on the workstation, while each consumer project strictly maintains its own isolated \`.sdw/\` directory. All configuration (\`.sdw/config.json\`), specs (\`.sdw/specs/\`), and run states (\`.sdw/state/\`) remain local to the consumer repository and never leak into global storage.
 `;
 
 function validateConfigSchema(config) {
