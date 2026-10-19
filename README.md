@@ -148,7 +148,90 @@ spec-driven-workflow/
 
 ---
 
-## 4. Getting Started
+## 4. Installing Skills with `npx skills` (Consumers)
+
+Install the SDW skills into any consumer project using the open agent skills tool (`npx skills`, see [vercel-labs/skills](https://github.com/vercel-labs/skills) / [skills.sh](https://skills.sh)). Run from your project root. Requires **Node.js 22.20 or later**.
+
+Verify what is available before installing:
+
+```bash
+npx skills add jpolvora/spec-driven-workflow --list
+```
+
+Expected: `10` discoverable skills — the 8 `sdw-*` skills plus `karpathy-guidelines` and `ws-memo`:
+
+| Skill | Purpose |
+|---|---|
+| `sdw-router` | Always-autoloaded router, dispatches prompts to the right SDW skill |
+| `sdw-config` | Initializes and verifies the `.sdw/` workspace (`init`, `check`, `parse`) |
+| `sdw-spec` | Spec authoring, EARS validation, index sync |
+| `sdw-orch` | End-to-end 8-step delivery workflow (spec → DAG → implement → review → PR) |
+| `sdw-rules` | Shared simplicity / anti-overengineering rules |
+| `sdw-security-checks` | Pre-commit secrets and credentials leak gate |
+| `sdw-code-review` | Standalone working-tree review and fix planning (also Step 7 delegation) |
+| `sdw-ship-pr` | Pre-PR checks, branch push, PR creation, review convergence |
+
+### Copy-paste: install all SDW skills (recommended)
+
+```bash
+npx skills add jpolvora/spec-driven-workflow --skill sdw-router --skill sdw-config --skill sdw-spec --skill sdw-orch --skill sdw-rules --skill sdw-security-checks --skill sdw-code-review --skill sdw-ship-pr -y
+```
+
+One-liner alternative (installs everything discoverable, including `karpathy-guidelines` and `ws-memo`):
+
+```bash
+npx skills add jpolvora/spec-driven-workflow --all
+```
+
+Interactive install (pick skills and agents from a menu):
+
+```bash
+npx skills add jpolvora/spec-driven-workflow
+```
+
+### Scope, agents, and lifecycle
+
+```bash
+# Project scope (default): installs to ./.agents/skills/, commit with your project
+# Global scope: available across all projects on the machine
+npx skills add jpolvora/spec-driven-workflow --skill sdw-router --skill sdw-config --skill sdw-spec --skill sdw-orch --skill sdw-rules --skill sdw-security-checks --skill sdw-code-review --skill sdw-ship-pr -g -y
+
+# Target specific agents (default is auto-detected agents; use '*' for all agents)
+npx skills add jpolvora/spec-driven-workflow --skill sdw-orch -a opencode -y
+npx skills add jpolvora/spec-driven-workflow --skill sdw-orch --skill sdw-spec -a claude-code -a cursor -y
+
+# Verify, update, remove
+npx skills list
+npx skills check
+npx skills update
+npx skills remove sdw-orch
+```
+
+Installed layout (project scope, OpenCode / Cursor / Codex / Amp / Replit share `.agents/skills/`; Claude Code also links under `.claude/skills/`):
+
+```text
+<projectRoot>/.agents/skills/sdw-orch/SKILL.md
+<projectRoot>/.agents/skills/sdw-spec/SKILL.md
+...
+<projectRoot>/skills-lock.json
+```
+
+### After install: initialize the workspace
+
+```bash
+# Initialize .sdw/ structure in the consumer project
+node .agents/skills/sdw-config/scripts/sdw_config.cjs init
+
+# Verify installation and workspace health
+node .agents/skills/sdw-config/scripts/sdw_config.cjs check
+node .agents/skills/sdw-router/scripts/sdw_router.cjs scan
+```
+
+> Note: contributor docs in this repo use canonical paths (`node skills/<name>/scripts/*.cjs`). Consumers installed via `npx skills` use the same script names under `node .agents/skills/<name>/scripts/*.cjs`.
+
+---
+
+## 5. Getting Started
 
 ### Using `sdw-router` (Autoload & Routing)
 
@@ -275,6 +358,6 @@ npm run review:dry   # alias: npm run review
 
 The helper uses the `OPENCODE_API_KEY` from the OS environment through the `opencode-go` provider, forces the pinned OpenCode `1.19.1` binary, and passes `--dry-run` with the Custom stack prompt. Findings are printed as `::error` / `::warning` annotations and the command exits `0` even when issues are found. See [AGENTS.md](AGENTS.md#10-local-code-review-dry-run-agentic-code-reviewers) for overrides.
 
-## 5. License & Contribution
+## 6. License & Contribution
 
 Maintained under the Spec-Driven Workflow initiative. Contributions must adhere to the authoring guidelines documented in [AGENTS.md](AGENTS.md).

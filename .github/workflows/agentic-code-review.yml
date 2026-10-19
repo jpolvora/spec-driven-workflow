@@ -6,6 +6,7 @@ name: Agentic Code Review
 #   - SDW_CODE_REVIEW_ENGINE: Review engine ('opencode' or 'cursor-sdk', default: 'opencode')
 #   - SDW_CODE_REVIEW_MODEL: Model identifier (default: 'opencode-go/deepseek-v4.1-flash')
 #   - SDW_CODE_REVIEW_VARIANT: Review variant/intensity (default: 'medium')
+#   - SDW_CODE_REVIEW_MAX_ROUNDS: PR review round budget before human handoff (default: '20')
 #
 # Required Secrets (configure via Settings -> Secrets and variables -> Actions -> Secrets):
 #   - OPENCODE_API_KEY: Required when using the 'opencode' engine
@@ -136,6 +137,7 @@ jobs:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           GITHUB_TOKEN: ${{ github.token }}
           AGENTIC_CODE_REVIEWERS_TIMEOUT_MS: "1200000"
+          AGENTIC_CODE_REVIEWERS_MAX_ROUNDS: ${{ vars.SDW_CODE_REVIEW_MAX_ROUNDS || '20' }}
           AGENTIC_CODE_REVIEWERS_EXTRA_EXCLUDE_PATTERNS: ".sdw/state/**"
           PR_NUMBER: ${{ steps.pr.outputs.number }}
           HEAD_REF: ${{ steps.pr.outputs.head_ref }}

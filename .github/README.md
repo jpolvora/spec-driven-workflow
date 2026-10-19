@@ -23,6 +23,7 @@ Reviewer configuration is managed dynamically through repository variables (Sett
 | `SDW_CODE_REVIEW_ENGINE` | `opencode` | Code review engine (`opencode` or `cursor-sdk`) |
 | `SDW_CODE_REVIEW_MODEL` | `opencode-go/deepseek-v4.1-flash` | Reviewer model identifier |
 | `SDW_CODE_REVIEW_VARIANT` | `medium` | Intensity / variant (`low`, `medium`, `high`) |
+| `SDW_CODE_REVIEW_MAX_ROUNDS` | `20` | PR review round budget before human handoff (`AGENTIC_CODE_REVIEWERS_MAX_ROUNDS`) |
 
 ---
 

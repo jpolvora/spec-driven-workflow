@@ -11,6 +11,7 @@ const DEFAULT_ENGINE = 'opencode';
 const DEFAULT_MODEL = 'opencode-go/deepseek-v4.1-flash';
 const DEFAULT_VARIANT = 'medium';
 const DEFAULT_TIMEOUT_MS = '1200000';
+const DEFAULT_MAX_ROUNDS = '20';
 const DEFAULT_TARGET_BRANCH = 'refs/heads/master';
 const PINNED_OPENCODE_VERSION = '1.19.1';
 const EXTRA_EXCLUDES = '.sdw/state/**';
@@ -122,6 +123,8 @@ function buildReviewerEnv(config, pinned, env = process.env) {
     AGENTIC_CODE_REVIEWERS_EXTRA_EXCLUDE_PATTERNS: EXTRA_EXCLUDES,
     AGENTIC_CODE_REVIEWERS_TIMEOUT_MS:
       String(env.AGENTIC_CODE_REVIEWERS_TIMEOUT_MS || '').trim() || DEFAULT_TIMEOUT_MS,
+    AGENTIC_CODE_REVIEWERS_MAX_ROUNDS:
+      String(env.AGENTIC_CODE_REVIEWERS_MAX_ROUNDS || '').trim() || DEFAULT_MAX_ROUNDS,
   };
   if (pinned) {
     next.AGENTIC_CODE_REVIEWERS_OPENCODE_BIN = pinned.bin;
