@@ -77,7 +77,7 @@ When `scmCodeReviewEnabled: true` or `--poll-pr` is active, `sdw-ship-pr` execut
 
 ### 4.2b Concurrent-Push Preemption Adaptation
 Concurrent pushes to the shipped head branch while polling are an allowed event, not a failure. The loop adapts instead of halting:
-- **Superseded checks are not failures:** `cancelled`, `cancel`, `timed_out`, and `startup_failure` states are reported as `supersededChecks` and waited out. Only `fail`, `failure`, and `action_required` feed the fixer/blocker path. A superseded `state` takes precedence over a coarse `bucket` value.
+- **Superseded checks are not failures:** `cancelled` and `cancel` states are reported as `supersededChecks` and waited out. Only `fail`, `failure`, `action_required`, and the terminal `timed_out`/`startup_failure` states feed the fixer/blocker path, since those indicate a run that executed and failed (or never started) rather than one replaced by a newer push. A superseded `state` takes precedence over a coarse `bucket` value.
 - **Fresh window for the replacement run:** check states are snapshotted per round. When a check moves from a terminal state back to pending/passing, or the check set changes between rounds, a newer CI run replaced the observed one: the loop logs the preemption, resets the round counter, and follows the latest status. Resets are capped by `--max-preemptions` (default `3`, also readable from `maxPreemptions` config); beyond the cap the loop falls back to the normal exhaustion path (`review_pending`).
 - **No extra provider queries:** preemption is inferred from `checkPrStatus` state transitions already polled each round; no head-SHA lookup is required, so the behavior is identical for `github` and `ado`.
 

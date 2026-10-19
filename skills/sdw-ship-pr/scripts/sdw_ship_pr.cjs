@@ -505,8 +505,8 @@ async function runShipPr(options = {}, customExecutor = null) {
         // superseded run (cancelled by a newer push) is recognized as preemption,
         // not failure. A preempted round grants the replacement run a fresh
         // convergence window instead of burning the iteration budget.
-        const FAILED_CHECK_STATES = new Set(['fail', 'failure', 'failed', 'action_required', 'rejected', 'broken']);
-        const SUPERSEDED_CHECK_STATES = new Set(['cancelled', 'cancel', 'timed_out', 'startup_failure']);
+        const FAILED_CHECK_STATES = new Set(['fail', 'failure', 'failed', 'action_required', 'rejected', 'broken', 'timed_out', 'startup_failure']);
+        const SUPERSEDED_CHECK_STATES = new Set(['cancelled', 'cancel']);
         const PENDING_CHECK_STATES = new Set(['pending', 'in_progress', 'queued', 'waiting', 'running']);
         const stateOf = c => String(c.state || '').toLowerCase();
         const bucketOf = c => String(c.bucket || '').toLowerCase();

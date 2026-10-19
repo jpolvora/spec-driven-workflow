@@ -439,6 +439,29 @@ test('sdw-ship-pr - superseded checks are not treated as failures', async () => 
   }
 });
 
+test('sdw-ship-pr - terminal CI states are treated as failing checks, not superseded', async () => {
+  const { tmpDir, config, fakeExecutor } = setupPreemptionWorkspace(() => [
+    { name: 'review', state: 'timed_out', bucket: 'fail' },
+    { name: 'ci/build', state: 'startup_failure', bucket: 'fail' }
+  ]);
+  try {
+    const report = await sdwShipPr.runShipPr({
+      projectRoot: tmpDir,
+      config,
+      head: 'develop',
+      base: 'master',
+      maxIterations: 1,
+      pollIntervalMs: 0
+    }, fakeExecutor);
+
+    assert.strictEqual(report.shipStatus, 'review_pending');
+    assert.deepStrictEqual(report.reviewConvergence.supersededChecks, [], 'terminal CI states must not be reported as superseded');
+    assert.strictEqual(report.reviewConvergence.failingChecks.length, 2, 'timed_out and startup_failure must feed the blocker path');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test('sdw-ship-pr - concurrent push preemption resets the convergence window instead of halting', async () => {
   const scripted = [
     [{ name: 'review', state: 'cancelled', bucket: 'fail' }],

@@ -88,7 +88,7 @@ Detailed protocol: [`references/ship_protocol.md`](references/ship_protocol.md).
      f. **Push:** Push the commit to the remote tracking branch: `git push origin <head>`.
      g. **Close related threads with comment:** **Only after pushing**, call `provider.resolveReviewThread({ prNumber, threadId, comment })` for each addressed thread, posting an informative comment explaining the fix that was implemented (commit SHA, files modified, changes made, and why it resolves the issue).
 2. If unresolved issues remain after maximum iterations, record review residual and report status. Never close a thread before pushing, and never close without an explanatory fix comment.
-3. **Concurrent-push adaptation:** Cancelled/superseded CI checks (`cancelled`, `timed_out`) are waited out, never treated as failures. When a newer run replaces the observed one, the loop resets its round window (up to `--max-preemptions` times) and follows the latest status instead of halting.
+3. **Concurrent-push adaptation:** Cancelled/superseded CI checks (`cancelled`, `cancel`) are waited out, never treated as failures; terminal states (`timed_out`, `startup_failure`) stay on the fixer/blocker path. When a newer run replaces the observed one, the loop resets its round window (up to `--max-preemptions` times) and follows the latest status instead of halting.
 - Done when: Active threads resolved with explanatory comments after push and CI checks green, or iteration ceiling reached with status recorded.
 
 ### Step 6: Delivery Outcome & State Persistence

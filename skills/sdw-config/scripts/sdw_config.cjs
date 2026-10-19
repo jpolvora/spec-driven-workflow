@@ -632,7 +632,7 @@ function loadConfig(targetRoot, options = {}) {
   const skillsInfo = resolveSkillsRoot({
     root,
     ...options,
-    skillsRoot: options.skillsRoot || configuredSkillsRoot
+    skillsRoot: options.skillsRoot || process.env.SDW_SKILLS_ROOT || configuredSkillsRoot
   });
   const resolvedSkillsRoot = skillsInfo ? skillsInfo.skillsRoot : normalizedRoot;
 
@@ -840,7 +840,7 @@ function cmdCheck(options) {
   const checkOptions = {
     root: targetRoot,
     ...options,
-    skillsRoot: options.skillsRoot || configuredSkillsRoot
+    skillsRoot: options.skillsRoot || process.env.SDW_SKILLS_ROOT || configuredSkillsRoot
   };
   if (options.callerDir === undefined && options.ignoreCaller === undefined) {
     const enclosing = findEnclosingSkillsDir(__dirname);
@@ -1042,7 +1042,7 @@ function cmdParse(options) {
   const skillsInfo = resolveSkillsRoot({
     root: targetRoot,
     ...options,
-    skillsRoot: options.skillsRoot || configuredSkillsRoot
+    skillsRoot: options.skillsRoot || process.env.SDW_SKILLS_ROOT || configuredSkillsRoot
   });
   const resolvedSkillsRoot = skillsInfo ? skillsInfo.skillsRoot : normalizedRoot;
   const resolved = {};
