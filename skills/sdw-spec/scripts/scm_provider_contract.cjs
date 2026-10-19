@@ -78,8 +78,11 @@ function htmlToMarkdown(html) {
  * Helper to extract acceptance criteria from description or raw text
  */
 function assertResolutionComment(comment) {
-  const normalized = String(comment || '').replace(/<!--\s*resolution-reply\s*-->/gi, '').trim();
-  if (!normalized || /^[0-9a-f]{7,40}$/i.test(normalized)) {
+  const normalized = String(comment || '')
+    .replace(/<!--\s*resolution-reply\s*-->/gi, '')
+    .replace(/^[\s`'"]+|[\s`'"]+$/g, '')
+    .trim();
+  if (!normalized || /^[0-9a-f]{4,64}$/i.test(normalized)) {
     throw new Error('A resolution comment must explain the fix and cannot be empty or a bare commit hash.');
   }
   return normalized;

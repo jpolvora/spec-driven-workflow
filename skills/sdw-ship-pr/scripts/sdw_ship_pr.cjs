@@ -739,8 +739,14 @@ async function cmdResolveThread(options, customExecutor) {
   if (!threadId) throw new Error('--thread <threadId> is required for resolve-thread.');
   if (scmContract && scmContract.assertResolutionComment) {
     scmContract.assertResolutionComment(comment);
-  } else if (!String(comment || '').trim() || /^[0-9a-f]{7,40}$/i.test(String(comment).trim())) {
-    throw new Error('A resolution comment must explain the fix and cannot be empty or a bare commit hash.');
+  } else {
+    const normalized = String(comment || '')
+      .replace(/<!--\s*resolution-reply\s*-->/gi, '')
+      .replace(/^[\s`'"]+|[\s`'"]+$/g, '')
+      .trim();
+    if (!normalized || /^[0-9a-f]{4,64}$/i.test(normalized)) {
+      throw new Error('A resolution comment must explain the fix and cannot be empty or a bare commit hash.');
+    }
   }
 
   const providerName = options.provider || config.scmProvider || 'github';

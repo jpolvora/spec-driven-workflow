@@ -256,8 +256,17 @@ test('sdw-scm-provider - resolution guard strips the internal marker before vali
     /cannot be empty or a bare commit hash/,
     'bare hash must be rejected'
   );
+  for (const hashOnly of ['abc123', 'a'.repeat(64), '`abc1234`', '"abc1234"', '<!-- resolution-reply -->\n`abc123`']) {
+    await assert.rejects(
+      provider.resolveReviewThread({ prNumber: 1, threadId: 'PRRT_x', comment: hashOnly, dryRun: true }),
+      /cannot be empty or a bare commit hash/,
+      `hash-only comment must be rejected: ${hashOnly.slice(0, 30)}`
+    );
+  }
   const ok = await provider.resolveReviewThread({ prNumber: 1, threadId: 'PRRT_x', comment: '<!-- resolution-reply -->\nFixed the guard.', dryRun: true });
   assert.strictEqual(ok.resolved, true, 'marker plus explanation must be accepted');
+  const okHash = await provider.resolveReviewThread({ prNumber: 1, threadId: 'PRRT_x', comment: 'Fixed in commit abc1234.', dryRun: true });
+  assert.strictEqual(okHash.resolved, true, 'explanation containing a hash must be accepted');
 });
 
 test('sdw-scm-provider - AC14, AC15, AC17, AC20: Orchestrator Step 8 skips polling when scmProvider is none and records in state', () => {
