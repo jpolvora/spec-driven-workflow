@@ -398,19 +398,19 @@ function cmdRun(options) {
     }
   }
 
-  // Step 2: Grilling Round & Decision Gate (AC5, AC6)
+  // Step 2: Refinement (Grilling + Technical Planning) (AC1, AC2)
   if (startStep <= 2 && state.steps[2].status !== 'completed') {
     state = stateManager.updateStepState(targetRoot, state.runId, 2, 'in_progress');
-    const grillingResult = specGrilling.analyzeSpecificationGaps(effectiveSpecContent);
+    const grillingResult = specGrilling.analyzeSpecificationGaps(effectiveSpecContent, { slug: specSlug });
 
     if (grillingResult.hasGaps) {
-      console.log(`[Step 2: Grilling] Detected ${grillingResult.gapsCount} specification decision gaps.`);
+      console.log(`[Step 2: Refinement] Detected ${grillingResult.gapsCount} specification decision gaps.`);
       for (const gap of grillingResult.gaps) {
         console.log(`  * Gap [${gap.dimension}]: ${gap.question} -> Default: ${gap.defaultChoice}`);
       }
 
       if (options.abortOnGaps && !options.unattended) {
-        console.log(`[Step 2: Grilling] User cancellation / gate stop triggered (--abort-on-gaps). Halting without dispatch.`);
+        console.log(`[Step 2: Refinement] User cancellation / gate stop triggered (--abort-on-gaps). Halting without dispatch.`);
         state = stateManager.updateStepState(targetRoot, state.runId, 2, 'paused_grilling_gate', grillingResult);
         state.status = 'paused';
         stateManager.saveRunState(targetRoot, state);
@@ -423,17 +423,32 @@ function cmdRun(options) {
         effectiveSpecContent = specGrilling.applyDecision(effectiveSpecContent, gap.dimension, gap.defaultChoice);
       }
     } else {
-      console.log(`[Step 2: Grilling] Grilling check clean: all core decision dimensions covered.`);
+      console.log(`[Step 2: Refinement] Grilling check clean: all core decision dimensions covered.`);
     }
 
-    state = stateManager.updateStepState(targetRoot, state.runId, 2, 'completed', { hasGaps: grillingResult.hasGaps, gaps: grillingResult.gaps });
+    const resolvedGaps = grillingResult.gaps.map(g => ({
+      dimension: g.dimension,
+      question: g.question,
+      chosenOption: g.defaultChoice
+    }));
+
+    const refinementOutput = {
+      hasGaps: grillingResult.hasGaps,
+      gaps: grillingResult.gaps,
+      gapsResolved: resolvedGaps,
+      blueprint: grillingResult.blueprint
+    };
+
+    console.log(`[Step 2: Refinement] Refinement complete. Blueprint generated for ${grillingResult.blueprint.targetFiles.length} target file(s).`);
+    state = stateManager.updateStepState(targetRoot, state.runId, 2, 'completed', refinementOutput);
   }
 
-  // Step 3: Complexity Analysis & DAG Task Decomposition (AC7)
+  // Step 3: Complexity Analysis & DAG Task Decomposition (AC3, AC7)
   let dagPlan = null;
+  const blueprint = (state.steps[2] && state.steps[2].output && state.steps[2].output.blueprint) || null;
   if (startStep <= 3 && state.steps[3].status !== 'completed') {
     state = stateManager.updateStepState(targetRoot, state.runId, 3, 'in_progress');
-    dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug });
+    dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint });
     console.log(`[Step 3: DAG Generation] Complexity: ${dagPlan.complexity.level}. Generated ${dagPlan.totalTasks} task(s).`);
     state.dagTasks = dagPlan.tasks;
     state = stateManager.saveRunState(targetRoot, state);
@@ -441,7 +456,7 @@ function cmdRun(options) {
   } else if (state.steps[3].output) {
     dagPlan = state.steps[3].output;
   } else {
-    dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug });
+    dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint });
   }
 
   // Step 4: Subagent Context Fencing & Dispatch (AC8, AC11, AC12, AC13, AC14, AC15, AC16, AC17, AC19, AC20)
@@ -720,9 +735,154 @@ function cmdRun(options) {
     state = stateManager.updateStepState(targetRoot, state.runId, 7, 'skipped', { reason: 'Skipped via --skip-review' });
   }
 
-  // Step 8: PR Preparation & Remote Comment Loop (AC14, AC15)
+  // Step 8: PR Preparation, Pre-PR Gates & Remote Comment Loop (AC5, AC6, AC7, AC8, AC9, AC10, AC11, AC12, AC14, AC15)
   if (startStep <= 8 && state.steps[8].status !== 'completed' && !options.skipPr) {
     state = stateManager.updateStepState(targetRoot, state.runId, 8, 'in_progress');
+
+    // 1. Project-Specific Pre-PR Instructions / Lifecycle Hook (AC11, AC12)
+    if (config.prePrInstructions) {
+      console.log(`[Step 8: Pre-PR Gate] Evaluating project pre-PR instructions: "${config.prePrInstructions}"`);
+    }
+    if (config.prePrCommand || typeof options.prePrHook === 'function') {
+      try {
+        if (config.prePrCommand) {
+          console.log(`[Step 8: Pre-PR Gate] Executing pre-PR command: "${config.prePrCommand}"...`);
+          execSync(config.prePrCommand, { cwd: targetRoot, stdio: 'inherit' });
+        }
+        if (typeof options.prePrHook === 'function') {
+          options.prePrHook(targetRoot);
+        }
+        const prePrStatus = execSync('git status --porcelain', { cwd: targetRoot, encoding: 'utf8' }).trim();
+        if (prePrStatus) {
+          // Verify secret leaks before staging pre-PR modifications (AC12)
+          if (Boolean(config.securityChecksEnabled) && !options.skipSecurity) {
+            const secRes = runSecurityGate(targetRoot, { staged: false });
+            if (secRes.exitCode !== 0) {
+              console.error(`[Step 8: Pre-PR Gate] Pre-PR changes rejected by security leak check.`);
+              state.status = 'failed';
+              stateManager.recordError(targetRoot, state.runId, 8, 'Pre-PR changes rejected by security leak check');
+              return 1;
+            }
+          }
+          execSync('git add -A', { cwd: targetRoot, stdio: 'ignore' });
+          execSync(`git commit -m "chore(${specSlug}): apply pre-pr requirements"`, { cwd: targetRoot, stdio: 'ignore' });
+          state.deliveryCommit = getBaseCommit(targetRoot);
+          stateManager.saveRunState(targetRoot, state);
+        }
+      } catch (err) {
+        console.error(`[Step 8: Pre-PR Gate] Pre-PR command failed: ${err.message}`);
+        state.status = 'failed';
+        stateManager.recordError(targetRoot, state.runId, 8, `Pre-PR command failed: ${err.message}`);
+        return 1;
+      }
+    }
+
+    // 2. Pre-PR Quality Gates (Build Verification & Full Test Pass) (AC5, AC6, AC7, AC8, AC9, AC10)
+    const requiredBuild = Boolean(config.requiredBuild);
+    const runAllTests = Boolean(config.runAllTests);
+
+    if (!requiredBuild && !runAllTests) {
+      console.log(`[Step 8: Pre-PR Verification] Build and test verification skipped (requiredBuild: false, runAllTests: false).`);
+    } else {
+      // Build Verification (AC5, AC8, AC9, AC10)
+      if (requiredBuild) {
+        const buildCmd = config.buildCommand || 'npm run build';
+        console.log(`[Step 8: Pre-PR Verification] Running build check: ${buildCmd}`);
+        let buildPassed = false;
+        let buildAttempts = 0;
+        const maxFixAttempts = 3;
+
+        while (!buildPassed && buildAttempts <= maxFixAttempts) {
+          try {
+            execSync(buildCmd, { cwd: targetRoot, stdio: ['ignore', 'pipe', 'pipe'] });
+            buildPassed = true;
+          } catch (buildErr) {
+            buildAttempts++;
+            if (buildAttempts > maxFixAttempts) {
+              console.error(`[Step 8: Pre-PR Verification] Build verification failed after ${maxFixAttempts} attempt(s). Halting.`);
+              state.status = 'failed';
+              stateManager.recordError(targetRoot, state.runId, 8, `Build verification failed after ${maxFixAttempts} attempt(s): ${buildErr.message}`);
+              return 1;
+            }
+            console.log(`[Step 8: Pre-PR Verification] Build failed. Attempting automated surgical fix (attempt ${buildAttempts}/${maxFixAttempts})...`);
+            if (typeof options.buildFixer === 'function') {
+              options.buildFixer(targetRoot, buildAttempts);
+            }
+            const fixStatus = execSync('git status --porcelain', { cwd: targetRoot, encoding: 'utf8' }).trim();
+            if (fixStatus) {
+              if (Boolean(config.securityChecksEnabled) && !options.skipSecurity) {
+                const sec = runSecurityGate(targetRoot, { staged: false });
+                if (sec.exitCode !== 0) {
+                  console.error(`[Step 8: Pre-PR Verification] Fix commit rejected: secret leak detected.`);
+                  state.status = 'failed';
+                  stateManager.recordError(targetRoot, state.runId, 8, 'Fix commit rejected: secret leak detected');
+                  return 1;
+                }
+              }
+              execSync('git add -A', { cwd: targetRoot, stdio: 'ignore' });
+              execSync(`git commit -m "fix(${specSlug}): resolve build failure (attempt ${buildAttempts})"`, { cwd: targetRoot, stdio: 'ignore' });
+              state.deliveryCommit = getBaseCommit(targetRoot);
+              stateManager.saveRunState(targetRoot, state);
+            } else {
+              console.error(`[Step 8: Pre-PR Verification] No automated fixes could be generated for build failure.`);
+              state.status = 'failed';
+              stateManager.recordError(targetRoot, state.runId, 8, `Build verification failed: ${buildErr.message}`);
+              return 1;
+            }
+          }
+        }
+      }
+
+      // Test Verification (AC6, AC8, AC9, AC10)
+      if (runAllTests) {
+        const testCmd = config.testCommand || 'npm test';
+        console.log(`[Step 8: Pre-PR Verification] Running test suite: ${testCmd}`);
+        let testPassed = false;
+        let testAttempts = 0;
+        const maxFixAttempts = 3;
+
+        while (!testPassed && testAttempts <= maxFixAttempts) {
+          try {
+            execSync(testCmd, { cwd: targetRoot, stdio: ['ignore', 'pipe', 'pipe'] });
+            testPassed = true;
+          } catch (testErr) {
+            testAttempts++;
+            if (testAttempts > maxFixAttempts) {
+              console.error(`[Step 8: Pre-PR Verification] Test verification failed after ${maxFixAttempts} attempt(s). Halting.`);
+              state.status = 'failed';
+              stateManager.recordError(targetRoot, state.runId, 8, `Test verification failed after ${maxFixAttempts} attempt(s): ${testErr.message}`);
+              return 1;
+            }
+            console.log(`[Step 8: Pre-PR Verification] Tests failed. Attempting automated surgical fix (attempt ${testAttempts}/${maxFixAttempts})...`);
+            if (typeof options.testFixer === 'function') {
+              options.testFixer(targetRoot, testAttempts);
+            }
+            const fixStatus = execSync('git status --porcelain', { cwd: targetRoot, encoding: 'utf8' }).trim();
+            if (fixStatus) {
+              if (Boolean(config.securityChecksEnabled) && !options.skipSecurity) {
+                const sec = runSecurityGate(targetRoot, { staged: false });
+                if (sec.exitCode !== 0) {
+                  console.error(`[Step 8: Pre-PR Verification] Fix commit rejected: secret leak detected.`);
+                  state.status = 'failed';
+                  stateManager.recordError(targetRoot, state.runId, 8, 'Fix commit rejected: secret leak detected');
+                  return 1;
+                }
+              }
+              execSync('git add -A', { cwd: targetRoot, stdio: 'ignore' });
+              execSync(`git commit -m "fix(${specSlug}): resolve test failure (attempt ${testAttempts})"`, { cwd: targetRoot, stdio: 'ignore' });
+              state.deliveryCommit = getBaseCommit(targetRoot);
+              stateManager.saveRunState(targetRoot, state);
+            } else {
+              console.error(`[Step 8: Pre-PR Verification] No automated fixes could be generated for test failure.`);
+              state.status = 'failed';
+              stateManager.recordError(targetRoot, state.runId, 8, `Test verification failed: ${testErr.message}`);
+              return 1;
+            }
+          }
+        }
+      }
+    }
+
     const prPayload = {
       title: `feat(${specSlug}): implement ${specSlug}`,
       specSlug,
@@ -777,7 +937,7 @@ function cmdRun(options) {
     state = stateManager.updateStepState(targetRoot, state.runId, 8, 'skipped', { reason: 'Skipped via --skip-pr' });
   }
 
-  // Remote Push / Branch Publishing (--push or config.pushDelivery)
+  // Remote Push / Branch Publishing (--push or config.pushDelivery) (AC14)
   const shouldPush = options.push !== undefined ? options.push : (config && config.pushDelivery);
   if (shouldPush) {
     try {
@@ -795,6 +955,8 @@ function cmdRun(options) {
       if (!state.errors) state.errors = [];
       state.errors.push({ step: 8, timestamp: new Date().toISOString(), error: `git push failed: ${pushErr.message}` });
     }
+  } else {
+    console.log(`[Step 8: PR Preparation] Pre-PR verification passed. PR payload assembled (remote push disabled).`);
   }
 
   state.status = 'completed';

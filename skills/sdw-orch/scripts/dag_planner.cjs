@@ -85,6 +85,11 @@ function generateDagPlan(specContent, options) {
 
   if (!complexity.isComplex || acs.length <= 3) {
     // Single execution unit
+    let prompt = `You are implementing the feature "${slug}". Focus strictly on the following acceptance criteria:\n` +
+      acs.map(a => `- ${a.id}: ${a.text}`).join('\n');
+    if (architecturalApproach) prompt += `\n\nArchitectural Approach:\n${architecturalApproach}`;
+    if (testPlan) prompt += `\n\nTest Plan:\n${testPlan}`;
+
     tasks.push({
       id: 'task-1',
       title: `Implement ${slug}`,
@@ -93,14 +98,19 @@ function generateDagPlan(specContent, options) {
       dependencies: [],
       status: 'pending',
       targetFiles: defaultTargetFiles,
-      contextPrompt: `You are implementing the feature "${slug}". Focus strictly on the following acceptance criteria:\n` +
-        acs.map(a => `- ${a.id}: ${a.text}`).join('\n')
+      architecturalApproach: architecturalApproach || undefined,
+      testPlan: testPlan || undefined,
+      contextPrompt: prompt
     });
   } else {
     // Multi-task DAG decomposition
     // Task 1: Core foundation / state / data models
     const t1Acs = acs.slice(0, Math.ceil(acs.length / 2));
     const t2Acs = acs.slice(Math.ceil(acs.length / 2));
+
+    let p1 = `You are implementing Task 1 (Core Logic) for "${slug}". Focus strictly on:\n` +
+      t1Acs.map(a => `- ${a.id}: ${a.text}`).join('\n');
+    if (architecturalApproach) p1 += `\n\nArchitectural Approach:\n${architecturalApproach}`;
 
     tasks.push({
       id: 'task-1',
@@ -110,9 +120,14 @@ function generateDagPlan(specContent, options) {
       dependencies: [],
       status: 'pending',
       targetFiles: defaultTargetFiles.slice(0, 4),
-      contextPrompt: `You are implementing Task 1 (Core Logic) for "${slug}". Focus strictly on:\n` +
-        t1Acs.map(a => `- ${a.id}: ${a.text}`).join('\n')
+      architecturalApproach: architecturalApproach || undefined,
+      testPlan: testPlan || undefined,
+      contextPrompt: p1
     });
+
+    let p2 = `You are implementing Task 2 (Workflows & Integration) for "${slug}". Focus strictly on:\n` +
+      t2Acs.map(a => `- ${a.id}: ${a.text}`).join('\n');
+    if (testPlan) p2 += `\n\nTest Plan:\n${testPlan}`;
 
     tasks.push({
       id: 'task-2',
@@ -122,8 +137,9 @@ function generateDagPlan(specContent, options) {
       dependencies: ['task-1'],
       status: 'pending',
       targetFiles: defaultTargetFiles.slice(4),
-      contextPrompt: `You are implementing Task 2 (Workflows & Integration) for "${slug}". Focus strictly on:\n` +
-        t2Acs.map(a => `- ${a.id}: ${a.text}`).join('\n')
+      architecturalApproach: architecturalApproach || undefined,
+      testPlan: testPlan || undefined,
+      contextPrompt: p2
     });
   }
 

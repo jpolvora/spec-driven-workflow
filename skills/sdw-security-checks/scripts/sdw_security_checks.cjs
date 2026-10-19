@@ -55,7 +55,7 @@ const RECOMMENDED_GITIGNORE = [
 
 const SCANNABLE_EXTENSIONS = new Set([
   '.env', '.json', '.yml', '.yaml', '.toml', '.xml', '.ini', '.cfg', '.conf', '.properties',
-  '.sh', '.bash', '.ps1', '.py', '.js', '.jsx', '.ts', '.tsx', '.cs', '.java', '.go', '.rb',
+  '.sh', '.bash', '.ps1', '.py', '.js', '.jsx', '.cjs', '.mjs', '.ts', '.tsx', '.cs', '.java', '.go', '.rb',
   '.php', '.tf', '.md', '.txt'
 ]);
 
