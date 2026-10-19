@@ -8,6 +8,7 @@ Mandatory repository rules and development guidelines for all AI agents working 
 
 **Spec-Driven Workflow (SDW)** is a streamlined, next-generation rework of the `workflow-skills` framework.
 - **Core Philosophy:** Modern LLM architectures possess high reasoning and planning capabilities. Excessive prompt instructions and repetitive sediment are eliminated to minimize token consumption, reduce context window overhead, and dramatically accelerate execution speed.
+- **Agent Agnostic (First-Class Feature):** The entire project, all skills, and tooling are strictly **agent-agnostic** and **harness-agnostic**. It is a mandatory, first-class requirement that no component creates dependencies on specific harnesses, proprietary vendors, or specific IDE implementations. Everything must be designed and implemented to ensure wide compatibility with most agents and harnesses.
 - **Predictability & Determinism:** Workflows are orchestrated through clear state machines, empirical exit criteria (`Done when:`), and deterministic Node.js helper scripts instead of stochastic prompt guidelines.
 
 ---
@@ -31,6 +32,11 @@ Mandatory repository rules and development guidelines for all AI agents working 
 4. **Deterministic Tool Anchors:**
    - Skills must invoke helpers via explicit launchers (e.g., `node skills/<skill-name>/scripts/<helper>.cjs`).
    - Shell commands and scripts must handle paths portably across Windows and POSIX (normalize path separators with forward slashes `/`).
+
+5. **Agent & Harness Agnosticism:**
+   - Do not create dependencies on specific harnesses, proprietary agent runtimes, specific vendors, or particular IDE implementations.
+   - Rely strictly on universal primitives: portable filesystem operations, standard CLI execution (Node.js 22 built-ins), standard Markdown/YAML/JSON formats, and portable stdin/stdout/file-based interaction.
+   - Always ensure broad compatibility across diverse agents and harnesses (e.g., Claude Code, Cursor, Codex/Copilot, Antigravity, OpenCode, Windsurf, or generic CLI harnesses).
 
 ---
 
@@ -85,4 +91,4 @@ Specifications in `.sdw/specs/` must conform to the canonical SDW specification 
 
 - **Run State Isolation:** Workflow state for an active run is maintained in `.sdw/state/{runId}.state.json`. Never pollute shared configuration or global directories with ephemeral session state.
 - **Subagent Context Fencing:** When orchestrators dispatch subagents (e.g. implementation units), provide only the necessary task slice and reference context rather than raw cumulative transcripts.
-- **User Clarification Gate:** When ambiguous branch paths or decision gaps are detected during grilling, use `ask_question` presenting explicit options with a recommended default.
+- **User Clarification Gate:** When ambiguous branch paths or decision gaps are detected during grilling, present explicit options with a recommended default (using host question prompt mechanisms like `ask_question` where supported, or structured interactive chat prompts).
