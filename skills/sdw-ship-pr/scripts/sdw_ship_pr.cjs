@@ -490,6 +490,7 @@ async function runShipPr(options = {}, customExecutor = null) {
               if (changed.length > 0) {
                 executor('git commit -m "fix(review): address failing checks"');
                 executor(`git push origin ${head}`);
+                if (pollIntervalMs > 0) await new Promise(r => setTimeout(r, pollIntervalMs));
                 continue;
               }
               warn('[sdw-ship-pr] reviewFixCommand produced no changes for the failing checks.');
@@ -504,6 +505,7 @@ async function runShipPr(options = {}, customExecutor = null) {
               });
               if (fixResult && fixResult.fixed === true) {
                 runReviewSecurityGate();
+                if (pollIntervalMs > 0) await new Promise(r => setTimeout(r, pollIntervalMs));
                 continue;
               }
               warn('[sdw-ship-pr] threadFixer did not confirm a fix for the failing checks.');
@@ -735,7 +737,9 @@ async function cmdResolveThread(options, customExecutor) {
   const comment = options.comment;
   if (!prNumber) throw new Error('--pr <prNumber> is required for resolve-thread.');
   if (!threadId) throw new Error('--thread <threadId> is required for resolve-thread.');
-  if (!comment) throw new Error('--comment <comment> is required for resolve-thread.');
+  if (!String(comment || '').trim() || /^[0-9a-f]{7,40}$/i.test(String(comment).trim())) {
+    throw new Error('A resolution comment must explain the fix and cannot be empty or a bare commit hash.');
+  }
 
   const providerName = options.provider || config.scmProvider || 'github';
   const provider = (scmContract && scmContract.createScmProvider)
@@ -824,7 +828,10 @@ if (require.main === module) {
           console.log(`  PR URL:       ${result.pullRequest.url}`);
         }
       }
-      process.exit((result && (result.success !== false && result.resolved !== false)) ? 0 : 1);
+      const ok = options.subcommand === 'check-status'
+        ? Boolean(result && result.allPassed === true)
+        : Boolean(result && result.success !== false && result.resolved !== false);
+      process.exit(ok ? 0 : 1);
     })
     .catch(err => {
       console.error(`\n[sdw-ship-pr] Error: ${err.message}`);

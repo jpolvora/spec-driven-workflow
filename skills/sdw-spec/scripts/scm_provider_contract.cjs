@@ -77,6 +77,17 @@ function htmlToMarkdown(html) {
 /**
  * Helper to extract acceptance criteria from description or raw text
  */
+function assertResolutionComment(comment) {
+  const normalized = String(comment || '').trim();
+  if (!normalized || /^[0-9a-f]{7,40}$/i.test(normalized)) {
+    throw new Error('A resolution comment must explain the fix and cannot be empty or a bare commit hash.');
+  }
+  return normalized;
+}
+
+/**
+ * Helper to extract acceptance criteria from description or raw text
+ */
 function extractAcceptanceCriteria(text) {
   if (!text) return [];
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
@@ -431,9 +442,7 @@ class GitHubProvider extends ScmProvider {
 
   async resolveReviewThread(options = {}) {
     const { prNumber, threadId, commentId, comment, model, dryRun = false } = options;
-    if (!comment) {
-      throw new Error('comment describing resolution is required for resolveReviewThread.');
-    }
+    assertResolutionComment(comment);
 
     if (dryRun) {
       return {
@@ -499,9 +508,19 @@ class GitHubProvider extends ScmProvider {
       if (!targetId || !prNumber) {
         throw new Error('prNumber and either threadId or commentId are required to reply/resolve.');
       }
-
-      const cmd = `gh api repos/:owner/:repo/pulls/${prNumber}/comments/${targetId}/replies -f body="${bodyWithMarker.replace(/"/g, '\\"')}"`;
-      this.executor(cmd);
+      if (!/^\d+$/.test(String(prNumber)) || !/^\d+$/.test(String(targetId))) {
+        throw new Error('prNumber and commentId must be numeric for the GitHub REST reply endpoint.');
+      }
+      let replyFile = null;
+      try {
+        replyFile = path.join(os.tmpdir(), `sdw-rest-reply-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
+        fs.writeFileSync(replyFile, JSON.stringify({ body: bodyWithMarker }), 'utf8');
+        this.executor(`gh api repos/:owner/:repo/pulls/${prNumber}/comments/${targetId}/replies --input "${replyFile.replace(/\\/g, '/')}"`);
+      } finally {
+        if (replyFile && fs.existsSync(replyFile)) {
+          try { fs.unlinkSync(replyFile); } catch (e) {}
+        }
+      }
       // A REST reply cannot resolve a GitHub review thread. Report the truth so the
       // convergence loop does not mark the PR as delivered while branch protection blocks it.
       return {
@@ -781,9 +800,7 @@ class AzureDevOpsProvider extends ScmProvider {
 
   async resolveReviewThread(options = {}) {
     const { prNumber, threadId, comment, model, dryRun = false } = options;
-    if (!comment) {
-      throw new Error('comment describing resolution is required for resolveReviewThread.');
-    }
+    assertResolutionComment(comment);
     if (!threadId || !prNumber) {
       throw new Error('prNumber and threadId are required for Azure DevOps resolveReviewThread.');
     }
@@ -946,6 +963,7 @@ module.exports = {
   resolveScmProvider,
   checkScmCapability,
   extractAcceptanceCriteria,
-  htmlToMarkdown
+  htmlToMarkdown,
+  assertResolutionComment
 };
 

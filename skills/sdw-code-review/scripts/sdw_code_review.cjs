@@ -247,7 +247,9 @@ const SCANNABLE_EXTS = new Set(['.js', '.cjs', '.mjs', '.jsx', '.ts', '.tsx', '.
 
 function isTestFile(file) {
   const n = normalizePath(file);
-  return n.includes('test') || n.includes('.spec.') || n.includes('__tests__') || n.startsWith('tests/');
+  return /(^|\/)tests?\//.test(n)
+    || /(^|\/)__tests__\//.test(n)
+    || /\.(test|spec)\.[^/]+$/.test(n);
 }
 
 function getAddedLines(projectRoot, base, file) {
@@ -593,7 +595,16 @@ function runCodeReview(options) {
   const blockingCount = criticalOpen + warningOpen;
   const passed = blockingCount === 0;
 
-  const allFindings = [...openFindings, ...fixedRecords].sort((a, b) => (a.id < b.id ? -1 : 1));
+  const seenFindingKeys = new Set();
+  const allFindings = [...openFindings, ...fixedRecords]
+    .filter(f => {
+      const key = `${f.file}:${f.line}:${f.rule}`;
+      if (seenFindingKeys.has(key)) return false;
+      seenFindingKeys.add(key);
+      return true;
+    })
+    .sort((a, b) => `${a.file}:${a.line}:${a.rule}`.localeCompare(`${b.file}:${b.line}:${b.rule}`))
+    .map((f, index) => ({ ...f, id: `CR-${String(index + 1).padStart(3, '0')}` }));
   const plannedAll = findings.filter(f => f.status === 'planned');
   const reportFindings = dryRun ? findings : allFindings;
 
@@ -626,7 +637,10 @@ function runCodeReview(options) {
     dryRun
   };
 
-  writeMarkdownReport(report, reportPath);
+  const explicitReport = Boolean(options.reportPath || options.report);
+  if (!dryRun || explicitReport) {
+    writeMarkdownReport(report, reportPath);
+  }
   return report;
 }
 
