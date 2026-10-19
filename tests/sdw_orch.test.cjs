@@ -122,15 +122,33 @@ test('AC9 & AC10: Conformance Scoring & Re-implementation Loop Gating', () => {
 - AC2: When a paused execution run resumes, the orchestrator shall restore session state from the state file.
 `;
 
-  // Evaluator handles hyphenated terms and inspects actual code files
-  const report = scoreEvaluator.evaluateScore(spec, {
+  // Evaluator handles evidence-based scoring (Spec 015)
+  const reportWithEvidence = scoreEvaluator.evaluateScore(spec, {
+    projectRoot: path.resolve(__dirname, '..'),
+    minScore: 8,
+    evidenceRecords: [
+      {
+        taskId: 'task-1',
+        acIds: ['AC1', 'AC2'],
+        filesChanged: ['skills/sdw-orch/scripts/state_manager.cjs'],
+        summary: 'State manager implementation'
+      }
+    ]
+  });
+
+  assert.equal(typeof reportWithEvidence.score, 'number');
+  assert.equal(reportWithEvidence.score, 10, 'Score is 10/10 with valid accepted evidence');
+  assert.equal(reportWithEvidence.verifiedAcs.length, 2, 'All ACs verified with evidence');
+  assert.equal(reportWithEvidence.passed, true);
+
+  // Evaluator without evidence fails closed with score 0
+  const reportWithoutEvidence = scoreEvaluator.evaluateScore(spec, {
     projectRoot: path.resolve(__dirname, '..'),
     minScore: 8
   });
-
-  assert.equal(typeof report.score, 'number');
-  assert.ok(report.score >= 0 && report.score <= 10, 'Score is between 0 and 10');
-  assert.ok(report.verifiedAcs.length > 0, 'Verified ACs tracked');
+  assert.equal(reportWithoutEvidence.score, 0, 'Score is 0 without evidence');
+  assert.equal(reportWithoutEvidence.passed, false);
+  assert.equal(reportWithoutEvidence.failingAcs.length, 2);
 });
 
 test('AC12 & AC13: Code Review Detection & Automated Fix Application', () => {
@@ -192,13 +210,17 @@ slug: low-score
 - AC2: The orchestrator shall satisfy nonexistent interplanetary telemetry gamma delta.
 `);
 
-    // Running with minScore 8 against nonexistent implementation should exit with code 2 (loop trigger)
+    // Running with minScore 8 against partial implementation (covering only 1 of 2 ACs = score 5) should exit with code 2 (loop trigger)
     const exitCode = sdwOrch.cmdRun({
       root: tmpDir,
       specPath: '.sdw/specs/low-score.md',
       minScore: 8,
       skipReview: true,
-      skipPr: true
+      skipPr: true,
+      implementation: {
+        mode: 'command',
+        command: 'node -e "const fs = require(\'fs\'); fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({ taskId: process.env.SDW_TASK_ID, acIds: [\'AC1\'], filesChanged: [\'.sdw/specs/low-score.md\'], summary: \'partial\' }));"'
+      }
     });
 
     assert.equal(exitCode, 2, 'Must exit with code 2 when conformance score fails threshold');
@@ -379,7 +401,11 @@ slug: push-feature
       push: true,
       minScore: 0,
       skipReview: true,
-      skipPr: false
+      skipPr: false,
+      implementation: {
+        mode: 'command',
+        command: 'node -e "const fs = require(\'fs\'); fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({ taskId: process.env.SDW_TASK_ID, acIds: [\'AC1\'], filesChanged: [\'.sdw/specs/push-feature.md\'], summary: \'push feature done\' }));"'
+      }
     });
 
     assert.equal(exitCode, 0, 'Cleanly finishes run with --push flag without unhandled exceptions');
@@ -419,7 +445,11 @@ slug: 002-feature-b
       specPaths: [specA, specB],
       minScore: 0,
       skipReview: true,
-      skipPr: true
+      skipPr: true,
+      implementation: {
+        mode: 'command',
+        command: 'node -e "const fs = require(\'fs\'); fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({ taskId: process.env.SDW_TASK_ID, acIds: [\'AC1\'], filesChanged: [process.env.SDW_SPEC_SLUG ? \'.sdw/specs/\' + process.env.SDW_SPEC_SLUG + \'.md\' : \'package.json\'], summary: \'batch done\' }));"'
+      }
     });
 
     assert.equal(exitCode, 0, 'Batch execution must exit with code 0 on success (AC1)');
@@ -576,7 +606,11 @@ slug: 002-todo
       root: tmpDir,
       minScore: 0,
       skipReview: true,
-      skipPr: true
+      skipPr: true,
+      implementation: {
+        mode: 'command',
+        command: 'node -e "const fs = require(\'fs\'); fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({ taskId: process.env.SDW_TASK_ID, acIds: [\'AC1\'], filesChanged: [process.env.SDW_SPEC_SLUG ? \'.sdw/specs/\' + process.env.SDW_SPEC_SLUG + \'.md\' : \'package.json\'], summary: \'batch resume done\' }));"'
+      }
     });
 
     assert.equal(exitCode, 0, 'Resuming batch must succeed');
@@ -669,7 +703,11 @@ slug: 002-feature-y
       abortOnGaps: true, // Should be overridden / bypassed in unattended mode
       minScore: 0,
       skipReview: true,
-      skipPr: true
+      skipPr: true,
+      implementation: {
+        mode: 'command',
+        command: 'node -e "const fs = require(\'fs\'); fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({ taskId: process.env.SDW_TASK_ID, acIds: [\'AC1\'], filesChanged: [process.env.SDW_SPEC_SLUG ? \'.sdw/specs/\' + process.env.SDW_SPEC_SLUG + \'.md\' : \'package.json\'], summary: \'unattended done\' }));"'
+      }
     });
 
     assert.equal(exitCode, 0, 'Unattended batch execution must complete successfully');

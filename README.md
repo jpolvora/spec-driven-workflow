@@ -56,17 +56,23 @@ flowchart TD
    - Generates a Directed Acyclic Graph (DAG) dividing the work into discrete, atomic execution units with context prompts.
    - Persists the DAG plan artifact `{slug}-step-3.md`. Supports isolated git worktrees (`useWorktrees: true`) for multi-task plans.
 
-4. **Isolated Subagent Dispatch & Implementation**
-   - Dispatches focused subagents according to the DAG definition.
-   - Enforces context fencing: each subagent receives only the relevant task prompt and scoped references, preventing context pollution and keeping the model tightly focused on its file set.
+4. **Implementation Execution Contract & Evidence Gate**
+   - Dispatches implementation via default handoff mode (writes prompt files, sets `awaiting_implementation`, exits code 4) or opt-in command mode (executing subprocesses with token substitution and environment sanitization).
+   - In worktree mode (`useWorktrees: true`), isolates tasks in sequential git worktrees branching from primary `HEAD`, committing in worktree, cherry-picking to primary, and cleaning up safely.
+   - Corroborates changes in worktrees or primary tree, rejecting empty worktrees or unmodified working trees.
+   - Requires task completion via `sdw-orch task finish` with schema-validated evidence files.
+   - Executes build and test verification gates (`verification.buildCommand`, `verification.testCommand`) once all tasks are accepted.
 
-5. **Conformance Scoring Loop**
-   - Evaluates implementation output by quantitatively comparing the resulting diffs and touched files against the refined spec's acceptance criteria.
-   - Persists the preliminary implementation report artifact `{slug}-step-5.md` with verified criteria and conformance score breakdown.
-   - If the score falls below the required threshold (e.g. `< 8/10`), loops back with gap observations.
+5. **Evidence-Based Conformance Scoring**
+   - Strictly evaluates conformance score based on accepted task evidence records (`round(verified / total * 10)`).
+   - Verifies criteria only when referenced by accepted evidence confirming real existing changed files on disk. Fails closed with 0/10 if no ACs exist.
+   - Persists the preliminary implementation report artifact `{slug}-step-5.md` with verified criteria and evidence links.
+   - If the score falls below the required threshold (default `< 8/10`), triggers a feedback re-implementation loop (code 2).
 
-6. **Delivery Commit**
-   - Once quality is assured by the conformance score, creates an atomic, structured delivery git commit.
+6. **Delivery Commit & Quality Guard**
+   - Refuses delivery commits if Step 4 is incomplete, any task unaccepted, or any verification gate failed.
+   - Runs pre-commit secret leak scan (`sdw-security-checks`) when enabled.
+   - Creates an atomic, structured delivery git commit (`feat(...)`).
 
 7. **Automated Code Review Loop**
    - Compares the newly committed code against the base branch commit.
@@ -105,6 +111,7 @@ spec-driven-workflow/
 │   ├── sdw_branch_worktree.test.cjs
 │   ├── sdw_config.test.cjs
 │   ├── sdw_orch.test.cjs
+│   ├── sdw_orch_implementation.test.cjs
 │   ├── sdw_refinement_gates.test.cjs
 │   ├── sdw_router.test.cjs
 │   ├── sdw_rules.test.cjs

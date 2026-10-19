@@ -132,7 +132,11 @@ test('sdw-orch reads custom config values from .sdw/config.json', () => {
       specsDir: '{projectRoot}/.sdw/specs',
       scoreMin: 7,
       scmCodeReviewEnabled: true,
-      stateDir: '{projectRoot}/.sdw/custom-state'
+      stateDir: '{projectRoot}/.sdw/custom-state',
+      implementation: {
+        mode: 'command',
+        command: 'node -e "const fs = require(\'fs\'); fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({ taskId: process.env.SDW_TASK_ID, acIds: [\'AC1\'], filesChanged: [\'.sdw/specs/feature.md\'], summary: \'done\' }));"'
+      }
     }, null, 2), 'utf8');
 
     const resolvedStateDir = stateManager.resolveStateDir(tmpDir);

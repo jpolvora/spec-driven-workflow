@@ -100,7 +100,11 @@ test('sdw-step-artifacts - AC1, AC2, AC3, AC4, AC5, AC6, AC7, AC12, AC13: Step 2
       skipSecurity: true,
       skipReview: true,
       unattended: true,
-      minScore: 0
+      minScore: 0,
+      implementation: {
+        mode: 'command',
+        command: 'node -e "const fs = require(\'fs\'); fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({ taskId: process.env.SDW_TASK_ID, acIds: [\'AC1\'], filesChanged: [\'.sdw/specs/014-dummy-step-artifacts.md\'], summary: \'done\' }));"'
+      }
     });
 
     assert.strictEqual(res, 0);

@@ -207,10 +207,13 @@ function writeStep5Artifact(options) {
     md += `## Verified Acceptance Criteria\n\n`;
     const verified = (report.verifiedAcs || []);
     if (verified.length > 0) {
-      md += `| ID | Description |\n`;
-      md += `|---|---|\n`;
+      md += `| ID | Description | Linked Tasks / Evidence |\n`;
+      md += `|---|---|---|\n`;
       for (const v of verified) {
-        md += `| ${v.id} | ${v.text ? v.text.replace(/\|/g, '\\|') : ''} |\n`;
+        const linkStr = (v.evidencePaths && v.evidencePaths.length > 0)
+          ? v.evidencePaths.join(', ')
+          : ((v.taskIds && v.taskIds.length > 0) ? v.taskIds.join(', ') : 'Accepted task evidence');
+        md += `| ${v.id} | ${v.text ? v.text.replace(/\|/g, '\\|') : ''} | ${linkStr} |\n`;
       }
       md += `\n`;
     } else {
@@ -221,11 +224,11 @@ function writeStep5Artifact(options) {
     md += `## Failing Acceptance Criteria\n\n`;
     const failing = (report.failingAcs || []);
     if (failing.length > 0) {
-      md += `| ID | Description | Missing Keywords / Reason |\n`;
+      md += `| ID | Description | Reason |\n`;
       md += `|---|---|---|\n`;
       for (const f of failing) {
-        const missing = f.missingKeywords && f.missingKeywords.length > 0 ? f.missingKeywords.join(', ') : 'Not matched';
-        md += `| ${f.id} | ${f.text ? f.text.replace(/\|/g, '\\|') : ''} | ${missing} |\n`;
+        const reason = f.reason || (f.missingKeywords && f.missingKeywords.length > 0 ? f.missingKeywords.join(', ') : 'Not matched');
+        md += `| ${f.id} | ${f.text ? f.text.replace(/\|/g, '\\|') : ''} | ${reason} |\n`;
       }
       md += `\n`;
     } else {

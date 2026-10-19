@@ -13,6 +13,8 @@ const scoreEvaluator = require('./score_evaluator.cjs');
 const reviewRunner = require('./review_runner.cjs');
 const batchRunner = require('./batch_runner.cjs');
 const artifactWriter = require('./artifact_writer.cjs');
+const implementationRunner = require('./implementation_runner.cjs');
+const evidenceValidator = require('./evidence_validator.cjs');
 
 function getSpecIndexHelper() {
   try {
@@ -58,7 +60,10 @@ function parseArgs(args) {
     noWorktrees: false,
     worktrees: false,
     noFeatureBranch: false,
-    featureBranch: false
+    featureBranch: false,
+    taskId: null,
+    evidencePath: null,
+    implementationMode: null
   };
 
   const positional = [];
@@ -90,6 +95,14 @@ function parseArgs(args) {
     else if (arg.startsWith('--root=')) result.root = arg.slice(7);
     else if (arg === '--run-id') result.runId = args[++i];
     else if (arg.startsWith('--run-id=')) result.runId = arg.slice(9);
+    else if (arg === '--task' || arg === '--task-id') result.taskId = args[++i];
+    else if (arg.startsWith('--task=')) result.taskId = arg.slice(7);
+    else if (arg.startsWith('--task-id=')) result.taskId = arg.slice(10);
+    else if (arg === '--evidence' || arg === '--evidence-path') result.evidencePath = args[++i];
+    else if (arg.startsWith('--evidence=')) result.evidencePath = arg.slice(11);
+    else if (arg.startsWith('--evidence-path=')) result.evidencePath = arg.slice(16);
+    else if (arg === '--mode') result.implementationMode = args[++i];
+    else if (arg.startsWith('--mode=')) result.implementationMode = arg.slice(7);
     else if (arg === '--step') result.step = parseInt(args[++i], 10);
     else if (arg.startsWith('--step=')) result.step = parseInt(arg.slice(7), 10);
     else if (arg === '--min-score') result.minScore = parseInt(args[++i], 10);
@@ -97,9 +110,17 @@ function parseArgs(args) {
     else if (!arg.startsWith('-')) positional.push(arg);
   }
 
-  result.subcommand = positional[0] || null;
-  result.specPaths = positional.slice(1);
-  result.specPath = positional[1] || null;
+  if ((positional[0] === 'task' && positional[1] === 'finish') || positional[0] === 'task-finish') {
+    result.subcommand = 'task-finish';
+    const rest = positional[0] === 'task-finish' ? positional.slice(1) : positional.slice(2);
+    result.specPaths = rest;
+    if (!result.taskId && rest[0]) result.taskId = rest[0];
+    if (!result.evidencePath && rest[1]) result.evidencePath = rest[1];
+  } else {
+    result.subcommand = positional[0] || null;
+    result.specPaths = positional.slice(1);
+    result.specPath = positional[1] || null;
+  }
 
   if (result.subcommand === 'resume-batch') {
     result.batchId = result.batchId || positional[1] || null;
@@ -136,6 +157,139 @@ function runSecurityGate(targetRoot, options = {}) {
     findings: [],
     error: 'Security scanner module unavailable'
   };
+}
+
+function runVerificationGates(targetRoot, config, options = {}) {
+  const gates = {};
+  let passed = true;
+  const specSlug = options.slug || options.specSlug || (options.runId ? options.runId.replace(/^run-\d+-/, '') : 'feature');
+  const runId = options.runId;
+
+  const verificationConfig = (config && config.verification) || {};
+  const reqBuild = options.requiredBuild !== undefined
+    ? options.requiredBuild
+    : Boolean(config.requiredBuild || (verificationConfig.buildCommand && typeof verificationConfig.buildCommand === 'string'));
+  const reqTests = options.runAllTests !== undefined
+    ? options.runAllTests
+    : Boolean(config.runAllTests || (verificationConfig.testCommand && typeof verificationConfig.testCommand === 'string'));
+
+  if (reqBuild) {
+    const buildCmd = (config.verification && config.verification.buildCommand) || config.buildCommand || 'npm run build';
+    console.log(`[Step 4: Verification Gate] Executing build command: "${buildCmd}"...`);
+    const start = Date.now();
+    let buildPassed = false;
+    let buildAttempts = 0;
+    const maxFixAttempts = (typeof options.buildFixer === 'function') ? 3 : 0;
+    let lastErr = null;
+
+    while (!buildPassed && buildAttempts <= maxFixAttempts) {
+      try {
+        execSync(buildCmd, { cwd: targetRoot, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8' });
+        buildPassed = true;
+        const durationMs = Date.now() - start;
+        gates.build = { status: 'passed', exitCode: 0, durationMs };
+        console.log(`[Step 4: Verification Gate] Build passed (${durationMs}ms).`);
+      } catch (err) {
+        lastErr = err;
+        buildAttempts++;
+        if (buildAttempts > maxFixAttempts) {
+          const durationMs = Date.now() - start;
+          const errMsg = maxFixAttempts > 0
+            ? `Build verification failed after ${maxFixAttempts} attempt(s): ${err.message}`
+            : `Build verification failed: ${err.message}`;
+          gates.build = { status: 'failed', exitCode: err.status || 1, durationMs, error: errMsg };
+          console.error(`[Step 4: Verification Gate] ${errMsg}`);
+          if (runId) {
+            stateManager.recordError(targetRoot, runId, 4, errMsg);
+          }
+          passed = false;
+          break;
+        }
+
+        console.log(`[Step 4: Verification Gate] Build failed. Attempting automated surgical fix (attempt ${buildAttempts}/${maxFixAttempts})...`);
+        if (typeof options.buildFixer === 'function') {
+          options.buildFixer(targetRoot, buildAttempts);
+        }
+        const fixStatus = execSync('git status --porcelain', { cwd: targetRoot, encoding: 'utf8' }).trim();
+        if (fixStatus) {
+          if (Boolean(config.securityChecksEnabled) && !options.skipSecurity) {
+            const sec = runSecurityGate(targetRoot, { staged: false });
+            if (sec.exitCode !== 0) {
+              console.error(`[Step 4: Verification Gate] Fix commit rejected: secret leak detected.`);
+              if (runId) {
+                stateManager.recordError(targetRoot, runId, 4, 'Fix commit rejected: secret leak detected');
+              }
+              passed = false;
+              gates.build = { status: 'failed', exitCode: 1, durationMs: Date.now() - start, error: 'Fix commit rejected: secret leak detected' };
+              break;
+            }
+          }
+          execSync('git add -A', { cwd: targetRoot, stdio: 'ignore' });
+          execSync(`git commit -m "fix(${specSlug}): resolve build failure (attempt ${buildAttempts})"`, { cwd: targetRoot, stdio: 'ignore' });
+        }
+      }
+    }
+  }
+
+  if (reqTests && passed) {
+    const testCmd = (config.verification && config.verification.testCommand) || config.testCommand || 'npm test';
+    console.log(`[Step 4: Verification Gate] Executing test command: "${testCmd}"...`);
+    const start = Date.now();
+    let testPassed = false;
+    let testAttempts = 0;
+    const maxFixAttempts = (typeof options.testFixer === 'function') ? 3 : 0;
+    let lastErr = null;
+
+    while (!testPassed && testAttempts <= maxFixAttempts) {
+      try {
+        execSync(testCmd, { cwd: targetRoot, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8' });
+        testPassed = true;
+        const durationMs = Date.now() - start;
+        gates.test = { status: 'passed', exitCode: 0, durationMs };
+        console.log(`[Step 4: Verification Gate] Tests passed (${durationMs}ms).`);
+      } catch (err) {
+        lastErr = err;
+        testAttempts++;
+        if (testAttempts > maxFixAttempts) {
+          const durationMs = Date.now() - start;
+          const errMsg = maxFixAttempts > 0
+            ? `Test verification failed after ${maxFixAttempts} attempt(s): ${err.message}`
+            : `Test verification failed: ${err.message}`;
+          gates.test = { status: 'failed', exitCode: err.status || 1, durationMs, error: errMsg };
+          console.error(`[Step 4: Verification Gate] ${errMsg}`);
+          if (runId) {
+            stateManager.recordError(targetRoot, runId, 4, errMsg);
+          }
+          passed = false;
+          break;
+        }
+
+        console.log(`[Step 4: Verification Gate] Tests failed. Attempting automated surgical fix (attempt ${testAttempts}/${maxFixAttempts})...`);
+        if (typeof options.testFixer === 'function') {
+          options.testFixer(targetRoot, testAttempts);
+        }
+        const fixStatus = execSync('git status --porcelain', { cwd: targetRoot, encoding: 'utf8' }).trim();
+        if (fixStatus) {
+          if (Boolean(config.securityChecksEnabled) && !options.skipSecurity) {
+            const sec = runSecurityGate(targetRoot, { staged: false });
+            if (sec.exitCode !== 0) {
+              console.error(`[Step 4: Verification Gate] Fix commit rejected: secret leak detected.`);
+              if (runId) {
+                stateManager.recordError(targetRoot, runId, 4, 'Fix commit rejected: secret leak detected');
+              }
+              passed = false;
+              gates.test = { status: 'failed', exitCode: 1, durationMs: Date.now() - start, error: 'Fix commit rejected: secret leak detected' };
+              break;
+            }
+          }
+          execSync('git add -A', { cwd: targetRoot, stdio: 'ignore' });
+          execSync(`git commit -m "fix(${specSlug}): resolve test failure (attempt ${testAttempts})"`, { cwd: targetRoot, stdio: 'ignore' });
+        }
+      }
+    }
+  }
+
+  return { passed, gates };
 }
 
 function loadProjectConfig(targetRoot) {
@@ -475,136 +629,265 @@ function cmdRun(options) {
     dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint });
   }
 
-  // Step 4: Subagent Context Fencing & Dispatch (AC8, AC11, AC12, AC13, AC14, AC15, AC16, AC17, AC19, AC20)
+  // Step 4: Implementation Execution Contract & Evidence Gate (Spec 015)
+  const implConfig = (options.implementation || config.implementation || {});
+  const implMode = options.implementationMode || implConfig.mode || 'handoff';
+
   if (startStep <= 4 && state.steps[4].status !== 'completed') {
-    state = stateManager.updateStepState(targetRoot, state.runId, 4, 'in_progress');
-    console.log(`[Step 4: Implementation] Prepared ${dagPlan.tasks.length} context-fenced task prompt(s).`);
-
-    if (useWorktrees) {
-      // Precondition checks (AC20)
-      const gitCheck = spawnSync('git', ['--version'], { cwd: targetRoot, encoding: 'utf8' });
-      const hasGitDir = fs.existsSync(path.join(targetRoot, '.git'));
-      if (gitCheck.status !== 0 || !hasGitDir) {
-        console.error('[Step 4: Worktree] Git unavailable or not a git repository for worktree operations.');
-        state.errors = state.errors || [];
-        state.errors.push({ step: 4, timestamp: new Date().toISOString(), error: 'Git unavailable or not a git repo' });
-        state = stateManager.updateStepState(targetRoot, state.runId, 4, 'worktree_failure', { error: 'Git unavailable' });
-        state.status = 'failed';
-        stateManager.saveRunState(targetRoot, state);
-        return 1;
-      }
-
-      // Check skip rule (AC13): single low-complexity task
-      const isSingleLowComplexity = dagPlan.tasks.length === 1 && (dagPlan.complexity.level === 'simple' || dagPlan.complexity.level === 'low');
-      if (isSingleLowComplexity) {
-        console.log(`[Step 4: Worktree] Skipped: single low-complexity task.`);
-        state.worktreeSkipReason = 'single low-complexity task';
-        state = stateManager.saveRunState(targetRoot, state);
-        dagPlan.tasks.forEach(t => {
-          console.log(`  + [${t.id}] ${t.title} (Covering: ${t.coveredAcs.join(', ')})`);
-        });
-      } else {
-        // Multi-task exclusive worktree lifecycle (AC12, AC14, AC15, AC16, AC17)
-        state.worktrees = state.worktrees || [];
-        const worktreeBaseDir = path.join(targetRoot, '.sdw', 'worktrees', state.runId);
-        if (!fs.existsSync(worktreeBaseDir)) {
-          fs.mkdirSync(worktreeBaseDir, { recursive: true });
-        }
-
-        for (const task of dagPlan.tasks) {
-          const taskWorktreeRel = `.sdw/worktrees/${state.runId}/${task.id}`;
-          const taskWorktreeAbs = path.join(targetRoot, taskWorktreeRel);
-          const taskBranch = `task/${state.runId}/${task.id}`;
-
-          console.log(`[Step 4: Worktree] Creating worktree for task ${task.id} at ${taskWorktreeRel}...`);
-          const addProc = spawnSync('git', ['worktree', 'add', taskWorktreeRel, '-b', taskBranch, 'HEAD'], {
-            cwd: targetRoot,
-            encoding: 'utf8'
-          });
-          if (addProc.status !== 0) {
-            console.error(`[Step 4: Worktree] Error creating worktree: ${addProc.stderr || 'git error'}`);
-            state.errors = state.errors || [];
-            state.errors.push({ step: 4, timestamp: new Date().toISOString(), error: addProc.stderr });
-            state = stateManager.updateStepState(targetRoot, state.runId, 4, 'worktree_failure', { error: addProc.stderr });
-            state.status = 'failed';
-            stateManager.saveRunState(targetRoot, state);
-            return 1;
-          }
-
-          const wtRecord = {
-            taskId: task.id,
-            path: taskWorktreeRel.replace(/\\/g, '/'),
-            branch: taskBranch,
-            baseCommit: getBaseCommit(targetRoot),
-            status: 'created',
-            commitSha: null
-          };
-          state.worktrees.push(wtRecord);
-          state = stateManager.saveRunState(targetRoot, state);
-
-          console.log(`  + [${task.id}] Dispatched to worktree: ${taskWorktreeRel}`);
-
-          // Check if changes exist in worktree
-          let wtHasChanges = false;
-          try {
-            wtHasChanges = Boolean(execSync('git status --porcelain', { cwd: taskWorktreeAbs, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim());
-          } catch (e) {}
-
-          if (wtHasChanges) {
-            execSync('git add -A', { cwd: taskWorktreeAbs, stdio: 'ignore' });
-            execSync(`git commit -m "task(${specSlug}): ${task.id}"`, { cwd: taskWorktreeAbs, stdio: 'ignore' });
-            const taskCommitSha = execSync('git rev-parse HEAD', { cwd: taskWorktreeAbs, encoding: 'utf8' }).trim();
-            wtRecord.commitSha = taskCommitSha;
-
-            // Integrate into primary working tree via cherry-pick (AC15)
-            try {
-              execSync(`git cherry-pick ${taskCommitSha}`, { cwd: targetRoot, stdio: 'ignore' });
-              console.log(`[Step 4: Worktree] Integrated task ${task.id} commit ${taskCommitSha} via cherry-pick.`);
-            } catch (cpErr) {
-              console.error(`[Step 4: Worktree] Conflict during cherry-pick integration of ${task.id}. Preserving worktree for inspection.`);
-              wtRecord.status = 'conflict';
-              stateManager.updateStepState(targetRoot, state.runId, 4, 'worktree_conflict', { error: cpErr.message, worktree: wtRecord });
-              state.status = 'failed';
-              stateManager.saveRunState(targetRoot, state);
-              options._runResult = { runId: state.runId, status: 'failed', error: `Worktree integration conflict on ${task.id}` };
-              return 1;
-            }
-          }
-
-          // Safe removal (AC17)
-          try {
-            execSync(`git worktree remove "${taskWorktreeRel}"`, { cwd: targetRoot, stdio: 'ignore' });
-            execSync(`git branch -d ${taskBranch}`, { cwd: targetRoot, stdio: 'ignore' });
-            wtRecord.status = 'integrated';
-          } catch (rmErr) {
-            console.error(`[Step 4: Worktree] Failed to remove worktree ${taskWorktreeRel}: ${rmErr.message}`);
-            wtRecord.status = 'remove_failed';
-            state.errors = state.errors || [];
-            state.errors.push({ step: 4, timestamp: new Date().toISOString(), error: rmErr.message });
-            stateManager.saveRunState(targetRoot, state);
-            return 1;
-          }
-          state = stateManager.saveRunState(targetRoot, state);
-        }
-      }
-    } else {
-      // Inline execution on primary tree (AC11)
-      dagPlan.tasks.forEach(t => {
-        console.log(`  + [${t.id}] ${t.title} (Covering: ${t.coveredAcs.join(', ')})`);
-      });
-    }
+    state.steps[4].tasks = state.steps[4].tasks || {};
+    state.steps[4].gates = state.steps[4].gates || {};
 
     if (options.simulateFailure) {
       console.error(`[Step 4: Implementation] Unrecoverable failure occurred during subagent execution (AC16).`);
+      state = stateManager.updateStepState(targetRoot, state.runId, 4, 'failed', { error: 'Simulated unrecoverable subagent execution failure' });
       stateManager.recordError(targetRoot, state.runId, 4, 'Simulated unrecoverable subagent execution failure');
       options._runResult = { runId: state.runId, status: 'failed', error: 'Simulated unrecoverable subagent execution failure' };
       return 1;
     }
 
-    state = stateManager.updateStepState(targetRoot, state.runId, 4, 'completed', { tasksPrepared: dagPlan.tasks.length });
+    if (useWorktrees && dagPlan.tasks.length <= 1) {
+      state.worktreeSkipReason = 'single low-complexity task';
+      useWorktrees = false;
+      state = stateManager.saveRunState(targetRoot, state);
+    }
+
+    const specAcs = dagPlanner.parseAcceptanceCriteria(effectiveSpecContent);
+
+    if (implMode === 'handoff') {
+      // AC3: write one prompt file per DAG task
+      const preparedTasks = [];
+      for (const task of dagPlan.tasks) {
+        let taskWorktreeRel = null;
+        if (useWorktrees) {
+          taskWorktreeRel = `.sdw/worktrees/${state.runId}/${task.id}`;
+        }
+        const rendered = implementationRunner.renderTaskPrompt({
+          targetRoot,
+          specSlug,
+          runId: state.runId,
+          stateDir: stateManager.resolveStateDir(targetRoot),
+          task,
+          specAcs,
+          useWorktrees,
+          taskWorktreeRel
+        });
+
+        const existingTask = state.steps[4].tasks[task.id] || {};
+        state.steps[4].tasks[task.id] = {
+          ...existingTask,
+          id: task.id,
+          title: task.title,
+          status: existingTask.status || 'pending',
+          promptPath: rendered.promptFileRel,
+          evidencePath: existingTask.evidencePath || rendered.evidenceFileRel,
+          workingDir: rendered.workingDirRel,
+          coveredAcs: task.coveredAcs || [],
+          dependencies: task.dependencies || []
+        };
+        preparedTasks.push(task.id);
+      }
+
+      // AC4: set Step 4 status to awaiting_implementation
+      state.status = 'paused';
+      state.steps[4].status = 'awaiting_implementation';
+      state = stateManager.saveRunState(targetRoot, state);
+
+      console.log(`\n[Step 4: Implementation] Prepared ${dagPlan.tasks.length} task prompt file(s) under handoff mode.`);
+      dagPlan.tasks.forEach(t => {
+        const tState = state.steps[4].tasks[t.id];
+        console.log(`  + [${t.id}] ${t.title}`);
+        console.log(`      Prompt:   ${tState.promptPath}`);
+        console.log(`      Evidence: ${tState.evidencePath}`);
+      });
+      console.log(`\n[Step 4: Implementation] Status: awaiting_implementation.`);
+      console.log(`Please implement tasks respecting DAG dependencies and submit evidence with:`);
+      console.log(`  node skills/sdw-orch/scripts/sdw_orch.cjs task finish --run-id ${state.runId} --task <taskId> --evidence <evidencePath>`);
+      console.log(`Once all tasks have accepted evidence, continue with:`);
+      console.log(`  node skills/sdw-orch/scripts/sdw_orch.cjs resume --run-id ${state.runId}`);
+
+      options._runResult = {
+        runId: state.runId,
+        status: 'awaiting_implementation',
+        currentStep: 4,
+        tasksPrepared: preparedTasks.length
+      };
+
+      // AC5: exit with code 4
+      return 4;
+    } else if (implMode === 'command') {
+      // AC21: execute implementation.command once per DAG task
+      console.log(`[Step 4: Implementation] Running in command mode for ${dagPlan.tasks.length} task(s)...`);
+
+      if (useWorktrees) {
+        const gitCheck = spawnSync('git', ['--version'], { cwd: targetRoot, encoding: 'utf8' });
+        const hasGitDir = fs.existsSync(path.join(targetRoot, '.git'));
+        if (gitCheck.status !== 0 || !hasGitDir) {
+          console.error('[Step 4: Worktree] Git unavailable or not a git repository for worktree operations.');
+          state = stateManager.updateStepState(targetRoot, state.runId, 4, 'worktree_failure', { error: 'Git unavailable' });
+          return 1;
+        }
+      }
+
+      const completedTaskIds = new Set(
+        Object.keys(state.steps[4].tasks || {}).filter(k => state.steps[4].tasks[k].status === 'completed')
+      );
+
+      for (const task of dagPlan.tasks) {
+        if (completedTaskIds.has(task.id)) {
+          console.log(`  + [${task.id}] Already completed.`);
+          continue;
+        }
+
+        // Check DAG dependencies (AC9)
+        const depCheck = implementationRunner.checkTaskDependencies(dagPlan, task.id, completedTaskIds);
+        if (!depCheck.satisfied) {
+          const err = `Task ${task.id} has uncompleted dependencies: ${depCheck.missingDependencies.join(', ')}`;
+          console.error(`[Step 4: Implementation] ${err}`);
+          state = stateManager.updateStepState(targetRoot, state.runId, 4, 'failed', { error: err });
+          return 1;
+        }
+
+        let wtInfo = null;
+        if (useWorktrees) {
+          // AC10: branch from latest integrated commit of primary tree
+          try {
+            wtInfo = implementationRunner.createTaskWorktree(targetRoot, state.runId, task.id);
+          } catch (wtErr) {
+            console.error(`[Step 4: Worktree] Error creating worktree: ${wtErr.message}`);
+            state = stateManager.updateStepState(targetRoot, state.runId, 4, 'worktree_failure', { error: wtErr.message });
+            return 1;
+          }
+        }
+
+        const rendered = implementationRunner.renderTaskPrompt({
+          targetRoot,
+          specSlug,
+          runId: state.runId,
+          stateDir: stateManager.resolveStateDir(targetRoot),
+          task,
+          specAcs,
+          useWorktrees,
+          taskWorktreeRel: wtInfo ? wtInfo.worktreeRel : null
+        });
+
+        // Execute command
+        const cmdResult = implementationRunner.executeTaskCommand({
+          config: {
+            ...config,
+            implementation: implConfig
+          },
+          task,
+          promptFile: rendered.promptFileAbs,
+          evidenceFile: rendered.evidenceFileAbs,
+          targetRoot,
+          worktreeDir: wtInfo ? wtInfo.worktreeAbs : null,
+          specSlug
+        });
+
+        if (!cmdResult.success) {
+          const errMsg = cmdResult.error || `Task command failed for ${task.id}`;
+          console.error(`[Step 4: Implementation] Task ${task.id} failed: ${errMsg}`);
+          state = stateManager.updateStepState(targetRoot, state.runId, 4, 'failed', { error: errMsg, task: task.id });
+          return 1;
+        }
+
+        // Validate evidence file
+        const evValidation = evidenceValidator.validateEvidenceFile(rendered.evidenceFileAbs, {
+          expectedTaskId: task.id,
+          specAcs,
+          projectRoot: targetRoot
+        });
+
+        if (!evValidation.valid) {
+          const errMsg = `Evidence validation failed for ${task.id}:\n  ` + evValidation.errors.join('\n  ');
+          console.error(`[Step 4: Implementation] ${errMsg}`);
+          state = stateManager.updateStepState(targetRoot, state.runId, 4, 'failed', { error: errMsg, task: task.id });
+          return 1;
+        }
+
+        const evidenceData = evValidation.data;
+
+        // Verify changes exist (AC14, AC15)
+        const hasChanges = implementationRunner.checkTaskChanges(
+          targetRoot,
+          wtInfo ? wtInfo.worktreeAbs : null,
+          useWorktrees,
+          evidenceData.filesChanged
+        );
+
+        if (!hasChanges) {
+          const errMsg = useWorktrees
+            ? `Task working tree for ${task.id} contains no changes.`
+            : `None of the files listed in filesChanged contain modifications in primary working tree.`;
+          console.error(`[Step 4: Implementation] ${errMsg}`);
+          state = stateManager.updateStepState(targetRoot, state.runId, 4, 'failed', { error: errMsg, task: task.id });
+          return 1;
+        }
+
+        let commitSha = null;
+        if (useWorktrees && wtInfo) {
+          try {
+            const intRes = implementationRunner.integrateTaskWorktree({
+              targetRoot,
+              specSlug,
+              taskId: task.id,
+              taskWorktreeAbs: wtInfo.worktreeAbs,
+              taskWorktreeRel: wtInfo.worktreeRel,
+              taskBranch: wtInfo.branch
+            });
+            commitSha = intRes.commitSha;
+            state.worktrees = state.worktrees || [];
+            state.worktrees.push({
+              taskId: task.id,
+              path: wtInfo.worktreeRel,
+              branch: wtInfo.branch,
+              status: 'integrated',
+              commitSha
+            });
+          } catch (cpErr) {
+            console.error(`[Step 4: Worktree] ${cpErr.message}`);
+            state = stateManager.updateStepState(targetRoot, state.runId, 4, 'worktree_conflict', { error: cpErr.message });
+            return 1;
+          }
+        } else {
+          commitSha = getBaseCommit(targetRoot);
+        }
+
+        state.steps[4].tasks[task.id] = {
+          id: task.id,
+          title: task.title,
+          status: 'completed',
+          promptPath: rendered.promptFileRel,
+          evidencePath: rendered.evidenceFileRel,
+          commitSha,
+          filesChanged: evidenceData.filesChanged,
+          acIds: evidenceData.acIds,
+          completedAt: new Date().toISOString()
+        };
+        completedTaskIds.add(task.id);
+        stateManager.saveRunState(targetRoot, state);
+        console.log(`[Step 4: Implementation] Task ${task.id} accepted (commit ${commitSha}, ${evidenceData.acIds.length} ACs, ${evidenceData.filesChanged.length} files).`);
+      }
+
+      const gateResults = runVerificationGates(targetRoot, config, { ...options, runId: state.runId, slug: specSlug });
+      if (!gateResults.passed) {
+        state = stateManager.loadRunState(targetRoot, state.runId);
+        state.steps[4].status = 'failed';
+        state.steps[4].gates = gateResults.gates;
+        state.status = 'failed';
+        stateManager.saveRunState(targetRoot, state);
+        return 1;
+      }
+      state.steps[4].gates = gateResults.gates;
+
+      state = stateManager.updateStepState(targetRoot, state.runId, 4, 'completed', {
+        tasks: state.steps[4].tasks,
+        gates: state.steps[4].gates
+      });
+    }
   }
 
-  // Step 5: Conformance Scoring Loop (AC9, AC10)
+  // Step 5: Conformance Scoring Loop (AC9, AC10, AC18, AC19, AC23, AC24)
   let scoreReport = null;
   if (startStep <= 5 && state.steps[5].status !== 'completed') {
     state = stateManager.updateStepState(targetRoot, state.runId, 5, 'in_progress');
@@ -613,7 +896,9 @@ function cmdRun(options) {
       slug: specSlug,
       baseCommit: state.baseCommit,
       minScore: effectiveMinScore,
-      blueprint
+      blueprint,
+      tasks: (state.steps && state.steps[4] && state.steps[4].tasks) || {},
+      state
     });
 
     console.log(`[Step 5: Conformance Scoring] Score: ${scoreReport.score}/10 (Required: ${effectiveMinScore}/10). Passed: ${scoreReport.passed}`);
@@ -651,8 +936,41 @@ function cmdRun(options) {
     }
   }
 
-  // Step 6: Delivery Commit (AC11)
+  // Step 6: Delivery Commit (AC11, AC20, AC25)
   if (startStep <= 6 && state.steps[6].status !== 'completed') {
+    // Quality gate: enforce Step 4 completion (AC20, AC25)
+    if (!state.steps[4] || state.steps[4].status !== 'completed') {
+      console.error(`[Step 6: Delivery Commit] Blocked: cannot create delivery commit because Step 4 is not completed.`);
+      state = stateManager.updateStepState(targetRoot, state.runId, 6, 'blocked_step4_incomplete');
+      state.status = 'failed';
+      stateManager.saveRunState(targetRoot, state);
+      options._runResult = { runId: state.runId, status: 'failed', error: 'Blocked: Step 4 is not completed' };
+      return 1;
+    }
+
+    const step4Tasks = (state.steps[4] && state.steps[4].tasks) || {};
+    const dagTasks = state.dagTasks || (state.steps[3] && state.steps[3].output && state.steps[3].output.tasks) || [];
+    const unacceptedTasks = dagTasks.filter(t => !step4Tasks[t.id] || step4Tasks[t.id].status !== 'completed');
+    if (unacceptedTasks.length > 0) {
+      console.error(`[Step 6: Delivery Commit] Blocked: ${unacceptedTasks.length} task(s) are not accepted (${unacceptedTasks.map(t => t.id).join(', ')}).`);
+      state = stateManager.updateStepState(targetRoot, state.runId, 6, 'blocked_tasks_incomplete');
+      state.status = 'failed';
+      stateManager.saveRunState(targetRoot, state);
+      options._runResult = { runId: state.runId, status: 'failed', error: 'Blocked: Tasks not accepted' };
+      return 1;
+    }
+
+    const gates = (state.steps[4] && state.steps[4].gates) || {};
+    const failedGates = Object.keys(gates).filter(g => gates[g].status !== 'passed');
+    if (failedGates.length > 0) {
+      console.error(`[Step 6: Delivery Commit] Blocked: required verification gate(s) failed (${failedGates.join(', ')}).`);
+      state = stateManager.updateStepState(targetRoot, state.runId, 6, 'blocked_gates_failed');
+      state.status = 'failed';
+      stateManager.saveRunState(targetRoot, state);
+      options._runResult = { runId: state.runId, status: 'failed', error: 'Blocked: Gates failed' };
+      return 1;
+    }
+
     // Quality gate: enforce score threshold before commit
     if (state.score !== null && state.score < effectiveMinScore) {
       console.error(`[Step 6: Delivery Commit] Blocked: cannot create delivery commit with failing conformance score (${state.score}/${effectiveMinScore}).`);
@@ -1005,6 +1323,192 @@ function cmdRun(options) {
   return 0;
 }
 
+function cmdTaskFinish(options) {
+  const targetRoot = options.root ? path.resolve(options.root) : process.cwd();
+  let state = null;
+  if (options.runId) {
+    state = stateManager.loadRunState(targetRoot, options.runId);
+  } else {
+    state = stateManager.findLatestRunState(targetRoot);
+  }
+
+  if (!state) {
+    console.error('Error: No run state found to submit task evidence.');
+    return 1;
+  }
+
+  const taskId = options.taskId;
+  if (!taskId) {
+    console.error('Error: Task ID is required (--task <taskId>).');
+    return 1;
+  }
+
+  const evidencePath = options.evidencePath;
+  if (!evidencePath) {
+    console.error('Error: Evidence path is required (--evidence <evidencePath>).');
+    return 1;
+  }
+
+  const evidenceFileAbs = path.isAbsolute(evidencePath)
+    ? evidencePath
+    : path.resolve(targetRoot, evidencePath);
+
+  if (!fs.existsSync(evidenceFileAbs)) {
+    console.error(`Error: Evidence file not found: "${evidenceFileAbs}".`);
+    return 1;
+  }
+
+  const config = loadProjectConfig(targetRoot);
+  const useWorktrees = options.worktrees ? true : (options.noWorktrees ? false : Boolean(config.worktrees));
+
+  const dagTasks = (Array.isArray(state.dagTasks) && state.dagTasks.length > 0)
+    ? state.dagTasks
+    : ((state.steps[3] && state.steps[3].output && state.steps[3].output.tasks) || []);
+  const targetTask = dagTasks.find(t => t.id === taskId);
+  if (!targetTask) {
+    console.error(`Error: Task "${taskId}" not found in DAG plan for run "${state.runId}".`);
+    return 1;
+  }
+
+  state.steps[4] = state.steps[4] || { name: 'implementation', status: 'awaiting_implementation', tasks: {}, gates: {} };
+  state.steps[4].tasks = state.steps[4].tasks || {};
+
+  const completedTaskIds = new Set(
+    Object.keys(state.steps[4].tasks).filter(k => state.steps[4].tasks[k].status === 'completed')
+  );
+
+  // Check DAG dependencies (AC9)
+  const depCheck = implementationRunner.checkTaskDependencies({ tasks: dagTasks }, taskId, completedTaskIds);
+  if (!depCheck.satisfied) {
+    console.error(`Error: Task "${taskId}" has uncompleted dependencies: ${depCheck.missingDependencies.join(', ')}`);
+    return 1;
+  }
+
+  // Load spec to validate AC IDs
+  let specAcs = [];
+  if (state.specPath && fs.existsSync(state.specPath)) {
+    try {
+      const specContent = fs.readFileSync(state.specPath, 'utf8');
+      specAcs = dagPlanner.parseAcceptanceCriteria(specContent);
+    } catch (e) {}
+  }
+
+  // Validate evidence schema & content (AC8, AC28, AC29)
+  const evValidation = evidenceValidator.validateEvidenceFile(evidenceFileAbs, {
+    expectedTaskId: taskId,
+    specAcs,
+    projectRoot: targetRoot
+  });
+
+  if (!evValidation.valid) {
+    console.error(`Evidence validation failed for ${taskId}:\n  ` + evValidation.errors.join('\n  '));
+    return 1;
+  }
+
+  const evidenceData = evValidation.data;
+
+  // Corroborate changes (AC13, AC14, AC15)
+  let commitSha = null;
+  const taskWorktreeRel = `.sdw/worktrees/${state.runId}/${taskId}`;
+  const taskWorktreeAbs = path.resolve(targetRoot, taskWorktreeRel);
+
+  const worktreeExists = useWorktrees && fs.existsSync(taskWorktreeAbs);
+  const effectiveUseWorktrees = useWorktrees && worktreeExists;
+
+  const hasChanges = implementationRunner.checkTaskChanges(
+    targetRoot,
+    effectiveUseWorktrees ? taskWorktreeAbs : null,
+    effectiveUseWorktrees,
+    evidenceData.filesChanged
+  );
+
+  if (!hasChanges) {
+    const errMsg = effectiveUseWorktrees
+      ? `Task working tree for ${taskId} contains no changes.`
+      : `None of the files listed in filesChanged contain modifications in primary working tree.`;
+    console.error(`Error: ${errMsg}`);
+    return 1;
+  }
+
+  // Integrate worktree if used (AC10, AC11)
+  if (effectiveUseWorktrees) {
+    try {
+      const intRes = implementationRunner.integrateTaskWorktree({
+        targetRoot,
+        specSlug: state.specSlug,
+        taskId,
+        taskWorktreeAbs,
+        taskWorktreeRel,
+        taskBranch: `sdw-${state.runId}-${taskId}`
+      });
+      commitSha = intRes.commitSha;
+      state.worktrees = state.worktrees || [];
+      state.worktrees.push({
+        taskId,
+        path: taskWorktreeRel,
+        branch: `sdw-${state.runId}-${taskId}`,
+        status: 'integrated',
+        commitSha
+      });
+    } catch (cpErr) {
+      console.error(`Error: Worktree integration failed for ${taskId}: ${cpErr.message}`);
+      return 1;
+    }
+  } else {
+    commitSha = getBaseCommit(targetRoot);
+  }
+
+  // Record task completion in state (AC16)
+  state.steps[4].tasks[taskId] = {
+    ...(state.steps[4].tasks[taskId] || {}),
+    id: taskId,
+    title: targetTask.title,
+    status: 'completed',
+    evidencePath: path.isAbsolute(evidencePath) ? path.relative(targetRoot, evidenceFileAbs).replace(/\\/g, '/') : evidencePath.replace(/\\/g, '/'),
+    commitSha,
+    filesChanged: evidenceData.filesChanged,
+    acIds: evidenceData.acIds,
+    completedAt: new Date().toISOString()
+  };
+
+  completedTaskIds.add(taskId);
+  state = stateManager.saveRunState(targetRoot, state);
+
+  console.log(`[sdw-orch task finish] Task "${taskId}" successfully accepted.`);
+  console.log(`  Covered ACs:   ${evidenceData.acIds.join(', ')}`);
+  console.log(`  Files Changed: ${evidenceData.filesChanged.join(', ')}`);
+  if (commitSha) {
+    console.log(`  Commit SHA:    ${commitSha}`);
+  }
+
+  // Check if all DAG tasks are completed
+  const remainingTasks = dagTasks.filter(t => !completedTaskIds.has(t.id));
+  if (remainingTasks.length > 0) {
+    console.log(`\nRemaining tasks to complete (${remainingTasks.length}):`);
+    remainingTasks.forEach(t => console.log(`  - [${t.id}] ${t.title}`));
+  } else {
+    console.log(`\nAll ${dagTasks.length} DAG tasks have completed!`);
+    // Run verification gates (AC17, AC18, AC19)
+    console.log(`Executing verification gates on integrated tree...`);
+    const gateResults = runVerificationGates(targetRoot, config, { ...options, runId: state.runId, slug: state.specSlug });
+    state.steps[4].gates = gateResults.gates;
+    if (!gateResults.passed) {
+      console.error(`Verification gates failed.`);
+      stateManager.saveRunState(targetRoot, state);
+      return 1;
+    }
+    state = stateManager.updateStepState(targetRoot, state.runId, 4, 'completed', {
+      tasks: state.steps[4].tasks,
+      gates: state.steps[4].gates
+    });
+    console.log(`Step 4 completed successfully! Proceed to Step 5 by running:`);
+    console.log(`  node skills/sdw-orch/scripts/sdw_orch.cjs resume --run-id ${state.runId}`);
+  }
+
+  options._finishResult = { runId: state.runId, taskId, status: 'completed' };
+  return 0;
+}
+
 function cmdResume(options) {
   const targetRoot = options.root ? path.resolve(options.root) : process.cwd();
   let state = null;
@@ -1017,8 +1521,11 @@ function cmdResume(options) {
       return 1;
     }
   } else {
-    console.error('Error: specify --run-id <id> or --latest to resume.');
-    return 1;
+    state = stateManager.findLatestRunState(targetRoot);
+    if (!state) {
+      console.error('Error: specify --run-id <id> or --latest to resume.');
+      return 1;
+    }
   }
 
   // Reject obsolete run state files created before sdw-orch migration
@@ -1027,7 +1534,66 @@ function cmdResume(options) {
     return 1;
   }
 
-  const resumptionStep = stateManager.getResumptionStep(state);
+  // Reject legacy run states with only { tasksPrepared } in Step 4 (AC24)
+  const step4 = state.steps && state.steps[4];
+  if (step4 && step4.status === 'completed') {
+    const isLegacyStep4 = step4.output &&
+      step4.output.tasksPrepared !== undefined &&
+      (!step4.tasks || Object.keys(step4.tasks).length === 0);
+    if (isLegacyStep4) {
+      console.error(`Error: Run state "${state.runId}" contains a legacy Step 4 execution with only { tasksPrepared } and no task evidence records. Resuming legacy run states is unsupported. Please start a new run.`);
+      return 1;
+    }
+  }
+
+  let resumptionStep = stateManager.getResumptionStep(state);
+
+  // If resuming at or before Step 4, check task completion and verification gates (AC20)
+  if (resumptionStep <= 4) {
+    const dagTasks = (Array.isArray(state.dagTasks) && state.dagTasks.length > 0)
+      ? state.dagTasks
+      : ((state.steps[3] && state.steps[3].output && state.steps[3].output.tasks) || []);
+    const completedTasks = Object.keys((state.steps[4] && state.steps[4].tasks) || {}).filter(
+      k => state.steps[4].tasks[k].status === 'completed'
+    );
+    const incompleteTasks = dagTasks.filter(t => !completedTasks.includes(t.id));
+
+    if (incompleteTasks.length > 0) {
+      console.error(`[sdw-orch resume] Cannot advance past Step 4: ${incompleteTasks.length} task(s) remain incomplete:`);
+      dagTasks.forEach(t => {
+        const isDone = completedTasks.includes(t.id);
+        console.log(`  [${isDone ? 'COMPLETED' : 'PENDING'}] ${t.id}: ${t.title}`);
+      });
+      console.error(`\nPlease complete remaining tasks and submit accepted evidence via:`);
+      console.error(`  node skills/sdw-orch/scripts/sdw_orch.cjs task finish --run-id ${state.runId} --task <taskId> --evidence <evidencePath>`);
+      return 4;
+    }
+
+    // All tasks completed. Execute build and test verification gates (AC20)
+    const config = loadProjectConfig(targetRoot);
+    console.log(`[sdw-orch resume] All ${dagTasks.length} DAG task(s) completed. Running verification gates...`);
+    const gateResults = runVerificationGates(targetRoot, config, { ...options, runId: state.runId, slug: state.specSlug });
+    state.steps[4].gates = gateResults.gates;
+
+    if (!gateResults.passed) {
+      console.error(`[sdw-orch resume] Verification gates failed. Step 4 remains incomplete.`);
+      state.steps[4].status = 'failed';
+      state.status = 'failed';
+      stateManager.saveRunState(targetRoot, state);
+      return 1;
+    }
+
+    // Mark Step 4 completed
+    state = stateManager.updateStepState(targetRoot, state.runId, 4, 'completed', {
+      tasks: state.steps[4].tasks,
+      gates: state.steps[4].gates
+    });
+    state.status = 'in_progress';
+    state = stateManager.saveRunState(targetRoot, state);
+    console.log(`[sdw-orch resume] Step 4 completed. Advancing to Step 5 (Conformance Scoring).`);
+    resumptionStep = stateManager.getResumptionStep(state);
+  }
+
   console.log(`[sdw-orch resume] Restoring session state for run "${state.runId}".`);
   console.log(`[sdw-orch resume] Resuming from step ${resumptionStep}/${state.totalSteps} (steps 1-${resumptionStep - 1} already resolved).`);
 
@@ -1124,11 +1690,15 @@ Subcommands:
   run <specPath...>      Execute orchestration workflow for single spec or batch queue
   resume                 Resume paused or incomplete execution run from state file
   resume-batch [batchId] Resume paused or incomplete multi-spec batch execution
+  task finish            Submit accepted evidence for a completed DAG task
   status                 Check status of current or specified run state
   help                   Display this help documentation
 
 Options:
-  --run-id <id>          Explicit run identifier (default: auto-generated)
+  --run-id <id>          Explicit run identifier (default: auto-generated or latest)
+  --task <id>            DAG task ID for task finish (alias: --task-id)
+  --evidence <path>      Path to evidence JSON file (alias: --evidence-path)
+  --mode <mode>          Implementation mode (handoff | command)
   --batch-id <id>        Explicit batch identifier for resume-batch
   --continue-on-error    Continue queue execution when a batch item fails
   --dry-run              Validate specs and display batch execution plan without executing
@@ -1141,7 +1711,7 @@ Options:
   --poll-pr              Enable remote PR review polling
   --abort-on-gaps        Halt at grilling gate if decision gaps are detected (ignored in unattended mode)
   --simulate-failure     Simulate subagent unrecoverable failure for testing
-  --latest               (status/resume) Target the most recent run state
+  --latest               (status/resume/task finish) Target the most recent run state
   --push                 Push active branch and delivery commit to remote origin
   --skip-security        Bypass pre-commit security checks gate (audit logged)
   --no-worktrees         Disable git worktrees even if configured
@@ -1181,6 +1751,9 @@ function main() {
     case 'resume':
       code = cmdResume(options);
       break;
+    case 'task-finish':
+      code = cmdTaskFinish(options);
+      break;
     case 'status':
       code = cmdStatus(options);
       break;
@@ -1203,6 +1776,7 @@ module.exports = {
   cmdResumeBatch,
   cmdResume,
   cmdStatus,
+  cmdTaskFinish,
   showHelp,
   loadProjectConfig,
   resolveSpecPath

@@ -248,10 +248,14 @@ None
     execSync('git add -A', { cwd: tmpDir, stdio: 'ignore' });
     execSync('git commit -m "initial commit"', { cwd: tmpDir, stdio: 'ignore' });
 
-    // Configure securityChecksEnabled: true
+    // Configure securityChecksEnabled: true and command mode implementation
     const configPath = path.join(tmpDir, '.sdw', 'config.json');
     const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     cfg.securityChecksEnabled = true;
+    cfg.implementation = {
+      mode: 'command',
+      command: 'node -e "const fs = require(\'fs\'); fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({ taskId: process.env.SDW_TASK_ID, acIds: [\'AC1\'], filesChanged: [\'leak.js\'], summary: \'leak\' }));"'
+    };
     fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2), 'utf8');
 
     // Stage a secret

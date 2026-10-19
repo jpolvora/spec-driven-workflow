@@ -265,6 +265,10 @@ None
     const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
     cfg.scmCodeReviewEnabled = true;
     cfg.scmProvider = 'none';
+    cfg.implementation = {
+      mode: 'command',
+      command: 'node -e "const fs = require(\'fs\'); fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({ taskId: process.env.SDW_TASK_ID, acIds: [\'AC1\'], filesChanged: [\'.sdw/specs/\' + process.env.SDW_SPEC_SLUG + \'.md\'], summary: \'done\' }));"'
+    };
     fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
 
     const runId = `run-${Date.now()}-${slug}`;

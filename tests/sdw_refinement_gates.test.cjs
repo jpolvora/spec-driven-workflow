@@ -23,6 +23,15 @@ function setupTestRepo() {
   sdwConfig.cmdInit({ root: tmpDir, force: true });
   fs.writeFileSync(path.join(tmpDir, '.gitignore'), '.sdw/state/*\n!.sdw/state/.gitkeep\n.sdw/worktrees/\n', 'utf8');
 
+  // Configure command mode implementation so tasks execute and advance through pipeline
+  const cfgPath = path.join(tmpDir, '.sdw', 'config.json');
+  const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+  cfg.implementation = {
+    mode: 'command',
+    command: 'node -e "const fs = require(\'fs\'); const ev = { taskId: process.env.SDW_TASK_ID, acIds: [\'AC1\'], filesChanged: [\'package.json\'], summary: \'task done\' }; fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify(ev)); const pkg = JSON.parse(fs.readFileSync(\'package.json\', \'utf8\')); pkg.updated = true; fs.writeFileSync(\'package.json\', JSON.stringify(pkg, null, 2));"'
+  };
+  fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
+
   // Initial commit
   fs.writeFileSync(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'test-project', version: '1.0.0' }, null, 2), 'utf8');
   execSync('git add -A', { cwd: tmpDir, stdio: 'ignore' });

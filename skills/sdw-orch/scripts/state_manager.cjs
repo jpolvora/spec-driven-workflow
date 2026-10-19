@@ -116,7 +116,7 @@ function createRunState(options) {
       1: { name: 'derivation', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null },
       2: { name: 'refinement', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null },
       3: { name: 'dag_generation', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null },
-      4: { name: 'implementation', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null },
+      4: { name: 'implementation', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null, tasks: {}, gates: {} },
       5: { name: 'scoring', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null },
       6: { name: 'delivery_commit', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null },
       7: { name: 'code_review', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null },
@@ -244,6 +244,26 @@ function updateStepState(targetRoot, runId, stepNum, status, outputData, error, 
   return saveRunState(targetRoot, state);
 }
 
+function updateTaskState(targetRoot, runId, taskId, taskState) {
+  const state = loadRunState(targetRoot, runId);
+  if (!state.steps[4]) {
+    state.steps[4] = { name: 'implementation', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null, tasks: {}, gates: {} };
+  }
+  state.steps[4].tasks = state.steps[4].tasks || {};
+  state.steps[4].tasks[taskId] = { ...(state.steps[4].tasks[taskId] || {}), ...taskState };
+  return saveRunState(targetRoot, state);
+}
+
+function updateGateState(targetRoot, runId, gateName, gateState) {
+  const state = loadRunState(targetRoot, runId);
+  if (!state.steps[4]) {
+    state.steps[4] = { name: 'implementation', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null, tasks: {}, gates: {} };
+  }
+  state.steps[4].gates = state.steps[4].gates || {};
+  state.steps[4].gates[gateName] = { ...(state.steps[4].gates[gateName] || {}), ...gateState };
+  return saveRunState(targetRoot, state);
+}
+
 module.exports = {
   normalizePath,
   resolveStateDir,
@@ -259,5 +279,7 @@ module.exports = {
   recordError,
   recordWarning,
   recordStepArtifact,
-  updateStepState
+  updateStepState,
+  updateTaskState,
+  updateGateState
 };

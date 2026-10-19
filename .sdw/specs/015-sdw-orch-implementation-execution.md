@@ -14,14 +14,14 @@ The `sdw-orch` 8-step pipeline currently has no implementation execution engine.
 
 This specification replaces the placeholder Step 4 with a harness-agnostic implementation execution contract and makes implementation evidence the precondition for scoring and delivery. Two execution modes are supported:
 
-1. **`handoff` (default):** the CLI prepares one prompt file per DAG task, persists task state, and pauses with `awaiting_implementation` and exit code 4. The host agent, in any harness, implements the task in the assigned working tree, writes a structured evidence file, and calls `sdw-orch task finish`. When every task is accepted, `sdw-orch resume` runs the required build and test gates, completes Step 4, and continues.
-2. **`command` (opt-in):** the CLI spawns a user-configured implementation command once per DAG task with prompt, task, working directory, slug, and evidence-file substitutions. The command implements the task and writes the evidence file. A non-zero exit, timeout, or invalid evidence fails the task.
+1. **`handoff` (default):** the CLI prepares one prompt file per DAG task, persists task state, and pauses with `awaiting_implementation` and exit code 4. The host agent, in any harness, implements each task according to its DAG dependency order in the assigned working directory (an isolated task worktree or primary tree), writes a structured evidence file, and calls `sdw-orch task finish`. Worktree changes are committed in the task worktree, cherry-picked into the primary tree, and the worktree is cleanly removed. When every task is accepted, `sdw-orch resume` runs the required build and test gates, completes Step 4, and continues. In multi-spec batch mode, exit code 4 pauses the batch queue with `awaiting_implementation` rather than failing the queue.
+2. **`command` (opt-in):** the CLI spawns a user-configured implementation command once per DAG task with prompt, task, working directory, slug, and evidence-file substitutions. The command implements the task and writes the evidence file. A non-zero exit, timeout, or invalid evidence fails the task. This mode is recommended for continuous, unattended multi-spec batch runs.
 
-Step 5 consumes task evidence instead of keyword matching: an acceptance criterion is verified only when an accepted task evidence record references it. Step 6 refuses to commit unless Step 4 is completed with accepted evidence and required gates have passed. No vendor SDK, LLM API, or new runtime dependency is introduced; the contract relies on the host agent or a user-supplied command.
+Step 5 consumes task evidence instead of keyword matching: an acceptance criterion is verified only when an accepted task evidence record references it and confirms real changed files. Step 6 refuses to commit unless Step 4 is completed with accepted evidence and required gates have passed. No vendor SDK, LLM API, or new runtime dependency is introduced; the contract relies on the host agent or a user-supplied command.
 
 ### Design Intent
 
-Restore the pipeline's central guarantee: code is implemented, verified, and only then committed. The design keeps the deterministic Node CLI as the state machine and treats implementation as an external capability behind a stable contract. `handoff` works in every harness without vendor coupling; `command` enables unattended or CI execution without embedding a vendor. Evidence is a small, validated JSON document authored by the implementer; the CLI validates structure and traceability, while build and test gates plus the existing review step provide corroboration. The change is intentionally breaking: a run cannot claim Step 4 completion from prompt preparation alone, and existing runs with `tasksPrepared`-only completion are rejected with remediation guidance.
+Restore the pipeline's central guarantee: code is implemented, verified, and only then committed. The design keeps the deterministic Node CLI as the state machine and treats implementation as an external capability behind a stable contract. `handoff` works in every harness without vendor coupling; `command` enables unattended or CI execution without embedding a vendor. Evidence is a small, validated JSON document authored by the implementer; the CLI validates structure, DAG dependencies, and traceability, while build and test gates plus the existing review step provide corroboration. The change is intentionally breaking: a run cannot claim Step 4 completion from prompt preparation alone, and existing runs with `tasksPrepared`-only completion are rejected with remediation guidance.
 
 ## Acceptance Criteria
 
@@ -33,35 +33,43 @@ Restore the pipeline's central guarantee: code is implemented, verified, and onl
 - AC6: The system shall provide a `task finish` subcommand accepting `--run-id`, `--task`, and `--evidence`.
 - AC7: When `task finish` executes, the system shall validate the evidence file against the task evidence schema.
 - AC8: If the evidence file is missing, malformed, or references an unknown acceptance criterion, then the system shall reject the task completion with a non-zero exit code.
-- AC9: When `task finish` accepts evidence in worktree mode, the system shall commit the task changes inside the task worktree.
-- AC10: When a task commit is created in worktree mode, the system shall integrate that commit into the primary working tree via cherry-pick.
-- AC11: If the task working tree contains no changes when `task finish` executes, then the system shall reject the task completion.
-- AC12: When every DAG task has accepted evidence, the system shall run the configured build command if `requiredBuild` is true.
-- AC13: When every DAG task has accepted evidence, the system shall run the configured test command if `runAllTests` is true.
-- AC14: If a required build or test command fails, then the system shall keep Step 4 incomplete.
-- AC15: When a required build or test command fails, the system shall record the failure in the run state.
-- AC16: The system shall mark Step 4 completed only when every DAG task has accepted evidence.
-- AC17: The system shall mark Step 4 completed only when all required build and test gates pass.
-- AC18: When Step 5 evaluates an acceptance criterion, the system shall mark it verified only when an accepted task evidence record references that criterion.
-- AC19: The system shall record per-criterion evidence links in the run state and the Step 5 score report.
-- AC20: If Step 4 is not completed, then the system shall refuse to create a delivery commit.
-- AC21: When `implementation.mode` is `command`, the system shall execute `implementation.command` once per DAG task with `{promptFile}`, `{taskId}`, `{cwd}`, `{slug}`, and `{evidenceFile}` substitutions.
-- AC22: If the implementation command exits non-zero, then the system shall mark the task failed.
-- AC23: If the implementation command exceeds `implementation.timeoutMs`, then the system shall terminate the process.
-- AC24: If the implementation command exceeds `implementation.timeoutMs`, then the system shall mark the task failed.
-- AC25: The system shall pass only environment variables listed in `implementation.envAllowlist` to the implementation command.
-- AC26: The system shall extend `.sdw/config.schema.json` with the `implementation` and `verification` configuration sections.
-- AC27: The system shall reject `implementation.mode` values other than `handoff` or `command` during configuration validation.
-- AC28: The system shall not mark Step 4 completed based solely on prepared task prompts.
-- AC29: The system shall document the execution modes, state transitions, evidence schema, and exit codes in the `sdw-orch` skill documentation and orchestrator protocol reference.
+- AC9: If a DAG task has uncompleted dependencies, then the system shall reject the task completion with a non-zero exit code.
+- AC10: When a task worktree is created in worktree mode, the system shall branch it from the latest integrated commit of the primary working tree.
+- AC11: When `task finish` accepts evidence in worktree mode, the system shall commit the task changes inside the task worktree.
+- AC12: When a task commit is created in worktree mode, the system shall integrate that commit into the primary working tree via cherry-pick.
+- AC13: When a task commit is integrated via cherry-pick in worktree mode, the system shall remove the task worktree and its task branch.
+- AC14: If worktree mode is active and the task working tree contains no changes when `task finish` executes, then the system shall reject the task completion.
+- AC15: If worktree mode is inactive and none of the files listed in `filesChanged` contain modifications in the primary working tree, then the system shall reject the task completion.
+- AC16: Where a task covers non-testable criteria, the system shall accept an empty `tests` array in the evidence file.
+- AC17: When every DAG task has accepted evidence, the system shall run the configured build command if `requiredBuild` is true.
+- AC18: When every DAG task has accepted evidence, the system shall run the configured test command if `runAllTests` is true.
+- AC19: If a required build or test command fails, then the system shall keep Step 4 incomplete.
+- AC20: When a required build or test command fails, the system shall record the failure in the run state.
+- AC21: The system shall mark Step 4 completed only when every DAG task has accepted evidence.
+- AC22: The system shall mark Step 4 completed only when all required build and test gates pass.
+- AC23: When Step 5 evaluates an acceptance criterion, the system shall mark it verified only when an accepted task evidence record references that criterion.
+- AC24: The system shall record per-criterion evidence links in the run state and the Step 5 score report.
+- AC25: If Step 4 is not completed, then the system shall refuse to create a delivery commit.
+- AC26: When `implementation.mode` is `command`, the system shall execute `implementation.command` once per DAG task with `{promptFile}`, `{taskId}`, `{cwd}`, `{slug}`, and `{evidenceFile}` substitutions.
+- AC27: If the implementation command exits non-zero, then the system shall mark the task failed.
+- AC28: If the implementation command exceeds `implementation.timeoutMs`, then the system shall terminate the process.
+- AC29: If the implementation command exceeds `implementation.timeoutMs`, then the system shall mark the task failed.
+- AC30: The system shall pass only environment variables listed in `implementation.envAllowlist` to the implementation command.
+- AC31: When a batch queue specification run exits with code 4, the system shall record `awaiting_implementation` in the batch manifest.
+- AC32: While a batch specification status is `awaiting_implementation`, the system shall pause the batch queue.
+- AC33: The system shall extend `.sdw/config.schema.json` with the `implementation` and `verification` configuration sections.
+- AC34: The system shall reject `implementation.mode` values other than `handoff` or `command` during configuration validation.
+- AC35: The system shall not mark Step 4 completed based solely on prepared task prompts.
+- AC36: The system shall document the execution modes, state transitions, evidence schema, and exit codes in the `sdw-orch` skill documentation and orchestrator protocol reference.
 
 ## Notes
 
 - Implementation surfaces:
-  - `skills/sdw-orch/scripts/implementation_runner.cjs` (new): prompt rendering, command spawning with timeout and environment allowlist, evidence validation, and task commit integration.
-  - `skills/sdw-orch/scripts/evidence_validator.cjs` (new): deterministic JSON schema validation for task evidence, including AC membership and path containment.
+  - `skills/sdw-orch/scripts/implementation_runner.cjs` (new): prompt rendering, command spawning with timeout and environment allowlist, evidence validation, DAG dependency check, and task commit integration.
+  - `skills/sdw-orch/scripts/evidence_validator.cjs` (new): deterministic JSON schema validation for task evidence, including AC membership, path containment, and test array structure.
   - `skills/sdw-orch/scripts/state_manager.cjs`: task-level state (`step 4 tasks`), gate results, evidence paths, and exit-code helpers.
   - `skills/sdw-orch/scripts/sdw_orch.cjs`: replace the placeholder Step 4; add `task finish`; make `resume` validate evidence and run gates; guard Step 6.
+  - `skills/sdw-orch/scripts/batch_runner.cjs`: record `awaiting_implementation` when a spec exits with code 4, pause the batch queue, and support batch resumption.
   - `skills/sdw-orch/scripts/score_evaluator.cjs`: replace keyword coverage with evidence-based AC verification; keep the numeric 0–10 score derived from verified criteria.
   - `skills/sdw-config/scripts/sdw_config.cjs` and `skills/sdw-config/references/config.schema.json`: defaults and validation for the new configuration sections.
   - `skills/sdw-orch/SKILL.md`, `skills/sdw-orch/references/orchestrator_protocol.md`, `skills/sdw-config/references/config_spec.md`, `.sdw/directory-structure.md`: document the contract, state schema, evidence schema, exit codes, and artifact paths.
@@ -86,12 +94,14 @@ Restore the pipeline's central guarantee: code is implemented, verified, and onl
   ```
 - `implementation.mode` is an enum (`handoff`, `command`); unknown values fail configuration validation. `implementation.command` is required only when the mode is `command`. `verification.buildCommand` is required when `requiredBuild` is true; `verification.testCommand` is required when `runAllTests` is true.
 - Handoff flow:
-  1. `sdw-orch run <spec>` executes Steps 1–3 and writes task prompts.
-  2. Step 4 stores `status: "awaiting_implementation"`, persists task records, prints the prompt and evidence paths, and exits with code 4.
-  3. The host agent implements each task in the assigned working tree and writes `task-{taskId}.evidence.json`.
-  4. `sdw-orch task finish --run-id <id> --task <taskId> --evidence <path>` validates the evidence, commits the task changes in worktree mode, cherry-picks the commit into the primary tree, and marks the task accepted.
-  5. `sdw-orch resume --run-id <id>` verifies that every task is accepted, runs required build and test gates, marks Step 4 completed, and continues with Step 5.
-- Command flow: `sdw-orch run <spec>` spawns the configured command once per task. The command must write the evidence file at `{evidenceFile}` before exiting zero. The CLI validates the evidence, commits and integrates changes in worktree mode, and marks the task accepted. A failed task halts the run unless the batch policy explicitly continues.
+  1. `sdw-orch run <spec>` executes Steps 1–3, decomposes DAG tasks, and writes task prompts.
+  2. Step 4 sets `status: "awaiting_implementation"`, persists task records, prints the prompt and evidence paths, and exits with code 4.
+  3. The host agent selects tasks respecting DAG dependency order (`dependencies: []` first).
+  4. In worktree mode, the task worktree `.sdw/worktrees/{runId}/{taskId}` is created branching from the latest primary tree `HEAD`.
+  5. The host agent implements the task in the assigned working tree and writes `task-{taskId}.evidence.json`.
+  6. `sdw-orch task finish --run-id <id> --task <taskId> --evidence <path>` verifies dependencies are complete, validates the evidence schema, checks for actual file changes, commits inside the worktree, cherry-picks the commit into the primary tree, removes the worktree, and marks the task accepted. In primary-tree mode, it verifies modifications exist directly on `filesChanged`.
+  7. Once every DAG task has accepted evidence, `sdw-orch resume --run-id <id>` runs required build and test gates, marks Step 4 completed, and advances to Step 5.
+- Command flow: `sdw-orch run <spec>` executes tasks in DAG topological order, spawning the configured command once per task. The command must write the evidence file at `{evidenceFile}` before exiting zero. The CLI validates dependencies and evidence, commits and integrates changes, and marks the task accepted. A failed task halts the run unless the batch policy explicitly continues. Continuous unattended batch execution (`run <spec1> <spec2> ...`) is recommended to use `command` mode.
 - Evidence schema (`.sdw/state/{slug}/{runId}/task-{taskId}.evidence.json`):
   ```json
   {
@@ -104,7 +114,7 @@ Restore the pipeline's central guarantee: code is implemented, verified, and onl
     "summary": "Implemented token refresh and covered AC1 and AC2."
   }
   ```
-  Validation rules: `taskId` must match the target task; `acIds` must be a non-empty subset of the specification's AC ids; `filesChanged` must be a non-empty array of project-relative paths that exist and remain inside the project root; `tests` entries use `passed`, `failed`, or `skipped`; `summary` must be non-empty. Unknown fields are preserved but ignored.
+  Validation rules: `taskId` must match the target task; `acIds` must be a non-empty subset of the specification's AC ids; `filesChanged` must be a non-empty array of project-relative paths that exist and remain inside the project root; `tests` is optional or may be an empty array `[]` when the covered criteria are non-testable (e.g. docs, configs); when `tests` entries exist, each must include `name`, `status` (`passed`, `failed`, or `skipped`), and optional `command`; `summary` must be non-empty. Unknown fields are preserved but ignored.
 - Run state additions (example):
   ```json
   {
@@ -132,12 +142,12 @@ Restore the pipeline's central guarantee: code is implemented, verified, and onl
 - Prompt file content: task id and title, task description, covered AC ids and text, target files, worktree or primary-tree working directory, applicable `sdw-rules` constraints, the evidence file path, the completion command, and a reminder that no product file may be committed by the implementer.
 - Step 5 scoring: `score = round(verifiedAcs / totalAcs * 10)`. An AC is verified only when at least one accepted task evidence record lists it and the evidence contains at least one existing changed file. Keyword presence in a diff or file is not evidence. When a specification has no ACs, the score is 0 and the run fails closed.
 - Step 6 guard: refuse the delivery commit when Step 4 status is not `completed`, when any task is not accepted, or when a required gate is not `passed`. The error names the blocking task or gate and the remediation command.
-- Worktree integration: in worktree mode, each accepted task commit is cherry-picked into the primary tree. A cherry-pick conflict marks Step 4 failed, preserves the worktree for inspection, and records the conflicting task. In single-task or primary-tree mode, the task changes remain in the primary tree and the accepted evidence is recorded without a per-task commit.
+- Worktree integration: in worktree mode, task worktrees are created sequentially when their DAG dependencies are fulfilled, branching from the latest primary tree `HEAD`. Each accepted task commit is cherry-picked into the primary tree and the worktree is safely removed (`git worktree remove` and `git branch -d`). A cherry-pick conflict marks Step 4 failed, preserves the worktree for operator inspection, and records the conflicting task. In single-task or primary-tree mode, task changes remain in the primary tree and the accepted evidence is recorded without a per-task commit.
 - Security: command execution uses the allowlisted environment only; substitutions are quoted; evidence paths are resolved and contained inside the project root; absolute paths, `..` traversal, and paths under `.git/` are rejected. The implementation command is trusted operator configuration, not agent-supplied input.
 - No backward compatibility: existing runs whose Step 4 is `completed` with only `tasksPrepared` are invalid. `resume` fails with a clear message naming the run and instructing the operator to start a new run. This follows the repository's breaking-change policy.
 - Tests:
   - Extend `tests/sdw_orch.test.cjs` or add `tests/sdw_orch_implementation.test.cjs`.
-  - Cover handoff pause and exit code 4; prompt file creation; resume rejection without evidence; evidence schema validation; worktree commit and cherry-pick; empty-worktree rejection; required build/test pass and fail; Step 6 guard; evidence-based Step 5 scoring; command-mode success, non-zero exit, and timeout; environment allowlist; path traversal rejection.
+  - Cover handoff pause and exit code 4; prompt file creation; resume rejection without evidence; evidence schema validation; DAG dependency order enforcement on `task finish`; worktree sequential creation, commit, cherry-pick, and removal; empty-worktree rejection; primary-tree modification verification; non-testable tasks with empty `tests` array; required build/test pass and fail; Step 6 guard; evidence-based Step 5 scoring; command-mode success, non-zero exit, and timeout; environment allowlist; path traversal rejection; batch runner pause on exit code 4.
   - Keep the suite dependency-free with `node:test` and `node:assert/strict`; use temporary directories and local git fixtures.
 
 ## Out of Scope
@@ -166,6 +176,9 @@ Restore the pipeline's central guarantee: code is implemented, verified, and onl
 | Backward compatibility | None; `tasksPrepared`-only runs are rejected | Repository policy explicitly forbids compatibility shims | y |
 | Exit code 4 | Reserved for awaiting implementation | Distinguishes a normal handoff pause from failure or a user gate | y |
 | Step 5 score derivation | Verified AC count divided by total AC count | Keeps the existing 0–10 threshold model while removing lexical scoring | y |
+| DAG dependency order | Enforced by `task finish` | Prevents accepting dependent tasks before foundational code is integrated | y |
+| Batch queue handoff behavior | Pauses queue on code 4 with `awaiting_implementation` | Avoids falsely failing multi-spec queues in default handoff mode | y |
+| Non-testable criteria | Accepted with empty `tests: []` array | Accommodates documentation, configuration, and structural specs cleanly | y |
 
 ## Definition of Ready (DoR)
 
@@ -191,13 +204,17 @@ Restore the pipeline's central guarantee: code is implemented, verified, and onl
 - Evidence files exist under `{stateDir}/{slug}/{runId}/task-{taskId}.evidence.json` for every accepted task.
 - Step 5 report lists each AC with its linked task ids and evidence paths, and the score equals `round(verified / total * 10)`.
 - A delivery commit is created only when Step 4 is completed and all required gates passed; the commit contains product changes, not only state files.
+- Batch manifest records `status: "awaiting_implementation"` when a specification pauses with exit code 4.
 
 ### Negative & Failing Test Scenarios
 
 - Resume without evidence: a handoff run resumed before any `task finish` call fails with a non-zero exit code and names the incomplete task.
+- Unsatisfied dependency: `task finish` against a task whose DAG dependencies are not yet accepted fails with a non-zero exit code and names the incomplete dependency.
 - Empty worktree: `task finish` against a task worktree with no changes is rejected and the task remains incomplete.
+- Missing primary tree modifications: in primary-tree mode, `task finish` with no modifications on `filesChanged` fails with a non-zero exit code.
 - Malformed evidence: an evidence file missing `acIds`, containing an unknown AC id, or containing an absolute or traversing path is rejected.
 - Unknown AC reference: evidence referencing `AC99` in a specification with fewer criteria fails validation.
+- Non-testable task acceptance: evidence with `tests: []` succeeds validation when ACs and files are valid.
 - Command failure: a command-mode runner exiting non-zero marks the task failed and halts the run.
 - Command timeout: a command-mode runner exceeding `implementation.timeoutMs` is terminated and the task is marked failed.
 - Required build failure: `requiredBuild: true` with a failing build command keeps Step 4 incomplete and records the failure.
@@ -206,3 +223,4 @@ Restore the pipeline's central guarantee: code is implemented, verified, and onl
 - Step 6 guard: a run with Step 4 incomplete exits non-zero before creating a delivery commit.
 - Lexical false positive: an AC whose words appear in the diff but which is absent from all evidence records is scored as unverified.
 - No ACs: a specification without acceptance criteria scores 0 and fails closed instead of defaulting to 10.
+- Batch queue pause: a multi-spec batch in `handoff` mode pauses on exit code 4 with `awaiting_implementation` without marking the spec as `failed`.

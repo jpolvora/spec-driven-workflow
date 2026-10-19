@@ -513,7 +513,11 @@ None.
       allowArchived: true,
       minScore: 0,
       skipReview: true,
-      skipPr: true
+      skipPr: true,
+      implementation: {
+        mode: 'command',
+        command: 'node -e "const fs = require(\'fs\'); fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({ taskId: process.env.SDW_TASK_ID, acIds: [\'AC1\'], filesChanged: [\'.sdw/specs/001-archived-test.md\'], summary: \'done\' }));"'
+      }
     });
     assert.equal(exitCodeAllowed, 0, 'Allows execution on archived spec with --allow-archived');
   } finally {

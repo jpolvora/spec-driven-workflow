@@ -324,6 +324,17 @@ function executeQueue(manifest, targetRoot, config, options, cmdRun) {
       if (manifest.policy.syncIndex) {
         triggerSpecSync(targetRoot);
       }
+    } else if (exitCode === 4) {
+      // AC31, AC32: Pause queue when specification awaits task implementation
+      item.status = 'awaiting_implementation';
+      item.error = null;
+      manifest.status = 'paused';
+      manifest.updatedAt = new Date().toISOString();
+      saveBatchManifest(targetRoot, manifest, config);
+      console.log(`\n[sdw-orch batch] Specification "${item.slug}" paused with awaiting_implementation (exit code 4).`);
+      console.log(`[sdw-orch batch] Batch queue paused at [${item.index + 1}/${manifest.total}]. Resume after task implementation with: sdw-orch resume-batch ${manifest.batchId}`);
+      printSummaryReport(manifest, options);
+      return 4;
     } else {
       anyFailed = true;
       item.status = 'failed';
