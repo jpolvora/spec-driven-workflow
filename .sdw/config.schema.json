@@ -47,6 +47,16 @@
       "description": "Enable pre-commit secrets and credentials leak scanning.",
       "default": false
     },
+    "useWorktrees": {
+      "type": "boolean",
+      "description": "Enable per-task isolated git worktrees for dispatched subagents under .sdw/worktrees/{runId}/.",
+      "default": false
+    },
+    "useFeatureBranches": {
+      "type": "boolean",
+      "description": "Automatically create and activate an isolated feature branch derived from specification slug.",
+      "default": false
+    },
     "requiredBuild": {
       "type": "boolean",
       "description": "Enforce successful build verification in Step 8 before creating delivery commit or PR.",

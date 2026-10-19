@@ -33,18 +33,18 @@ When executing multiple specifications (`run <spec1> <spec2> ...` or batch queue
 
 ## Steps
 
-1. **Initialize State & Inspect Specification**
-   Resolve project root and create an isolated run state in `.sdw/state/{runId}.state.json`. If the spec is human-friendly, derive an agentic spec; if already formatted for agents, skip derivation.
+1. **Initialize State, Branch & Inspect Specification**
+   Resolve project root and create an isolated run state in `.sdw/state/{runId}.state.json`. When `useFeatureBranches: true`, verify clean working tree and activate feature branch (`feature/{specSlug}`). If the spec is human-friendly, derive an agentic spec; if already formatted, skip derivation.
    - Run: `node skills/sdw-orch/scripts/sdw_orch.cjs run <specPath> [options]`
-   - Done when: Run state JSON exists on disk and derivation status is recorded.
+   - Done when: Run state JSON exists on disk, feature branch is activated (if configured), and derivation status is recorded.
 
 2. **Conduct Grilling Round**
    Walk decision tree paths for input bounds, failure recovery, and concurrency. In single-spec mode, query the user via `ask_question` if ambiguous gaps remain. In multi-spec batch mode, auto-resolve gaps autonomously using recommended defaults.
    - Done when: All decision gaps are resolved and spec is marked refined.
 
 3. **Decompose into DAG Tasks & Execute Implementation**
-   Analyze complexity and emit DAG execution units. Subagents must adhere to `sdw-rules` simplicity first and surgical diff directives (minimum code to satisfy ACs). Run test suites (`npm test`) until all tests pass.
-   - Done when: DAG tasks are generated, implementation code is written, and tests pass.
+   Analyze complexity and emit DAG execution units. When `useWorktrees: true` on multi-task plans, create exclusive worktrees under `.sdw/worktrees/{runId}/{taskId}`, dispatching subagents there and integrating commits via cherry-pick. Subagents adhere to `sdw-rules` simplicity first. Run test suites (`npm test`) until all tests pass.
+   - Done when: DAG tasks are generated, implementation code is integrated, and tests pass.
 
 4. **Evaluate Conformance Score & Security Gate**
    Compute conformance score (0-10) against touched files. If score < threshold (default 8/10), loop back with error feedback. When `securityChecksEnabled` is true, run pre-commit secret/leak scanner (`sdw-security-checks`); block on HIGH findings unless overridden via `--skip-security`.

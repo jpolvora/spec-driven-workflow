@@ -109,3 +109,24 @@ When multiple specifications are queued (`sdw-orch run spec1 spec2 ...` or `resu
 - **Autonomous Delivery & Synchronization:** Upon successful implementation and verification (conformance score ≥ threshold, tests passing, review clean), the orchestrator stages the delivery commit, updates `index.specs.md` to `completed`, syncs via `sdw-spec sync`, and immediately initiates the next queued specification.
 - **Halting vs Continuation:** Default policy halts execution on specification failure, saving batch state for `resume-batch`. When `--continue-on-error` is active, errors are logged in the manifest and the queue advances uninterrupted to the next item.
 - **Terminal Consolidated Summary:** The orchestrator emits the batch manifest summary report only once all queued items have completed or halted.
+
+## 5. Branch & Worktree Strategy Protocol
+
+Configurable feature branch activation and per-task isolated git worktrees:
+
+### Feature Branch Lifecycle (`useFeatureBranches: true`)
+- **Activation:** Before Step 1 executes, checks that the working tree is clean (`git status --porcelain`). If dirty, halts execution.
+- **Naming:** Derives branch name `feature/{specSlug}`.
+- **Switch/Reuse:** If `feature/{specSlug}` already exists, switches to it and marks `branchReused: true`. Otherwise, creates and switches to `feature/{specSlug}` from the resolved base branch.
+- **Metadata:** Records `branch`, `baseBranch`, and `branchReused` in state. Step 8 PR payload includes `head: branch` and `base: baseBranch`.
+
+### Per-Task Worktree Lifecycle (`useWorktrees: true`)
+- **Preconditions:** Verifies git availability, repository initialization, and writability of `.sdw/worktrees/`.
+- **Trivial Skip Rule:** If DAG tasks count === 1 and complexity is `low` or `simple`, skips worktree creation (`reason: "single low-complexity task"`).
+- **Creation:** For each DAG task, creates an exclusive worktree:
+  `git worktree add .sdw/worktrees/{runId}/{taskId} -b task/{runId}/{taskId} HEAD`
+- **Execution & Integration:** Subagent implements in the worktree. Changes are committed inside the worktree (`task({specSlug}): {taskId}`) and integrated into the primary working tree via `git cherry-pick <commitSha>`.
+- **Conflict Handling:** Cherry-pick conflicts halt execution with exit code 1; the conflicted worktree is preserved for operator inspection.
+- **Clean Removal:** Once integrated, removes worktree via `git worktree remove` and deletes task branch via `git branch -d`.
+- **Overrides:** `--no-worktrees` and `--no-feature-branch` flags override configuration for the current run.
+

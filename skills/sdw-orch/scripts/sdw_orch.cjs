@@ -3,7 +3,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
+const { execSync, spawnSync } = require('child_process');
 
 const stateManager = require('./state_manager.cjs');
 const specDerivation = require('./spec_derivation.cjs');
@@ -45,7 +45,11 @@ function parseArgs(args) {
     json: false,
     latest: false,
     unattended: false,
-    skipSecurity: false
+    skipSecurity: false,
+    noWorktrees: false,
+    worktrees: false,
+    noFeatureBranch: false,
+    featureBranch: false
   };
 
   const positional = [];
@@ -55,6 +59,10 @@ function parseArgs(args) {
     else if (arg === '--unattended') result.unattended = true;
     else if (arg === '--interactive') result.unattended = false;
     else if (arg === '--skip-security') result.skipSecurity = true;
+    else if (arg === '--no-worktrees') result.noWorktrees = true;
+    else if (arg === '--worktrees') result.worktrees = true;
+    else if (arg === '--no-feature-branch') result.noFeatureBranch = true;
+    else if (arg === '--feature-branch') result.featureBranch = true;
     else if (arg === '--skip-review') result.skipReview = true;
     else if (arg === '--skip-pr') result.skipPr = true;
     else if (arg === '--poll-pr') result.pollPr = true;
@@ -146,6 +154,8 @@ function loadProjectConfig(targetRoot) {
         pushDelivery: false,
         stateDir: path.join(root, '.sdw', 'state').replace(/\\/g, '/'),
         securityChecksEnabled: false,
+        useWorktrees: false,
+        useFeatureBranches: false,
         ...resolved
       };
     } catch (e) {}
@@ -158,7 +168,9 @@ function loadProjectConfig(targetRoot) {
     pushDelivery: false,
     stateDir: path.join(root, '.sdw', 'state').replace(/\\/g, '/'),
     autoResolveGaps: false,
-    securityChecksEnabled: false
+    securityChecksEnabled: false,
+    useWorktrees: false,
+    useFeatureBranches: false
   };
 }
 
@@ -228,20 +240,119 @@ function cmdRun(options) {
     } catch (err) {}
   }
 
+  // Resolve feature branches and worktrees settings (AC1, AC2, AC21)
+  let useFeatureBranches = Boolean(config.useFeatureBranches);
+  let featureBranchSource = 'config';
+  if (options.noFeatureBranch) {
+    useFeatureBranches = false;
+    featureBranchSource = 'cli';
+  } else if (options.featureBranch) {
+    useFeatureBranches = true;
+    featureBranchSource = 'cli';
+  }
+
+  let useWorktrees = Boolean(config.useWorktrees);
+  let worktreesSource = 'config';
+  if (options.noWorktrees) {
+    useWorktrees = false;
+    worktreesSource = 'cli';
+  } else if (options.worktrees) {
+    useWorktrees = true;
+    worktreesSource = 'cli';
+  }
+
+  const runtimeOverrides = (options.noWorktrees || options.worktrees || options.noFeatureBranch || options.featureBranch)
+    ? { useWorktrees, useFeatureBranches, worktreesSource, featureBranchSource }
+    : null;
+
+  // Resolve current and base branch
+  let currentBranch = 'main';
+  let baseBranch = 'main';
+  try {
+    currentBranch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: targetRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch (e) {}
+  try {
+    const originHead = execSync('git symbolic-ref --short refs/remotes/origin/HEAD', { cwd: targetRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    baseBranch = originHead.replace(/^origin\//, '');
+  } catch (e) {
+    baseBranch = currentBranch;
+  }
+
+  let activeBranch = currentBranch;
+  let branchReused = false;
+
+  // Feature branch activation before step 1 (AC6, AC7, AC8)
+  if (useFeatureBranches) {
+    // AC7: Refuse dirty working tree
+    try {
+      const statusOut = execSync('git status --porcelain', { cwd: targetRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+      if (statusOut) {
+        console.error(`[Branch Activation] Error: Git working tree is dirty; cannot create or switch feature branch.`);
+        options._runResult = { status: 'failed', error: 'Working tree is dirty; refusing feature branch activation' };
+        return 1;
+      }
+    } catch (gitErr) {
+      console.error(`[Branch Activation] Git error: ${gitErr.message}`);
+      options._runResult = { status: 'failed', error: gitErr.message };
+      return 1;
+    }
+
+    const targetBranch = `feature/${specSlug}`;
+    if (currentBranch === targetBranch) {
+      branchReused = true;
+      activeBranch = targetBranch;
+      console.log(`[Branch Activation] Already on feature branch "${targetBranch}" (reused).`);
+    } else {
+      const branchCheck = spawnSync('git', ['rev-parse', '--verify', '--quiet', `refs/heads/${targetBranch}`], { cwd: targetRoot });
+      if (branchCheck.status === 0) {
+        // AC8: Switch to existing branch and record reuse
+        try {
+          execSync(`git switch ${targetBranch}`, { cwd: targetRoot, stdio: 'ignore' });
+          branchReused = true;
+          activeBranch = targetBranch;
+          console.log(`[Branch Activation] Reused and switched to existing feature branch "${targetBranch}".`);
+        } catch (switchErr) {
+          console.error(`[Branch Activation] Failed to switch to branch "${targetBranch}": ${switchErr.message}`);
+          return 1;
+        }
+      } else {
+        // AC6: Create and switch to new feature branch
+        try {
+          execSync(`git switch -c ${targetBranch}`, { cwd: targetRoot, stdio: 'ignore' });
+          branchReused = false;
+          activeBranch = targetBranch;
+          console.log(`[Branch Activation] Created and switched to feature branch "${targetBranch}" from ${baseBranch}.`);
+        } catch (createErr) {
+          console.error(`[Branch Activation] Failed to create branch "${targetBranch}": ${createErr.message}`);
+          return 1;
+        }
+      }
+    }
+  }
+
   const baseCommit = options.baseCommit || getBaseCommit(targetRoot);
   const startStep = options.startStep || (options.step ? options.step : 1);
 
-  // Initialize or restore Run State (AC1, AC2)
+  // Initialize or restore Run State (AC1, AC2, AC9)
   let state;
   if (options.runId && fs.existsSync(stateManager.getStateFilePath(targetRoot, options.runId))) {
     state = stateManager.loadRunState(targetRoot, options.runId);
+    state.branch = activeBranch;
+    state.baseBranch = baseBranch;
+    state.branchReused = branchReused;
+    if (runtimeOverrides) state.runtimeOverrides = runtimeOverrides;
+    state = stateManager.saveRunState(targetRoot, state);
   } else {
     state = stateManager.createRunState({
       root: targetRoot,
       specPath: options.specPath,
       slug: specSlug,
       runId: options.runId,
-      baseCommit
+      baseCommit,
+      branch: activeBranch,
+      baseBranch,
+      branchReused,
+      runtimeOverrides
     });
   }
 
@@ -310,13 +421,124 @@ function cmdRun(options) {
     dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug });
   }
 
-  // Step 4: Subagent Context Fencing & Dispatch (AC8, AC16)
+  // Step 4: Subagent Context Fencing & Dispatch (AC8, AC11, AC12, AC13, AC14, AC15, AC16, AC17, AC19, AC20)
   if (startStep <= 4 && state.steps[4].status !== 'completed') {
     state = stateManager.updateStepState(targetRoot, state.runId, 4, 'in_progress');
     console.log(`[Step 4: Implementation] Prepared ${dagPlan.tasks.length} context-fenced task prompt(s).`);
-    dagPlan.tasks.forEach(t => {
-      console.log(`  + [${t.id}] ${t.title} (Covering: ${t.coveredAcs.join(', ')})`);
-    });
+
+    if (useWorktrees) {
+      // Precondition checks (AC20)
+      const gitCheck = spawnSync('git', ['--version'], { cwd: targetRoot, encoding: 'utf8' });
+      const hasGitDir = fs.existsSync(path.join(targetRoot, '.git'));
+      if (gitCheck.status !== 0 || !hasGitDir) {
+        console.error('[Step 4: Worktree] Git unavailable or not a git repository for worktree operations.');
+        state.errors = state.errors || [];
+        state.errors.push({ step: 4, timestamp: new Date().toISOString(), error: 'Git unavailable or not a git repo' });
+        state = stateManager.updateStepState(targetRoot, state.runId, 4, 'worktree_failure', { error: 'Git unavailable' });
+        state.status = 'failed';
+        stateManager.saveRunState(targetRoot, state);
+        return 1;
+      }
+
+      // Check skip rule (AC13): single low-complexity task
+      const isSingleLowComplexity = dagPlan.tasks.length === 1 && (dagPlan.complexity.level === 'simple' || dagPlan.complexity.level === 'low');
+      if (isSingleLowComplexity) {
+        console.log(`[Step 4: Worktree] Skipped: single low-complexity task.`);
+        state.worktreeSkipReason = 'single low-complexity task';
+        state = stateManager.saveRunState(targetRoot, state);
+        dagPlan.tasks.forEach(t => {
+          console.log(`  + [${t.id}] ${t.title} (Covering: ${t.coveredAcs.join(', ')})`);
+        });
+      } else {
+        // Multi-task exclusive worktree lifecycle (AC12, AC14, AC15, AC16, AC17)
+        state.worktrees = state.worktrees || [];
+        const worktreeBaseDir = path.join(targetRoot, '.sdw', 'worktrees', state.runId);
+        if (!fs.existsSync(worktreeBaseDir)) {
+          fs.mkdirSync(worktreeBaseDir, { recursive: true });
+        }
+
+        for (const task of dagPlan.tasks) {
+          const taskWorktreeRel = `.sdw/worktrees/${state.runId}/${task.id}`;
+          const taskWorktreeAbs = path.join(targetRoot, taskWorktreeRel);
+          const taskBranch = `task/${state.runId}/${task.id}`;
+
+          console.log(`[Step 4: Worktree] Creating worktree for task ${task.id} at ${taskWorktreeRel}...`);
+          const addProc = spawnSync('git', ['worktree', 'add', taskWorktreeRel, '-b', taskBranch, 'HEAD'], {
+            cwd: targetRoot,
+            encoding: 'utf8'
+          });
+          if (addProc.status !== 0) {
+            console.error(`[Step 4: Worktree] Error creating worktree: ${addProc.stderr || 'git error'}`);
+            state.errors = state.errors || [];
+            state.errors.push({ step: 4, timestamp: new Date().toISOString(), error: addProc.stderr });
+            state = stateManager.updateStepState(targetRoot, state.runId, 4, 'worktree_failure', { error: addProc.stderr });
+            state.status = 'failed';
+            stateManager.saveRunState(targetRoot, state);
+            return 1;
+          }
+
+          const wtRecord = {
+            taskId: task.id,
+            path: taskWorktreeRel.replace(/\\/g, '/'),
+            branch: taskBranch,
+            baseCommit: getBaseCommit(targetRoot),
+            status: 'created',
+            commitSha: null
+          };
+          state.worktrees.push(wtRecord);
+          state = stateManager.saveRunState(targetRoot, state);
+
+          console.log(`  + [${task.id}] Dispatched to worktree: ${taskWorktreeRel}`);
+
+          // Check if changes exist in worktree
+          let wtHasChanges = false;
+          try {
+            wtHasChanges = Boolean(execSync('git status --porcelain', { cwd: taskWorktreeAbs, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim());
+          } catch (e) {}
+
+          if (wtHasChanges) {
+            execSync('git add -A', { cwd: taskWorktreeAbs, stdio: 'ignore' });
+            execSync(`git commit -m "task(${specSlug}): ${task.id}"`, { cwd: taskWorktreeAbs, stdio: 'ignore' });
+            const taskCommitSha = execSync('git rev-parse HEAD', { cwd: taskWorktreeAbs, encoding: 'utf8' }).trim();
+            wtRecord.commitSha = taskCommitSha;
+
+            // Integrate into primary working tree via cherry-pick (AC15)
+            try {
+              execSync(`git cherry-pick ${taskCommitSha}`, { cwd: targetRoot, stdio: 'ignore' });
+              console.log(`[Step 4: Worktree] Integrated task ${task.id} commit ${taskCommitSha} via cherry-pick.`);
+            } catch (cpErr) {
+              console.error(`[Step 4: Worktree] Conflict during cherry-pick integration of ${task.id}. Preserving worktree for inspection.`);
+              wtRecord.status = 'conflict';
+              stateManager.updateStepState(targetRoot, state.runId, 4, 'worktree_conflict', { error: cpErr.message, worktree: wtRecord });
+              state.status = 'failed';
+              stateManager.saveRunState(targetRoot, state);
+              options._runResult = { runId: state.runId, status: 'failed', error: `Worktree integration conflict on ${task.id}` };
+              return 1;
+            }
+          }
+
+          // Safe removal (AC17)
+          try {
+            execSync(`git worktree remove "${taskWorktreeRel}"`, { cwd: targetRoot, stdio: 'ignore' });
+            execSync(`git branch -d ${taskBranch}`, { cwd: targetRoot, stdio: 'ignore' });
+            wtRecord.status = 'integrated';
+          } catch (rmErr) {
+            console.error(`[Step 4: Worktree] Failed to remove worktree ${taskWorktreeRel}: ${rmErr.message}`);
+            wtRecord.status = 'remove_failed';
+            state.errors = state.errors || [];
+            state.errors.push({ step: 4, timestamp: new Date().toISOString(), error: rmErr.message });
+            stateManager.saveRunState(targetRoot, state);
+            return 1;
+          }
+          state = stateManager.saveRunState(targetRoot, state);
+        }
+      }
+    } else {
+      // Inline execution on primary tree (AC11)
+      dagPlan.tasks.forEach(t => {
+        console.log(`  + [${t.id}] ${t.title} (Covering: ${t.coveredAcs.join(', ')})`);
+      });
+    }
 
     if (options.simulateFailure) {
       console.error(`[Step 4: Implementation] Unrecoverable failure occurred during subagent execution (AC16).`);
@@ -481,6 +703,8 @@ function cmdRun(options) {
     const prPayload = {
       title: `feat(${specSlug}): implement ${specSlug}`,
       specSlug,
+      head: state.branch || null,
+      base: state.baseBranch || null,
       baseCommit: state.baseCommit,
       deliveryCommit: state.deliveryCommit,
       score: state.score,
@@ -603,11 +827,19 @@ function cmdStatus(options) {
   console.log(`=========================`);
   console.log(`Run ID:       ${state.runId}`);
   console.log(`Spec:         ${state.specSlug}`);
+  console.log(`Branch:       ${state.branch || 'None'}`);
+  console.log(`Base Branch:  ${state.baseBranch || 'None'}`);
   console.log(`Status:       ${state.status}`);
   console.log(`Current Step: ${state.currentStep}/${state.totalSteps}`);
   console.log(`Score:        ${state.score !== null ? `${state.score}/10` : 'Not evaluated yet'}`);
   console.log(`Created:      ${state.createdAt}`);
   console.log(`Updated:      ${state.updatedAt}`);
+  if (state.worktrees && state.worktrees.length > 0) {
+    console.log(`\nWorktrees:`);
+    state.worktrees.forEach(w => {
+      console.log(`  [${w.taskId}] ${w.path} (${w.status}) -> commit: ${w.commitSha || 'none'}`);
+    });
+  }
   console.log(`\nSteps:`);
 
   for (let s = 1; s <= state.totalSteps; s++) {
@@ -672,6 +904,10 @@ Options:
   --latest               (status/resume) Target the most recent run state
   --push                 Push active branch and delivery commit to remote origin
   --skip-security        Bypass pre-commit security checks gate (audit logged)
+  --no-worktrees         Disable git worktrees even if configured
+  --worktrees            Force git worktrees on multi-task plans
+  --no-feature-branch    Disable feature branch creation even if configured
+  --feature-branch       Force feature branch creation
   --skip-review          Skip code review step
   --skip-pr              Skip pull request preparation step
   --force                Override quality gates or allow execution on archived specs

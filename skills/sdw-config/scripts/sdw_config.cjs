@@ -66,6 +66,8 @@ const DEFAULT_CONFIG = {
   stateDir: '{projectRoot}/.sdw/state',
   autoResolveGaps: true,
   securityChecksEnabled: false,
+  useWorktrees: false,
+  useFeatureBranches: false,
   requiredBuild: false,
   buildCommand: 'npm run build',
   runAllTests: false,
@@ -121,6 +123,16 @@ const DEFAULT_SCHEMA = {
     "securityChecksEnabled": {
       "type": "boolean",
       "description": "Enable pre-commit secrets and credentials leak scanning.",
+      "default": false
+    },
+    "useWorktrees": {
+      "type": "boolean",
+      "description": "Enable per-task isolated git worktrees for dispatched subagents under .sdw/worktrees/{runId}/.",
+      "default": false
+    },
+    "useFeatureBranches": {
+      "type": "boolean",
+      "description": "Automatically create and activate an isolated feature branch derived from specification slug.",
       "default": false
     },
     "requiredBuild": {
@@ -217,6 +229,20 @@ function validateConfigSchema(config) {
   if ('securityChecksEnabled' in config) {
     if (typeof config.securityChecksEnabled !== 'boolean') {
       errors.push('Property "securityChecksEnabled" must be a boolean.');
+    }
+  }
+
+  // useWorktrees
+  if ('useWorktrees' in config) {
+    if (typeof config.useWorktrees !== 'boolean') {
+      errors.push('Property "useWorktrees" must be a boolean.');
+    }
+  }
+
+  // useFeatureBranches
+  if ('useFeatureBranches' in config) {
+    if (typeof config.useFeatureBranches !== 'boolean') {
+      errors.push('Property "useFeatureBranches" must be a boolean.');
     }
   }
 
