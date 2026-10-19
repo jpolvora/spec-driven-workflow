@@ -73,6 +73,27 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
       "description": "Automatically apply recommended defaults for unhandled grilling gaps when running non-interactively.",
       "default": true
     },
+    "securityChecksEnabled": {
+      "type": "boolean",
+      "description": "Enable pre-commit secrets and credentials leak scanning.",
+      "default": false
+    },
+    "useWorktrees": {
+      "type": "boolean",
+      "description": "Enable per-task isolated git worktrees for dispatched subagents under .sdw/worktrees/{runId}/.",
+      "default": false
+    },
+    "useFeatureBranches": {
+      "type": "boolean",
+      "description": "Automatically create and activate an isolated feature branch derived from specification slug.",
+      "default": false
+    },
+    "scmProvider": {
+      "type": "string",
+      "enum": ["none", "ado", "github"],
+      "default": "none",
+      "description": "Configured SCM provider for issues, work items, and pull requests. Allowed: none, ado, github."
+    },
     "requiredBuild": {
       "type": "boolean",
       "description": "Enforce successful build verification in Step 8 before creating delivery commit or PR.",
@@ -119,6 +140,10 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
 | `pushDelivery` | `boolean` | `false` | Whether to automatically push delivery commits to remote origin |
 | `stateDir` | `string` | `"{projectRoot}/.sdw/state"` | Path to isolated execution run state directory (supports `{projectRoot}`) |
 | `autoResolveGaps` | `boolean` | `true` | Whether to auto-apply recommended grilling defaults when non-interactive |
+| `securityChecksEnabled` | `boolean` | `false` | Enable pre-commit secrets and credentials leak scanning |
+| `useWorktrees` | `boolean` | `false` | Enable per-task isolated git worktrees for dispatched subagents under `.sdw/worktrees/{runId}/` |
+| `useFeatureBranches` | `boolean` | `false` | Automatically create and activate an isolated feature branch derived from specification slug |
+| `scmProvider` | `string` | `"none"` | Configured SCM provider for issues, work items, and pull requests (`none`, `ado`, `github`) |
 | `requiredBuild` | `boolean` | `false` | Enforce successful build verification in Step 8 before creating delivery commit or PR |
 | `buildCommand` | `string` | `"npm run build"` | Command to execute for build verification |
 | `runAllTests` | `boolean` | `false` | Enforce passing all test suites in Step 8 before creating delivery commit or PR |
@@ -141,6 +166,10 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
   "pushDelivery": false,
   "stateDir": "{projectRoot}/.sdw/state",
   "autoResolveGaps": true,
+  "securityChecksEnabled": false,
+  "useWorktrees": false,
+  "useFeatureBranches": false,
+  "scmProvider": "none",
   "requiredBuild": false,
   "runAllTests": false
 }

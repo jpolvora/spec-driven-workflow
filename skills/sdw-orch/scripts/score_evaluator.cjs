@@ -5,53 +5,46 @@ const path = require('path');
 const { execSync } = require('child_process');
 const { parseAcceptanceCriteria } = require('./dag_planner.cjs');
 
+function normalizePath(p) {
+  return p.replace(/\\/g, '/');
+}
+
 function getTouchedFiles(baseCommit, projectRoot) {
   const cwd = projectRoot || process.cwd();
   const fileSet = new Set();
   try {
     if (baseCommit) {
-      // Check uncommitted changes vs baseCommit
       const diffUncommitted = execSync(`git diff --name-only ${baseCommit}`, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-      diffUncommitted.split('\n').map(l => l.trim()).filter(Boolean).forEach(f => fileSet.add(f));
+      diffUncommitted.split('\n').map(l => l.trim()).filter(Boolean).forEach(f => fileSet.add(normalizePath(f)));
 
-      // Check committed changes between baseCommit and HEAD
       const diffCommitted = execSync(`git diff --name-only ${baseCommit} HEAD`, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-      diffCommitted.split('\n').map(l => l.trim()).filter(Boolean).forEach(f => fileSet.add(f));
+      diffCommitted.split('\n').map(l => l.trim()).filter(Boolean).forEach(f => fileSet.add(normalizePath(f)));
     }
 
-    // Also include currently modified or untracked files
     const statusOut = execSync('git status --porcelain', { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
     statusOut.split('\n')
-      .map(l => l.trim().replace(/^[A-Z?]{1,2}\s+/, ''))
+      .map(l => l.trim().replace(/^[A-Z?]{1,2}\s+/, '').trim())
       .filter(Boolean)
-      .forEach(f => fileSet.add(f));
+      .forEach(f => fileSet.add(normalizePath(f)));
   } catch (err) {
     // Git errors ignored
   }
   return Array.from(fileSet);
 }
 
-function getDiffContent(baseCommit, projectRoot) {
-  const cwd = projectRoot || process.cwd();
-  let content = '';
-  try {
-    if (baseCommit) {
-      content += execSync(`git diff ${baseCommit}`, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-      content += '\n' + execSync(`git diff ${baseCommit} HEAD`, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-    } else {
-      content = execSync('git diff HEAD', { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-    }
-  } catch (err) {
-    // ignore
-  }
-  return content;
-}
+/**
+ * Evaluates conformance score based strictly on accepted task evidence records (Spec 015).
+ * 
+ * Score = Math.round((verifiedAcs / totalAcs) * 10).
+ * An AC is verified ONLY when at least one accepted task evidence record references it
+ * and confirms at least one real changed file that exists on disk.
+ * If 0 ACs found in spec, score is 0 and evaluation fails closed.
+ */
+function evaluateScore(specContent, options = {}) {
+  const projectRoot = options.projectRoot || process.cwd();
+  const baseCommit = options.baseCommit || null;
 
-function evaluateScore(specContent, options) {
-  const projectRoot = (options && options.projectRoot) || process.cwd();
-  const baseCommit = (options && options.baseCommit) || null;
-
-  let minScore = (options && options.minScore !== undefined) ? options.minScore : null;
+  let minScore = options.minScore !== undefined ? options.minScore : null;
   if (minScore === null) {
     try {
       const sdwConfig = require('../../sdw-config/scripts/sdw_config.cjs');
@@ -63,10 +56,12 @@ function evaluateScore(specContent, options) {
   }
 
   const acs = parseAcceptanceCriteria(specContent);
+
+  // Closed failure when 0 ACs present (Spec 015 AC23, Line 133, Line 208)
   if (acs.length === 0) {
     return {
-      score: 10,
-      passed: true,
+      score: 0,
+      passed: false,
       minScore,
       totalAcs: 0,
       verifiedCount: 0,
@@ -74,123 +69,140 @@ function evaluateScore(specContent, options) {
       verifiedAcs: [],
       failingAcs: [],
       touchedFiles: [],
-      feedback: 'No explicit acceptance criteria found in spec. Default score assigned.'
+      evidenceLinks: {},
+      feedback: 'Specification has no acceptance criteria. Fails closed with score 0/10.'
     };
   }
 
-  const touchedFiles = getTouchedFiles(baseCommit, projectRoot);
-  const diffContent = getDiffContent(baseCommit, projectRoot);
+  // Collect accepted task evidence records
+  // Source 1: options.tasks (from state.steps[4].tasks)
+  // Source 2: options.evidenceRecords (passed directly in options)
+  const taskEvidenceList = [];
 
-  // Combine diff content with full file contents of touched and explicit target files
-  let combinedContent = diffContent;
-  const filesToCheck = new Set([...touchedFiles, ...((options && options.targetFiles) || [])]);
-  
-  // Include targetFiles from DAG decomposition
-  try {
-    const { generateDagPlan } = require('./dag_planner.cjs');
-    const dag = generateDagPlan(specContent, options);
-    if (dag && dag.tasks) {
-      for (const t of dag.tasks) {
-        if (t.targetFiles) {
-          t.targetFiles.forEach(f => filesToCheck.add(f));
-        }
-      }
-    }
-  } catch (e) {}
-
-  // Also check skills/ and .sdw/ default locations if targetFiles still empty
-  if (filesToCheck.size === 0) {
-    const defaultSearchDirs = ['skills/sdw-orch/scripts', 'skills/sdw-orch', '.sdw'];
-    for (const d of defaultSearchDirs) {
-      const fullDir = path.resolve(projectRoot, d);
-      if (fs.existsSync(fullDir)) {
-        try {
-          const entries = fs.readdirSync(fullDir);
-          for (const entry of entries) {
-            const rel = path.join(d, entry).replace(/\\/g, '/');
-            if (fs.statSync(path.resolve(projectRoot, rel)).isFile()) {
-              filesToCheck.add(rel);
-            }
+  if (options.tasks && typeof options.tasks === 'object') {
+    for (const [taskId, taskData] of Object.entries(options.tasks)) {
+      if (taskData && taskData.status === 'completed') {
+        let evidence = taskData.evidence || null;
+        if (!evidence && taskData.evidencePath) {
+          const absEvPath = path.isAbsolute(taskData.evidencePath)
+            ? taskData.evidencePath
+            : path.resolve(projectRoot, taskData.evidencePath);
+          if (fs.existsSync(absEvPath)) {
+            try {
+              evidence = JSON.parse(fs.readFileSync(absEvPath, 'utf8'));
+            } catch (e) {}
           }
-        } catch (e) {}
+        }
+        taskEvidenceList.push({
+          taskId,
+          evidencePath: taskData.evidencePath || null,
+          commitSha: taskData.commitSha || null,
+          acIds: (evidence && evidence.acIds) || taskData.acIds || [],
+          filesChanged: (evidence && evidence.filesChanged) || taskData.filesChanged || []
+        });
       }
     }
+  } else if (Array.isArray(options.evidenceRecords)) {
+    taskEvidenceList.push(...options.evidenceRecords);
   }
 
-  for (const relPath of filesToCheck) {
-    const fullPath = path.resolve(projectRoot, relPath);
-    if (fs.existsSync(fullPath) && fs.statSync(fullPath).isFile()) {
-      try {
-        combinedContent += '\n' + fs.readFileSync(fullPath, 'utf8');
-      } catch (e) {}
+  // Build map of verified AC IDs to evidence links
+  const evidenceMap = {};
+  const allTouchedFiles = new Set(getTouchedFiles(baseCommit, projectRoot));
+
+  for (const record of taskEvidenceList) {
+    const files = Array.isArray(record.filesChanged) ? record.filesChanged : [];
+    const existingChangedFiles = files.filter(f => {
+      const absF = path.resolve(projectRoot, f);
+      return fs.existsSync(absF);
+    });
+
+    // Evidence must confirm at least one existing changed file
+    if (existingChangedFiles.length === 0 && files.length > 0) {
+      continue;
+    }
+
+    files.forEach(f => allTouchedFiles.add(normalizePath(f)));
+
+    const acIds = Array.isArray(record.acIds) ? record.acIds : [];
+    for (const acId of acIds) {
+      const cleanAcId = String(acId).trim();
+      if (!evidenceMap[cleanAcId]) {
+        evidenceMap[cleanAcId] = {
+          taskIds: [],
+          evidencePaths: [],
+          filesChanged: []
+        };
+      }
+      if (record.taskId && !evidenceMap[cleanAcId].taskIds.includes(record.taskId)) {
+        evidenceMap[cleanAcId].taskIds.push(record.taskId);
+      }
+      if (record.evidencePath && !evidenceMap[cleanAcId].evidencePaths.includes(record.evidencePath)) {
+        evidenceMap[cleanAcId].evidencePaths.push(normalizePath(record.evidencePath));
+      }
+      existingChangedFiles.forEach(f => {
+        const norm = normalizePath(f);
+        if (!evidenceMap[cleanAcId].filesChanged.includes(norm)) {
+          evidenceMap[cleanAcId].filesChanged.push(norm);
+        }
+      });
     }
   }
-
-  const haystack = combinedContent.toLowerCase();
-  const stopWords = new Set(['shall', 'when', 'while', 'where', 'then', 'the', 'system', 'that', 'with', 'from', 'each', 'this', 'after', 'into', 'over', 'under']);
 
   const verifiedAcs = [];
   const failingAcs = [];
 
   for (const ac of acs) {
-    // Replace non-alphanumeric chars with spaces to handle hyphenated words cleanly
-    const words = ac.text
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, ' ')
-      .split(/\s+/)
-      .filter(w => w.length > 2 && !stopWords.has(w));
-
-    let matches = 0;
-    for (const w of words) {
-      if (haystack.includes(w)) {
-        matches++;
-      }
-    }
-
-    const coverageRatio = words.length > 0 ? matches / words.length : 1;
-    // Require at least 40% keyword match across the implementation
-    if (coverageRatio >= 0.4 || words.length === 0) {
-      verifiedAcs.push({ id: ac.id, text: ac.text, coverageRatio });
+    const cleanId = ac.id.trim();
+    if (evidenceMap[cleanId]) {
+      verifiedAcs.push({
+        id: cleanId,
+        text: ac.text,
+        taskIds: evidenceMap[cleanId].taskIds,
+        evidencePaths: evidenceMap[cleanId].evidencePaths,
+        filesChanged: evidenceMap[cleanId].filesChanged
+      });
     } else {
       failingAcs.push({
-        id: ac.id,
+        id: cleanId,
         text: ac.text,
-        coverageRatio,
-        missingKeywords: words.filter(w => !haystack.includes(w))
+        reason: 'No accepted task evidence record references this criterion.'
       });
     }
   }
 
-  const rawScore = Math.round((verifiedAcs.length / acs.length) * 10);
+  const verifiedCount = verifiedAcs.length;
+  const totalAcs = acs.length;
+  const rawScore = Math.round((verifiedCount / totalAcs) * 10);
   const score = Math.max(0, Math.min(10, rawScore));
   const passed = score >= minScore;
 
   let feedback = '';
   if (!passed) {
     feedback = `Conformance score is ${score}/10 (minimum required: ${minScore}/10).\n` +
-      `The following acceptance criteria lack observable evidence in touched files or diffs:\n` +
+      `The following acceptance criteria lack accepted task evidence records:\n` +
       failingAcs.map(f => `- ${f.id}: ${f.text}`).join('\n') +
-      `\nPlease re-implement or verify these specific requirements.`;
+      `\nPlease complete task implementation and submit valid task evidence.`;
   } else {
-    feedback = `Conformance score is ${score}/10 (exceeds threshold ${minScore}/10). All ${verifiedAcs.length} acceptance criteria pass verification.`;
+    feedback = `Conformance score is ${score}/10 (meets or exceeds required threshold ${minScore}/10). All ${verifiedCount}/${totalAcs} acceptance criteria verified via accepted task evidence.`;
   }
 
   return {
     score,
     passed,
     minScore,
-    totalAcs: acs.length,
-    verifiedCount: verifiedAcs.length,
+    totalAcs,
+    verifiedCount,
     failingCount: failingAcs.length,
     verifiedAcs,
     failingAcs,
-    touchedFiles: Array.from(filesToCheck),
+    touchedFiles: Array.from(allTouchedFiles),
+    evidenceLinks: evidenceMap,
     feedback
   };
 }
 
 module.exports = {
   getTouchedFiles,
-  getDiffContent,
   evaluateScore
 };

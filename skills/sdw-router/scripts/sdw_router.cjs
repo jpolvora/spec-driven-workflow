@@ -144,6 +144,16 @@ const INTENT_RULES = {
     primaryKeywords: ['orch', 'orchestrator', 'orchestration', 'implement spec', 'specification implementation', 'workflow execution'],
     secondaryKeywords: ['workflow', 'implement', 'implementation', 'resumption', 'run spec', 'resume', 'status', 'dag', 'conformance', 'delivery commit', 'automated review', 'pull request', 'push', 'batch', 'resume-batch', 'multi-spec'],
     recommendedOption: 'Orchestrate end-to-end implementation and delivery using sdw-orch'
+  },
+  'sdw-rules': {
+    primaryKeywords: ['sdw-rules', 'shared rules', 'karpathy', 'simplicity first', 'scope enclosure', 'anti-overengineering'],
+    secondaryKeywords: ['guideline', 'guidelines', 'yagni', 'surgical diff', 'traps log', 'audit-spec', 'log-trap', 'traps.md'],
+    recommendedOption: 'Review behavioral rules, anti-patterns, or log traps using sdw-rules'
+  },
+  'sdw-security-checks': {
+    primaryKeywords: ['security-checks', 'security checks', 'secret leak', 'leak scan', 'credentials check', 'pre-commit security'],
+    secondaryKeywords: ['secrets', 'leaks', 'pii', 'credentials', 'api keys', 'securityChecksEnabled', 'allowlist secret', 'scan --staged'],
+    recommendedOption: 'Scan workspace or staged diff for secrets, credentials, and leaks using sdw-security-checks'
   }
 };
 
@@ -222,7 +232,7 @@ function routePrompt(prompt, options) {
     }
   }
 
-  const knownExplicitSkills = ['sdw-config', 'sdw-spec', 'sdw-orch', 'sdw-router'];
+  const knownExplicitSkills = ['sdw-config', 'sdw-spec', 'sdw-orch', 'sdw-router', 'sdw-rules'];
   for (const s of knownExplicitSkills) {
     if (new RegExp(`(?:^|\\s)[/@]?${s}\\b`, 'i').test(lower)) {
       // It was explicitly requested but might be missing on disk

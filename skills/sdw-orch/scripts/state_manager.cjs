@@ -44,6 +44,18 @@ function getStateFilePath(targetRoot, runId) {
   return path.join(stateDir, `${runId}.state.json`);
 }
 
+function resolveArtifactsDir(targetRoot, specSlug, runId) {
+  const root = targetRoot ? path.resolve(targetRoot) : process.cwd();
+  const stateDir = resolveStateDir(root);
+  return normalizePath(path.join(stateDir, specSlug, runId));
+}
+
+function getArtifactsRelDir(targetRoot, specSlug, runId) {
+  const root = targetRoot ? path.resolve(targetRoot) : process.cwd();
+  const absDir = resolveArtifactsDir(root, specSlug, runId);
+  return normalizePath(path.relative(root, absDir));
+}
+
 function createRunState(options) {
   const targetRoot = options.root ? path.resolve(options.root) : process.cwd();
   const specPath = options.specPath ? normalizePath(path.resolve(targetRoot, options.specPath)) : null;
@@ -55,11 +67,16 @@ function createRunState(options) {
   if (!options.overwrite && fs.existsSync(stateFilePath)) {
     try {
       const existing = JSON.parse(fs.readFileSync(stateFilePath, 'utf8'));
+      if (!existing.artifactsDir) {
+        existing.artifactsDir = getArtifactsRelDir(targetRoot, existing.specSlug || specSlug, existing.runId || runId);
+      }
       return existing;
     } catch (e) {
       // If corrupted, recreate
     }
   }
+
+  const artifactsRelDir = getArtifactsRelDir(targetRoot, specSlug, runId);
 
   const state = {
     orchestrator: 'sdw-orch',
@@ -73,21 +90,37 @@ function createRunState(options) {
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     baseCommit: options.baseCommit || null,
+    branch: options.branch || null,
+    baseBranch: options.baseBranch || null,
+    branchReused: Boolean(options.branchReused),
+    worktrees: [],
+    worktreeSkipReason: null,
+    runtimeOverrides: options.runtimeOverrides || null,
+    scm: options.scm || {
+      provider: 'none',
+      resolvedFrom: 'default',
+      cliInstalled: null,
+      cliAuthenticated: null,
+      skipped: false,
+      skipReason: null,
+      errors: []
+    },
     deliveryCommit: null,
     reviewCommit: null,
     score: null,
     scoreIteration: 0,
     reviewIteration: 0,
     dagTasks: [],
+    artifactsDir: options.artifactsDir || artifactsRelDir,
     steps: {
-      1: { name: 'derivation', status: 'pending', startedAt: null, completedAt: null, output: null },
-      2: { name: 'grilling', status: 'pending', startedAt: null, completedAt: null, output: null },
-      3: { name: 'dag_generation', status: 'pending', startedAt: null, completedAt: null, output: null },
-      4: { name: 'implementation', status: 'pending', startedAt: null, completedAt: null, output: null },
-      5: { name: 'scoring', status: 'pending', startedAt: null, completedAt: null, output: null },
-      6: { name: 'delivery_commit', status: 'pending', startedAt: null, completedAt: null, output: null },
-      7: { name: 'code_review', status: 'pending', startedAt: null, completedAt: null, output: null },
-      8: { name: 'pr_preparation', status: 'pending', startedAt: null, completedAt: null, output: null }
+      1: { name: 'derivation', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null },
+      2: { name: 'refinement', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null },
+      3: { name: 'dag_generation', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null },
+      4: { name: 'implementation', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null, tasks: {}, gates: {} },
+      5: { name: 'scoring', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null },
+      6: { name: 'delivery_commit', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null },
+      7: { name: 'code_review', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null },
+      8: { name: 'pr_preparation', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null }
     },
     handoffs: {},
     errors: []
@@ -154,11 +187,27 @@ function recordError(targetRoot, runId, stepNum, errorMessage) {
   return saveRunState(targetRoot, state);
 }
 
-function updateStepState(targetRoot, runId, stepNum, status, outputData, error) {
+function recordWarning(targetRoot, runId, stepNum, warningMessage) {
+  const state = loadRunState(targetRoot, runId);
+  const now = new Date().toISOString();
+  state.errors = state.errors || [];
+  state.errors.push({ step: stepNum, timestamp: now, error: String(warningMessage), warning: true });
+  return saveRunState(targetRoot, state);
+}
+
+function recordStepArtifact(targetRoot, runId, stepNum, artifactRelPath) {
+  const state = loadRunState(targetRoot, runId);
+  if (state.steps && state.steps[stepNum]) {
+    state.steps[stepNum].artifact = normalizePath(artifactRelPath);
+  }
+  return saveRunState(targetRoot, state);
+}
+
+function updateStepState(targetRoot, runId, stepNum, status, outputData, error, options) {
   const state = loadRunState(targetRoot, runId);
   const now = new Date().toISOString();
   if (!state.steps[stepNum]) {
-    state.steps[stepNum] = { name: `step_${stepNum}`, status: 'pending' };
+    state.steps[stepNum] = { name: `step_${stepNum}`, status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null };
   }
 
   const stepObj = state.steps[stepNum];
@@ -172,6 +221,19 @@ function updateStepState(targetRoot, runId, stepNum, status, outputData, error) 
   if (outputData !== undefined) {
     stepObj.output = outputData;
   }
+
+  let opt = options;
+  if (error && typeof error === 'object' && !error.message && !Array.isArray(error) && (error.artifact || error.artifactsDir)) {
+    opt = error;
+    error = null;
+  }
+  if (opt && opt.artifact) {
+    stepObj.artifact = normalizePath(opt.artifact);
+  }
+  if (opt && opt.artifactsDir) {
+    state.artifactsDir = normalizePath(opt.artifactsDir);
+  }
+
   if (error) {
     stepObj.error = error;
     state.errors.push({ step: stepNum, timestamp: now, error: String(error) });
@@ -182,9 +244,31 @@ function updateStepState(targetRoot, runId, stepNum, status, outputData, error) 
   return saveRunState(targetRoot, state);
 }
 
+function updateTaskState(targetRoot, runId, taskId, taskState) {
+  const state = loadRunState(targetRoot, runId);
+  if (!state.steps[4]) {
+    state.steps[4] = { name: 'implementation', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null, tasks: {}, gates: {} };
+  }
+  state.steps[4].tasks = state.steps[4].tasks || {};
+  state.steps[4].tasks[taskId] = { ...(state.steps[4].tasks[taskId] || {}), ...taskState };
+  return saveRunState(targetRoot, state);
+}
+
+function updateGateState(targetRoot, runId, gateName, gateState) {
+  const state = loadRunState(targetRoot, runId);
+  if (!state.steps[4]) {
+    state.steps[4] = { name: 'implementation', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null, tasks: {}, gates: {} };
+  }
+  state.steps[4].gates = state.steps[4].gates || {};
+  state.steps[4].gates[gateName] = { ...(state.steps[4].gates[gateName] || {}), ...gateState };
+  return saveRunState(targetRoot, state);
+}
+
 module.exports = {
   normalizePath,
   resolveStateDir,
+  resolveArtifactsDir,
+  getArtifactsRelDir,
   generateRunId,
   getStateFilePath,
   createRunState,
@@ -193,5 +277,9 @@ module.exports = {
   saveRunState,
   getResumptionStep,
   recordError,
-  updateStepState
+  recordWarning,
+  recordStepArtifact,
+  updateStepState,
+  updateTaskState,
+  updateGateState
 };

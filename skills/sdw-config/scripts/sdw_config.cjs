@@ -3,6 +3,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { execSync } = require('child_process');
 
 function normalizePath(p) {
   return p.replace(/\\/g, '/');
@@ -65,6 +66,21 @@ const DEFAULT_CONFIG = {
   pushDelivery: false,
   stateDir: '{projectRoot}/.sdw/state',
   autoResolveGaps: true,
+  securityChecksEnabled: false,
+  useWorktrees: false,
+  useFeatureBranches: false,
+  scmProvider: 'none',
+  implementation: {
+    mode: 'handoff',
+    command: null,
+    timeoutMs: 1800000,
+    envAllowlist: ['PATH', 'HOME', 'USERPROFILE', 'TEMP', 'TMP', 'LANG', 'LC_ALL']
+  },
+  verification: {
+    buildCommand: null,
+    testCommand: null,
+    timeoutMs: 600000
+  },
   requiredBuild: false,
   buildCommand: 'npm run build',
   runAllTests: false,
@@ -117,9 +133,81 @@ const DEFAULT_SCHEMA = {
       "description": "Automatically apply recommended defaults for unhandled grilling gaps when running non-interactively.",
       "default": true
     },
+    "securityChecksEnabled": {
+      "type": "boolean",
+      "description": "Enable pre-commit secrets and credentials leak scanning.",
+      "default": false
+    },
+    "useWorktrees": {
+      "type": "boolean",
+      "description": "Enable per-task isolated git worktrees for dispatched subagents under .sdw/worktrees/{runId}/.",
+      "default": false
+    },
+    "useFeatureBranches": {
+      "type": "boolean",
+      "description": "Automatically create and activate an isolated feature branch derived from specification slug.",
+      "default": false
+    },
+    "scmProvider": {
+      "type": "string",
+      "enum": ["none", "ado", "github"],
+      "default": "none",
+      "description": "Configured SCM provider for issues, work items, and pull requests. Allowed: none, ado, github."
+    },
+    "implementation": {
+      "type": "object",
+      "description": "Configuration for task implementation execution in Step 4.",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["handoff", "command"],
+          "default": "handoff",
+          "description": "Implementation execution mode: handoff or command."
+        },
+        "command": {
+          "type": ["string", "null"],
+          "default": null,
+          "description": "Command to execute when implementation.mode is command."
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "default": 1800000,
+          "description": "Execution timeout in milliseconds for command mode."
+        },
+        "envAllowlist": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["PATH", "HOME", "USERPROFILE", "TEMP", "TMP", "LANG", "LC_ALL"],
+          "description": "List of allowed environment variable names."
+        }
+      },
+      "additionalProperties": false
+    },
+    "verification": {
+      "type": "object",
+      "description": "Configuration for build and test gates in Step 4.",
+      "properties": {
+        "buildCommand": {
+          "type": ["string", "null"],
+          "default": "npm run build",
+          "description": "Command executed for build verification gate."
+        },
+        "testCommand": {
+          "type": ["string", "null"],
+          "default": "npm test",
+          "description": "Command executed for test verification gate."
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "default": 600000,
+          "description": "Execution timeout in milliseconds."
+        }
+      },
+      "additionalProperties": false
+    },
     "requiredBuild": {
       "type": "boolean",
-      "description": "Enforce successful build verification in Step 8 before creating delivery commit or PR.",
+      "description": "Enforce successful build verification before creating delivery commit or PR.",
       "default": false
     },
     "buildCommand": {
@@ -129,7 +217,7 @@ const DEFAULT_SCHEMA = {
     },
     "runAllTests": {
       "type": "boolean",
-      "description": "Enforce passing all test suites in Step 8 before creating delivery commit or PR.",
+      "description": "Enforce passing all test suites before creating delivery commit or PR.",
       "default": false
     },
     "testCommand": {
@@ -162,7 +250,10 @@ Baseline directory layout for consumer projects adopting Spec-Driven Workflow:
     ├── config.schema.json       # JSON Schema definition for config.json validation
     ├── directory-structure.md   # Structural guidelines and layout rules
     ├── specs/                   # Target directory for canonical specifications
-    └── state/                   # Ephemeral execution run state files (*.state.json)
+    ├── state/                   # Ephemeral execution run state files (*.state.json)
+    │   └── {slug}/{runId}/      # Human-auditable intermediate step artifacts ({slug}-step-{N}.md)
+    ├── traps.md                 # Central anti-regression trap log
+    └── worktrees/               # Ephemeral per-task git worktrees for isolated subagents
 \`\`\`
 `;
 
@@ -207,6 +298,87 @@ function validateConfigSchema(config) {
     }
   }
 
+  // securityChecksEnabled
+  if ('securityChecksEnabled' in config) {
+    if (typeof config.securityChecksEnabled !== 'boolean') {
+      errors.push('Property "securityChecksEnabled" must be a boolean.');
+    }
+  }
+
+  // useWorktrees
+  if ('useWorktrees' in config) {
+    if (typeof config.useWorktrees !== 'boolean') {
+      errors.push('Property "useWorktrees" must be a boolean.');
+    }
+  }
+
+  // useFeatureBranches
+  if ('useFeatureBranches' in config) {
+    if (typeof config.useFeatureBranches !== 'boolean') {
+      errors.push('Property "useFeatureBranches" must be a boolean.');
+    }
+  }
+
+  // scmProvider (AC1, AC2)
+  if ('scmProvider' in config) {
+    const allowed = ['none', 'ado', 'github'];
+    if (typeof config.scmProvider !== 'string' || !allowed.includes(config.scmProvider)) {
+      errors.push(`Property "scmProvider" must be one of: ${allowed.join(', ')}.`);
+    }
+  }
+
+  // implementation (AC1, AC2, AC27, AC34)
+  if ('implementation' in config) {
+    if (!config.implementation || typeof config.implementation !== 'object' || Array.isArray(config.implementation)) {
+      errors.push('Property "implementation" must be an object.');
+    } else {
+      if ('mode' in config.implementation) {
+        const allowedModes = ['handoff', 'command'];
+        if (typeof config.implementation.mode !== 'string' || !allowedModes.includes(config.implementation.mode)) {
+          errors.push(`Property "implementation.mode" must be one of: ${allowedModes.join(', ')}.`);
+        }
+      }
+      if (config.implementation.mode === 'command') {
+        if (!config.implementation.command || typeof config.implementation.command !== 'string' || config.implementation.command.trim().length === 0) {
+          errors.push('Property "implementation.command" must be a non-empty string when implementation.mode is "command".');
+        }
+      }
+      if ('timeoutMs' in config.implementation) {
+        if (typeof config.implementation.timeoutMs !== 'number' || config.implementation.timeoutMs <= 0) {
+          errors.push('Property "implementation.timeoutMs" must be a positive integer.');
+        }
+      }
+      if ('envAllowlist' in config.implementation) {
+        if (!Array.isArray(config.implementation.envAllowlist) || !config.implementation.envAllowlist.every(e => typeof e === 'string')) {
+          errors.push('Property "implementation.envAllowlist" must be an array of strings.');
+        }
+      }
+    }
+  }
+
+  // verification
+  if ('verification' in config) {
+    if (!config.verification || typeof config.verification !== 'object' || Array.isArray(config.verification)) {
+      errors.push('Property "verification" must be an object.');
+    } else {
+      if ('buildCommand' in config.verification && config.verification.buildCommand !== null) {
+        if (typeof config.verification.buildCommand !== 'string') {
+          errors.push('Property "verification.buildCommand" must be a string or null.');
+        }
+      }
+      if ('testCommand' in config.verification && config.verification.testCommand !== null) {
+        if (typeof config.verification.testCommand !== 'string') {
+          errors.push('Property "verification.testCommand" must be a string or null.');
+        }
+      }
+      if ('timeoutMs' in config.verification) {
+        if (typeof config.verification.timeoutMs !== 'number' || config.verification.timeoutMs <= 0) {
+          errors.push('Property "verification.timeoutMs" must be a positive integer.');
+        }
+      }
+    }
+  }
+
   // pushDelivery
   if ('pushDelivery' in config) {
     if (typeof config.pushDelivery !== 'boolean') {
@@ -218,6 +390,11 @@ function validateConfigSchema(config) {
   if ('requiredBuild' in config) {
     if (typeof config.requiredBuild !== 'boolean') {
       errors.push('Property "requiredBuild" must be a boolean.');
+    } else if (config.requiredBuild === true) {
+      const buildCmd = (config.verification && config.verification.buildCommand) || config.buildCommand;
+      if (!buildCmd || typeof buildCmd !== 'string' || buildCmd.trim().length === 0) {
+        errors.push('Missing required build command: "requiredBuild" is true but neither "verification.buildCommand" nor "buildCommand" is specified.');
+      }
     }
   }
 
@@ -232,6 +409,11 @@ function validateConfigSchema(config) {
   if ('runAllTests' in config) {
     if (typeof config.runAllTests !== 'boolean') {
       errors.push('Property "runAllTests" must be a boolean.');
+    } else if (config.runAllTests === true) {
+      const testCmd = (config.verification && config.verification.testCommand) || config.testCommand;
+      if (!testCmd || typeof testCmd !== 'string' || testCmd.trim().length === 0) {
+        errors.push('Missing required test command: "runAllTests" is true but neither "verification.testCommand" nor "testCommand" is specified.');
+      }
     }
   }
 
@@ -276,7 +458,18 @@ function loadConfig(targetRoot) {
     }
   }
 
-  const merged = { ...DEFAULT_CONFIG, ...rawConfig };
+  const merged = {
+    ...DEFAULT_CONFIG,
+    ...rawConfig,
+    implementation: {
+      ...DEFAULT_CONFIG.implementation,
+      ...((rawConfig && rawConfig.implementation) || {})
+    },
+    verification: {
+      ...DEFAULT_CONFIG.verification,
+      ...((rawConfig && rawConfig.verification) || {})
+    }
+  };
   const resolved = {};
 
   for (const [key, value] of Object.entries(merged)) {
@@ -475,6 +668,56 @@ function cmdCheck(options) {
       if (!specsExists) {
         valid = false;
         errors.push(`Configured specsDir does not exist on disk: ${resolvedSpecs}`);
+      }
+    }
+
+    // 4.5 Validate scmProvider CLI presence and authentication status (AC16)
+    const provider = parsedConfig.scmProvider || 'none';
+    if (provider === 'none') {
+      checks.push({
+        name: 'scm_provider_status',
+        target: 'scmProvider: none',
+        passed: true,
+        detail: 'SCM integration disabled (none)'
+      });
+    } else {
+      const binName = provider === 'github' ? 'gh' : 'az';
+      let installed = false;
+      try {
+        const probeCmd = process.platform === 'win32' ? `where ${binName}` : `command -v ${binName}`;
+        const out = execSync(probeCmd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+        installed = Boolean(out && out.trim());
+      } catch (e) {
+        installed = false;
+      }
+      checks.push({
+        name: `scm_cli_presence_${binName}`,
+        target: `CLI: ${binName}`,
+        passed: installed,
+        detail: installed ? `${binName} is installed on PATH` : `${binName} is NOT installed on PATH`
+      });
+      if (!installed) {
+        valid = false;
+        errors.push(`Configured SCM provider "${provider}" requires CLI "${binName}", but it is not installed on PATH.`);
+      } else {
+        let authenticated = false;
+        try {
+          const authCmd = binName === 'gh' ? 'gh auth status' : 'az account show';
+          execSync(authCmd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+          authenticated = true;
+        } catch (e) {
+          authenticated = false;
+        }
+        checks.push({
+          name: `scm_cli_authenticated_${binName}`,
+          target: `CLI auth: ${binName}`,
+          passed: authenticated,
+          detail: authenticated ? `${binName} is authenticated` : `${binName} is NOT authenticated`
+        });
+        if (!authenticated) {
+          valid = false;
+          errors.push(`Configured SCM provider "${provider}" CLI "${binName}" is not authenticated.`);
+        }
       }
     }
   }

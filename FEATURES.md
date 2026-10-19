@@ -60,13 +60,15 @@
   1. **Spec Ingestion & Agentic Derivation:** Translates human requirements into agent-ready specifications (auto-skips if already formatted).
   2. **Grilling Round & Gap Elimination:** Exhaustively walks decision trees for input bounds, failure recovery, and state persistence, querying the user only when ambiguous decision gaps arise.
   3. **Complexity Analysis & DAG Task Decomposition:** Evaluates touchpoints (CLI, state, VCS, PR, UI) to generate Directed Acyclic Graph execution units.
-  4. **Context-Fenced Subagent Dispatch:** Prepares isolated prompts for subagents, preventing transcript drift and context pollution.
-  5. **Quantitative Conformance Scoring (0–10):** Measures actual git diffs and touched files against required acceptance criteria. If score < threshold (default 8/10), automatically triggers a feedback re-implementation loop.
-  6. **Atomic Delivery Commit:** Automatically stages and creates structured, conventional delivery git commits (`feat(...)`).
+  4. **Implementation Execution Contract & Evidence Gate:** Supports handoff mode (default: writes prompts, marks `awaiting_implementation`, exits code 4) and command mode (opt-in subprocess execution). Enforces sequential worktrees branching from primary HEAD, atomic per-task commits, linear cherry-pick integration, and deterministic build and test verification gates.
+  5. **Quantitative Conformance Scoring (0–10):** Strictly evidence-based scoring (`round(verified / total * 10)`). Validates accepted task evidence confirming real existing files on disk, eliminating lexical keyword heuristics and failing closed on 0 ACs. Triggers feedback re-implementation loop on low score.
+  6. **Delivery Commit Quality Guard:** Refuses delivery commits if Step 4 is incomplete, any task unaccepted, or any gate failed. Stages and creates structured delivery git commits (`feat(...)`).
   7. **Automated SCM Code Review Loop:** Inspects committed diffs for forbidden scripts, credential leaks, active debugger statements, and unresolved TODOs, applying auto-fixes iteratively.
   8. **PR Packaging & Remote Publishing:** Compiles PR payloads, updates the specification index to `completed`, and pushes delivery branches to remote origins.
+- **Task Finish Subcommand (`task finish`):** Empirically corroborates changes in worktrees or primary tree, validates evidence schemas (relative paths, no `..`, existing files on disk, optional tests array), and enforces DAG dependency order.
 - **Run State Isolation & Resumption:** Persists active run state in `.sdw/state/{runId}.state.json`, enabling seamless pauses, status inspections, and one-click resumption from interrupted steps.
-- **Multi-Specification Batch Queue Execution:** Enqueue and sequentially execute multiple specifications (`sdw-orch run spec1 spec2 ...`) with strict context fencing, batch manifest tracking (`.sdw/state/batch-{id}.json`), failure policies (`--continue-on-error`), dry-run pre-flight validation (`--dry-run`), and automated resumption (`resume-batch`).
+- **Configurable Feature Branches & Task Worktrees:** Opt-in branch and worktree isolation (`useFeatureBranches: false`, `useWorktrees: false`). Derives feature branches from spec slugs (`feature/{slug}`), refuses activation on dirty trees, reuses existing branches safely, dispatches multi-task DAGs into isolated git worktrees (`.sdw/worktrees/{runId}/{taskId}`), integrates worktree changes via linear cherry-pick, safely cleans worktrees, and supports runtime CLI overrides (`--no-worktrees`, `--no-feature-branch`).
+- **Multi-Specification Batch Queue Execution:** Enqueue and sequentially execute multiple specifications (`sdw-orch run spec1 spec2 ...`) with strict context fencing, batch manifest tracking (`.sdw/state/batch-{id}.json`), failure policies (`--continue-on-error`), dry-run pre-flight validation (`--dry-run`), automated resumption (`resume-batch`), batch queue pause on handoff (exit code 4), and **enforced unattended execution** that runs continuously through all queued specifications without intermediate conversational interruption.
 
 ---
 
@@ -77,21 +79,77 @@
 - **Automated Workspace Scaffolding (`init`):** Bootstraps consumer repositories with canonical `.sdw/` directory trees, baseline `config.json`, and directory documentation.
 - **Dynamic Token Resolution (`parse`):** Seamlessly substitutes environment tokens (such as `{projectRoot}`) across paths on Windows and POSIX systems.
 - **JSON Schema Validation Gate (`check`):** Validates workspace configuration against `config.schema.json` to prevent invalid configurations from halting agent workflows.
-- **Extensible Governance:** Centralizes scoring thresholds (`scoreMin`), remote code review flags (`scmCodeReviewEnabled`), branch push behaviors (`pushDelivery`), and specs directories.
+- **Extensible Governance & SCM Provider Selection:** Centralizes scoring thresholds (`scoreMin`), remote code review flags (`scmCodeReviewEnabled`), branch push behaviors (`pushDelivery`), feature branches (`useFeatureBranches`), task worktrees (`useWorktrees`), security checks (`securityChecksEnabled`), and explicit SCM provider routing (`scmProvider`: `none` | `ado` | `github`) with fail-safe disable modes and CLI capability verification in `check`.
 
 ---
 
-### 5. 🧪 Battle-Tested Quality & Zero-Flake Test Suite
+### 5. 📏 `sdw-rules` — Shared Behavioral Rules, Simplicity & Anti-Overengineering
+
+*Canonical engineering discipline codifying simplicity first, surgical scope enclosure, and anti-regression traps.*
+
+- **Ultra-Lean Context Budget:** Compact Tier 1 `SKILL.md` (≤ 80 lines) codifies the 4 core pillars with an announcement banner and zero prompt bloat.
+- **Think & Ask Before Acting:** Prohibits silent scope expansion. When architectural opportunities arise, halts and presents an interactive clarification gate (`ask_question`), defaulting to minimal scope.
+- **Simplicity First (YAGNI):** Enforces writing minimum code required to satisfy ACs. Explicitly rejects speculative abstractions, complex class registries, and unused helper modules.
+- **Surgical Diff Hygiene:** Restricts modifications strictly to files and lines required by the current task, prohibiting adjacent reformatting or unnecessary refactoring.
+- **Empirical Goal-Driven Verification:** Directs multi-step tasks to define clear, verifiable success criteria and tests before declaring completion.
+- **Deterministic Compliance Doctor (`doctor`):** Audits installed skills for context line budgets (≤ 120 lines) and cross-references from downstream core skills (`sdw-spec`, `sdw-orch`).
+- **Specification Scope Auditor (`audit-spec`):** Scans specifications for speculative scope creep markers, composite ACs, or missing Out of Scope boundaries.
+- **Anti-Regression Trap Log (`log-trap`):** Appends verified friction and overengineering lessons to `.sdw/traps.md` at project scope to prevent repeating mistakes.
+
+---
+
+### 6. 🔒 `sdw-security-checks` — Configurable Pre-Commit Secrets & Leak Gate
+
+*Deterministic, zero-dependency secret detection and leak prevention guarding against credential leaks before git commits.*
+
+- **Zero External Runtime Dependencies:** Pure Node.js 22 standard library regex scanner over git inventories; no `ripgrep` or external binary required.
+- **Configurable Workflow Gate (`securityChecksEnabled`):** Opt-in via `.sdw/config.json`. When enabled, enforces pre-commit inspections at delivery commit (Step 6) and review-fix commit (Step 7).
+- **Confidence Model & Fail-Closed Semantics:** HIGH findings (API keys, AWS credentials, Slack tokens, private keys, database passwords, `.env` files) block commits; MEDIUM findings warn; scanner failures fail closed.
+- **Redacted Audit Reporting:** Findings report file path, line number, pattern type, and severity without exposing raw secret values in output or logs.
+- **Suppression & Bypass Pragma:** False-positive suppression via `# pragma: allowlist secret` and auditable operator bypass via `--skip-security` recorded in run state.
+
+---
+
+### 7. 🛡️ Orchestrator Refinement & Pre-PR Quality Gates
+
+*Consolidated technical planning and ironclad repository-level quality gates before PR publication.*
+
+- **Refinement Phase (Grilling + Technical Planning):** Step 2 merges adversarial decision gap analysis with constructive technical planning, producing a structured technical blueprint (`targetFiles`, `architecturalApproach`, `testPlan`) directly ingested by Step 3 DAG generation.
+- **Configurable Pre-PR Quality Gates (`requiredBuild`, `runAllTests`):** Opt-in build verification (`buildCommand`, default `npm run build`) and full test execution pass (`testCommand`, default `npm test`) executed as mandatory prerequisites in Step 8 before remote push or PR creation.
+- **Automated Surgical Fix Loop:** Autonomous remediation loop (up to 3 iterations) resolving build or test regressions with mandatory pre-commit secret leak checks before each fix commit.
+- **Project Pre-PR Lifecycle Hook:** Support for project-specific instructions (`prePrInstructions`) and automation commands (`prePrCommand`) for semantic version bumping, changelog updates, and documentation synchronization.
+
+---
+
+### 8. 📜 Human-Auditable Step Artifacts Persistence
+
+*Deterministic side-effect persistence capturing intermediate reasoning, task graphs, and verification evidence.*
+
+- **Human-Auditable Evidence:** Steps 2, 3, and 5 automatically persist structured Markdown artifacts under `.sdw/state/{slug}/{runId}/`, providing transparency without altering pipeline execution semantics.
+- **Step 2 (Refinement Artifact `{slug}-step-2.md`):** Records detected decision gaps, resolutions applied per gap, the decision tree walk summary, and the full refined specification snapshot.
+- **Step 3 (DAG Generation Artifact `{slug}-step-3.md`):** Documents complexity analysis, task decomposition (dependencies, covered acceptance criteria, target files), and context-fenced task prompts.
+- **Step 5 (Scoring Artifact `{slug}-step-5.md`):** Summarizes implementation touched files, quantitative conformance score breakdown, verified criteria table, failing criteria table, and evaluator feedback.
+- **State Linkage & Best-Effort Resilience:** The run state records `artifactsDir` and per-step `artifact` paths. Failures in artifact generation log warnings and record errors without halting delivery execution.
+
+---
+
+### 9. 🧪 Battle-Tested Quality & Zero-Flake Test Suite
 
 *Engineering rigor backed by 100% native automated tests.*
 
 - **Native Node.js Test Runner:** Built with `node:test` and `node:assert/strict` — zero third-party testing frameworks required.
-- **40 Comprehensive Test Scenarios:**
+- **97 Comprehensive Test Scenarios:**
   - `sdw_config.test.cjs`: Configuration parsing, schema validation, token expansion, and initialization gates.
   - `sdw_spec.test.cjs`: Index bootstrapping, EARS validation, synthesis, SCM provider contract, state synchronization, and archival quality gates.
-  - `sdw_orch.test.cjs`: State machine transitions, derivation, grilling decision trees, DAG decomposition, scoring gates, code review auto-fixing, and remote push publishing.
+  - `sdw_orch.test.cjs`: State machine transitions, derivation, grilling decision trees, DAG decomposition, scoring gates, code review auto-fixing, remote push publishing, and unattended multi-spec batch queue execution.
+  - `sdw_refinement_gates.test.cjs`: Step 2 Refinement state machine naming, technical blueprint ingestion into Step 3, config schema validation, build and test quality gates, automated fix retry loops, and pre-PR lifecycle hooks.
+  - `sdw_step_artifacts.test.cjs`: Intermediate step artifact persistence (steps 2, 3, 5), directory isolation (`.sdw/state/{slug}/{runId}/`), run state linkage, deterministic overwrite on re-execution, and resilient failure handling.
+  - `sdw_branch_worktree.test.cjs`: Feature branch lifecycle, dirty tree refusal, branch reuse, worktree creation/cleanup, cherry-pick integration, and runtime overrides.
+  - `sdw_scm_provider.test.cjs`: SCM provider resolution, capability checks, safe disable modes, strict CLI isolation (`gh` vs `az`), and orchestrator polling integration.
   - `sdw_router.test.cjs`: Minimal context budget enforcement (SKILL.md ≤ 120 lines), explicit invocations, keyword classification, tied-confidence disambiguation, missing directory resolution, and pass-through non-interference.
-- **Sub-Second Execution:** Entire test suite runs in ~1.2 seconds with 100% pass rate.
+  - `sdw_rules.test.cjs`: Three-tier progressive disclosure, announcement banners, Karpathy simplicity principles, doctor compliance verification, scope creep audits, and trap logging.
+  - `sdw_security_checks.test.cjs`: Secrets scanning, staged diff inspection, redaction hygiene, pragma suppression, fail-closed gate handling, and orchestrator bypass verification.
+- **Sub-Second Execution:** Entire test suite runs in ~5 seconds with 100% pass rate.
 
 ---
 
@@ -99,11 +157,6 @@
 
 The following specifications are scheduled for upcoming execution phases:
 
-- **005 — Multi-Spec Batch Execution:** Parallel and sequential pipeline batching for multi-feature delivery.
 - **006 — Packaging & Vercel Skills Compatibility:** Standalone npm packaging, one-command installer, and seamless distribution across `.agents/skills/`.
 - **007 — SDW Memory Skill:** Integrated anti-regression project memory and vault trap retrieval.
-- **008 — SDW Rules Shared Skill:** Shared behavioral constraints for simplicity, scope enclosure, and anti-overengineering.
-- **009 — SDW Security Checks:** Configurable pre-commit secret leak scanners and PII protection gates.
-- **010 — Branch & Worktree Strategy:** Configurable feature branches and per-task isolated worktrees.
 - **011 — GitHub Actions CI/CD Integration:** Automated workflow runs, agentic PR reviews, and skill distribution pipelines.
-- **012 — SCM Provider Selection:** Granular GitHub / Azure DevOps routing with fail-safe disable modes.

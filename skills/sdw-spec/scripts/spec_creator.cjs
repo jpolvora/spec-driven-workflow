@@ -3,7 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { resolvePaths, registerSpec } = require('./spec_index.cjs');
-const { createScmProvider } = require('./scm_provider_contract.cjs');
+const { createScmProvider, resolveScmProvider, checkScmCapability } = require('./scm_provider_contract.cjs');
 const { validateFile } = require('./validate_spec.cjs');
 
 function getNextPrefix(specsDir) {
@@ -221,19 +221,42 @@ function createNewSpec(inputText, options = {}) {
 }
 
 async function importRemoteSpec(options = {}) {
-  const { specsDir } = resolvePaths(options.root);
+  const { root, specsDir } = resolvePaths(options.root);
   if (!fs.existsSync(specsDir)) {
     fs.mkdirSync(specsDir, { recursive: true });
   }
 
-  const providerName = options.provider;
   const itemId = options.id;
-
-  if (!providerName) {
-    throw new Error('Provider option (--provider <github|azure-devops>) is required for import.');
-  }
   if (!itemId) {
     throw new Error('Item identifier (--id <itemId>) is required for import.');
+  }
+
+  // Load project config if not supplied
+  let config = options.config;
+  if (!config) {
+    const cfgPath = path.join(root, '.sdw', 'config.json');
+    if (fs.existsSync(cfgPath)) {
+      try {
+        config = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+      } catch (e) {}
+    }
+  }
+
+  // Resolve provider from explicit argument or config (AC7, AC8, AC9)
+  const resolution = resolveScmProvider({ config, explicit: options.provider });
+  if (resolution.disabled || resolution.provider === 'none') {
+    throw new Error('SCM import disabled: set scmProvider to "github" or "ado" in .sdw/config.json or pass --provider <github|ado>.');
+  }
+
+  const providerName = resolution.provider;
+
+  // Check capability: CLI must be installed and authenticated (AC10, AC11)
+  const capability = checkScmCapability(providerName, options);
+  if (!capability.installed) {
+    throw new Error(`SCM Import Failed: Provider CLI "${capability.bin}" is not installed or not found on PATH. Please install "${capability.bin}" to enable ${providerName} imports.`);
+  }
+  if (!capability.authenticated) {
+    throw new Error(`SCM Import Failed: Provider CLI "${capability.bin}" is not authenticated. Detail: ${capability.error}`);
   }
 
   const provider = options.scmProvider || createScmProvider(providerName, options);

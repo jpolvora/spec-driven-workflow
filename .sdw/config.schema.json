@@ -42,9 +42,81 @@
       "description": "Automatically apply recommended defaults for unhandled grilling gaps when running non-interactively.",
       "default": true
     },
+    "securityChecksEnabled": {
+      "type": "boolean",
+      "description": "Enable pre-commit secrets and credentials leak scanning.",
+      "default": false
+    },
+    "useWorktrees": {
+      "type": "boolean",
+      "description": "Enable per-task isolated git worktrees for dispatched subagents under .sdw/worktrees/{runId}/.",
+      "default": false
+    },
+    "useFeatureBranches": {
+      "type": "boolean",
+      "description": "Automatically create and activate an isolated feature branch derived from specification slug.",
+      "default": false
+    },
+    "scmProvider": {
+      "type": "string",
+      "enum": ["none", "ado", "github"],
+      "default": "none",
+      "description": "Configured SCM provider for issues, work items, and pull requests. Allowed: none, ado, github."
+    },
+    "implementation": {
+      "type": "object",
+      "description": "Configuration for task implementation execution in Step 4.",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["handoff", "command"],
+          "default": "handoff",
+          "description": "Implementation execution mode: handoff (interactive agent/human) or command (automated process execution)."
+        },
+        "command": {
+          "type": ["string", "null"],
+          "default": null,
+          "description": "Command to execute when implementation.mode is command. Supports {promptFile}, {taskId}, {cwd}, {slug}, {evidenceFile}."
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "default": 1800000,
+          "description": "Execution timeout in milliseconds for command mode."
+        },
+        "envAllowlist": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["PATH", "HOME", "USERPROFILE", "TEMP", "TMP", "LANG", "LC_ALL"],
+          "description": "List of allowed environment variable names passed to implementation command."
+        }
+      },
+      "additionalProperties": false
+    },
+    "verification": {
+      "type": "object",
+      "description": "Configuration for build and test gates in Step 4.",
+      "properties": {
+        "buildCommand": {
+          "type": ["string", "null"],
+          "default": "npm run build",
+          "description": "Command executed for build verification gate when requiredBuild is true."
+        },
+        "testCommand": {
+          "type": ["string", "null"],
+          "default": "npm test",
+          "description": "Command executed for test verification gate when runAllTests is true."
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "default": 600000,
+          "description": "Execution timeout in milliseconds for build and test verification commands."
+        }
+      },
+      "additionalProperties": false
+    },
     "requiredBuild": {
       "type": "boolean",
-      "description": "Enforce successful build verification in Step 8 before creating delivery commit or PR.",
+      "description": "Enforce successful build verification before creating delivery commit or PR.",
       "default": false
     },
     "buildCommand": {
@@ -54,7 +126,7 @@
     },
     "runAllTests": {
       "type": "boolean",
-      "description": "Enforce passing all test suites in Step 8 before creating delivery commit or PR.",
+      "description": "Enforce passing all test suites before creating delivery commit or PR.",
       "default": false
     },
     "testCommand": {

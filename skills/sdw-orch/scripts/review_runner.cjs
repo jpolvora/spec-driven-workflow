@@ -79,9 +79,42 @@ function runAutomatedReview(options) {
             fixable: false
           });
         }
+        if (/@unrequested\b|@speculative\b|\/\/\s*UNREQUESTED\b|\/\*\s*UNREQUESTED\b/i.test(text)) {
+          findings.push({
+            file: f,
+            severity: 'error',
+            rule: 'unrequested_scope_expansion',
+            message: 'Unrequested feature or speculative code expansion detected without user confirmation.',
+            fixable: false
+          });
+        }
       } catch (e) {
         // file reading error
       }
+    }
+  }
+
+  // Rule 4: sdw-rules compliance check if skills files were touched
+  const skillsTouched = touchedFiles.some(f => f.startsWith('skills/'));
+  if (skillsTouched) {
+    try {
+      const sdwRules = require('../../sdw-rules/scripts/sdw_rules.cjs');
+      if (sdwRules && typeof sdwRules.cmdDoctor === 'function') {
+        const doctorRes = sdwRules.cmdDoctor({ root: projectRoot });
+        if (!doctorRes.passed) {
+          for (const v of doctorRes.violations) {
+            findings.push({
+              file: `skills/${v.skill}/SKILL.md`,
+              severity: 'error',
+              rule: `sdw_rules_${v.rule}`,
+              message: `[sdw-rules] ${v.message}`,
+              fixable: false
+            });
+          }
+        }
+      }
+    } catch (e) {
+      // ignore if sdw-rules is not resolvable
     }
   }
 

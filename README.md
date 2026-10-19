@@ -45,37 +45,44 @@ flowchart TD
    - Translates human goals into clear, technical, agentic specifications.
    - *Optimization:* This step is automatically skipped if the input specification is already formatted for agentic execution.
 
-2. **Grilling Round (Ambiguity & Gap Elimination)**
+2. **Refinement Round (Grilling + Technical Planning)**
    - Executes an exhaustive decision tree walk over the spec to detect underspecified logic, unhandled edge cases, and missing constraints.
    - Proactively queries project context, codebase structure, memory, and architectural rules to resolve gaps autonomously.
-   - For decisions requiring human authority, triggers an interactive user prompt (`ask_question`), clearly presenting the gap, available options, and a recommended default.
-   - Produces a refined, ambiguity-free specification ready for implementation.
+   - Generates a structured technical blueprint (`targetFiles`, `architecturalApproach`, `testPlan`) and persists the human-auditable refinement artifact `{slug}-step-2.md`.
+   - For decisions requiring human authority in interactive mode, prompts the user (`ask_question`) with recommended defaults.
 
 3. **Complexity Analysis & DAG Task Decomposition**
-   - Assesses technical scope, dependencies, and risk factors.
-   - Generates a Directed Acyclic Graph (DAG) dividing the work into discrete, atomic execution units.
-   - Simple changes produce a single execution unit; complex features produce sequential or parallel execution units.
+   - Assesses technical scope, dependencies, and risk factors, directly ingesting the Step 2 technical blueprint.
+   - Generates a Directed Acyclic Graph (DAG) dividing the work into discrete, atomic execution units with context prompts.
+   - Persists the DAG plan artifact `{slug}-step-3.md`. Supports isolated git worktrees (`useWorktrees: true`) for multi-task plans.
 
-4. **Isolated Subagent Dispatch & Implementation**
-   - Dispatches focused subagents according to the DAG definition.
-   - Enforces context fencing: each subagent receives only the relevant task prompt and scoped references, preventing context pollution and keeping the model tightly focused on its file set.
+4. **Implementation Execution Contract & Evidence Gate**
+   - Dispatches implementation via default handoff mode (writes prompt files, sets `awaiting_implementation`, exits code 4) or opt-in command mode (executing subprocesses with token substitution and environment sanitization).
+   - In worktree mode (`useWorktrees: true`), isolates tasks in sequential git worktrees branching from primary `HEAD`, committing in worktree, cherry-picking to primary, and cleaning up safely.
+   - Corroborates changes in worktrees or primary tree, rejecting empty worktrees or unmodified working trees.
+   - Requires task completion via `sdw-orch task finish` with schema-validated evidence files.
+   - Executes build and test verification gates (`verification.buildCommand`, `verification.testCommand`) once all tasks are accepted.
 
-5. **Conformance Scoring Loop**
-   - Evaluates implementation output by quantitatively comparing the resulting diffs and touched files against the refined spec's acceptance criteria.
-   - If the score falls below the required threshold (e.g. `< 8/10`), the orchestrator loops back to implementation, attaching exact observations and gap findings to prevent repeating the same errors.
-   - Re-implementation repeats until the quality bar is verified.
+5. **Evidence-Based Conformance Scoring**
+   - Strictly evaluates conformance score based on accepted task evidence records (`round(verified / total * 10)`).
+   - Verifies criteria only when referenced by accepted evidence confirming real existing changed files on disk. Fails closed with 0/10 if no ACs exist.
+   - Persists the preliminary implementation report artifact `{slug}-step-5.md` with verified criteria and evidence links.
+   - If the score falls below the required threshold (default `< 8/10`), triggers a feedback re-implementation loop (code 2).
 
-6. **Delivery Commit**
-   - Once quality is assured by the conformance score, creates an atomic, structured delivery git commit.
+6. **Delivery Commit & Quality Guard**
+   - Refuses delivery commits if Step 4 is incomplete, any task unaccepted, or any verification gate failed.
+   - Runs pre-commit secret leak scan (`sdw-security-checks`) when enabled.
+   - Creates an atomic, structured delivery git commit (`feat(...)`).
 
 7. **Automated Code Review Loop**
    - Compares the newly committed code against the base branch commit.
    - Evaluates project-specific coding standards, architectural invariants, security risks, and regressions.
    - If warnings or findings are reported, applies targeted surgical fixes and creates updated commits in an iterative loop until all findings are resolved.
 
-8. **PR Preparation & Remote Review Resolution Loop**
-   - Associates work items/tasks, marks the feature spec as completed, and opens/updates the Pull Request.
-   - *Optional Remote Review Loop:* If enabled, schedules a monitoring timer to poll for PR reviewer comments. When comments are posted, the orchestrator analyzes the feedback, implements surgical fixes, pushes commits, and responds with resolution summaries until all threads are resolved.
+8. **Pre-PR Quality Gates, PR Preparation & Remote Review Resolution Loop**
+   - Runs opt-in build verification (`requiredBuild`, `buildCommand`) and full test execution pass (`runAllTests`, `testCommand`) with an automated surgical fix loop (up to 3 attempts) and secret leak scanning.
+   - Executes optional project-specific pre-PR commands (`prePrCommand`) and instructions (`prePrInstructions`).
+   - Marks the feature spec as completed, assembles PR metadata, and pushes to remote origin when `--push` is enabled.
 
 ---
 
@@ -87,20 +94,31 @@ spec-driven-workflow/
 │   ├── config.json               # Default configuration schema
 │   ├── directory-structure.md    # Layout rules & documentation
 │   └── specs/                    # Storage directory for feature specifications
-│       ├── 001-sdw-implement-initial-version.md
-│       ├── 002-sdw-spec-management.md
-│       ├── 003-sdw-router-skill.md
-│       └── index.specs.md        # Central specification index
+│       ├── index.specs.md        # Central specification index
+│       └── *.md                  # Canonical feature specifications
+│   ├── state/                    # Ephemeral execution run state and step artifacts
+│   │   └── {slug}/{runId}/       # Human-auditable step artifacts ({slug}-step-{N}.md)
+│   ├── traps.md                  # Central anti-regression trap log
+│   └── worktrees/                # Ephemeral per-task git worktrees for isolated subagents
 ├── skills/                       # Canonical source of truth for all skills
 │   ├── sdw-config/               # Project configuration & verification skill
 │   ├── sdw-orch/                 # End-to-end workflow orchestrator skill
 │   ├── sdw-router/               # Always-autoloaded entrypoint and skill router
+│   ├── sdw-rules/                # Shared behavioral rules, simplicity & anti-overengineering
+│   ├── sdw-security-checks/      # Pre-commit secrets and credentials leak scanner
 │   └── sdw-spec/                 # Spec authoring, validation, sync, and index manager
 ├── tests/                        # Automated unit & integration test suites
+│   ├── sdw_branch_worktree.test.cjs
 │   ├── sdw_config.test.cjs
 │   ├── sdw_orch.test.cjs
+│   ├── sdw_orch_implementation.test.cjs
+│   ├── sdw_refinement_gates.test.cjs
 │   ├── sdw_router.test.cjs
-│   └── sdw_spec.test.cjs
+│   ├── sdw_rules.test.cjs
+│   ├── sdw_scm_provider.test.cjs
+│   ├── sdw_security_checks.test.cjs
+│   ├── sdw_spec.test.cjs
+│   └── sdw_step_artifacts.test.cjs
 ├── AGENTS.md                     # Mandatory rules and protocols for AI agents
 ├── FEATURES.md                   # Feature showcase and architecture presentation
 └── README.md                     # Project documentation and architecture guide
@@ -183,6 +201,21 @@ node skills/sdw-orch/scripts/sdw_orch.cjs resume-batch [batchId]
 
 # Inspect status of active execution
 node skills/sdw-orch/scripts/sdw_orch.cjs status
+```
+
+### Using `sdw-security-checks` (Secrets & Credentials Gate)
+
+The `sdw-security-checks` skill guards against committing sensitive tokens and credentials:
+
+```bash
+# Scan working tree (ignore-aware) for secrets and leaks
+node skills/sdw-security-checks/scripts/sdw_security_checks.cjs scan
+
+# Scan staged changes only (git diff --cached)
+node skills/sdw-security-checks/scripts/sdw_security_checks.cjs scan --staged
+
+# Emit structured JSON report
+node skills/sdw-security-checks/scripts/sdw_security_checks.cjs scan --staged --json
 ```
 
 ## 5. License & Contribution
