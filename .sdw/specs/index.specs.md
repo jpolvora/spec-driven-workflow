@@ -23,3 +23,4 @@ Central repository index tracking specification lifecycle states, metadata, and 
 | 009 | 009-sdw-security-checks | SDW Security Checks Skill — Configurable Pre-Commit Secrets & Leak Gate | pending | local | 2026-10-19 | PASS | - |
 | 010 | 010-sdw-orch-branch-worktree-strategy | SDW Orchestrator Branch & Worktree Strategy — Configurable Feature Branches and Per-Task Worktrees | pending | local | 2026-10-19 | PASS | - |
 | 011 | 011-github-actions-integration | GitHub Actions Integration — CI, Agentic Code Review, and Skills Distribution | pending | local | 2026-10-19 | PASS | - |
+| 012 | 012-scm-provider-selection | SCM Provider Selection — Explicit GitHub/Azure DevOps Routing with Safe Disable | pending | local | 2026-10-19 | PASS | - |
