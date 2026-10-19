@@ -1083,144 +1083,150 @@ function cmdRun(options) {
   if (startStep <= 8 && state.steps[8].status !== 'completed' && !options.skipPr) {
     state = stateManager.updateStepState(targetRoot, state.runId, 8, 'in_progress');
 
-    // 1. Project-Specific Pre-PR Instructions / Lifecycle Hook (AC11, AC12)
-    if (config.prePrInstructions) {
-      console.log(`[Step 8: Pre-PR Gate] Evaluating project pre-PR instructions: "${config.prePrInstructions}"`);
-    }
-    if (config.prePrCommand || typeof options.prePrHook === 'function') {
-      try {
-        if (config.prePrCommand) {
-          console.log(`[Step 8: Pre-PR Gate] Executing pre-PR command: "${config.prePrCommand}"...`);
-          execSync(config.prePrCommand, { cwd: targetRoot, stdio: 'inherit' });
-        }
-        if (typeof options.prePrHook === 'function') {
-          options.prePrHook(targetRoot);
-        }
-        const prePrStatus = execSync('git status --porcelain', { cwd: targetRoot, encoding: 'utf8' }).trim();
-        if (prePrStatus) {
-          // Verify secret leaks before staging pre-PR modifications (AC12)
-          if (Boolean(config.securityChecksEnabled) && !options.skipSecurity) {
-            const secRes = runSecurityGate(targetRoot, { staged: false });
-            if (secRes.exitCode !== 0) {
-              console.error(`[Step 8: Pre-PR Gate] Pre-PR changes rejected by security leak check.`);
-              state.status = 'failed';
-              stateManager.recordError(targetRoot, state.runId, 8, 'Pre-PR changes rejected by security leak check');
-              return 1;
-            }
-          }
-          execSync('git add -A', { cwd: targetRoot, stdio: 'ignore' });
-          execSync(`git commit -m "chore(${specSlug}): apply pre-pr requirements"`, { cwd: targetRoot, stdio: 'ignore' });
-          state.deliveryCommit = getBaseCommit(targetRoot);
-          stateManager.saveRunState(targetRoot, state);
-        }
-      } catch (err) {
-        console.error(`[Step 8: Pre-PR Gate] Pre-PR command failed: ${err.message}`);
-        state.status = 'failed';
-        stateManager.recordError(targetRoot, state.runId, 8, `Pre-PR command failed: ${err.message}`);
-        return 1;
+    const shipPrScript = path.resolve(__dirname, '../../sdw-ship-pr/scripts/sdw_ship_pr.cjs');
+    const hasShipPr = fs.existsSync(shipPrScript);
+
+    // If sdw-ship-pr is available and no unit-test fixer hooks are passed, delegate pre-PR gates to sdw-ship-pr as single owner
+    if (!hasShipPr || options.testFixer || options.buildFixer || options.prePrHook) {
+      // 1. Project-Specific Pre-PR Instructions / Lifecycle Hook (AC11, AC12)
+      if (config.prePrInstructions) {
+        console.log(`[Step 8: Pre-PR Gate] Evaluating project pre-PR instructions: "${config.prePrInstructions}"`);
       }
-    }
-
-    // 2. Pre-PR Quality Gates (Build Verification & Full Test Pass) (AC5, AC6, AC7, AC8, AC9, AC10)
-    const requiredBuild = Boolean(config.requiredBuild);
-    const runAllTests = Boolean(config.runAllTests);
-
-    if (!requiredBuild && !runAllTests) {
-      console.log(`[Step 8: Pre-PR Verification] Build and test verification skipped (requiredBuild: false, runAllTests: false).`);
-    } else {
-      // Build Verification (AC5, AC8, AC9, AC10)
-      if (requiredBuild) {
-        const buildCmd = config.buildCommand || 'npm run build';
-        console.log(`[Step 8: Pre-PR Verification] Running build check: ${buildCmd}`);
-        let buildPassed = false;
-        let buildAttempts = 0;
-        const maxFixAttempts = 3;
-
-        while (!buildPassed && buildAttempts <= maxFixAttempts) {
-          try {
-            execSync(buildCmd, { cwd: targetRoot, stdio: ['ignore', 'pipe', 'pipe'] });
-            buildPassed = true;
-          } catch (buildErr) {
-            buildAttempts++;
-            if (buildAttempts > maxFixAttempts) {
-              console.error(`[Step 8: Pre-PR Verification] Build verification failed after ${maxFixAttempts} attempt(s). Halting.`);
-              state.status = 'failed';
-              stateManager.recordError(targetRoot, state.runId, 8, `Build verification failed after ${maxFixAttempts} attempt(s): ${buildErr.message}`);
-              return 1;
-            }
-            console.log(`[Step 8: Pre-PR Verification] Build failed. Attempting automated surgical fix (attempt ${buildAttempts}/${maxFixAttempts})...`);
-            if (typeof options.buildFixer === 'function') {
-              options.buildFixer(targetRoot, buildAttempts);
-            }
-            const fixStatus = execSync('git status --porcelain', { cwd: targetRoot, encoding: 'utf8' }).trim();
-            if (fixStatus) {
-              if (Boolean(config.securityChecksEnabled) && !options.skipSecurity) {
-                const sec = runSecurityGate(targetRoot, { staged: false });
-                if (sec.exitCode !== 0) {
-                  console.error(`[Step 8: Pre-PR Verification] Fix commit rejected: secret leak detected.`);
-                  state.status = 'failed';
-                  stateManager.recordError(targetRoot, state.runId, 8, 'Fix commit rejected: secret leak detected');
-                  return 1;
-                }
-              }
-              execSync('git add -A', { cwd: targetRoot, stdio: 'ignore' });
-              execSync(`git commit -m "fix(${specSlug}): resolve build failure (attempt ${buildAttempts})"`, { cwd: targetRoot, stdio: 'ignore' });
-              state.deliveryCommit = getBaseCommit(targetRoot);
-              stateManager.saveRunState(targetRoot, state);
-            } else {
-              console.error(`[Step 8: Pre-PR Verification] No automated fixes could be generated for build failure.`);
-              state.status = 'failed';
-              stateManager.recordError(targetRoot, state.runId, 8, `Build verification failed: ${buildErr.message}`);
-              return 1;
-            }
+      if (config.prePrCommand || typeof options.prePrHook === 'function') {
+        try {
+          if (config.prePrCommand) {
+            console.log(`[Step 8: Pre-PR Gate] Executing pre-PR command: "${config.prePrCommand}"...`);
+            execSync(config.prePrCommand, { cwd: targetRoot, stdio: 'inherit' });
           }
+          if (typeof options.prePrHook === 'function') {
+            options.prePrHook(targetRoot);
+          }
+          const prePrStatus = execSync('git status --porcelain', { cwd: targetRoot, encoding: 'utf8' }).trim();
+          if (prePrStatus) {
+            // Verify secret leaks before staging pre-PR modifications (AC12)
+            if (Boolean(config.securityChecksEnabled) && !options.skipSecurity) {
+              const secRes = runSecurityGate(targetRoot, { staged: false });
+              if (secRes.exitCode !== 0) {
+                console.error(`[Step 8: Pre-PR Gate] Pre-PR changes rejected by security leak check.`);
+                state.status = 'failed';
+                stateManager.recordError(targetRoot, state.runId, 8, 'Pre-PR changes rejected by security leak check');
+                return 1;
+              }
+            }
+            execSync('git add -A', { cwd: targetRoot, stdio: 'ignore' });
+            execSync(`git commit -m "chore(${specSlug}): apply pre-pr requirements"`, { cwd: targetRoot, stdio: 'ignore' });
+            state.deliveryCommit = getBaseCommit(targetRoot);
+            stateManager.saveRunState(targetRoot, state);
+          }
+        } catch (err) {
+          console.error(`[Step 8: Pre-PR Gate] Pre-PR command failed: ${err.message}`);
+          state.status = 'failed';
+          stateManager.recordError(targetRoot, state.runId, 8, `Pre-PR command failed: ${err.message}`);
+          return 1;
         }
       }
 
-      // Test Verification (AC6, AC8, AC9, AC10)
-      if (runAllTests) {
-        const testCmd = config.testCommand || 'npm test';
-        console.log(`[Step 8: Pre-PR Verification] Running test suite: ${testCmd}`);
-        let testPassed = false;
-        let testAttempts = 0;
-        const maxFixAttempts = 3;
+      // 2. Pre-PR Quality Gates (Build Verification & Full Test Pass) (AC5, AC6, AC7, AC8, AC9, AC10)
+      const requiredBuild = Boolean(config.requiredBuild);
+      const runAllTests = Boolean(config.runAllTests);
 
-        while (!testPassed && testAttempts <= maxFixAttempts) {
-          try {
-            execSync(testCmd, { cwd: targetRoot, stdio: ['ignore', 'pipe', 'pipe'] });
-            testPassed = true;
-          } catch (testErr) {
-            testAttempts++;
-            if (testAttempts > maxFixAttempts) {
-              console.error(`[Step 8: Pre-PR Verification] Test verification failed after ${maxFixAttempts} attempt(s). Halting.`);
-              state.status = 'failed';
-              stateManager.recordError(targetRoot, state.runId, 8, `Test verification failed after ${maxFixAttempts} attempt(s): ${testErr.message}`);
-              return 1;
-            }
-            console.log(`[Step 8: Pre-PR Verification] Tests failed. Attempting automated surgical fix (attempt ${testAttempts}/${maxFixAttempts})...`);
-            if (typeof options.testFixer === 'function') {
-              options.testFixer(targetRoot, testAttempts);
-            }
-            const fixStatus = execSync('git status --porcelain', { cwd: targetRoot, encoding: 'utf8' }).trim();
-            if (fixStatus) {
-              if (Boolean(config.securityChecksEnabled) && !options.skipSecurity) {
-                const sec = runSecurityGate(targetRoot, { staged: false });
-                if (sec.exitCode !== 0) {
-                  console.error(`[Step 8: Pre-PR Verification] Fix commit rejected: secret leak detected.`);
-                  state.status = 'failed';
-                  stateManager.recordError(targetRoot, state.runId, 8, 'Fix commit rejected: secret leak detected');
-                  return 1;
-                }
+      if (!requiredBuild && !runAllTests) {
+        console.log(`[Step 8: Pre-PR Verification] Build and test verification skipped (requiredBuild: false, runAllTests: false).`);
+      } else {
+        // Build Verification (AC5, AC8, AC9, AC10)
+        if (requiredBuild) {
+          const buildCmd = config.buildCommand || 'npm run build';
+          console.log(`[Step 8: Pre-PR Verification] Running build check: ${buildCmd}`);
+          let buildPassed = false;
+          let buildAttempts = 0;
+          const maxFixAttempts = 3;
+
+          while (!buildPassed && buildAttempts <= maxFixAttempts) {
+            try {
+              execSync(buildCmd, { cwd: targetRoot, stdio: ['ignore', 'pipe', 'pipe'] });
+              buildPassed = true;
+            } catch (buildErr) {
+              buildAttempts++;
+              if (buildAttempts > maxFixAttempts) {
+                console.error(`[Step 8: Pre-PR Verification] Build verification failed after ${maxFixAttempts} attempt(s). Halting.`);
+                state.status = 'failed';
+                stateManager.recordError(targetRoot, state.runId, 8, `Build verification failed after ${maxFixAttempts} attempt(s): ${buildErr.message}`);
+                return 1;
               }
-              execSync('git add -A', { cwd: targetRoot, stdio: 'ignore' });
-              execSync(`git commit -m "fix(${specSlug}): resolve test failure (attempt ${testAttempts})"`, { cwd: targetRoot, stdio: 'ignore' });
-              state.deliveryCommit = getBaseCommit(targetRoot);
-              stateManager.saveRunState(targetRoot, state);
-            } else {
-              console.error(`[Step 8: Pre-PR Verification] No automated fixes could be generated for test failure.`);
-              state.status = 'failed';
-              stateManager.recordError(targetRoot, state.runId, 8, `Test verification failed: ${testErr.message}`);
-              return 1;
+              console.log(`[Step 8: Pre-PR Verification] Build failed. Attempting automated surgical fix (attempt ${buildAttempts}/${maxFixAttempts})...`);
+              if (typeof options.buildFixer === 'function') {
+                options.buildFixer(targetRoot, buildAttempts);
+              }
+              const fixStatus = execSync('git status --porcelain', { cwd: targetRoot, encoding: 'utf8' }).trim();
+              if (fixStatus) {
+                if (Boolean(config.securityChecksEnabled) && !options.skipSecurity) {
+                  const sec = runSecurityGate(targetRoot, { staged: false });
+                  if (sec.exitCode !== 0) {
+                    console.error(`[Step 8: Pre-PR Verification] Fix commit rejected: secret leak detected.`);
+                    state.status = 'failed';
+                    stateManager.recordError(targetRoot, state.runId, 8, 'Fix commit rejected: secret leak detected');
+                    return 1;
+                  }
+                }
+                execSync('git add -A', { cwd: targetRoot, stdio: 'ignore' });
+                execSync(`git commit -m "fix(${specSlug}): resolve build failure (attempt ${buildAttempts})"`, { cwd: targetRoot, stdio: 'ignore' });
+                state.deliveryCommit = getBaseCommit(targetRoot);
+                stateManager.saveRunState(targetRoot, state);
+              } else {
+                console.error(`[Step 8: Pre-PR Verification] No automated fixes could be generated for build failure.`);
+                state.status = 'failed';
+                stateManager.recordError(targetRoot, state.runId, 8, `Build verification failed: ${buildErr.message}`);
+                return 1;
+              }
+            }
+          }
+        }
+
+        // Test Verification (AC6, AC8, AC9, AC10)
+        if (runAllTests) {
+          const testCmd = config.testCommand || 'npm test';
+          console.log(`[Step 8: Pre-PR Verification] Running test suite: ${testCmd}`);
+          let testPassed = false;
+          let testAttempts = 0;
+          const maxFixAttempts = 3;
+
+          while (!testPassed && testAttempts <= maxFixAttempts) {
+            try {
+              execSync(testCmd, { cwd: targetRoot, stdio: ['ignore', 'pipe', 'pipe'] });
+              testPassed = true;
+            } catch (testErr) {
+              testAttempts++;
+              if (testAttempts > maxFixAttempts) {
+                console.error(`[Step 8: Pre-PR Verification] Test verification failed after ${maxFixAttempts} attempt(s). Halting.`);
+                state.status = 'failed';
+                stateManager.recordError(targetRoot, state.runId, 8, `Test verification failed after ${maxFixAttempts} attempt(s): ${testErr.message}`);
+                return 1;
+              }
+              console.log(`[Step 8: Pre-PR Verification] Tests failed. Attempting automated surgical fix (attempt ${testAttempts}/${maxFixAttempts})...`);
+              if (typeof options.testFixer === 'function') {
+                options.testFixer(targetRoot, testAttempts);
+              }
+              const fixStatus = execSync('git status --porcelain', { cwd: targetRoot, encoding: 'utf8' }).trim();
+              if (fixStatus) {
+                if (Boolean(config.securityChecksEnabled) && !options.skipSecurity) {
+                  const sec = runSecurityGate(targetRoot, { staged: false });
+                  if (sec.exitCode !== 0) {
+                    console.error(`[Step 8: Pre-PR Verification] Fix commit rejected: secret leak detected.`);
+                    state.status = 'failed';
+                    stateManager.recordError(targetRoot, state.runId, 8, 'Fix commit rejected: secret leak detected');
+                    return 1;
+                  }
+                }
+                execSync('git add -A', { cwd: targetRoot, stdio: 'ignore' });
+                execSync(`git commit -m "fix(${specSlug}): resolve test failure (attempt ${testAttempts})"`, { cwd: targetRoot, stdio: 'ignore' });
+                state.deliveryCommit = getBaseCommit(targetRoot);
+                stateManager.saveRunState(targetRoot, state);
+              } else {
+                console.error(`[Step 8: Pre-PR Verification] No automated fixes could be generated for test failure.`);
+                state.status = 'failed';
+                stateManager.recordError(targetRoot, state.runId, 8, `Test verification failed: ${testErr.message}`);
+                return 1;
+              }
             }
           }
         }
@@ -1238,13 +1244,6 @@ function cmdRun(options) {
       completedAt: new Date().toISOString()
     };
     console.log(`[Step 8: PR Preparation] Assembled PR payload: "${prPayload.title}".`);
-
-    // Mark spec as completed in index.specs.md if helper exists (AC24)
-    if (specIndex) {
-      try {
-        specIndex.updateSpecStatus(specSlug, 'completed', { root: targetRoot });
-      } catch (e) {}
-    }
 
     // Optional Remote Review Resolution Loop & SCM Provider state (AC14, AC15, AC20)
     const pollPr = options.pollPr !== undefined ? options.pollPr : (config.scmCodeReviewEnabled || false);
@@ -1275,8 +1274,7 @@ function cmdRun(options) {
     state = stateManager.saveRunState(targetRoot, state);
 
     // Delegate PR delivery, SCM submission, and review convergence to sdw-ship-pr (AC12, AC13)
-    const shipPrScript = path.resolve(__dirname, '../../sdw-ship-pr/scripts/sdw_ship_pr.cjs');
-    if (fs.existsSync(shipPrScript)) {
+    if (hasShipPr) {
       try {
         console.log(`[sdw-orch Step 8] Delegating delivery to sdw-ship-pr...`);
         const runArgs = [
@@ -1298,10 +1296,22 @@ function cmdRun(options) {
 
         let shipResult = null;
         try {
-          shipResult = JSON.parse(shipStdout);
-        } catch (e) {}
+          const trimmed = (shipStdout || '').trim();
+          const jsonStart = trimmed.indexOf('{');
+          const jsonEnd = trimmed.lastIndexOf('}');
+          if (jsonStart !== -1 && jsonEnd !== -1) {
+            shipResult = JSON.parse(trimmed.slice(jsonStart, jsonEnd + 1));
+          } else {
+            shipResult = JSON.parse(trimmed);
+          }
+        } catch (e) {
+          console.warn(`[sdw-orch Step 8] Note: Failed to parse sdw-ship-pr JSON output: ${e.message}`);
+        }
 
         if (shipResult) {
+          if (shipResult.success === false || shipResult.shipStatus === 'failed') {
+            throw new Error(shipResult.error || 'sdw-ship-pr reported delivery failure');
+          }
           if (shipResult.pullRequest) {
             state.pullRequest = shipResult.pullRequest;
             prPayload.pullRequest = shipResult.pullRequest;
@@ -1315,15 +1325,30 @@ function cmdRun(options) {
           prPayload.reviewConvergence = shipResult.reviewConvergence;
         }
       } catch (shipErr) {
-        console.warn(`[sdw-orch Step 8] Note from sdw-ship-pr: ${shipErr.message}`);
-        if (!state.errors) state.errors = [];
-        state.errors.push({ step: 8, timestamp: new Date().toISOString(), error: shipErr.message });
+        console.error(`[sdw-orch Step 8] Delivery failed: ${shipErr.message}`);
+        state.status = 'failed';
+        state = stateManager.updateStepState(targetRoot, state.runId, 8, 'failed', { error: shipErr.message });
+        stateManager.recordError(targetRoot, state.runId, 8, shipErr.message);
+        options._runResult = { runId: state.runId, status: 'failed', error: shipErr.message };
+        return 1;
       }
     }
 
     state = stateManager.updateStepState(targetRoot, state.runId, 8, 'completed', prPayload);
+
+    // Mark spec as completed in index.specs.md after successful delivery (AC24)
+    if (specIndex) {
+      try {
+        specIndex.updateSpecStatus(specSlug, 'completed', { root: targetRoot });
+      } catch (e) {}
+    }
   } else if (options.skipPr) {
     state = stateManager.updateStepState(targetRoot, state.runId, 8, 'skipped', { reason: 'Skipped via --skip-pr' });
+    if (specIndex) {
+      try {
+        specIndex.updateSpecStatus(specSlug, 'completed', { root: targetRoot });
+      } catch (e) {}
+    }
   }
 
   // Remote Push / Branch Publishing (--push or config.pushDelivery) fallback

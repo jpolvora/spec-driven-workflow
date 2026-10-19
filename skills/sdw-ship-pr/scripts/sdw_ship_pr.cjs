@@ -174,78 +174,121 @@ async function runShipPr(options = {}, customExecutor = null) {
     error: null
   };
 
+  const log = options.json ? console.error : console.log;
+  const warn = options.json ? console.error : console.warn;
+
   try {
     // Step 1: Pre-PR Verification Gates
-    console.log('[sdw-ship-pr] Evaluating pre-PR requirements...');
+    log('[sdw-ship-pr] Evaluating pre-PR requirements...');
 
     if (config.prePrInstructions) {
-      console.log(`[sdw-ship-pr] Pre-PR Instructions: ${config.prePrInstructions}`);
+      log(`[sdw-ship-pr] Pre-PR Instructions: ${config.prePrInstructions}`);
     }
 
-    if (config.prePrCommand) {
-      console.log(`[sdw-ship-pr] Running prePrCommand: "${config.prePrCommand}"...`);
-      try {
-        executor(config.prePrCommand);
-      } catch (cmdErr) {
-        throw new Error(`prePrCommand failed: ${cmdErr.message}`);
-      }
-    }
-
-    if (config.requiredBuild) {
-      console.log('[sdw-ship-pr] Running requiredBuild (npm run build)...');
-      try {
-        executor('npm run build');
-      } catch (buildErr) {
-        throw new Error(`requiredBuild failed: ${buildErr.message}`);
-      }
-    }
-
-    if (config.runAllTests) {
-      console.log('[sdw-ship-pr] Running runAllTests (npm test)...');
-      try {
-        executor('npm test');
-      } catch (testErr) {
-        throw new Error(`runAllTests failed: ${testErr.message}`);
-      }
-    }
-
-    if (config.securityChecksEnabled) {
-      console.log('[sdw-ship-pr] Evaluating security leak checks...');
-      try {
-        const diff = executor('git diff HEAD~1..HEAD').toString();
-        const secretPattern = /(?:api[_-]?key|secret|token|password|bearer|auth[_-]?token)\s*[:=]\s*['"][a-zA-Z0-9_\-\.]{16,}['"]/i;
-        if (secretPattern.test(diff)) {
-          throw new Error('Security checks failed: potential secret leak pattern detected in diff.');
+    if (dryRun) {
+      log('[sdw-ship-pr] (dry-run) Simulating pre-PR verification gates (prePrCommand, requiredBuild, runAllTests, security checks)...');
+      report.prePrPassed = true;
+    } else {
+      if (config.prePrCommand) {
+        log(`[sdw-ship-pr] Running prePrCommand: "${config.prePrCommand}"...`);
+        try {
+          executor(config.prePrCommand);
+        } catch (cmdErr) {
+          throw new Error(`prePrCommand failed: ${cmdErr.message}`);
         }
-      } catch (secErr) {
-        if (secErr.message.includes('Security checks failed')) {
-          throw secErr;
-        }
-        // If git diff fails (e.g. initial commit or non-git), log warning
-      }
-    }
 
-    report.prePrPassed = true;
+        // Stage and commit pre-PR modifications if generated
+        try {
+          const modStatus = executor('git status --porcelain').toString().trim();
+          if (modStatus) {
+            log('[sdw-ship-pr] Staging and committing pre-PR modifications...');
+            executor('git add -A');
+            const commitMsg = specSlug && specSlug !== 'unspecified' ? `chore(${specSlug}): apply pre-pr requirements` : 'chore: apply pre-pr requirements';
+            executor(`git commit -m "${commitMsg}"`);
+          }
+        } catch (modErr) {
+          // non-git or commit error ignored
+        }
+      }
+
+      if (config.requiredBuild) {
+        const buildCmd = config.buildCommand || (config.verification && config.verification.buildCommand) || 'npm run build';
+        log(`[sdw-ship-pr] Running requiredBuild (${buildCmd})...`);
+        try {
+          executor(buildCmd);
+        } catch (buildErr) {
+          throw new Error(`requiredBuild failed: ${buildErr.message}`);
+        }
+      }
+
+      if (config.runAllTests) {
+        const testCmd = config.testCommand || (config.verification && config.verification.testCommand) || 'npm test';
+        log(`[sdw-ship-pr] Running runAllTests (${testCmd})...`);
+        try {
+          executor(testCmd);
+        } catch (testErr) {
+          throw new Error(`runAllTests failed: ${testErr.message}`);
+        }
+      }
+
+      if (config.securityChecksEnabled) {
+        log('[sdw-ship-pr] Evaluating security leak checks...');
+        const secretPattern = /(?:api[_-]?key|secret|token|password|bearer|auth[_-]?token|ghp_[a-zA-Z0-9]{36})\s*[:=]?\s*['"][a-zA-Z0-9_\-\.]{16,}['"]/i;
+        let diff = '';
+        try {
+          try {
+            diff += executor(`git diff ${base}...HEAD`).toString() + '\n';
+          } catch (e1) {
+            try {
+              diff += executor('git diff HEAD~1..HEAD').toString() + '\n';
+            } catch (e2) {}
+          }
+          try {
+            diff += executor('git diff HEAD').toString() + '\n';
+          } catch (e3) {}
+
+          if (secretPattern.test(diff)) {
+            throw new Error('Security checks failed: potential secret leak pattern detected in diff.');
+          }
+        } catch (secErr) {
+          if (secErr.message.includes('Security checks failed')) {
+            throw secErr;
+          }
+        }
+      }
+
+      report.prePrPassed = true;
+    }
 
     // Step 2: Remote Branch Publishing
     if (pushDelivery) {
       if (dryRun) {
-        console.log(`[sdw-ship-pr] (dry-run) git push -u origin ${head}`);
+        log(`[sdw-ship-pr] (dry-run) git push -u origin ${head}`);
         report.pushed = true;
       } else {
-        console.log(`[sdw-ship-pr] Pushing branch ${head} to remote origin...`);
+        let hasRemote = false;
         try {
-          executor(`git push -u origin ${head}`);
-          report.pushed = true;
-        } catch (pushErr) {
-          throw new Error(`git push failed: ${pushErr.message}`);
+          const remotes = executor('git remote').toString().trim();
+          hasRemote = Boolean(remotes);
+        } catch (e) {}
+
+        if (!hasRemote) {
+          log('[sdw-ship-pr] Remote push skipped: no git remote configured.');
+        } else {
+          log(`[sdw-ship-pr] Pushing branch ${head} to remote origin...`);
+          try {
+            executor(`git push -u origin ${head}`);
+            report.pushed = true;
+          } catch (pushErr) {
+            throw new Error(`git push failed: ${pushErr.message}`);
+          }
         }
       }
     }
 
     // Step 3: Pull Request Creation / Idempotent Reuse
     if (scmProviderName === 'none') {
-      console.log('[sdw-ship-pr] scmProvider is set to "none". Skipping remote pull request creation.');
+      log('[sdw-ship-pr] scmProvider is set to "none". Skipping remote pull request creation.');
       report.shipStatus = 'delivered_local';
       report.success = true;
     } else {
@@ -258,7 +301,7 @@ async function runShipPr(options = {}, customExecutor = null) {
         throw new Error(capability.error || `SCM CLI capability check failed for ${scmProviderName}.`);
       }
 
-      console.log(`[sdw-ship-pr] Preparing pull request via ${scmProviderName}...`);
+      log(`[sdw-ship-pr] Preparing pull request via ${scmProviderName}...`);
       const provider = scmContract.createScmProvider(scmProviderName, { executor });
 
       const prResult = await provider.createPullRequest({
@@ -279,11 +322,11 @@ async function runShipPr(options = {}, customExecutor = null) {
         dryRun: prResult.dryRun || false
       };
 
-      console.log(`[sdw-ship-pr] Pull request ${prResult.reused ? 'reused' : 'created'}: ${prResult.url || '(dry-run simulated)'}`);
+      log(`[sdw-ship-pr] Pull request ${prResult.reused ? 'reused' : 'created'}: ${prResult.url || '(dry-run simulated)'}`);
 
       // Step 4: Post-PR Review Convergence
       if (scmCodeReviewEnabled) {
-        console.log(`[sdw-ship-pr] SCM review convergence enabled for PR #${prResult.number || 'simulate'}.`);
+        log(`[sdw-ship-pr] SCM review convergence enabled for PR #${prResult.number || 'simulate'}.`);
         const maxRounds = options.maxIterations || 3;
         let round = 0;
         let converged = false;
@@ -291,10 +334,10 @@ async function runShipPr(options = {}, customExecutor = null) {
         while (round < maxRounds && !converged) {
           round++;
           report.reviewConvergence.rounds = round;
-          console.log(`[sdw-ship-pr] Convergence round ${round}/${maxRounds}...`);
+          log(`[sdw-ship-pr] Convergence round ${round}/${maxRounds}...`);
 
           if (dryRun) {
-            console.log('[sdw-ship-pr] (dry-run) Simulating review convergence checks and active thread resolution.');
+            log('[sdw-ship-pr] (dry-run) Simulating review convergence checks and active thread resolution.');
             report.reviewConvergence.converged = true;
             report.reviewConvergence.activeThreads = 0;
             converged = true;
@@ -308,7 +351,7 @@ async function runShipPr(options = {}, customExecutor = null) {
           report.reviewConvergence.activeThreads = reviewThreads.activeCount;
 
           if (status.allPassed && reviewThreads.activeCount === 0) {
-            console.log('[sdw-ship-pr] All checks passed and 0 active review threads detected. Review converged successfully.');
+            log('[sdw-ship-pr] All checks passed and 0 active review threads detected. Review converged successfully.');
             converged = true;
             report.reviewConvergence.converged = true;
             break;
@@ -317,7 +360,7 @@ async function runShipPr(options = {}, customExecutor = null) {
           // If active threads exist, resolve them
           const activeList = reviewThreads.threads.filter(t => !t.isResolved);
           if (activeList.length > 0) {
-            console.log(`[sdw-ship-pr] Detected ${activeList.length} active review thread(s). Resolving threads...`);
+            log(`[sdw-ship-pr] Detected ${activeList.length} active review thread(s). Resolving threads...`);
 
             for (const thread of activeList) {
               const threadComment = thread.comments && thread.comments[0] ? thread.comments[0].body : 'Review feedback';
@@ -338,13 +381,13 @@ async function runShipPr(options = {}, customExecutor = null) {
                   threadId: thread.id,
                   resolution: summaryNote
                 });
-                console.log(`[sdw-ship-pr] Closed and resolved review thread ${thread.id} with resolution summary.`);
+                log(`[sdw-ship-pr] Closed and resolved review thread ${thread.id} with resolution summary.`);
               }
             }
           }
 
           if (round >= maxRounds && !converged) {
-            console.warn(`[sdw-ship-pr] Reached maximum review convergence rounds (${maxRounds}) with residual active threads.`);
+            warn(`[sdw-ship-pr] Reached maximum review convergence rounds (${maxRounds}) with residual active threads.`);
           }
         }
       }
@@ -380,9 +423,9 @@ async function runShipPr(options = {}, customExecutor = null) {
           stateData.pullRequest = report.pullRequest;
           stateData.shipStatus = report.shipStatus;
           fs.writeFileSync(stateFilePath, JSON.stringify(stateData, null, 2), 'utf8');
-          console.log(`[sdw-ship-pr] Updated run state at ${stateFilePath}`);
+          log(`[sdw-ship-pr] Updated run state at ${stateFilePath}`);
         } catch (saveErr) {
-          console.warn(`[sdw-ship-pr] Warning: Could not update state file: ${saveErr.message}`);
+          warn(`[sdw-ship-pr] Warning: Could not update state file: ${saveErr.message}`);
         }
       }
     }
@@ -421,7 +464,7 @@ if (require.main === module) {
   runShipPr(options)
     .then(report => {
       if (options.json) {
-        console.log(JSON.stringify(report, null, 2));
+        process.stdout.write(JSON.stringify(report, null, 2) + '\n');
       } else {
         console.log('\n[sdw-ship-pr] Delivery Complete:');
         console.log(`  Status:       ${report.shipStatus}`);
@@ -437,7 +480,7 @@ if (require.main === module) {
     .catch(err => {
       console.error(`\n[sdw-ship-pr] Error: ${err.message}`);
       if (options.json) {
-        console.log(JSON.stringify({ success: false, error: err.message }, null, 2));
+        process.stdout.write(JSON.stringify({ success: false, error: err.message }, null, 2) + '\n');
       }
       process.exit(1);
     });

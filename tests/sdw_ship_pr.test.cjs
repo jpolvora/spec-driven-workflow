@@ -95,6 +95,41 @@ test('sdw-ship-pr - AC16, AC17: Review convergence loop fixes issues, adds summa
   const calls = [];
   const fakeExecutor = (cmd) => {
     calls.push(cmd);
+    if (cmd.includes('--input')) {
+      const match = cmd.match(/--input\s+"([^"]+)"/);
+      if (match && fs.existsSync(match[1])) {
+        const fileContent = fs.readFileSync(match[1], 'utf8');
+        calls.push(fileContent);
+        if (fileContent.includes('reviewThreads')) {
+          return JSON.stringify({
+            data: {
+              repository: {
+                pullRequest: {
+                  reviewThreads: {
+                    nodes: [
+                      {
+                        id: 'PRRT_kwTEST123',
+                        isResolved: false,
+                        path: 'src/index.js',
+                        line: 10,
+                        comments: {
+                          nodes: [
+                            { id: 'PRRC_1', body: 'Missing null check on config object', author: { login: 'reviewer' } }
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          });
+        }
+        if (fileContent.includes('resolveReviewThread')) {
+          return JSON.stringify({ data: { resolveReviewThread: { thread: { isResolved: true } } } });
+        }
+      }
+    }
     if (cmd.includes('pr checks')) {
       return JSON.stringify([
         { name: 'ci/build', state: 'pass', bucket: 'pass' }
@@ -223,4 +258,27 @@ test('sdw-ship-pr - AC14: Router routes PR shipping and review convergence inten
   assert.strictEqual(routeKeyword.matched, true);
   assert.strictEqual(routeKeyword.targetSkill, 'sdw-ship-pr');
 });
+
+test('sdw-ship-pr - CLI --json mode produces strictly machine-readable JSON on stdout', () => {
+  const scriptPath = path.resolve(__dirname, '../skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs');
+  const { execSync } = require('child_process');
+
+  const stdout = execSync(`node "${scriptPath}" --dry-run --json`, {
+    cwd: path.resolve(__dirname, '..'),
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+
+  // Must parse as valid JSON directly without throwing
+  let parsed;
+  assert.doesNotThrow(() => {
+    parsed = JSON.parse(stdout);
+  }, 'stdout must be strictly parseable JSON with no progress log contamination');
+
+  assert.strictEqual(typeof parsed, 'object');
+  assert.ok('success' in parsed);
+  assert.ok('shipStatus' in parsed);
+  assert.ok('prePrPassed' in parsed);
+});
+
 

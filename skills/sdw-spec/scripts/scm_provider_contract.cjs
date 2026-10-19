@@ -252,7 +252,17 @@ class GitHubProvider extends ScmProvider {
     }
     try {
       const cmd = `gh pr checks ${prIdentifier} --json name,state,bucket,link`;
-      const stdout = this.executor(cmd);
+      let stdout = '';
+      try {
+        stdout = this.executor(cmd);
+      } catch (execErr) {
+        // gh pr checks exits with 1 (failing) or 8 (pending), but still emits valid JSON on stdout
+        if (execErr && execErr.stdout) {
+          stdout = typeof execErr.stdout === 'string' ? execErr.stdout : execErr.stdout.toString('utf8');
+        } else {
+          throw execErr;
+        }
+      }
       let checks = [];
       try {
         checks = JSON.parse(stdout || '[]');
@@ -292,35 +302,53 @@ class GitHubProvider extends ScmProvider {
       const owner = repoData.owner ? (repoData.owner.login || repoData.owner) : null;
       const name = repoData.name;
       if (owner && name) {
-        const query = `query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { reviewThreads(first: 50) { nodes { id isResolved path line comments(first: 50) { nodes { id databaseId body author { login } createdAt } } } } } } }`;
-        const cmd = `gh api graphql -f query='${query}' -F owner="${owner}" -F name="${name}" -F number=${Number(prIdentifier)}`;
-        const stdout = this.executor(cmd);
-        const data = JSON.parse(stdout || '{}');
-        const rawThreads = data.data && data.data.repository && data.data.repository.pullRequest && data.data.repository.pullRequest.reviewThreads && data.data.repository.pullRequest.reviewThreads.nodes;
-        if (Array.isArray(rawThreads)) {
-          const threads = rawThreads.map(t => {
-            const comments = (t.comments && t.comments.nodes ? t.comments.nodes : []).map(c => ({
-              id: String(c.id),
-              databaseId: c.databaseId ? String(c.databaseId) : null,
-              body: c.body || '',
-              author: c.author ? c.author.login : 'unknown',
-              createdAt: c.createdAt || ''
-            }));
-            const hasResolution = t.isResolved || comments.some(c =>
-              c.body.includes('<!-- resolution-reply -->') || /resolved|fixed|closed/i.test(c.body)
-            );
-            return {
-              id: String(t.id),
-              path: t.path,
-              line: t.line,
-              isResolved: hasResolution,
-              comments
-            };
+        let tempGqlFile = null;
+        try {
+          const query = `query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { reviewThreads(first: 50) { nodes { id isResolved path line comments(first: 50) { nodes { id databaseId body author { login } createdAt } } } } } } }`;
+          const payload = JSON.stringify({
+            query,
+            variables: {
+              owner,
+              name,
+              number: Number(prIdentifier)
+            }
           });
-          return {
-            threads,
-            activeCount: threads.filter(t => !t.isResolved).length
-          };
+          const tmpDir = os.tmpdir();
+          tempGqlFile = path.join(tmpDir, `sdw-gql-list-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
+          fs.writeFileSync(tempGqlFile, payload, 'utf8');
+
+          const stdout = this.executor(`gh api graphql --input "${tempGqlFile.replace(/\\/g, '/')}"`);
+          const data = JSON.parse(stdout || '{}');
+          const rawThreads = data.data && data.data.repository && data.data.repository.pullRequest && data.data.repository.pullRequest.reviewThreads && data.data.repository.pullRequest.reviewThreads.nodes;
+          if (Array.isArray(rawThreads)) {
+            const threads = rawThreads.map(t => {
+              const comments = (t.comments && t.comments.nodes ? t.comments.nodes : []).map(c => ({
+                id: String(c.id),
+                databaseId: c.databaseId ? String(c.databaseId) : null,
+                body: c.body || '',
+                author: c.author ? c.author.login : 'unknown',
+                createdAt: c.createdAt || ''
+              }));
+              const hasResolution = t.isResolved || comments.some(c =>
+                c.body.includes('<!-- resolution-reply -->') || /resolved|fixed|closed/i.test(c.body)
+              );
+              return {
+                id: String(t.id),
+                path: t.path,
+                line: t.line,
+                isResolved: hasResolution,
+                comments
+              };
+            });
+            return {
+              threads,
+              activeCount: threads.filter(t => !t.isResolved).length
+            };
+          }
+        } finally {
+          if (tempGqlFile && fs.existsSync(tempGqlFile)) {
+            try { fs.unlinkSync(tempGqlFile); } catch (e) {}
+          }
         }
       }
     } catch (gqlErr) {
@@ -394,14 +422,32 @@ class GitHubProvider extends ScmProvider {
 
     try {
       if (threadId && String(threadId).startsWith('PRRT_')) {
-        const mutation = `mutation($threadId: ID!, $body: String!) { addPullRequestReviewThreadReply(input: { pullRequestReviewThreadId: $threadId, body: $body }) { comment { id } } resolveReviewThread(input: { threadId: $threadId }) { thread { isResolved } } }`;
-        this.executor(`gh api graphql -f query='${mutation}' -F threadId="${threadId}" -F body="${bodyWithMarker.replace(/"/g, '\\"')}"`);
-        return {
-          resolved: true,
-          dryRun: false,
-          threadId,
-          comment: bodyWithMarker
-        };
+        let tempGqlFile = null;
+        try {
+          const mutation = `mutation($threadId: ID!, $body: String!) { addPullRequestReviewThreadReply(input: { pullRequestReviewThreadId: $threadId, body: $body }) { comment { id } } resolveReviewThread(input: { threadId: $threadId }) { thread { isResolved } } }`;
+          const payload = JSON.stringify({
+            query: mutation,
+            variables: {
+              threadId: String(threadId),
+              body: bodyWithMarker
+            }
+          });
+          const tmpDir = os.tmpdir();
+          tempGqlFile = path.join(tmpDir, `sdw-gql-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
+          fs.writeFileSync(tempGqlFile, payload, 'utf8');
+
+          this.executor(`gh api graphql --input "${tempGqlFile.replace(/\\/g, '/')}"`);
+          return {
+            resolved: true,
+            dryRun: false,
+            threadId,
+            comment: bodyWithMarker
+          };
+        } finally {
+          if (tempGqlFile && fs.existsSync(tempGqlFile)) {
+            try { fs.unlinkSync(tempGqlFile); } catch (e) {}
+          }
+        }
       }
 
       const targetId = commentId || threadId;
@@ -603,7 +649,7 @@ class AzureDevOpsProvider extends ScmProvider {
           const status = String(prData.status || '').toLowerCase();
           allPassed = status === 'active';
         } catch (e) {
-          allPassed = true;
+          throw new Error(`Azure DevOps checkPrStatus could not verify PR ${prIdentifier}: ${e.message}`);
         }
       }
 
