@@ -99,3 +99,13 @@ When multiple specifications are provided to `sdw-orch run <spec1> <spec2> ...`,
 - **Sequential Context Isolation:** Each specification runs in an independent child run context with its own distinct `runId` and `.state.json` file.
 - **Deterministic Resumption:** `resume-batch [batchId]` skips completed items and resumes strictly from the first pending or failed item.
 - **Index Synchronization:** Automatically executes `sdw-spec sync` upon each item completion unless `--no-sync` is specified.
+
+## 4. Unattended Multi-Specification Execution Protocol
+
+When multiple specifications are queued (`sdw-orch run spec1 spec2 ...` or `resume-batch`):
+- **Unattended Execution Contract:** The orchestrator and executing agent operate strictly in non-interactive, unattended mode. No pauses or conversational confirmation queries are permitted between queue items.
+- **Autonomous Decision Resolution:** Grilling/Refinement decision gaps in Step 2 automatically select recommended defaults (`autoResolveGaps: true`, `abortOnGaps: false`), eliminating pauses.
+- **Per-Specification Isolation:** Each specification runs in its own child context with isolated run state (`run-*.state.json`), maintaining clean subagent context fencing.
+- **Autonomous Delivery & Synchronization:** Upon successful implementation and verification (conformance score ≥ threshold, tests passing, review clean), the orchestrator stages the delivery commit, updates `index.specs.md` to `completed`, syncs via `sdw-spec sync`, and immediately initiates the next queued specification.
+- **Halting vs Continuation:** Default policy halts execution on specification failure, saving batch state for `resume-batch`. When `--continue-on-error` is active, errors are logged in the manifest and the queue advances uninterrupted to the next item.
+- **Terminal Consolidated Summary:** The orchestrator emits the batch manifest summary report only once all queued items have completed or halted.

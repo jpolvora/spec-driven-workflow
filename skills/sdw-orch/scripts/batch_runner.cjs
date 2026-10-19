@@ -154,7 +154,8 @@ function createBatchManifest({ root, specs, options, config }) {
     status: 'in_progress',
     policy: {
       continueOnError: Boolean(options.continueOnError),
-      syncIndex: options.noSync ? false : true
+      syncIndex: options.noSync ? false : true,
+      unattended: options.unattended !== false
     },
     total: queue.length,
     currentIndex: 0,
@@ -291,6 +292,9 @@ function executeQueue(manifest, targetRoot, config, options, cmdRun) {
       root: targetRoot,
       specPath: item.spec,
       runId: undefined, // ensure isolated runId per spec (AC3, AC11)
+      unattended: options.unattended !== false,
+      autoResolveGaps: true,
+      abortOnGaps: false,
       _runResult: null
     };
 

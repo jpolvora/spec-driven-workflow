@@ -43,13 +43,16 @@ function parseArgs(args) {
     allowArchived: false,
     step: null,
     json: false,
-    latest: false
+    latest: false,
+    unattended: false
   };
 
   const positional = [];
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === '--json') result.json = true;
+    else if (arg === '--unattended') result.unattended = true;
+    else if (arg === '--interactive') result.unattended = false;
     else if (arg === '--skip-review') result.skipReview = true;
     else if (arg === '--skip-pr') result.skipPr = true;
     else if (arg === '--poll-pr') result.pollPr = true;
@@ -246,7 +249,7 @@ function cmdRun(options) {
         console.log(`  * Gap [${gap.dimension}]: ${gap.question} -> Default: ${gap.defaultChoice}`);
       }
 
-      if (options.abortOnGaps) {
+      if (options.abortOnGaps && !options.unattended) {
         console.log(`[Step 2: Grilling] User cancellation / gate stop triggered (--abort-on-gaps). Halting without dispatch.`);
         state = stateManager.updateStepState(targetRoot, state.runId, 2, 'paused_grilling_gate', grillingResult);
         state.status = 'paused';
@@ -563,11 +566,21 @@ function cmdBatchRun(options) {
   const specs = options.specPaths && options.specPaths.length > 0
     ? options.specPaths
     : (options.specPath ? [options.specPath] : []);
-  return batchRunner.runBatch(specs, options, cmdRun);
+  const batchOpts = {
+    ...options,
+    unattended: options.unattended !== false,
+    autoResolveGaps: true
+  };
+  return batchRunner.runBatch(specs, batchOpts, cmdRun);
 }
 
 function cmdResumeBatch(options) {
-  return batchRunner.resumeBatch(options.batchId, options, cmdRun);
+  const batchOpts = {
+    ...options,
+    unattended: options.unattended !== false,
+    autoResolveGaps: true
+  };
+  return batchRunner.resumeBatch(options.batchId, batchOpts, cmdRun);
 }
 
 function showHelp() {
@@ -586,11 +599,13 @@ Options:
   --continue-on-error    Continue queue execution when a batch item fails
   --dry-run              Validate specs and display batch execution plan without executing
   --no-sync              Skip automatic sdw-spec sync between batch queue items
+  --unattended           Execute without interruption, auto-resolving grilling gaps (default in batch)
+  --interactive          Require manual confirmation at decision gates
   --root <path>          Target workspace project root directory
   --step <n>             Start or run specific step (1-8)
   --min-score <n>        Minimum acceptable conformance score (default: 8)
   --poll-pr              Enable remote PR review polling
-  --abort-on-gaps        Halt at grilling gate if decision gaps are detected
+  --abort-on-gaps        Halt at grilling gate if decision gaps are detected (ignored in unattended mode)
   --simulate-failure     Simulate subagent unrecoverable failure for testing
   --latest               (status/resume) Target the most recent run state
   --push                 Push active branch and delivery commit to remote origin

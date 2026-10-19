@@ -640,3 +640,51 @@ test('AC9: Side-Effect-Free Dry-Run (--dry-run)', () => {
   }
 });
 
+test('Multi-Spec Batch Unattended Execution: executes continuously without gate interruption', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-batch-unattended-'));
+  try {
+    const specsDir = path.join(tmpDir, '.sdw', 'specs');
+    fs.mkdirSync(specsDir, { recursive: true });
+
+    // Create 2 specifications with decision gaps
+    const spec1 = path.join(specsDir, '001-feature-x.md');
+    fs.writeFileSync(spec1, `---
+slug: 001-feature-x
+---
+# Feature X
+## Acceptance Criteria
+- AC1: The system shall run unattended.`);
+
+    const spec2 = path.join(specsDir, '002-feature-y.md');
+    fs.writeFileSync(spec2, `---
+slug: 002-feature-y
+---
+# Feature Y
+## Acceptance Criteria
+- AC1: The system shall complete the queue.`);
+
+    const exitCode = sdwOrch.cmdBatchRun({
+      root: tmpDir,
+      specPaths: [spec1, spec2],
+      abortOnGaps: true, // Should be overridden / bypassed in unattended mode
+      minScore: 0,
+      skipReview: true,
+      skipPr: true
+    });
+
+    assert.equal(exitCode, 0, 'Unattended batch execution must complete successfully');
+
+    const batchRunner = require('../skills/sdw-orch/scripts/batch_runner.cjs');
+    const manifests = batchRunner.listBatchManifests(tmpDir);
+    assert.equal(manifests.length, 1);
+    const manifest = manifests[0].manifest;
+    assert.equal(manifest.status, 'completed');
+    assert.equal(manifest.policy.unattended, true, 'Manifest must reflect unattended policy');
+    assert.equal(manifest.queue.length, 2);
+    assert.equal(manifest.queue[0].status, 'completed');
+    assert.equal(manifest.queue[1].status, 'completed');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
