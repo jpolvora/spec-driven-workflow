@@ -130,3 +130,23 @@ Configurable feature branch activation and per-task isolated git worktrees:
 - **Clean Removal:** Once integrated, removes worktree via `git worktree remove` and deletes task branch via `git branch -d`.
 - **Overrides:** `--no-worktrees` and `--no-feature-branch` flags override configuration for the current run.
 
+## 6. Step Artifacts Persistence Protocol
+
+Intermediate outputs of human-auditable steps (2, 3, 5) are persisted as human-readable Markdown files:
+
+### Directory Layout & Filename Convention
+- **Directory:** `{stateDir}/{slug}/{runId}/` (e.g. `.sdw/state/014-sdw-orch-step-artifacts-persistence/run-1792400000000-014-sdw-orch-step-artifacts-pe/`)
+- **Naming:** `{slug}-step-{N}.md` (e.g. `014-sdw-orch-step-artifacts-persistence-step-2.md`, `...-step-3.md`, `...-step-5.md`)
+- **State Linkage:** Run state records `state.artifactsDir` and `state.steps[N].artifact` with forward slashes relative to project root.
+
+### Scope & In-Scope Steps
+- **Step 2 (Refinement):** `{slug}-step-2.md` contains metadata header, `## Decision Gaps & Resolutions` table, `## Decision Tree Walk` summary, and `## Refined Spec Snapshot`.
+- **Step 3 (DAG Generation):** `{slug}-step-3.md` contains metadata header, `## Complexity Analysis`, `## Task Decomposition` table, and `## Task Context Prompts` blocks.
+- **Step 5 (Conformance Scoring):** `{slug}-step-5.md` contains metadata header, `## Implementation Summary`, `## Conformance Score` evaluation, `## Verified Acceptance Criteria`, `## Failing Acceptance Criteria`, and `## Feedback`.
+- **Excluded Steps:** Steps 1, 4, 6, 7, and 8 do not emit step artifacts.
+
+### Resumption & Overwrite Policy
+- **Resumed Runs:** Reuses the existing `artifactsDir` from run state.
+- **Step Re-execution:** Rewrites the existing step artifact deterministically within the same run.
+- **Failure Policy:** Persistence is best-effort. Failures log a warning, record an error prefixed `Artifact persistence warning:` in `state.errors`, and continue workflow execution without changing run status.
+

@@ -11,6 +11,7 @@ Baseline directory layout for consumer projects adopting Spec-Driven Workflow:
     ├── specs/                   # Canonical feature specifications (*.md)
     │   └── index.specs.md       # Centralized specification index and lifecycle tracking table
     ├── state/                   # Ephemeral execution run state files (*.state.json)
+    │   └── {slug}/{runId}/      # Human-auditable intermediate step artifacts ({slug}-step-{N}.md)
     ├── traps.md                 # Central anti-regression trap log
     └── worktrees/               # Ephemeral per-task git worktrees for isolated subagents
 ```
@@ -22,6 +23,6 @@ Baseline directory layout for consumer projects adopting Spec-Driven Workflow:
 - **`.sdw/directory-structure.md`**: Textual specification and inventory of the `.sdw` directory hierarchy.
 - **`.sdw/specs/`**: Target directory for canonical specifications with EARS acceptance criteria and Definition of Ready.
 - **`.sdw/specs/index.specs.md`**: Centralized specification index registering slugs, titles, lifecycle statuses (`pending`, `completed`, `archived`), and validation health.
-- **`.sdw/state/`**: Dedicated directory for isolated execution run state files (`run-*.state.json`).
+- **`.sdw/state/`**: Dedicated directory for isolated execution run state files (`run-*.state.json`) and per-run step artifacts (`.sdw/state/{slug}/{runId}/{slug}-step-{N}.md`).
 - **`.sdw/traps.md`**: Central anti-regression trap log capturing session friction, scope enclosure rules, and architectural traps.
 - **`.sdw/worktrees/`**: Ephemeral per-task worktrees (`.sdw/worktrees/{runId}/{taskId}`) used when `useWorktrees: true`. Ignored by git.

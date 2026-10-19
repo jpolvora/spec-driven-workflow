@@ -38,17 +38,17 @@ When executing multiple specifications (`run <spec1> <spec2> ...` or batch queue
    - Run: `node skills/sdw-orch/scripts/sdw_orch.cjs run <specPath> [options]`
    - Done when: Run state JSON exists on disk, feature branch is activated (if configured), and derivation status is recorded.
 
-2. **Conduct Grilling Round**
-   Walk decision tree paths for input bounds, failure recovery, and concurrency. In single-spec mode, query the user via `ask_question` if ambiguous gaps remain. In multi-spec batch mode, auto-resolve gaps autonomously using recommended defaults.
-   - Done when: All decision gaps are resolved and spec is marked refined.
+2. **Conduct Refinement Round**
+   Walk decision tree paths for input bounds, failure recovery, and concurrency, producing a technical blueprint. In single-spec mode, query the user via `ask_question` if ambiguous gaps remain. In multi-spec batch mode, auto-resolve gaps autonomously using recommended defaults.
+   - Done when: All decision gaps are resolved, technical blueprint generated, and refinement artifact `{slug}-step-2.md` persisted.
 
 3. **Decompose into DAG Tasks & Execute Implementation**
-   Analyze complexity and emit DAG execution units. When `useWorktrees: true` on multi-task plans, create exclusive worktrees under `.sdw/worktrees/{runId}/{taskId}`, dispatching subagents there and integrating commits via cherry-pick. Subagents adhere to `sdw-rules` simplicity first. Run test suites (`npm test`) until all tests pass.
-   - Done when: DAG tasks are generated, implementation code is integrated, and tests pass.
+   Analyze complexity and emit DAG execution units with context prompts. When `useWorktrees: true` on multi-task plans, create exclusive worktrees under `.sdw/worktrees/{runId}/{taskId}`, dispatching subagents there and integrating commits via cherry-pick. Subagents adhere to `sdw-rules` simplicity first. Run test suites (`npm test`) until all tests pass.
+   - Done when: DAG tasks generated, DAG artifact `{slug}-step-3.md` persisted, code integrated, and tests pass.
 
 4. **Evaluate Conformance Score & Security Gate**
    Compute conformance score (0-10) against touched files. If score < threshold (default 8/10), loop back with error feedback. When `securityChecksEnabled` is true, run pre-commit secret/leak scanner (`sdw-security-checks`); block on HIGH findings unless overridden via `--skip-security`.
-   - Done when: Conformance score meets threshold and pre-commit security check passes or is bypassed.
+   - Done when: Conformance score meets threshold, preliminary report artifact `{slug}-step-5.md` persisted, and pre-commit security check passes or is bypassed.
 
 5. **Deliver Commit & Remote Push**
    Stage and commit delivery code, execute automated review, package pull request metadata, mark specification completed in `index.specs.md`, and push the active branch to remote origin. In multi-spec mode, advance immediately to the next queued specification without stopping.
@@ -56,4 +56,4 @@ When executing multiple specifications (`run <spec1> <spec2> ...` or batch queue
 
 ## References
 
-- Architecture and state schema: [`references/orchestrator_protocol.md`](references/orchestrator_protocol.md)
+- Architecture, batch protocol, and step artifacts persistence: [`references/orchestrator_protocol.md`](references/orchestrator_protocol.md)

@@ -188,7 +188,10 @@ Baseline directory layout for consumer projects adopting Spec-Driven Workflow:
     ├── config.schema.json       # JSON Schema definition for config.json validation
     ├── directory-structure.md   # Structural guidelines and layout rules
     ├── specs/                   # Target directory for canonical specifications
-    └── state/                   # Ephemeral execution run state files (*.state.json)
+    ├── state/                   # Ephemeral execution run state files (*.state.json)
+    │   └── {slug}/{runId}/      # Human-auditable intermediate step artifacts ({slug}-step-{N}.md)
+    ├── traps.md                 # Central anti-regression trap log
+    └── worktrees/               # Ephemeral per-task git worktrees for isolated subagents
 \`\`\`
 `;
 

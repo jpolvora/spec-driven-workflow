@@ -12,6 +12,7 @@ const dagPlanner = require('./dag_planner.cjs');
 const scoreEvaluator = require('./score_evaluator.cjs');
 const reviewRunner = require('./review_runner.cjs');
 const batchRunner = require('./batch_runner.cjs');
+const artifactWriter = require('./artifact_writer.cjs');
 
 function getSpecIndexHelper() {
   try {
@@ -440,7 +441,15 @@ function cmdRun(options) {
     };
 
     console.log(`[Step 2: Refinement] Refinement complete. Blueprint generated for ${grillingResult.blueprint.targetFiles.length} target file(s).`);
-    state = stateManager.updateStepState(targetRoot, state.runId, 2, 'completed', refinementOutput);
+    const step2Artifact = artifactWriter.writeStep2Artifact({
+      targetRoot,
+      specSlug,
+      runId: state.runId,
+      grillingResult,
+      effectiveSpecContent,
+      artifactsDir: state.artifactsDir
+    });
+    state = stateManager.updateStepState(targetRoot, state.runId, 2, 'completed', refinementOutput, null, { artifact: step2Artifact });
   }
 
   // Step 3: Complexity Analysis & DAG Task Decomposition (AC3, AC7)
@@ -452,7 +461,14 @@ function cmdRun(options) {
     console.log(`[Step 3: DAG Generation] Complexity: ${dagPlan.complexity.level}. Generated ${dagPlan.totalTasks} task(s).`);
     state.dagTasks = dagPlan.tasks;
     state = stateManager.saveRunState(targetRoot, state);
-    state = stateManager.updateStepState(targetRoot, state.runId, 3, 'completed', dagPlan);
+    const step3Artifact = artifactWriter.writeStep3Artifact({
+      targetRoot,
+      specSlug,
+      runId: state.runId,
+      dagPlan,
+      artifactsDir: state.artifactsDir
+    });
+    state = stateManager.updateStepState(targetRoot, state.runId, 3, 'completed', dagPlan, null, { artifact: step3Artifact });
   } else if (state.steps[3].output) {
     dagPlan = state.steps[3].output;
   } else {
@@ -604,9 +620,18 @@ function cmdRun(options) {
     console.log(`  Verified ACs: ${scoreReport.verifiedCount}/${scoreReport.totalAcs}`);
     console.log(`  Failing ACs:  ${scoreReport.failingCount}/${scoreReport.totalAcs}`);
 
+    const step5Artifact = artifactWriter.writeStep5Artifact({
+      targetRoot,
+      specSlug,
+      runId: state.runId,
+      scoreReport,
+      dagPlan,
+      artifactsDir: state.artifactsDir
+    });
+
     if (!scoreReport.passed) {
       console.error(`[Step 5: Conformance Scoring] Conformance score below threshold (${scoreReport.score} < ${effectiveMinScore}). Triggering re-implementation feedback loop.`);
-      state = stateManager.updateStepState(targetRoot, state.runId, 5, 'reimplementation_needed', scoreReport);
+      state = stateManager.updateStepState(targetRoot, state.runId, 5, 'reimplementation_needed', scoreReport, null, { artifact: step5Artifact });
       state.score = scoreReport.score;
       state.scoreIteration = (state.scoreIteration || 0) + 1;
       state.status = 'failed';
@@ -615,7 +640,7 @@ function cmdRun(options) {
       return 2; // Exit code 2 indicates score failure / re-implementation needed
     }
 
-    state = stateManager.updateStepState(targetRoot, state.runId, 5, 'completed', scoreReport);
+    state = stateManager.updateStepState(targetRoot, state.runId, 5, 'completed', scoreReport, null, { artifact: step5Artifact });
     state.score = scoreReport.score;
     state.scoreIteration = (state.scoreIteration || 0) + 1;
     state = stateManager.saveRunState(targetRoot, state);

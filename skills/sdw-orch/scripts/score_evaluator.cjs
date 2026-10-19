@@ -98,8 +98,19 @@ function evaluateScore(specContent, options) {
     }
   } catch (e) {}
 
-  // Also check skills/ and .sdw/ default locations if targetFiles still empty
-  if (filesToCheck.size === 0) {
+  let existingFilesCount = 0;
+  for (const relPath of filesToCheck) {
+    const fullPath = path.resolve(projectRoot, relPath);
+    if (fs.existsSync(fullPath) && fs.statSync(fullPath).isFile()) {
+      try {
+        combinedContent += '\n' + fs.readFileSync(fullPath, 'utf8');
+        existingFilesCount++;
+      } catch (e) {}
+    }
+  }
+
+  // Also check skills/ and .sdw/ default locations if targetFiles empty or none exist on disk
+  if (existingFilesCount === 0) {
     const defaultSearchDirs = ['skills/sdw-orch/scripts', 'skills/sdw-orch', '.sdw'];
     for (const d of defaultSearchDirs) {
       const fullDir = path.resolve(projectRoot, d);
@@ -108,21 +119,13 @@ function evaluateScore(specContent, options) {
           const entries = fs.readdirSync(fullDir);
           for (const entry of entries) {
             const rel = path.join(d, entry).replace(/\\/g, '/');
-            if (fs.statSync(path.resolve(projectRoot, rel)).isFile()) {
-              filesToCheck.add(rel);
+            const absF = path.resolve(projectRoot, rel);
+            if (fs.existsSync(absF) && fs.statSync(absF).isFile()) {
+              combinedContent += '\n' + fs.readFileSync(absF, 'utf8');
             }
           }
         } catch (e) {}
       }
-    }
-  }
-
-  for (const relPath of filesToCheck) {
-    const fullPath = path.resolve(projectRoot, relPath);
-    if (fs.existsSync(fullPath) && fs.statSync(fullPath).isFile()) {
-      try {
-        combinedContent += '\n' + fs.readFileSync(fullPath, 'utf8');
-      } catch (e) {}
     }
   }
 
