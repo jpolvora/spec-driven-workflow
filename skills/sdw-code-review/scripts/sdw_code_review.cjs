@@ -603,7 +603,11 @@ function runCodeReview(options) {
       seenFindingKeys.add(key);
       return true;
     })
-    .sort((a, b) => `${a.file}:${a.line}:${a.rule}`.localeCompare(`${b.file}:${b.line}:${b.rule}`))
+    .sort((a, b) => {
+      if (a.file !== b.file) return a.file < b.file ? -1 : 1;
+      if (a.line !== b.line) return a.line - b.line;
+      return a.rule < b.rule ? -1 : 1;
+    })
     .map((f, index) => ({ ...f, id: `CR-${String(index + 1).padStart(3, '0')}` }));
   const plannedAll = findings.filter(f => f.status === 'planned');
   const reportFindings = dryRun ? findings : allFindings;

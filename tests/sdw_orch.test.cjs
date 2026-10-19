@@ -175,6 +175,18 @@ test('AC12 & AC13: Code Review Detection & Automated Fix Application', () => {
   }
 });
 
+test('review_runner.runAutomatedReview fails closed when review cannot run', () => {
+  const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-review-fail-'));
+  try {
+    const result = reviewRunner.runAutomatedReview({ projectRoot: empty });
+    assert.equal(result.passed, false, 'unrunnable review must not pass');
+    assert.equal(result.errorCount, 1);
+    assert.ok(result.error, 'error must describe the review failure');
+  } finally {
+    fs.rmSync(empty, { recursive: true, force: true });
+  }
+});
+
 test('AC16: Unrecoverable Failure State Persistence & Halting', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-fail-test-'));
   try {
