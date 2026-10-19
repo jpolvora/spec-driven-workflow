@@ -137,6 +137,24 @@ function getBaseCommit(projectRoot) {
   }
 }
 
+function assertSafeSlug(specSlug) {
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(String(specSlug))) {
+    throw new Error(
+      `Invalid specification slug "${specSlug}". Expected lowercase letters, digits, and hyphens (^[a-z0-9][a-z0-9-]*$).`
+    );
+  }
+}
+
+function git(targetRoot, args, options = {}) {
+  const result = spawnSync('git', args, { cwd: targetRoot, encoding: 'utf8', ...options });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    const stderr = result.stderr ? String(result.stderr).trim() : '';
+    throw new Error(stderr || `git ${args.join(' ')} failed (exit ${result.status})`);
+  }
+  return result.stdout;
+}
+
 function runSecurityGate(targetRoot, options = {}) {
   try {
     const secScanner = require('../../sdw-security-checks/scripts/sdw_security_checks.cjs');
@@ -225,7 +243,7 @@ function runVerificationGates(targetRoot, config, options = {}) {
             }
           }
           execSync('git add -A', { cwd: targetRoot, stdio: 'ignore' });
-          execSync(`git commit -m "fix(${specSlug}): resolve build failure (attempt ${buildAttempts})"`, { cwd: targetRoot, stdio: 'ignore' });
+          git(targetRoot, ['commit', '-m', `fix(${specSlug}): resolve build failure (attempt ${buildAttempts})`], { stdio: 'ignore' });
         }
       }
     }
@@ -283,7 +301,7 @@ function runVerificationGates(targetRoot, config, options = {}) {
             }
           }
           execSync('git add -A', { cwd: targetRoot, stdio: 'ignore' });
-          execSync(`git commit -m "fix(${specSlug}): resolve test failure (attempt ${testAttempts})"`, { cwd: targetRoot, stdio: 'ignore' });
+          git(targetRoot, ['commit', '-m', `fix(${specSlug}): resolve test failure (attempt ${testAttempts})`], { stdio: 'ignore' });
         }
       }
     }
@@ -382,6 +400,14 @@ function cmdRun(options) {
   const slugMatch = rawSpecContent.match(/slug:\s*([^\r\n]+)/);
   const specSlug = slugMatch ? slugMatch[1].trim() : specBasename.replace(/^step-\d+-/, '');
 
+  try {
+    assertSafeSlug(specSlug);
+  } catch (slugErr) {
+    console.error(`[sdw-orch] ${slugErr.message}`);
+    options._runResult = { error: slugErr.message };
+    return 1;
+  }
+
   // Quality check: inspect index.specs.md status if available
   const specIndex = getSpecIndexHelper();
   if (specIndex) {
@@ -472,7 +498,7 @@ function cmdRun(options) {
       if (branchCheck.status === 0) {
         // AC8: Switch to existing branch and record reuse
         try {
-          execSync(`git switch ${targetBranch}`, { cwd: targetRoot, stdio: 'ignore' });
+          git(targetRoot, ['switch', targetBranch], { stdio: 'ignore' });
           branchReused = true;
           activeBranch = targetBranch;
           console.log(`[Branch Activation] Reused and switched to existing feature branch "${targetBranch}".`);
@@ -483,7 +509,7 @@ function cmdRun(options) {
       } else {
         // AC6: Create and switch to new feature branch
         try {
-          execSync(`git switch -c ${targetBranch}`, { cwd: targetRoot, stdio: 'ignore' });
+          git(targetRoot, ['switch', '-c', targetBranch], { stdio: 'ignore' });
           branchReused = false;
           activeBranch = targetBranch;
           console.log(`[Branch Activation] Created and switched to feature branch "${targetBranch}" from ${baseBranch}.`);
@@ -1028,7 +1054,7 @@ function cmdRun(options) {
       if (statusOut) {
         console.log(`[Step 6: Delivery Commit] Staging and committing implementation changes...`);
         execSync('git add -A', { cwd: targetRoot, stdio: 'ignore' });
-        execSync(`git commit -m "feat(${specSlug}): implement ${specSlug}"`, { cwd: targetRoot, stdio: 'ignore' });
+        git(targetRoot, ['commit', '-m', `feat(${specSlug}): implement ${specSlug}`], { stdio: 'ignore' });
         commitSha = getBaseCommit(targetRoot);
         console.log(`[Step 6: Delivery Commit] Created delivery commit ${commitSha}`);
       } else {
@@ -1070,7 +1096,7 @@ function cmdRun(options) {
       }
       try {
         execSync('git add -A', { cwd: targetRoot, stdio: 'ignore' });
-        execSync(`git commit -m "fix(${specSlug}): apply automated review fixes (iteration ${reviewLoop})"`, { cwd: targetRoot, stdio: 'ignore' });
+        git(targetRoot, ['commit', '-m', `fix(${specSlug}): apply automated review fixes (iteration ${reviewLoop})`], { stdio: 'ignore' });
       } catch (e) {}
       reviewReport = reviewRunner.runAutomatedReview({ projectRoot: targetRoot, baseCommit: state.baseCommit });
     }
@@ -1125,7 +1151,7 @@ function cmdRun(options) {
               }
             }
             execSync('git add -A', { cwd: targetRoot, stdio: 'ignore' });
-            execSync(`git commit -m "chore(${specSlug}): apply pre-pr requirements"`, { cwd: targetRoot, stdio: 'ignore' });
+            git(targetRoot, ['commit', '-m', `chore(${specSlug}): apply pre-pr requirements`], { stdio: 'ignore' });
             state.deliveryCommit = getBaseCommit(targetRoot);
             stateManager.saveRunState(targetRoot, state);
           }
@@ -1180,7 +1206,7 @@ function cmdRun(options) {
                   }
                 }
                 execSync('git add -A', { cwd: targetRoot, stdio: 'ignore' });
-                execSync(`git commit -m "fix(${specSlug}): resolve build failure (attempt ${buildAttempts})"`, { cwd: targetRoot, stdio: 'ignore' });
+                git(targetRoot, ['commit', '-m', `fix(${specSlug}): resolve build failure (attempt ${buildAttempts})`], { stdio: 'ignore' });
                 state.deliveryCommit = getBaseCommit(targetRoot);
                 stateManager.saveRunState(targetRoot, state);
               } else {
@@ -1229,7 +1255,7 @@ function cmdRun(options) {
                   }
                 }
                 execSync('git add -A', { cwd: targetRoot, stdio: 'ignore' });
-                execSync(`git commit -m "fix(${specSlug}): resolve test failure (attempt ${testAttempts})"`, { cwd: targetRoot, stdio: 'ignore' });
+                git(targetRoot, ['commit', '-m', `fix(${specSlug}): resolve test failure (attempt ${testAttempts})`], { stdio: 'ignore' });
                 state.deliveryCommit = getBaseCommit(targetRoot);
                 stateManager.saveRunState(targetRoot, state);
               } else {
@@ -1288,22 +1314,29 @@ function cmdRun(options) {
     if (hasShipPr) {
       try {
         console.log(`[sdw-orch Step 8] Delegating delivery to sdw-ship-pr...`);
-        const runArgs = [
-          `"${shipPrScript}"`,
-          `--run-id "${state.runId}"`,
-          `--spec "${specSlug}"`,
-          `--root "${targetRoot.replace(/\\/g, '/')}"`,
-          options.push || config.pushDelivery ? '--push' : '',
-          pollPr ? '--poll-pr' : '',
-          options.dryRun ? '--dry-run' : '',
+        // argv form: specSlug/runId/paths are never interpreted by a shell.
+        const shipArgs = [
+          shipPrScript,
+          '--run-id', state.runId,
+          '--spec', specSlug,
+          '--root', targetRoot,
+          ...(options.push || config.pushDelivery ? ['--push'] : []),
+          ...(pollPr ? ['--poll-pr'] : []),
+          ...(options.dryRun ? ['--dry-run'] : []),
           '--json'
-        ].filter(Boolean).join(' ');
+        ];
 
-        const shipStdout = execSync(`node ${runArgs}`, {
+        const shipProc = spawnSync(process.execPath, shipArgs, {
           cwd: targetRoot,
           encoding: 'utf8',
           stdio: ['ignore', 'pipe', 'pipe']
         });
+        if (shipProc.error) throw shipProc.error;
+        const shipStdout = shipProc.stdout || '';
+        if (!String(shipStdout).trim() && shipProc.status !== 0) {
+          const shipErr = shipProc.stderr ? String(shipProc.stderr).trim() : '';
+          throw new Error(shipErr || `sdw-ship-pr exited with code ${shipProc.status}`);
+        }
 
         let shipResult = null;
         try {
@@ -1370,7 +1403,7 @@ function cmdRun(options) {
       const currentBranch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: targetRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
       if (remotes && currentBranch && currentBranch !== 'HEAD') {
         console.log(`[sdw-orch] Pushing delivery branch to origin/${currentBranch}...`);
-        execSync(`git push origin ${currentBranch}`, { cwd: targetRoot, stdio: 'inherit' });
+        git(targetRoot, ['push', 'origin', currentBranch], { stdio: 'inherit' });
         state.pushedBranch = currentBranch;
       } else if (!remotes) {
         console.log(`[sdw-orch] Remote push skipped: no git remote configured.`);
