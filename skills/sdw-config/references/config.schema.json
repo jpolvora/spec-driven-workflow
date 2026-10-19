@@ -1,0 +1,42 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://spec-driven-workflow.org/schemas/config.schema.json",
+  "title": "SDW Configuration Schema",
+  "description": "Configuration schema for Spec-Driven Workflow (.sdw/config.json).",
+  "type": "object",
+  "required": ["specsDir"],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Relative path or URL to the JSON schema definition file."
+    },
+    "specsDir": {
+      "type": "string",
+      "description": "Path to the directory containing feature specifications. Supports token {projectRoot}.",
+      "default": "{projectRoot}/.sdw/specs"
+    },
+    "scoreMin": {
+      "type": "integer",
+      "description": "Minimum conformance score (0-10) required before creating delivery commits.",
+      "minimum": 0,
+      "maximum": 10,
+      "default": 8
+    },
+    "scmCodeReviewEnabled": {
+      "type": "boolean",
+      "description": "Enable remote pull request review polling loop and automated review comment resolution.",
+      "default": false
+    },
+    "stateDir": {
+      "type": "string",
+      "description": "Path to the directory storing run session state files. Supports token {projectRoot}.",
+      "default": "{projectRoot}/.sdw/state"
+    },
+    "autoResolveGaps": {
+      "type": "boolean",
+      "description": "Automatically apply recommended defaults for unhandled grilling gaps when running non-interactively.",
+      "default": true
+    }
+  },
+  "additionalProperties": true
+}

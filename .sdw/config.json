@@ -1,5 +1,8 @@
 {
-    "specsDir": "{projectRoot}/.sdw/specs",
-    "scmCodeReviewEnabled": false,
-    "scoreMin": 8
+  "$schema": "./config.schema.json",
+  "specsDir": "{projectRoot}/.sdw/specs",
+  "scoreMin": 8,
+  "scmCodeReviewEnabled": false,
+  "stateDir": "{projectRoot}/.sdw/state",
+  "autoResolveGaps": true
 }

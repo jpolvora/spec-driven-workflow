@@ -58,20 +58,159 @@ function parseArgs(args) {
 }
 
 const DEFAULT_CONFIG = {
-  specsDir: '{projectRoot}/.sdw/specs'
+  $schema: './config.schema.json',
+  specsDir: '{projectRoot}/.sdw/specs',
+  scoreMin: 8,
+  scmCodeReviewEnabled: false,
+  stateDir: '{projectRoot}/.sdw/state',
+  autoResolveGaps: true
 };
 
-const DEFAULT_DIRECTORY_STRUCTURE = `rules for directory structure
+const DEFAULT_SCHEMA = {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://spec-driven-workflow.org/schemas/config.schema.json",
+  "title": "SDW Configuration Schema",
+  "description": "Configuration schema for Spec-Driven Workflow (.sdw/config.json).",
+  "type": "object",
+  "required": ["specsDir"],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Relative path or URL to the JSON schema definition file."
+    },
+    "specsDir": {
+      "type": "string",
+      "description": "Path to the directory containing feature specifications. Supports token {projectRoot}.",
+      "default": "{projectRoot}/.sdw/specs"
+    },
+    "scoreMin": {
+      "type": "integer",
+      "description": "Minimum conformance score (0-10) required before creating delivery commits.",
+      "minimum": 0,
+      "maximum": 10,
+      "default": 8
+    },
+    "scmCodeReviewEnabled": {
+      "type": "boolean",
+      "description": "Enable remote pull request review polling loop and automated review comment resolution.",
+      "default": false
+    },
+    "stateDir": {
+      "type": "string",
+      "description": "Path to the directory storing run session state files. Supports token {projectRoot}.",
+      "default": "{projectRoot}/.sdw/state"
+    },
+    "autoResolveGaps": {
+      "type": "boolean",
+      "description": "Automatically apply recommended defaults for unhandled grilling gaps when running non-interactively.",
+      "default": true
+    }
+  },
+  "additionalProperties": true
+};
 
-specs/
-config.json
+const DEFAULT_DIRECTORY_STRUCTURE = `# SDW Directory Structure & Guidelines
+
+Baseline directory layout for consumer projects adopting Spec-Driven Workflow:
+
+\`\`\`text
+{projectRoot}/
+└── .sdw/
+    ├── config.json              # Main project workflow configuration
+    ├── config.schema.json       # JSON Schema definition for config.json validation
+    ├── directory-structure.md   # Structural guidelines and layout rules
+    ├── specs/                   # Target directory for canonical specifications
+    └── state/                   # Ephemeral execution run state files (*.state.json)
+\`\`\`
 `;
+
+function validateConfigSchema(config) {
+  const errors = [];
+  if (!config || typeof config !== 'object' || Array.isArray(config)) {
+    return { valid: false, errors: ['Configuration must be a JSON object.'] };
+  }
+
+  // Required properties
+  if (!('specsDir' in config)) {
+    errors.push('Missing required property "specsDir".');
+  } else if (typeof config.specsDir !== 'string' || config.specsDir.trim().length === 0) {
+    errors.push('Property "specsDir" must be a non-empty string.');
+  }
+
+  // scoreMin
+  if ('scoreMin' in config) {
+    if (typeof config.scoreMin !== 'number' || !Number.isInteger(config.scoreMin) || config.scoreMin < 0 || config.scoreMin > 10) {
+      errors.push('Property "scoreMin" must be an integer between 0 and 10.');
+    }
+  }
+
+  // scmCodeReviewEnabled
+  if ('scmCodeReviewEnabled' in config) {
+    if (typeof config.scmCodeReviewEnabled !== 'boolean') {
+      errors.push('Property "scmCodeReviewEnabled" must be a boolean.');
+    }
+  }
+
+  // stateDir
+  if ('stateDir' in config) {
+    if (typeof config.stateDir !== 'string' || config.stateDir.trim().length === 0) {
+      errors.push('Property "stateDir" must be a string.');
+    }
+  }
+
+  // autoResolveGaps
+  if ('autoResolveGaps' in config) {
+    if (typeof config.autoResolveGaps !== 'boolean') {
+      errors.push('Property "autoResolveGaps" must be a boolean.');
+    }
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors
+  };
+}
+
+function loadConfig(targetRoot) {
+  const root = targetRoot ? path.resolve(targetRoot) : findProjectRoot(process.cwd());
+  const normalizedRoot = normalizePath(root);
+  const configFile = path.join(root, '.sdw', 'config.json');
+
+  let rawConfig = {};
+  if (fs.existsSync(configFile)) {
+    try {
+      rawConfig = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+    } catch (e) {
+      // Fallback
+    }
+  }
+
+  const merged = { ...DEFAULT_CONFIG, ...rawConfig };
+  const resolved = {};
+
+  for (const [key, value] of Object.entries(merged)) {
+    if (typeof value === 'string') {
+      resolved[key] = value.replace(/\{projectRoot\}/g, normalizedRoot);
+    } else {
+      resolved[key] = value;
+    }
+  }
+
+  return {
+    ...resolved,
+    projectRoot: normalizedRoot,
+    raw: rawConfig,
+    resolved
+  };
+}
 
 function cmdInit(options) {
   const targetRoot = options.root ? path.resolve(options.root) : process.cwd();
   const sdwDir = path.join(targetRoot, '.sdw');
   const specsDir = path.join(sdwDir, 'specs');
+  const stateDir = path.join(sdwDir, 'state');
   const configFile = path.join(sdwDir, 'config.json');
+  const schemaFile = path.join(sdwDir, 'config.schema.json');
   const structureFile = path.join(sdwDir, 'directory-structure.md');
 
   const created = [];
@@ -85,6 +224,18 @@ function cmdInit(options) {
   if (!fs.existsSync(specsDir)) {
     fs.mkdirSync(specsDir, { recursive: true });
     created.push('.sdw/specs/');
+  }
+
+  if (!fs.existsSync(stateDir)) {
+    fs.mkdirSync(stateDir, { recursive: true });
+    created.push('.sdw/state/');
+  }
+
+  if (!fs.existsSync(schemaFile) || options.force) {
+    fs.writeFileSync(schemaFile, JSON.stringify(DEFAULT_SCHEMA, null, 2) + '\n', 'utf8');
+    created.push('.sdw/config.schema.json');
+  } else {
+    skipped.push('.sdw/config.schema.json (already exists)');
   }
 
   if (!fs.existsSync(configFile) || options.force) {
@@ -179,6 +330,34 @@ function cmdCheck(options) {
         detail: err.message
       });
       errors.push(`.sdw/config.json syntax error: ${err.message}`);
+    }
+  }
+
+  // 3.5 Check config.schema.json exists
+  const schemaFile = path.join(sdwDir, 'config.schema.json');
+  const schemaExists = fs.existsSync(schemaFile);
+  checks.push({
+    name: 'config_schema_file_exists',
+    target: '.sdw/config.schema.json',
+    passed: schemaExists
+  });
+  if (!schemaExists) {
+    valid = false;
+    errors.push('Missing .sdw/config.schema.json schema file.');
+  }
+
+  // 3.6 Validate parsed config.json against schema
+  if (parsedConfig) {
+    const schemaValidation = validateConfigSchema(parsedConfig);
+    checks.push({
+      name: 'config_schema_validation',
+      target: '.sdw/config.json',
+      passed: schemaValidation.valid,
+      detail: schemaValidation.errors.length > 0 ? schemaValidation.errors.join('; ') : undefined
+    });
+    if (!schemaValidation.valid) {
+      valid = false;
+      errors.push(...schemaValidation.errors);
     }
   }
 
@@ -380,5 +559,11 @@ module.exports = {
   cmdInit,
   cmdCheck,
   cmdParse,
+  loadConfig,
+  validateConfigSchema,
+  DEFAULT_CONFIG,
+  DEFAULT_SCHEMA,
+  findProjectRoot,
+  normalizePath,
   showHelp
 };

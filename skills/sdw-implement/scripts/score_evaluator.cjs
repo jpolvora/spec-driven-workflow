@@ -48,9 +48,19 @@ function getDiffContent(baseCommit, projectRoot) {
 }
 
 function evaluateScore(specContent, options) {
-  const minScore = (options && options.minScore !== undefined) ? options.minScore : 8;
   const projectRoot = (options && options.projectRoot) || process.cwd();
   const baseCommit = (options && options.baseCommit) || null;
+
+  let minScore = (options && options.minScore !== undefined) ? options.minScore : null;
+  if (minScore === null) {
+    try {
+      const sdwConfig = require('../../sdw-config/scripts/sdw_config.cjs');
+      const config = sdwConfig.loadConfig(projectRoot);
+      minScore = config && config.scoreMin !== undefined ? config.scoreMin : 8;
+    } catch (e) {
+      minScore = 8;
+    }
+  }
 
   const acs = parseAcceptanceCriteria(specContent);
   if (acs.length === 0) {

@@ -18,10 +18,10 @@ function parseArgs(args) {
     specPath: null,
     runId: null,
     root: null,
-    minScore: 8,
+    minScore: undefined,
     skipReview: false,
     skipPr: false,
-    pollPr: false,
+    pollPr: undefined,
     abortOnGaps: false,
     simulateFailure: false,
     step: null,
@@ -63,18 +63,73 @@ function getBaseCommit(projectRoot) {
   }
 }
 
+function loadProjectConfig(targetRoot) {
+  try {
+    const sdwConfig = require('../../sdw-config/scripts/sdw_config.cjs');
+    if (sdwConfig && typeof sdwConfig.loadConfig === 'function') {
+      return sdwConfig.loadConfig(targetRoot);
+    }
+  } catch (e) {}
+
+  const root = targetRoot || process.cwd();
+  const configFile = path.join(root, '.sdw', 'config.json');
+  if (fs.existsSync(configFile)) {
+    try {
+      const raw = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+      const normRoot = root.replace(/\\/g, '/');
+      const resolved = {};
+      for (const [k, v] of Object.entries(raw)) {
+        resolved[k] = typeof v === 'string' ? v.replace(/\{projectRoot\}/g, normRoot) : v;
+      }
+      return {
+        specsDir: path.join(root, '.sdw', 'specs').replace(/\\/g, '/'),
+        scoreMin: 8,
+        scmCodeReviewEnabled: false,
+        stateDir: path.join(root, '.sdw', 'state').replace(/\\/g, '/'),
+        autoResolveGaps: true,
+        ...resolved
+      };
+    } catch (e) {}
+  }
+
+  return {
+    specsDir: path.join(root, '.sdw', 'specs').replace(/\\/g, '/'),
+    scoreMin: 8,
+    scmCodeReviewEnabled: false,
+    stateDir: path.join(root, '.sdw', 'state').replace(/\\/g, '/'),
+    autoResolveGaps: true
+  };
+}
+
 function cmdRun(options) {
   const targetRoot = options.root ? path.resolve(options.root) : process.cwd();
+  const config = loadProjectConfig(targetRoot);
+
   if (!options.specPath) {
     console.error('Error: specPath is required for "run" command.');
     return 1;
   }
 
-  const specFullPath = path.resolve(targetRoot, options.specPath);
+  // Resolve specification path: check targetRoot first, then config.specsDir
+  let specFullPath = path.resolve(targetRoot, options.specPath);
+  if (!fs.existsSync(specFullPath) && config.specsDir) {
+    const inSpecsDir = path.resolve(config.specsDir, options.specPath);
+    if (fs.existsSync(inSpecsDir)) {
+      specFullPath = inSpecsDir;
+    } else if (fs.existsSync(inSpecsDir + '.md')) {
+      specFullPath = inSpecsDir + '.md';
+    }
+  }
+
   if (!fs.existsSync(specFullPath)) {
     console.error(`Error: Specification file not found at: ${specFullPath}`);
     return 1;
   }
+
+  const effectiveMinScore = (options.minScore !== undefined && !isNaN(options.minScore)) 
+    ? options.minScore 
+    : (config.scoreMin !== undefined ? config.scoreMin : 8);
+  const effectivePollPr = options.pollPr !== undefined ? options.pollPr : Boolean(config.scmCodeReviewEnabled);
 
   const rawSpecContent = fs.readFileSync(specFullPath, 'utf8');
   const specSlug = path.basename(specFullPath, path.extname(specFullPath)).replace(/^step-\d+-/, '');
@@ -182,15 +237,15 @@ function cmdRun(options) {
       projectRoot: targetRoot,
       slug: specSlug,
       baseCommit: state.baseCommit,
-      minScore: options.minScore
+      minScore: effectiveMinScore
     });
 
-    console.log(`[Step 5: Conformance Scoring] Score: ${scoreReport.score}/10 (Required: ${options.minScore}/10). Passed: ${scoreReport.passed}`);
+    console.log(`[Step 5: Conformance Scoring] Score: ${scoreReport.score}/10 (Required: ${effectiveMinScore}/10). Passed: ${scoreReport.passed}`);
     console.log(`  Verified ACs: ${scoreReport.verifiedCount}/${scoreReport.totalAcs}`);
     console.log(`  Failing ACs:  ${scoreReport.failingCount}/${scoreReport.totalAcs}`);
 
     if (!scoreReport.passed) {
-      console.error(`[Step 5: Conformance Scoring] Conformance score below threshold (${scoreReport.score} < ${options.minScore}). Triggering re-implementation feedback loop.`);
+      console.error(`[Step 5: Conformance Scoring] Conformance score below threshold (${scoreReport.score} < ${effectiveMinScore}). Triggering re-implementation feedback loop.`);
       state = stateManager.updateStepState(targetRoot, state.runId, 5, 'reimplementation_needed', scoreReport);
       state.score = scoreReport.score;
       state.scoreIteration = (state.scoreIteration || 0) + 1;
@@ -213,8 +268,8 @@ function cmdRun(options) {
   // Step 6: Delivery Commit (AC11)
   if (startStep <= 6 && state.steps[6].status !== 'completed') {
     // Quality gate: enforce score threshold before commit
-    if (state.score !== null && state.score < options.minScore) {
-      console.error(`[Step 6: Delivery Commit] Blocked: cannot create delivery commit with failing conformance score (${state.score}/${options.minScore}).`);
+    if (state.score !== null && state.score < effectiveMinScore) {
+      console.error(`[Step 6: Delivery Commit] Blocked: cannot create delivery commit with failing conformance score (${state.score}/${effectiveMinScore}).`);
       return 2;
     }
 
@@ -294,7 +349,7 @@ function cmdRun(options) {
         deliveryCommit: state.deliveryCommit || state.baseCommit
       };
 
-      if (options.pollPr) {
+      if (effectivePollPr) {
         console.log(`[Step 8: PR Review Polling] Polling remote PR comments (AC15)... zero open review comments.`);
         prPayload.remoteMonitoring = { openComments: 0, resolvedComments: 0, status: 'approved' };
       }

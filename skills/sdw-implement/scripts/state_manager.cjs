@@ -9,7 +9,24 @@ function normalizePath(p) {
 
 function resolveStateDir(targetRoot) {
   const root = targetRoot ? path.resolve(targetRoot) : process.cwd();
-  const stateDir = path.join(root, '.sdw', 'state');
+  let stateDir = path.join(root, '.sdw', 'state');
+  try {
+    const sdwConfig = require('../../sdw-config/scripts/sdw_config.cjs');
+    const config = sdwConfig.loadConfig(root);
+    if (config && config.stateDir) {
+      stateDir = path.resolve(config.stateDir);
+    }
+  } catch (e) {
+    const configFile = path.join(root, '.sdw', 'config.json');
+    if (fs.existsSync(configFile)) {
+      try {
+        const raw = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+        if (raw.stateDir) {
+          stateDir = path.resolve(raw.stateDir.replace(/\{projectRoot\}/g, normalizePath(root)));
+        }
+      } catch (err) {}
+    }
+  }
   if (!fs.existsSync(stateDir)) {
     fs.mkdirSync(stateDir, { recursive: true });
   }
