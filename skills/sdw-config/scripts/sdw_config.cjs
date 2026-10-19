@@ -634,7 +634,7 @@ function loadConfig(targetRoot, options = {}) {
     }
   }
 
-  const configuredSkillsRoot = typeof rawConfig.skillsRoot === 'string' && rawConfig.skillsRoot.trim()
+  const configuredSkillsRoot = rawConfig && typeof rawConfig.skillsRoot === 'string' && rawConfig.skillsRoot.trim()
     ? normalizePath(path.resolve(root, rawConfig.skillsRoot.trim().replace(/\{projectRoot\}/g, normalizedRoot)))
     : undefined;
   const skillsInfo = resolveSkillsRoot({
@@ -1044,7 +1044,7 @@ function cmdParse(options) {
   }
 
   const normalizedRoot = normalizePath(targetRoot);
-  const configuredSkillsRoot = typeof rawConfig.skillsRoot === 'string' && rawConfig.skillsRoot.trim()
+  const configuredSkillsRoot = rawConfig && typeof rawConfig.skillsRoot === 'string' && rawConfig.skillsRoot.trim()
     ? normalizePath(path.resolve(targetRoot, rawConfig.skillsRoot.trim().replace(/\{projectRoot\}/g, normalizedRoot)))
     : undefined;
   const skillsInfo = resolveSkillsRoot({

@@ -190,7 +190,9 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
   "useFeatureBranches": false,
   "scmProvider": "none",
   "requiredBuild": false,
-  "runAllTests": false
+  "runAllTests": false,
+  "reviewFixCommand": "",
+  "maxPreemptions": 3
 }
 ```
 
@@ -202,6 +204,7 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
 - **Purpose**: Creates `.sdw/`, `.sdw/specs/`, `.sdw/state/`, `.sdw/config.json`, `.sdw/config.schema.json`, and `.sdw/directory-structure.md` in the target project root.
 - **Flags**:
   - `--root <path>`: Explicit project root directory (defaults to current working directory).
+  - `--skills-root <path>`: Explicit active skills directory; `SDW_SKILLS_ROOT` is honored when the flag is absent, and both take precedence over `.sdw/config.json` `skillsRoot`.
   - `--force`: Overwrites existing configuration and documentation files.
   - `--json`: Returns structured JSON summary of created and skipped files.
 - **Exit Code**: Always `0` on success.
@@ -210,13 +213,15 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
 - **Purpose**: Validates presence of `.sdw/`, validates `config.json` against `config.schema.json` (syntax, required keys, types, value bounds), disk existence of `specsDir`, and presence of `directory-structure.md`.
 - **Flags**:
   - `--root <path>`: Explicit project root directory.
-  - `--json`: Emits `{ "valid": boolean, "root": string, "checks": [...], "errors": [...] }`.
+  - `--skills-root <path>`: Optional explicit active skills directory override (falls back to `SDW_SKILLS_ROOT`, then `.sdw/config.json` `skillsRoot`, then auto-detection).
+  - `--json`: Emits `{ "valid": boolean, "root": string, "skillsRoot": string, "skillsMode": string, "checks": [...], "errors": [...] }`.
 - **Exit Code**: `0` when all checks pass; `1` if any check fails.
 
 ### 3.3 `parse`
 - **Purpose**: Reads `.sdw/config.json`, substitutes tokens (e.g. `{projectRoot}`), and outputs the resolved configuration.
 - **Flags**:
   - `--root <path>`: Explicit project root directory.
-  - `--json`: Emits pure JSON formatted output.
+  - `--skills-root <path>`: Optional explicit active skills directory override (precedence: flag, then `SDW_SKILLS_ROOT`, then `.sdw/config.json` `skillsRoot`).
+  - `--json`: Emits pure JSON formatted output including the resolved `projectRoot`, `skillsRoot`, and `skillsMode` (`canonical`, `local`, `global`, or `unknown`).
   - `--key <name>`: Extracts a single resolved configuration key.
 - **Exit Code**: `0` on success; `1` on missing file, invalid JSON, or missing key.

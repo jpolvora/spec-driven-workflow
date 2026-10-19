@@ -26,12 +26,15 @@ function resolveSkillScript(targetRoot, skillName, scriptRelPath, options = {}) 
         ignoreCaller: options.ignoreCaller,
         skillsRoot: options.skillsRoot
       });
-      if (info && info.skillsRoot) {
+      if (info && info.exists && info.skillsRoot) {
         const candidate = path.join(info.skillsRoot, skillName, scriptRelPath);
         if (fs.existsSync(candidate)) return candidate;
       }
     }
   } catch (e) {}
+  // An explicit or configured root that failed validation must fail closed
+  // instead of silently resolving scripts from a co-located installation (AC9).
+  if (options.skillsRoot) return null;
   if (!options.ignoreCaller) {
     const fallback = path.resolve(__dirname, '../../', skillName, scriptRelPath);
     return fs.existsSync(fallback) ? fallback : null;
@@ -595,8 +598,8 @@ function cmdRun(options) {
   }
 
   // AC10: honor the skills root resolved from .sdw/config.json for dynamic script resolution
-  const resolveOptions = (config && config.skillsRoot && !options.skillsRoot)
-    ? { ...options, skillsRoot: config.skillsRoot }
+  const resolveOptions = (detectedSkillsRoot && !options.skillsRoot)
+    ? { ...options, skillsRoot: detectedSkillsRoot }
     : options;
   const effectiveMinScore = options.minScore !== undefined ? options.minScore : (config.scoreMin !== undefined ? config.scoreMin : 8);
 
@@ -1286,7 +1289,11 @@ function cmdRun(options) {
   // Step 7: Delegated Code Review via sdw-code-review (Spec 025)
   // Sole review authority is skills/sdw-code-review; orchestrator dispatches
   // CLI runner (or subagent in handoff) and inspects the JSON report.
-  if (startStep <= 7 && state.steps[7].status !== 'completed' && !options.skipReview) {
+  if (startStep <= 7 && state.steps[7].status !== 'completed' && !options.skipReview && !isGitRepo(targetRoot)) {
+    // sdw-code-review requires a git range to review; a non-git workspace cannot host it.
+    console.log('[Step 7: Delegated Review] Non-git workspace: review skipped.');
+    state = stateManager.updateStepState(targetRoot, state.runId, 7, 'skipped', { reason: 'non-git workspace' });
+  } else if (startStep <= 7 && state.steps[7].status !== 'completed' && !options.skipReview) {
     state = stateManager.updateStepState(targetRoot, state.runId, 7, 'in_progress');
     const resolvedCodeReviewScript = resolveSkillScript(targetRoot, 'sdw-code-review', path.join('scripts', 'sdw_code_review.cjs'), resolveOptions);
     const codeReviewScript = resolvedCodeReviewScript || path.resolve(__dirname, '../../sdw-code-review/scripts/sdw_code_review.cjs');
