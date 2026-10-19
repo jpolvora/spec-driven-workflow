@@ -35,7 +35,7 @@ When executing multiple specifications (`run <spec1> <spec2> ...` or batch queue
 ## Steps
 
 1. **Spec Ingestion & Derivation**
-   Resolve project root and create isolated run state in `.sdw/state/{runId}.state.json`. If `useFeatureBranches: true`, verify clean working tree and activate feature branch (`feature/{specSlug}`). If the spec is human-friendly, derive an agentic spec; if already formatted, skip derivation.
+   Resolve project root and create isolated run state in `.sdw/state/{runId}.state.json`. If `useFeatureBranches: true`, activate feature branch (`feature/{specSlug}`); dirty trees are allowed and never block execution. If the spec is human-friendly, derive an agentic spec; if already formatted, skip derivation.
    - Run: `node skills/sdw-orch/scripts/sdw_orch.cjs run <specPath> [options]`
    - Done when: Run state exists on disk, branch is active, and derivation status recorded.
 
@@ -56,8 +56,8 @@ When executing multiple specifications (`run <spec1> <spec2> ...` or batch queue
    - Done when: Conformance score meets threshold and scoring artifact `{slug}-step-5.md` persisted.
 
 6. **Delivery Commit & Security Gate**
-   Refuse delivery commit if Step 4 is incomplete, any task unaccepted, or any gate failed. Run pre-commit secret leak scan (`sdw-security-checks`) when enabled. Stage and commit delivery changes atomically.
-   - Done when: Step 4 quality guards pass, pre-commit security check passes, and delivery commit exists.
+   Refuse delivery commit if Step 4 is incomplete, any task unaccepted, or any gate failed. Run pre-commit secret leak scan (`sdw-security-checks`) when enabled. Stage and commit only tracked spec files (accepted evidence `filesChanged` + `index.specs.md`); unrelated worktree changes are never staged.
+   - Done when: Step 4 quality guards pass, pre-commit security check passes, and scoped delivery commit exists.
 
 7. **Automated Code Review Loop**
    Compare branch changes to base commit, verifying rule invariants and clean syntax in an iterative loop (up to 3 auto-fix attempts).

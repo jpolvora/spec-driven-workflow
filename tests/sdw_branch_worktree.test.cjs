@@ -197,13 +197,13 @@ test('sdw-orch branch & worktree - AC6, AC8, AC9, AC10: Feature branch creation,
   }
 });
 
-test('sdw-orch branch & worktree - AC7: Refuses feature branch activation on dirty working tree', () => {
+test('sdw-orch branch & worktree - AC7: Dirty tree never blocks; delivery commits only tracked spec files', () => {
   const tmpDir = setupTestRepo();
   try {
     const slug = '003-dirty-tree-test';
     const specPath = createDummySpec(tmpDir, slug);
 
-    // Make tree dirty
+    // Unrelated dirty file must be left alone by scoped commits
     fs.writeFileSync(path.join(tmpDir, 'dirty.txt'), 'uncommitted changes', 'utf8');
 
     const code = sdwOrch.cmdRun({
@@ -214,7 +214,14 @@ test('sdw-orch branch & worktree - AC7: Refuses feature branch activation on dir
       skipReview: true,
       skipPr: true
     });
-    assert.strictEqual(code, 1, 'Must halt with exit code 1 when tree is dirty');
+    assert.strictEqual(code, 0, 'Dirty tree must not halt execution');
+
+    const activeBranch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: tmpDir, encoding: 'utf8' }).trim();
+    assert.strictEqual(activeBranch, `feature/${slug}`, 'Must checkout feature branch despite dirty tree');
+
+    const committed = execSync('git log --oneline --name-only -3', { cwd: tmpDir, encoding: 'utf8' });
+    assert.ok(!committed.split('\n').some(l => l.trim() === 'dirty.txt'), 'Unrelated dirty.txt must not be swept into delivery commits');
+    assert.ok(fs.existsSync(path.join(tmpDir, 'dirty.txt')), 'Unrelated dirty.txt must remain uncommitted in worktree');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

@@ -155,6 +155,131 @@ function git(targetRoot, args, options = {}) {
   return result.stdout;
 }
 
+function normalizeRel(p) {
+  return String(p || '').replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
+function isScopedExcluded(rel) {
+  const n = normalizeRel(rel);
+  return n.startsWith('.sdw/state/') || n === '.sdw/state'
+    || n.startsWith('.sdw/worktrees/') || n === '.sdw/worktrees'
+    || n.startsWith('.git/');
+}
+
+function getStatusFiles(targetRoot) {
+  try {
+    const out = execSync('git status --porcelain', { cwd: targetRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    if (!out) return [];
+    return out.split('\n')
+      .map(l => l.trim().replace(/^[A-Z?]{1,2}\s+/, '').trim().replace(/^"(.*)"$/, '$1'))
+      .filter(Boolean)
+      .map(normalizeRel)
+      .filter(f => !isScopedExcluded(f));
+  } catch (e) {
+    return [];
+  }
+}
+
+function statSignature(targetRoot, rel) {
+  try {
+    const abs = path.join(targetRoot, rel);
+    if (!fs.existsSync(abs)) return '<deleted>';
+    const st = fs.statSync(abs);
+    if (!st.isFile()) return '<dir>';
+    return `${st.mtimeMs}:${st.size}`;
+  } catch (e) {
+    return '<error>';
+  }
+}
+
+function snapshotStats(targetRoot) {
+  const m = new Map();
+  for (const f of getStatusFiles(targetRoot)) {
+    m.set(f, statSignature(targetRoot, f));
+  }
+  return m;
+}
+
+function diffSinceSnapshot(targetRoot, beforeStats) {
+  const afterFiles = getStatusFiles(targetRoot);
+  const delta = [];
+  for (const f of afterFiles) {
+    const before = beforeStats ? beforeStats.get(f) : undefined;
+    const now = statSignature(targetRoot, f);
+    if (before === undefined || before !== now) delta.push(f);
+  }
+  return delta;
+}
+
+function isGitTracked(targetRoot, rel) {
+  const r = spawnSync('git', ['ls-files', '--error-unmatch', rel], { cwd: targetRoot, encoding: 'utf8', stdio: 'ignore' });
+  return r.status === 0;
+}
+
+function stageAndCommitOnly(targetRoot, files, message) {
+  const clean = [...new Set((files || []).map(normalizeRel))]
+    .filter(f => f && !f.includes('..') && !path.isAbsolute(f) && !/^[a-zA-Z]:/.test(f) && !isScopedExcluded(f));
+  const stageable = [];
+  for (const f of clean) {
+    const abs = path.join(targetRoot, f);
+    if (fs.existsSync(abs)) {
+      stageable.push(f);
+    } else if (isGitTracked(targetRoot, f)) {
+      stageable.push(f);
+    }
+  }
+  if (stageable.length === 0) {
+    return { committed: false, commitSha: getBaseCommit(targetRoot), files: [] };
+  }
+  git(targetRoot, ['add', '--', ...stageable], { stdio: 'ignore' });
+  let staged = '';
+  try {
+    staged = execSync('git diff --cached --name-only', { cwd: targetRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch (e) {
+    staged = '';
+  }
+  if (!staged) {
+    return { committed: false, commitSha: getBaseCommit(targetRoot), files: stageable };
+  }
+  git(targetRoot, ['commit', '-m', message], { stdio: 'ignore' });
+  return { committed: true, commitSha: getBaseCommit(targetRoot), files: stageable };
+}
+
+function collectDeliveryFiles(targetRoot, specSlug, state) {
+  const files = new Set();
+  const tasks = (state && state.steps && state.steps[4] && state.steps[4].tasks) || {};
+  for (const t of Object.values(tasks)) {
+    if (t && t.status === 'completed' && Array.isArray(t.filesChanged)) {
+      for (const f of t.filesChanged) {
+        const n = normalizeRel(String(f || '').trim());
+        if (n && !n.includes('..') && !path.isAbsolute(n) && !/^[a-zA-Z]:/.test(n) && !isScopedExcluded(n)) {
+          files.add(n);
+        }
+      }
+    }
+    if (t && t.status === 'completed' && Array.isArray(t.acIds) && t.filesChanged === undefined && Array.isArray(t.files)) {
+      for (const f of t.files) {
+        const n = normalizeRel(String(f || '').trim());
+        if (n && !n.includes('..') && !path.isAbsolute(n) && !isScopedExcluded(n)) files.add(n);
+      }
+    }
+  }
+  try {
+    const cfg = loadProjectConfig(targetRoot);
+    const specsDirAbs = cfg && cfg.specsDir ? path.resolve(cfg.specsDir) : path.join(path.resolve(targetRoot), '.sdw', 'specs');
+    const idxAbs = path.join(specsDirAbs, 'index.specs.md');
+    if (fs.existsSync(idxAbs)) {
+      const rel = normalizeRel(path.relative(path.resolve(targetRoot), idxAbs));
+      if (rel && !rel.includes('..') && !isScopedExcluded(rel)) files.add(rel);
+    }
+  } catch (e) {}
+  const fallbackIdx = '.sdw/specs/index.specs.md';
+  try {
+    if (fs.existsSync(path.join(path.resolve(targetRoot), fallbackIdx))) files.add(fallbackIdx);
+  } catch (e) {}
+  return [...files].sort();
+}
+
 function runSecurityGate(targetRoot, options = {}) {
   try {
     const secScanner = require('../../sdw-security-checks/scripts/sdw_security_checks.cjs');
@@ -225,11 +350,12 @@ function runVerificationGates(targetRoot, config, options = {}) {
         }
 
         console.log(`[Step 4: Verification Gate] Build failed. Attempting automated surgical fix (attempt ${buildAttempts}/${maxFixAttempts})...`);
+        const fixBefore = snapshotStats(targetRoot);
         if (typeof options.buildFixer === 'function') {
           options.buildFixer(targetRoot, buildAttempts);
         }
-        const fixStatus = execSync('git status --porcelain', { cwd: targetRoot, encoding: 'utf8' }).trim();
-        if (fixStatus) {
+        const fixDelta = diffSinceSnapshot(targetRoot, fixBefore);
+        if (fixDelta.length > 0) {
           if (Boolean(config.securityChecksEnabled) && !options.skipSecurity) {
             const sec = runSecurityGate(targetRoot, { staged: false });
             if (sec.exitCode !== 0) {
@@ -242,8 +368,7 @@ function runVerificationGates(targetRoot, config, options = {}) {
               break;
             }
           }
-          execSync('git add -A', { cwd: targetRoot, stdio: 'ignore' });
-          git(targetRoot, ['commit', '-m', `fix(${specSlug}): resolve build failure (attempt ${buildAttempts})`], { stdio: 'ignore' });
+          stageAndCommitOnly(targetRoot, fixDelta, `fix(${specSlug}): resolve build failure (attempt ${buildAttempts})`);
         }
       }
     }
@@ -283,11 +408,12 @@ function runVerificationGates(targetRoot, config, options = {}) {
         }
 
         console.log(`[Step 4: Verification Gate] Tests failed. Attempting automated surgical fix (attempt ${testAttempts}/${maxFixAttempts})...`);
+        const testFixBefore = snapshotStats(targetRoot);
         if (typeof options.testFixer === 'function') {
           options.testFixer(targetRoot, testAttempts);
         }
-        const fixStatus = execSync('git status --porcelain', { cwd: targetRoot, encoding: 'utf8' }).trim();
-        if (fixStatus) {
+        const testFixDelta = diffSinceSnapshot(targetRoot, testFixBefore);
+        if (testFixDelta.length > 0) {
           if (Boolean(config.securityChecksEnabled) && !options.skipSecurity) {
             const sec = runSecurityGate(targetRoot, { staged: false });
             if (sec.exitCode !== 0) {
@@ -300,8 +426,7 @@ function runVerificationGates(targetRoot, config, options = {}) {
               break;
             }
           }
-          execSync('git add -A', { cwd: targetRoot, stdio: 'ignore' });
-          git(targetRoot, ['commit', '-m', `fix(${specSlug}): resolve test failure (attempt ${testAttempts})`], { stdio: 'ignore' });
+          stageAndCommitOnly(targetRoot, testFixDelta, `fix(${specSlug}): resolve test failure (attempt ${testAttempts})`);
         }
       }
     }
@@ -472,22 +597,10 @@ function cmdRun(options) {
   let activeBranch = currentBranch;
   let branchReused = false;
 
-  // Feature branch activation before step 1 (AC6, AC7, AC8)
+  // Feature branch activation before step 1 (AC6, AC8)
+  // Dirty working trees are allowed: execution proceeds independently of git
+  // state and delivery commits stage only tracked spec files (scoped commits).
   if (useFeatureBranches) {
-    // AC7: Refuse dirty working tree
-    try {
-      const statusOut = execSync('git status --porcelain', { cwd: targetRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-      if (statusOut) {
-        console.error(`[Branch Activation] Error: Git working tree is dirty; cannot create or switch feature branch.`);
-        options._runResult = { status: 'failed', error: 'Working tree is dirty; refusing feature branch activation' };
-        return 1;
-      }
-    } catch (gitErr) {
-      console.error(`[Branch Activation] Git error: ${gitErr.message}`);
-      options._runResult = { status: 'failed', error: gitErr.message };
-      return 1;
-    }
-
     const targetBranch = `feature/${specSlug}`;
     if (currentBranch === targetBranch) {
       branchReused = true;
@@ -1050,16 +1163,21 @@ function cmdRun(options) {
         } catch (e) {}
       }
 
-      const statusOut = execSync('git status --porcelain', { cwd: targetRoot, encoding: 'utf8' }).trim();
-      if (statusOut) {
-        console.log(`[Step 6: Delivery Commit] Staging and committing implementation changes...`);
-        execSync('git add -A', { cwd: targetRoot, stdio: 'ignore' });
-        git(targetRoot, ['commit', '-m', `feat(${specSlug}): implement ${specSlug}`], { stdio: 'ignore' });
-        commitSha = getBaseCommit(targetRoot);
-        console.log(`[Step 6: Delivery Commit] Created delivery commit ${commitSha}`);
+      // Scoped delivery commit: stage only tracked spec files (evidence
+      // filesChanged + spec index). Unrelated worktree changes are left alone.
+      const deliveryFiles = collectDeliveryFiles(targetRoot, specSlug, state);
+      if (deliveryFiles.length > 0) {
+        console.log(`[Step 6: Delivery Commit] Staging scoped delivery files (${deliveryFiles.length}): ${deliveryFiles.join(', ')}`);
+        const res = stageAndCommitOnly(targetRoot, deliveryFiles, `feat(${specSlug}): implement ${specSlug}`);
+        commitSha = res.commitSha;
+        if (res.committed) {
+          console.log(`[Step 6: Delivery Commit] Created delivery commit ${commitSha}`);
+        } else {
+          console.log(`[Step 6: Delivery Commit] No scoped changes to commit; using commit ${commitSha}`);
+        }
       } else {
         commitSha = getBaseCommit(targetRoot) || baseCommit;
-        console.log(`[Step 6: Delivery Commit] Working tree clean; using commit ${commitSha}`);
+        console.log(`[Step 6: Delivery Commit] No tracked spec files to commit; using commit ${commitSha}`);
       }
     } catch (err) {
       console.log(`[Step 6: Delivery Commit] Git note: ${err.message}`);
@@ -1095,8 +1213,8 @@ function cmdRun(options) {
         }
       }
       try {
-        execSync('git add -A', { cwd: targetRoot, stdio: 'ignore' });
-        git(targetRoot, ['commit', '-m', `fix(${specSlug}): apply automated review fixes (iteration ${reviewLoop})`], { stdio: 'ignore' });
+        // Scoped review-fix commit: only files the auto-fixer touched.
+        stageAndCommitOnly(targetRoot, fixed, `fix(${specSlug}): apply automated review fixes (iteration ${reviewLoop})`);
       } catch (e) {}
       reviewReport = reviewRunner.runAutomatedReview({ projectRoot: targetRoot, baseCommit: state.baseCommit });
     }
@@ -1130,6 +1248,7 @@ function cmdRun(options) {
         console.log(`[Step 8: Pre-PR Gate] Evaluating project pre-PR instructions: "${config.prePrInstructions}"`);
       }
       if (config.prePrCommand || typeof options.prePrHook === 'function') {
+        const prePrBefore = snapshotStats(targetRoot);
         try {
           if (config.prePrCommand) {
             console.log(`[Step 8: Pre-PR Gate] Executing pre-PR command: "${config.prePrCommand}"...`);
@@ -1138,8 +1257,8 @@ function cmdRun(options) {
           if (typeof options.prePrHook === 'function') {
             options.prePrHook(targetRoot);
           }
-          const prePrStatus = execSync('git status --porcelain', { cwd: targetRoot, encoding: 'utf8' }).trim();
-          if (prePrStatus) {
+          const prePrDelta = diffSinceSnapshot(targetRoot, prePrBefore);
+          if (prePrDelta.length > 0) {
             // Verify secret leaks before staging pre-PR modifications (AC12)
             if (Boolean(config.securityChecksEnabled) && !options.skipSecurity) {
               const secRes = runSecurityGate(targetRoot, { staged: false });
@@ -1150,8 +1269,7 @@ function cmdRun(options) {
                 return 1;
               }
             }
-            execSync('git add -A', { cwd: targetRoot, stdio: 'ignore' });
-            git(targetRoot, ['commit', '-m', `chore(${specSlug}): apply pre-pr requirements`], { stdio: 'ignore' });
+            stageAndCommitOnly(targetRoot, prePrDelta, `chore(${specSlug}): apply pre-pr requirements`);
             state.deliveryCommit = getBaseCommit(targetRoot);
             stateManager.saveRunState(targetRoot, state);
           }
@@ -1191,11 +1309,12 @@ function cmdRun(options) {
                 return 1;
               }
               console.log(`[Step 8: Pre-PR Verification] Build failed. Attempting automated surgical fix (attempt ${buildAttempts}/${maxFixAttempts})...`);
+              const buildFixBefore = snapshotStats(targetRoot);
               if (typeof options.buildFixer === 'function') {
                 options.buildFixer(targetRoot, buildAttempts);
               }
-              const fixStatus = execSync('git status --porcelain', { cwd: targetRoot, encoding: 'utf8' }).trim();
-              if (fixStatus) {
+              const buildFixDelta = diffSinceSnapshot(targetRoot, buildFixBefore);
+              if (buildFixDelta.length > 0) {
                 if (Boolean(config.securityChecksEnabled) && !options.skipSecurity) {
                   const sec = runSecurityGate(targetRoot, { staged: false });
                   if (sec.exitCode !== 0) {
@@ -1205,8 +1324,7 @@ function cmdRun(options) {
                     return 1;
                   }
                 }
-                execSync('git add -A', { cwd: targetRoot, stdio: 'ignore' });
-                git(targetRoot, ['commit', '-m', `fix(${specSlug}): resolve build failure (attempt ${buildAttempts})`], { stdio: 'ignore' });
+                stageAndCommitOnly(targetRoot, buildFixDelta, `fix(${specSlug}): resolve build failure (attempt ${buildAttempts})`);
                 state.deliveryCommit = getBaseCommit(targetRoot);
                 stateManager.saveRunState(targetRoot, state);
               } else {
@@ -1240,11 +1358,12 @@ function cmdRun(options) {
                 return 1;
               }
               console.log(`[Step 8: Pre-PR Verification] Tests failed. Attempting automated surgical fix (attempt ${testAttempts}/${maxFixAttempts})...`);
+              const testFixBefore = snapshotStats(targetRoot);
               if (typeof options.testFixer === 'function') {
                 options.testFixer(targetRoot, testAttempts);
               }
-              const fixStatus = execSync('git status --porcelain', { cwd: targetRoot, encoding: 'utf8' }).trim();
-              if (fixStatus) {
+              const testFixDelta = diffSinceSnapshot(targetRoot, testFixBefore);
+              if (testFixDelta.length > 0) {
                 if (Boolean(config.securityChecksEnabled) && !options.skipSecurity) {
                   const sec = runSecurityGate(targetRoot, { staged: false });
                   if (sec.exitCode !== 0) {
@@ -1254,8 +1373,7 @@ function cmdRun(options) {
                     return 1;
                   }
                 }
-                execSync('git add -A', { cwd: targetRoot, stdio: 'ignore' });
-                git(targetRoot, ['commit', '-m', `fix(${specSlug}): resolve test failure (attempt ${testAttempts})`], { stdio: 'ignore' });
+                stageAndCommitOnly(targetRoot, testFixDelta, `fix(${specSlug}): resolve test failure (attempt ${testAttempts})`);
                 state.deliveryCommit = getBaseCommit(targetRoot);
                 stateManager.saveRunState(targetRoot, state);
               } else {
@@ -1912,5 +2030,10 @@ module.exports = {
   cmdTaskFinish,
   showHelp,
   loadProjectConfig,
-  resolveSpecPath
+  resolveSpecPath,
+  collectDeliveryFiles,
+  stageAndCommitOnly,
+  getStatusFiles,
+  snapshotStats,
+  diffSinceSnapshot
 };

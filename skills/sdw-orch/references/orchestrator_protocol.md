@@ -115,7 +115,7 @@ When multiple specifications are queued (`sdw-orch run spec1 spec2 ...` or `resu
 Configurable feature branch activation and per-task isolated git worktrees:
 
 ### Feature Branch Lifecycle (`useFeatureBranches: true`)
-- **Activation:** Before Step 1 executes, checks that the working tree is clean (`git status --porcelain`). If dirty, halts execution.
+- **Activation:** No working-tree cleanliness gate. Execution proceeds independently of git state; dirty trees never block, refuse, or halt a run.
 - **Naming:** Derives branch name `feature/{specSlug}`.
 - **Switch/Reuse:** If `feature/{specSlug}` already exists, switches to it and marks `branchReused: true`. Otherwise, creates and switches to `feature/{specSlug}` from the resolved base branch.
 - **Metadata:** Records `branch`, `baseBranch`, and `branchReused` in state. Step 8 PR payload includes `head: branch` and `base: baseBranch`.
@@ -171,7 +171,7 @@ Step 4 replaces dummy placeholder behavior with a deterministic implementation e
 - **Validation Rules:**
   - `taskId`: Must match target DAG task.
   - `acIds`: Non-empty subset of specification ACs.
-  - `filesChanged`: Non-empty array of project-relative paths (no absolute paths, no `..` traversal, no `.git/`), files must exist on disk.
+  - `filesChanged`: Non-empty array of project-relative paths (no absolute paths, no `..` traversal, no `.git/`), files must exist on disk or be git-tracked deletions.
   - `tests`: Optional or empty array `[]` for non-testable tasks (e.g. docs, configs).
   - `summary`: Non-empty string.
 - **Change Corroboration:** Changes verified in worktree (or primary tree if non-worktree mode). Empty worktrees or unmodified primary trees are rejected with code 1.
@@ -199,6 +199,8 @@ Step 4 replaces dummy placeholder behavior with a deterministic implementation e
 
 ### Delivery Commit Guard (Step 6)
 - Delivery commit is refused if Step 4 is not `completed`, any DAG task is unaccepted, or any verification gate is not `passed`.
+- **Scoped commits only:** never run `git add -A`. Stage exactly the tracked spec files: accepted evidence `filesChanged` plus `index.specs.md`. Unrelated worktree changes are left uncommitted.
+- Fixer, pre-PR, and review-fix commits stage only their own delta (`diffSinceSnapshot`) or fixer-touched files, never the whole tree.
 
 ### Batch Queue Pause
 - When a batch item halts with code 4 (`awaiting_implementation`), the batch queue pauses, marks the item `awaiting_implementation`, saves manifest with status `paused`, and exits with code 4.
