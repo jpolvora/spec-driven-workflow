@@ -12,7 +12,7 @@
     },
     "specsDir": {
       "type": "string",
-      "description": "Path to the directory containing feature specifications. Supports token {projectRoot}.",
+      "description": "Path to the directory containing feature specifications. Supports tokens {projectRoot} and {skillsRoot}.",
       "default": "{projectRoot}/.sdw/specs"
     },
     "scoreMin": {
@@ -34,8 +34,12 @@
     },
     "stateDir": {
       "type": "string",
-      "description": "Path to the directory storing run session state files. Supports token {projectRoot}.",
+      "description": "Path to the directory storing run session state files. Supports tokens {projectRoot} and {skillsRoot}.",
       "default": "{projectRoot}/.sdw/state"
+    },
+    "skillsRoot": {
+      "type": "string",
+      "description": "Path to the active skills directory. Supports tokens {projectRoot} and {skillsRoot}."
     },
     "autoResolveGaps": {
       "type": "boolean",
@@ -143,6 +147,17 @@
       "type": "string",
       "description": "Optional project-specific instructions or checklist for agents to verify prior to PR submission.",
       "default": ""
+    },
+    "reviewFixCommand": {
+      "type": "string",
+      "description": "Optional command that applies review-thread fixes. When unset, sdw-ship-pr never resolves active threads automatically.",
+      "default": ""
+    },
+    "maxPreemptions": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Maximum concurrent-push adaptation budget for post-PR review convergence before draining rounds.",
+      "default": 3
     }
   },
   "additionalProperties": true

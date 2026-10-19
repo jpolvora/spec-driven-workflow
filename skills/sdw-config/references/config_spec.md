@@ -43,7 +43,7 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
     },
     "specsDir": {
       "type": "string",
-      "description": "Path to the directory containing feature specifications. Supports token {projectRoot}.",
+      "description": "Path to the directory containing feature specifications. Supports tokens {projectRoot} and {skillsRoot}.",
       "default": "{projectRoot}/.sdw/specs"
     },
     "scoreMin": {
@@ -65,8 +65,12 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
     },
     "stateDir": {
       "type": "string",
-      "description": "Path to the directory storing run session state files. Supports token {projectRoot}.",
+      "description": "Path to the directory storing run session state files. Supports tokens {projectRoot} and {skillsRoot}.",
       "default": "{projectRoot}/.sdw/state"
+    },
+    "skillsRoot": {
+      "type": "string",
+      "description": "Path to the active skills directory. Supports tokens {projectRoot} and {skillsRoot}."
     },
     "autoResolveGaps": {
       "type": "boolean",
@@ -123,6 +127,17 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
       "type": "string",
       "description": "Optional project-specific instructions or checklist for agents to verify prior to PR submission.",
       "default": ""
+    },
+    "reviewFixCommand": {
+      "type": "string",
+      "description": "Optional command that applies review-thread fixes. When unset, sdw-ship-pr never resolves active threads automatically.",
+      "default": ""
+    },
+    "maxPreemptions": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Maximum concurrent-push adaptation budget for post-PR review convergence before draining rounds.",
+      "default": 3
     }
   },
   "additionalProperties": true
@@ -134,11 +149,12 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
 | Key | Type | Default | Description |
 |:---|:---|:---|:---|
 | `$schema` | `string` | `"./config.schema.json"` | Schema definition reference for editor autocomplete and validation |
-| `specsDir` | `string` | `"{projectRoot}/.sdw/specs"` | Path to specifications directory (supports `{projectRoot}`) |
+| `specsDir` | `string` | `"{projectRoot}/.sdw/specs"` | Path to specifications directory (supports `{projectRoot}` and `{skillsRoot}`) |
 | `scoreMin` | `integer` | `8` | Minimum acceptable conformance score (range: 0–10) |
 | `scmCodeReviewEnabled` | `boolean` | `false` | Whether remote PR comment polling and automated fix resolution loop is active |
 | `pushDelivery` | `boolean` | `false` | Whether to automatically push delivery commits to remote origin |
-| `stateDir` | `string` | `"{projectRoot}/.sdw/state"` | Path to isolated execution run state directory (supports `{projectRoot}`) |
+| `stateDir` | `string` | `"{projectRoot}/.sdw/state"` | Path to isolated execution run state directory (supports `{projectRoot}` and `{skillsRoot}`) |
+| `skillsRoot` | `string` | — | Path to the active skills directory (supports `{projectRoot}` and `{skillsRoot}`) |
 | `autoResolveGaps` | `boolean` | `true` | Whether to auto-apply recommended grilling defaults when non-interactive |
 | `securityChecksEnabled` | `boolean` | `false` | Enable pre-commit secrets and credentials leak scanning |
 | `useWorktrees` | `boolean` | `false` | Enable per-task isolated git worktrees for dispatched subagents under `.sdw/worktrees/{runId}/` |
@@ -150,10 +166,13 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
 | `testCommand` | `string` | `"npm test"` | Command to execute for test verification pass |
 | `prePrCommand` | `string` | `""` | Optional project-specific shell command to execute before PR preparation |
 | `prePrInstructions` | `string` | `""` | Optional project-specific instructions or checklist for agents to verify prior to PR |
+| `reviewFixCommand` | `string` | `""` | Optional command that applies review-thread fixes. When unset, sdw-ship-pr never resolves active threads automatically |
+| `maxPreemptions` | `integer` | `3` | Maximum concurrent-push adaptation budget for post-PR review convergence before draining rounds |
 
 ### 2.2 Supported Path Tokens
 
 - `{projectRoot}`: Replaced by the absolute, forward-slash normalized path of the consumer project root (e.g., `C:/projects/my-app` or `/home/user/my-app`).
+- `{skillsRoot}`: Replaced by the absolute, forward-slash normalized path of the resolved active skills directory.
 
 ### 2.3 Default Configuration Baseline
 

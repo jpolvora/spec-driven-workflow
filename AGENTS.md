@@ -29,6 +29,7 @@ Mandatory repository rules and development guidelines for all AI agents working 
    - All helper scripts must use **Node.js 22 CommonJS (`.cjs`)** and **Node standard library only** (`fs`, `path`, `process`, `child_process`).
    - Zero runtime npm dependencies are permitted in packaged skills.
    - Never author Python (`.py`) scripts for skill helpers or tooling anchors.
+   - Prefer Node.js for all scripting: use `node -e` / `node *.cjs` for local computation, file parsing, templating, and automation. Use Python only when explicitly requested by the user or required by external tooling.
 
 4. **Deterministic Tool Anchors:**
    - Skills must invoke helpers via explicit launchers (e.g., `node skills/<skill-name>/scripts/<helper>.cjs`).

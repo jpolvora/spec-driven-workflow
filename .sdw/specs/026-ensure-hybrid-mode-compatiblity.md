@@ -26,7 +26,7 @@ Eliminates the rigid assumption that SDW skills must reside in the immediate wor
 ## Acceptance Criteria
 
 - AC1: The system shall support a {skillsRoot} token in .sdw/config.json and runtime path resolution that resolves to the active skills installation directory.
-- AC2: When resolving the skills root directory, the system shall inspect explicit CLI or environment overrides, the enclosing directory of the executing script, project-local skills directories, and the global user directory in strict order.
+- AC2: When resolving the skills root directory, the system shall inspect explicit CLI or environment overrides, project-local canonical and consumer skills directories, the enclosing directory of the executing script, and the global user directory in strict order.
 - AC3: While executing within a project containing local skills, the system shall resolve cross-skill references to the project-local skills root.
 - AC4: While executing within a project lacking local skills, the system shall resolve cross-skill references to the global user skills root in $HOME/.agents/skills.
 - AC5: When sdw-config init executes in a project under hybrid mode, the system shall generate local .sdw configuration defaults without polluting the global skills directory.
@@ -40,9 +40,9 @@ Eliminates the rigid assumption that SDW skills must reside in the immediate wor
 
 - **Dynamic Skills Root Resolution Precedence:**
   1. Explicit CLI argument (`--skills-root <path>`) or environment variable (`SDW_SKILLS_ROOT`).
-  2. Enclosing skill path: If the current executing script `__dirname` resides inside a skills tree (matching `.../skills/<skill-name>/...`), resolve the parent `skills` directory.
-  3. Canonical repository root: `{projectRoot}/skills` (if exists and contains at least one valid SDW skill).
-  4. Consumer project-local directory: `{projectRoot}/.agents/skills` (if exists and contains at least one valid SDW skill).
+  2. Canonical repository root: `{projectRoot}/skills` (if exists and contains at least one valid SDW skill).
+  3. Consumer project-local directory: `{projectRoot}/.agents/skills` (if exists and contains at least one valid SDW skill).
+  4. Enclosing skill path: If the current executing script `__dirname` resides inside a skills tree (matching `.../skills/<skill-name>/...`), resolve the parent `skills` directory.
   5. User-level shared directory: `$HOME/.agents/skills` (or `%USERPROFILE%/.agents/skills` on Windows, normalized with forward slashes).
 
 - **Deployment Mode Classifications:**

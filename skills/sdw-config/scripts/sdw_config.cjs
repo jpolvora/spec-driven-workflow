@@ -77,13 +77,21 @@ function resolveSkillsRoot(options = {}) {
   const explicit = options.skillsRoot || process.env.SDW_SKILLS_ROOT;
   if (explicit && typeof explicit === 'string' && explicit.trim()) {
     const norm = normalizePath(path.resolve(explicit.trim()));
-    if (fs.existsSync(norm) && fs.statSync(norm).isDirectory()) {
+    let isDir = false;
+    try { isDir = fs.statSync(norm).isDirectory(); } catch (e) { isDir = false; }
+    if (!isDir) {
       return {
         skillsRoot: norm,
-        mode: detectSkillsMode(norm, options.root, options.homeDir),
-        exists: true
+        mode: 'unknown',
+        exists: false,
+        error: `Configured skillsRoot does not exist or is not a directory: ${norm}`
       };
     }
+    return {
+      skillsRoot: norm,
+      mode: detectSkillsMode(norm, options.root, options.homeDir),
+      exists: true
+    };
   }
 
   const targetRoot = options.root ? path.resolve(options.root) : findProjectRoot(process.cwd());
@@ -578,6 +586,13 @@ function validateConfigSchema(config) {
     }
   }
 
+  // maxPreemptions
+  if ('maxPreemptions' in config) {
+    if (typeof config.maxPreemptions !== 'number' || !Number.isInteger(config.maxPreemptions) || config.maxPreemptions < 0) {
+      errors.push('Property "maxPreemptions" must be a non-negative integer.');
+    }
+  }
+
   return {
     valid: errors.length === 0,
     errors
@@ -932,14 +947,18 @@ function cmdCheck(options) {
 
   // 6. Check skillsRoot resolution (AC6, AC9)
   const hasSkills = Boolean(skillsInfo && skillsInfo.exists);
+  const skillsDetail = hasSkills
+    ? `Mode: ${skillsInfo.mode} (${skillsInfo.skillsRoot})`
+    : (skillsInfo && skillsInfo.error ? skillsInfo.error : 'Missing skills directory on disk');
   checks.push({
     name: 'skills_root_resolution',
-    target: hasSkills ? skillsInfo.skillsRoot : 'none',
+    target: hasSkills ? skillsInfo.skillsRoot : (skillsInfo && skillsInfo.skillsRoot ? skillsInfo.skillsRoot : 'none'),
     passed: hasSkills,
-    detail: hasSkills ? `Mode: ${skillsInfo.mode} (${skillsInfo.skillsRoot})` : 'Missing skills directory on disk'
+    detail: skillsDetail
   });
   if (!hasSkills) {
     valid = false;
+    if (skillsInfo && skillsInfo.error) errors.push(skillsInfo.error);
     errors.push('No valid skills directory found on disk (checked project-local and global $HOME/.agents/skills).');
   }
 

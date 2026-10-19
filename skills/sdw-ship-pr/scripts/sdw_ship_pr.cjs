@@ -31,7 +31,11 @@ function assertSafeRef(ref, label) {
 
 function resolveStateDir(projectRoot, config = {}) {
   const configured = config.stateDir || '{projectRoot}/.sdw/state';
-  const raw = String(configured).replace(/\{projectRoot\}/g, projectRoot);
+  let skillsRootVal = typeof config.skillsRoot === 'string' && config.skillsRoot.trim()
+    ? config.skillsRoot.replace(/\{projectRoot\}/g, projectRoot)
+    : projectRoot;
+  if (skillsRootVal.includes('{skillsRoot}')) skillsRootVal = projectRoot;
+  const raw = String(configured).replace(/\{projectRoot\}/g, projectRoot).replace(/\{skillsRoot\}/g, skillsRootVal).replace(/\{projectRoot\}/g, projectRoot);
   return path.isAbsolute(raw) ? path.normalize(raw) : path.resolve(projectRoot, raw);
 }
 
@@ -146,6 +150,13 @@ function parseArgs(args) {
  * Loads project configuration from .sdw/config.json
  */
 function loadConfig(projectRoot = process.cwd()) {
+  try {
+    const sdwConfig = require('../../sdw-config/scripts/sdw_config.cjs');
+    if (sdwConfig && typeof sdwConfig.loadConfig === 'function') {
+      const loaded = sdwConfig.loadConfig(projectRoot);
+      if (loaded && typeof loaded === 'object') return loaded;
+    }
+  } catch (e) {}
   const configPath = path.join(projectRoot, '.sdw', 'config.json');
   if (fs.existsSync(configPath)) {
     try {
@@ -494,9 +505,9 @@ async function runShipPr(options = {}, customExecutor = null) {
         // superseded run (cancelled by a newer push) is recognized as preemption,
         // not failure. A preempted round grants the replacement run a fresh
         // convergence window instead of burning the iteration budget.
-        const FAILED_CHECK_STATES = new Set(['fail', 'failure', 'action_required']);
+        const FAILED_CHECK_STATES = new Set(['fail', 'failure', 'failed', 'action_required', 'rejected', 'broken']);
         const SUPERSEDED_CHECK_STATES = new Set(['cancelled', 'cancel', 'timed_out', 'startup_failure']);
-        const PENDING_CHECK_STATES = new Set(['pending', 'in_progress', 'queued', 'waiting']);
+        const PENDING_CHECK_STATES = new Set(['pending', 'in_progress', 'queued', 'waiting', 'running']);
         const stateOf = c => String(c.state || '').toLowerCase();
         const bucketOf = c => String(c.bucket || '').toLowerCase();
         const isFailedCheck = c => !isSupersededCheck(c) && (FAILED_CHECK_STATES.has(stateOf(c)) || FAILED_CHECK_STATES.has(bucketOf(c)));
