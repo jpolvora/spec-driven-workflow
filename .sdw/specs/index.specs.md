@@ -20,3 +20,4 @@ Central repository index tracking specification lifecycle states, metadata, and 
 | 006 | 006-packaging-installer-updater | Packaging, Distribution, and Vercel Skills Compatibility | pending | local | 2026-10-19 | PASS | - |
 | 007 | 007-sdw-memory-skill | SDW Memory Skill & Anti-Regression Project Memory | pending | local | 2026-10-19 | PASS | - |
 | 008 | 008-sdw-rules-skill | SDW Rules Shared Skill — Simplicity, Scope Enclosure, and Anti-Overengineering | pending | local | 2026-10-19 | PASS | - |
+| 009 | 009-sdw-security-checks | SDW Security Checks Skill — Configurable Pre-Commit Secrets & Leak Gate | pending | local | 2026-10-19 | PASS | - |
