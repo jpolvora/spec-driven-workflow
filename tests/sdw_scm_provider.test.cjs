@@ -213,9 +213,10 @@ test('sdw-scm-provider - AC16: sdw-config check reports scmProvider and CLI capa
     let jsonOutput = '';
     const origLog = console.log;
     console.log = (msg) => { jsonOutput += msg + '\n'; };
+    const skillsFixture = path.resolve(__dirname, '../skills');
     try {
       // Default none
-      const resNone = sdwConfig.cmdCheck({ root: tmpDir, json: true });
+      const resNone = sdwConfig.cmdCheck({ root: tmpDir, skillsRoot: skillsFixture, json: true });
       assert.strictEqual(resNone, 0);
 
       // Set invalid provider
@@ -227,7 +228,7 @@ test('sdw-scm-provider - AC16: sdw-config check reports scmProvider and CLI capa
       // Reset the capture so the invalid run is asserted in isolation: the
       // default none run already emits scm_provider_status with passed true.
       jsonOutput = '';
-      const resInvalid = sdwConfig.cmdCheck({ root: tmpDir, json: true });
+      const resInvalid = sdwConfig.cmdCheck({ root: tmpDir, skillsRoot: skillsFixture, json: true });
       assert.strictEqual(resInvalid, 1, 'Check must fail on invalid scmProvider');
     } finally {
       console.log = origLog;
