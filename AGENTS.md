@@ -137,6 +137,7 @@ This repository uses Spec-Driven Workflow for spec management, configuration, an
 ** Do not forget to update `.sdw/directory-structure.md` file to reflect updated layout for the consumer project as evolves
 ** Never reference files with hardcoded full OS paths. Use always relative paths to the project root.
 ** When dealing with paths and files references, use token paths and resolve correctly.
+** When new configuration keys for .sdw/config.json are available, update the config file with the default value and in case of an appropriated value can be inferred/detected, do it. Also if some config key/value is not available/has removed from schema and it is outdated/ignored, remove it from the config file.
 
 ## 9. Checklist for preparing PR:
 

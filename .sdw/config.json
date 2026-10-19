@@ -2,9 +2,37 @@
   "$schema": "./config.schema.json",
   "specsDir": "{projectRoot}/.sdw/specs",
   "scoreMin": 8,
-  "scmCodeReviewEnabled": false,
+  "scmCodeReviewEnabled": true,
+  "pushDelivery": true,
   "stateDir": "{projectRoot}/.sdw/state",
   "autoResolveGaps": true,
+  "securityChecksEnabled": true,
+  "useWorktrees": false,
+  "useFeatureBranches": false,
+  "scmProvider": "github",
+  "implementation": {
+    "mode": "handoff",
+    "command": null,
+    "timeoutMs": 1800000,
+    "envAllowlist": [
+      "PATH",
+      "HOME",
+      "USERPROFILE",
+      "TEMP",
+      "TMP",
+      "LANG",
+      "LC_ALL"
+    ]
+  },
+  "verification": {
+    "buildCommand": null,
+    "testCommand": "npm test",
+    "timeoutMs": 600000
+  },
   "requiredBuild": false,
-  "runAllTests": false
+  "buildCommand": "npm run build",
+  "runAllTests": true,
+  "testCommand": "npm test",
+  "prePrCommand": "",
+  "prePrInstructions": ""
 }
