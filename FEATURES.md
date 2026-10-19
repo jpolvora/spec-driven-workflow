@@ -78,7 +78,7 @@
 - **Automated Workspace Scaffolding (`init`):** Bootstraps consumer repositories with canonical `.sdw/` directory trees, baseline `config.json`, and directory documentation.
 - **Dynamic Token Resolution (`parse`):** Seamlessly substitutes environment tokens (such as `{projectRoot}`) across paths on Windows and POSIX systems.
 - **JSON Schema Validation Gate (`check`):** Validates workspace configuration against `config.schema.json` to prevent invalid configurations from halting agent workflows.
-- **Extensible Governance:** Centralizes scoring thresholds (`scoreMin`), remote code review flags (`scmCodeReviewEnabled`), branch push behaviors (`pushDelivery`), and specs directories.
+- **Extensible Governance & SCM Provider Selection:** Centralizes scoring thresholds (`scoreMin`), remote code review flags (`scmCodeReviewEnabled`), branch push behaviors (`pushDelivery`), feature branches (`useFeatureBranches`), task worktrees (`useWorktrees`), security checks (`securityChecksEnabled`), and explicit SCM provider routing (`scmProvider`: `none` | `ado` | `github`) with fail-safe disable modes and CLI capability verification in `check`.
 
 ---
 
@@ -114,11 +114,12 @@
 *Engineering rigor backed by 100% native automated tests.*
 
 - **Native Node.js Test Runner:** Built with `node:test` and `node:assert/strict` — zero third-party testing frameworks required.
-- **77 Comprehensive Test Scenarios:**
+- **84 Comprehensive Test Scenarios:**
   - `sdw_config.test.cjs`: Configuration parsing, schema validation, token expansion, and initialization gates.
   - `sdw_spec.test.cjs`: Index bootstrapping, EARS validation, synthesis, SCM provider contract, state synchronization, and archival quality gates.
   - `sdw_orch.test.cjs`: State machine transitions, derivation, grilling decision trees, DAG decomposition, scoring gates, code review auto-fixing, remote push publishing, and unattended multi-spec batch queue execution.
   - `sdw_branch_worktree.test.cjs`: Feature branch lifecycle, dirty tree refusal, branch reuse, worktree creation/cleanup, cherry-pick integration, and runtime overrides.
+  - `sdw_scm_provider.test.cjs`: SCM provider resolution, capability checks, safe disable modes, strict CLI isolation (`gh` vs `az`), and orchestrator polling integration.
   - `sdw_router.test.cjs`: Minimal context budget enforcement (SKILL.md ≤ 120 lines), explicit invocations, keyword classification, tied-confidence disambiguation, missing directory resolution, and pass-through non-interference.
   - `sdw_rules.test.cjs`: Three-tier progressive disclosure, announcement banners, Karpathy simplicity principles, doctor compliance verification, scope creep audits, and trap logging.
   - `sdw_security_checks.test.cjs`: Secrets scanning, staged diff inspection, redaction hygiene, pragma suppression, fail-closed gate handling, and orchestrator bypass verification.
@@ -133,6 +134,5 @@ The following specifications are scheduled for upcoming execution phases:
 - **006 — Packaging & Vercel Skills Compatibility:** Standalone npm packaging, one-command installer, and seamless distribution across `.agents/skills/`.
 - **007 — SDW Memory Skill:** Integrated anti-regression project memory and vault trap retrieval.
 - **011 — GitHub Actions CI/CD Integration:** Automated workflow runs, agentic PR reviews, and skill distribution pipelines.
-- **012 — SCM Provider Selection:** Granular GitHub / Azure DevOps routing with fail-safe disable modes.
 - **013 — Refinement Step & Pre-PR Gates:** Refinement step merging grilling with technical planning, build/test gates, and pre-PR lifecycle hooks.
 - **014 — Step Artifacts Persistence:** Per-step human-auditable markdown artifacts persistence under `{stateDir}/{slug}/{runId}/`.
