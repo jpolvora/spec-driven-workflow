@@ -207,13 +207,36 @@ npx skills update
 npx skills remove sdw-orch
 ```
 
-Installed layout (project scope, OpenCode / Cursor / Codex / Amp / Replit share `.agents/skills/`; Claude Code also links under `.claude/skills/`):
+### Global install (`$HOME/.agents/skills`)
+
+Global-only install — user-level (`$HOME/.agents/skills`) instead of project (`./.agents/skills`), cwd-independent:
+
+```bash
+npx skills add jpolvora/spec-driven-workflow -g --all
+```
+
+- `-g`: installs globally (user-level) instead of project-level.
+- `--all`: shorthand for `-s '*' -a '*' -y` (all skills, all agents, no prompts), same as the project test but global.
+- Subset (global, non-interactive):
+
+```bash
+npx skills add jpolvora/spec-driven-workflow -g -s sdw-spec,sdw-orch -y
+```
+
+- Verify:
+
+```bash
+npx skills list -g
+```
+
+Installed layout (project scope under `<projectRoot>/.agents/skills/`, global scope under `$HOME/.agents/skills/`; OpenCode / Cursor / Codex share `.agents/skills/`; Claude Code also links under `.claude/skills/`):
 
 ```text
 <projectRoot>/.agents/skills/sdw-orch/SKILL.md
 <projectRoot>/.agents/skills/sdw-spec/SKILL.md
 ...
 <projectRoot>/skills-lock.json
+# global equivalent: $HOME/.agents/skills/sdw-orch/SKILL.md, ...
 ```
 
 ### After install: initialize the workspace
