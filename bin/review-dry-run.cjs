@@ -5,11 +5,13 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-const REVIEWER_URL = 'https://raw.githubusercontent.com/jpolvora/agentic-code-reviewers/release/run.sh';
+const REVIEWER_BASE_URL = 'https://raw.githubusercontent.com/jpolvora/agentic-code-reviewers';
+const REVIEWER_DEFAULT_REF = 'release';
 const DEFAULT_ENGINE = 'opencode';
-const DEFAULT_MODEL = 'opencode-go/deepseek-v4.1-flash';
+const DEFAULT_MODEL = 'opencode-go/claude-haiku-5-5';
 const DEFAULT_VARIANT = 'medium';
 const DEFAULT_TIMEOUT_MS = '1200000';
+const DEFAULT_MAX_ROUNDS = '20';
 const DEFAULT_TARGET_BRANCH = 'refs/heads/master';
 const PINNED_OPENCODE_VERSION = '1.19.1';
 const EXTRA_EXCLUDES = '.sdw/state/**';
@@ -24,11 +26,20 @@ function resolveReviewerConfig(env = process.env) {
   const variant = String(env.AGENTIC_CODE_REVIEWERS_VARIANT || DEFAULT_VARIANT).trim() || DEFAULT_VARIANT;
   const targetBranch =
     String(env.AGENTIC_CODE_REVIEWERS_TARGET_BRANCH || DEFAULT_TARGET_BRANCH).trim() || DEFAULT_TARGET_BRANCH;
+  const ref = String(env.AGENTIC_CODE_REVIEWERS_REF || REVIEWER_DEFAULT_REF).trim() || REVIEWER_DEFAULT_REF;
+  if (!/^[A-Za-z0-9._/-]+$/.test(ref) || ref.includes('..')) {
+    throw new Error(`Invalid AGENTIC_CODE_REVIEWERS_REF: "${ref}".`);
+  }
+  const sha256 = String(env.AGENTIC_CODE_REVIEWERS_SHA256 || '').trim();
   const credential = engine === 'cursor-sdk' ? 'CURSOR_API_KEY' : 'OPENCODE_API_KEY';
   if (!String(env[credential] || '').trim()) {
     throw new Error(`${credential} is required for reviewer engine ${engine}`);
   }
-  return { requestedEngine, engine, model, variant, targetBranch };
+  return { requestedEngine, engine, model, variant, targetBranch, ref, sha256 };
+}
+
+function resolveReviewerUrl(config) {
+  return `${REVIEWER_BASE_URL}/${config.ref}/run.sh`;
 }
 
 function buildReviewerArgs(config) {
@@ -112,6 +123,8 @@ function buildReviewerEnv(config, pinned, env = process.env) {
     AGENTIC_CODE_REVIEWERS_EXTRA_EXCLUDE_PATTERNS: EXTRA_EXCLUDES,
     AGENTIC_CODE_REVIEWERS_TIMEOUT_MS:
       String(env.AGENTIC_CODE_REVIEWERS_TIMEOUT_MS || '').trim() || DEFAULT_TIMEOUT_MS,
+    AGENTIC_CODE_REVIEWERS_MAX_ROUNDS:
+      String(env.AGENTIC_CODE_REVIEWERS_MAX_ROUNDS || '').trim() || DEFAULT_MAX_ROUNDS,
   };
   if (pinned) {
     next.AGENTIC_CODE_REVIEWERS_OPENCODE_BIN = pinned.bin;
@@ -128,9 +141,17 @@ function run() {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-review-'));
   const runnerPath = path.join(tempRoot, 'run.sh');
   try {
-    const download = spawnSync('curl', ['-fsSL', REVIEWER_URL, '-o', runnerPath], { stdio: 'inherit' });
+    const reviewerUrl = resolveReviewerUrl(config);
+    const download = spawnSync('curl', ['-fsSL', reviewerUrl, '-o', runnerPath], { stdio: 'inherit' });
     if (download.error) throw download.error;
     if (download.status !== 0) return download.status || 1;
+    if (config.sha256) {
+      const crypto = require('crypto');
+      const digest = crypto.createHash('sha256').update(fs.readFileSync(runnerPath)).digest('hex');
+      if (digest !== config.sha256.toLowerCase()) {
+        throw new Error(`Reviewer script checksum mismatch for ref "${config.ref}".`);
+      }
+    }
 
     if (pinned) {
       process.stdout.write(`Reviewer engine: ${config.engine} (OpenCode ${pinned.version})\n`);
@@ -153,6 +174,7 @@ module.exports = {
   buildReviewerArgs,
   buildReviewerEnv,
   resolveReviewerConfig,
+  resolveReviewerUrl,
   resolvePinnedOpencode,
   run,
 };

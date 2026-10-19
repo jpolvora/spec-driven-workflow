@@ -210,21 +210,64 @@ test('sdw-scm-provider - AC4, AC5, AC6: Import routes to configured provider and
 test('sdw-scm-provider - AC16: sdw-config check reports scmProvider and CLI capability', () => {
   const tmpDir = setupTestRepo();
   try {
-    // Default none
-    const resNone = sdwConfig.cmdCheck({ root: tmpDir, json: true });
-    assert.strictEqual(resNone, 0);
+    let jsonOutput = '';
+    const origLog = console.log;
+    console.log = (msg) => { jsonOutput += msg + '\n'; };
+    const skillsFixture = path.resolve(__dirname, '../skills');
+    try {
+      // Default none
+      const resNone = sdwConfig.cmdCheck({ root: tmpDir, skillsRoot: skillsFixture, json: true });
+      assert.strictEqual(resNone, 0);
 
-    // Set invalid provider
-    const cfgPath = path.join(tmpDir, '.sdw', 'config.json');
-    const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
-    cfg.scmProvider = 'invalid_scm';
-    fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
+      // Set invalid provider
+      const cfgPath = path.join(tmpDir, '.sdw', 'config.json');
+      const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+      cfg.scmProvider = 'invalid_scm';
+      fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
 
-    const resInvalid = sdwConfig.cmdCheck({ root: tmpDir, json: true });
-    assert.strictEqual(resInvalid, 1, 'Check must fail on invalid scmProvider');
+      // Reset the capture so the invalid run is asserted in isolation: the
+      // default none run already emits scm_provider_status with passed true.
+      jsonOutput = '';
+      const resInvalid = sdwConfig.cmdCheck({ root: tmpDir, skillsRoot: skillsFixture, json: true });
+      assert.strictEqual(resInvalid, 1, 'Check must fail on invalid scmProvider');
+    } finally {
+      console.log = origLog;
+    }
+    const invalidReport = JSON.parse(jsonOutput);
+    const statusCheck = invalidReport.checks.find(c => c.name === 'scm_provider_status');
+    assert.ok(statusCheck, 'Invalid provider check must be reported');
+    assert.strictEqual(statusCheck.passed, false);
+    assert.match(statusCheck.detail, /Unsupported or invalid SCM provider/);
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
+});
+
+test('sdw-scm-provider - resolution guard strips the internal marker before validating', async () => {
+  const provider = createScmProvider('github', {
+    executor: () => { throw new Error('must not reach network'); }
+  });
+  await assert.rejects(
+    provider.resolveReviewThread({ prNumber: 1, threadId: 'PRRT_x', comment: '<!-- resolution-reply -->\nabc1234', dryRun: true }),
+    /cannot be empty or a bare commit hash/,
+    'marker plus bare hash must be rejected'
+  );
+  await assert.rejects(
+    provider.resolveReviewThread({ prNumber: 1, threadId: 'PRRT_x', comment: 'abc1234', dryRun: true }),
+    /cannot be empty or a bare commit hash/,
+    'bare hash must be rejected'
+  );
+  for (const hashOnly of ['abc123', 'a'.repeat(64), '`abc1234`', '"abc1234"', '<!-- resolution-reply -->\n`abc123`']) {
+    await assert.rejects(
+      provider.resolveReviewThread({ prNumber: 1, threadId: 'PRRT_x', comment: hashOnly, dryRun: true }),
+      /cannot be empty or a bare commit hash/,
+      `hash-only comment must be rejected: ${hashOnly.slice(0, 30)}`
+    );
+  }
+  const ok = await provider.resolveReviewThread({ prNumber: 1, threadId: 'PRRT_x', comment: '<!-- resolution-reply -->\nFixed the guard.', dryRun: true });
+  assert.strictEqual(ok.resolved, true, 'marker plus explanation must be accepted');
+  const okHash = await provider.resolveReviewThread({ prNumber: 1, threadId: 'PRRT_x', comment: 'Fixed in commit abc1234.', dryRun: true });
+  assert.strictEqual(okHash.resolved, true, 'explanation containing a hash must be accepted');
 });
 
 test('sdw-scm-provider - AC14, AC15, AC17, AC20: Orchestrator Step 8 skips polling when scmProvider is none and records in state', () => {

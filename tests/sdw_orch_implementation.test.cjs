@@ -558,7 +558,8 @@ test('AC33, AC34, AC35, AC36: Config schema validates implementation/verificatio
     };
     fs.writeFileSync(cfgPath, JSON.stringify(validCfg, null, 2), 'utf8');
 
-    const schemaValidation = sdwConfig.cmdCheck({ root: tmpDir });
+    const skillsFixture = path.resolve(__dirname, '../skills');
+    const schemaValidation = sdwConfig.cmdCheck({ root: tmpDir, skillsRoot: skillsFixture });
     assert.equal(schemaValidation, 0, 'Config with implementation & verification sections validates cleanly (AC33, AC34)');
 
     // AC35, AC36: Reject legacy state with only { tasksPrepared }

@@ -37,6 +37,7 @@ Parameters:
 - `--poll-pr`: Enable post-PR review polling and convergence loop.
 - `--max-iterations <n>`: Review convergence ceiling (default `3`).
 - `--poll-interval <ms>`: Wait between convergence rounds (default `20000`).
+- `--max-preemptions <n>`: Concurrent-push adaptation budget (default `3`).
 - `--dry-run`: Simulate pre-PR checks, branch push, PR creation, and review polling without remote mutations.
 - `--json`: Output structured JSON execution report.
 
@@ -69,10 +70,11 @@ Detailed protocol: [`references/ship_protocol.md`](references/ship_protocol.md).
 1. When `scmProvider` is `none`: skip remote PR creation, log local delivery readiness, and return exit 0.
 2. When `scmProvider` is `github` or `ado`:
    - Assemble PR title and body from specification or CLI parameters.
-   - Query open PRs matching `<head>` into `<base>` using the unified SCM provider contract.
-   - If an open PR exists, reuse its number and URL.
+   - Query open PRs matching `<head>` into `<base>` using the unified SCM provider contract (`findActivePullRequest`).
+   - If an open PR exists, reuse its number and URL. Complement the active PR: push commits to the PR branch and update the PR description with the amending delivery details (`### Amending Delivery: {specSlug}`).
+   - While amending an active PR undergoing review/approval is not a recommended practice, adapt as a non-blocking operation: continue the delivery process without failing or blocking.
    - Otherwise, create a new pull request via `provider.createPullRequest({ title, body, head, base, dryRun })`.
-- Done when: Pull request number and URL are captured or reused, or SCM creation skipped cleanly.
+- Done when: Pull request number and URL are captured or reused, description amended if reused, or SCM creation skipped cleanly.
 
 ### Step 5: Post-PR Review Convergence (Cooperative & Proactive Fix Cycle)
 1. When `scmCodeReviewEnabled: true` or `--poll-pr` passed (and `scmProvider != "none"`):
@@ -86,6 +88,7 @@ Detailed protocol: [`references/ship_protocol.md`](references/ship_protocol.md).
      f. **Push:** Push the commit to the remote tracking branch: `git push origin <head>`.
      g. **Close related threads with comment:** **Only after pushing**, call `provider.resolveReviewThread({ prNumber, threadId, comment })` for each addressed thread, posting an informative comment explaining the fix that was implemented (commit SHA, files modified, changes made, and why it resolves the issue).
 2. If unresolved issues remain after maximum iterations, record review residual and report status. Never close a thread before pushing, and never close without an explanatory fix comment.
+3. **Concurrent-push adaptation:** Cancelled/superseded CI checks (`cancelled`, `cancel`) are waited out, never treated as failures; terminal states (`timed_out`, `startup_failure`) stay on the fixer/blocker path. When a newer run replaces the observed one, the loop resets its round window (up to `--max-preemptions` times) and follows the latest status instead of halting.
 - Done when: Active threads resolved with explanatory comments after push and CI checks green, or iteration ceiling reached with status recorded.
 
 ### Step 6: Delivery Outcome & State Persistence

@@ -15,7 +15,40 @@ const artifactWriter = require('./artifact_writer.cjs');
 const implementationRunner = require('./implementation_runner.cjs');
 const evidenceValidator = require('./evidence_validator.cjs');
 
-function getSpecIndexHelper() {
+function resolveSkillScript(targetRoot, skillName, scriptRelPath, options = {}) {
+  try {
+    const sdwConfig = require('../../sdw-config/scripts/sdw_config.cjs');
+    if (sdwConfig && typeof sdwConfig.resolveSkillsRoot === 'function') {
+      const info = sdwConfig.resolveSkillsRoot({
+        root: targetRoot,
+        callerDir: options.callerDir !== undefined ? options.callerDir : __dirname,
+        homeDir: options.homeDir,
+        ignoreCaller: options.ignoreCaller,
+        skillsRoot: options.skillsRoot
+      });
+      if (info && info.exists && info.skillsRoot) {
+        const candidate = path.join(info.skillsRoot, skillName, scriptRelPath);
+        if (fs.existsSync(candidate)) return candidate;
+      }
+    }
+  } catch (e) {}
+  // An explicit or configured root that failed validation must fail closed
+  // instead of silently resolving scripts from a co-located installation (AC9).
+  if (options.skillsRoot) return null;
+  if (!options.ignoreCaller) {
+    const fallback = path.resolve(__dirname, '../../', skillName, scriptRelPath);
+    return fs.existsSync(fallback) ? fallback : null;
+  }
+  return null;
+}
+
+function getSpecIndexHelper(targetRoot, options = {}) {
+  try {
+    const scriptPath = resolveSkillScript(targetRoot, 'sdw-spec', path.join('scripts', 'spec_index.cjs'), options);
+    if (scriptPath) {
+      return require(scriptPath);
+    }
+  } catch (e) {}
   try {
     return require('../../sdw-spec/scripts/spec_index.cjs');
   } catch (e) {
@@ -23,7 +56,13 @@ function getSpecIndexHelper() {
   }
 }
 
-function getScmProviderContract() {
+function getScmProviderContract(targetRoot, options = {}) {
+  try {
+    const scriptPath = resolveSkillScript(targetRoot, 'sdw-spec', path.join('scripts', 'scm_provider_contract.cjs'), options);
+    if (scriptPath) {
+      return require(scriptPath);
+    }
+  } catch (e) {}
   try {
     return require('../../sdw-spec/scripts/scm_provider_contract.cjs');
   } catch (e) {
@@ -62,6 +101,7 @@ function parseArgs(args) {
     featureBranch: false,
     taskId: null,
     evidencePath: null,
+    skillsRoot: null,
     implementationMode: null
   };
 
@@ -92,6 +132,8 @@ function parseArgs(args) {
     else if (arg.startsWith('--batch-id=')) result.batchId = arg.slice(11);
     else if (arg === '--root') result.root = args[++i];
     else if (arg.startsWith('--root=')) result.root = arg.slice(7);
+    else if (arg === '--skills-root') result.skillsRoot = args[++i];
+    else if (arg.startsWith('--skills-root=')) result.skillsRoot = arg.slice(14);
     else if (arg === '--run-id') result.runId = args[++i];
     else if (arg.startsWith('--run-id=')) result.runId = arg.slice(9);
     else if (arg === '--task' || arg === '--task-id') result.taskId = args[++i];
@@ -136,6 +178,15 @@ function getBaseCommit(projectRoot) {
   }
 }
 
+function isGitRepo(projectRoot) {
+  try {
+    const res = spawnSync('git', ['rev-parse', '--git-dir'], { cwd: projectRoot, stdio: 'ignore' });
+    return res.status === 0;
+  } catch (e) {
+    return false;
+  }
+}
+
 function assertSafeSlug(specSlug) {
   if (!/^[a-z0-9][a-z0-9-]*$/.test(String(specSlug))) {
     throw new Error(
@@ -156,6 +207,12 @@ function git(targetRoot, args, options = {}) {
 
 function normalizeRel(p) {
   return String(p || '').replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
+// Emitted commands must work under any install topology (spec 026 AC10): resolve
+// this CLI from its own location instead of assuming {projectRoot}/skills exists.
+function orchCommandPath() {
+  return __filename.replace(/\\/g, '/');
 }
 
 function isScopedExcluded(rel) {
@@ -216,6 +273,9 @@ function isGitTracked(targetRoot, rel) {
 }
 
 function stageAndCommitOnly(targetRoot, files, message) {
+  if (!isGitRepo(targetRoot)) {
+    return { committed: false, commitSha: null, files: [] };
+  }
   const clean = [...new Set((files || []).map(normalizeRel))]
     .filter(f => f && !f.includes('..') && !path.isAbsolute(f) && !/^[a-zA-Z]:/.test(f) && !isScopedExcluded(f));
   const stageable = [];
@@ -276,12 +336,21 @@ function collectDeliveryFiles(targetRoot, specSlug, state) {
   try {
     if (fs.existsSync(path.join(path.resolve(targetRoot), fallbackIdx))) files.add(fallbackIdx);
   } catch (e) {}
+  if (state && state.specPath) {
+    try {
+      const relSpec = normalizeRel(path.relative(path.resolve(targetRoot), path.resolve(state.specPath)));
+      if (relSpec && !relSpec.includes('..') && !isScopedExcluded(relSpec) && fs.existsSync(path.resolve(targetRoot, relSpec))) {
+        files.add(relSpec);
+      }
+    } catch (e) {}
+  }
   return [...files].sort();
 }
 
 function runSecurityGate(targetRoot, options = {}) {
   try {
-    const secScanner = require('../../sdw-security-checks/scripts/sdw_security_checks.cjs');
+    const scriptPath = resolveSkillScript(targetRoot, 'sdw-security-checks', path.join('scripts', 'sdw_security_checks.cjs'), options);
+    const secScanner = scriptPath ? require(scriptPath) : require('../../sdw-security-checks/scripts/sdw_security_checks.cjs');
     if (secScanner && typeof secScanner.scan === 'function') {
       return secScanner.scan({ root: targetRoot, staged: options.staged !== false });
     }
@@ -437,11 +506,12 @@ function runVerificationGates(targetRoot, config, options = {}) {
   return { passed, gates };
 }
 
-function loadProjectConfig(targetRoot) {
+function loadProjectConfig(targetRoot, options = {}) {
   try {
-    const sdwConfig = require('../../sdw-config/scripts/sdw_config.cjs');
+    const scriptPath = resolveSkillScript(targetRoot, 'sdw-config', path.join('scripts', 'sdw_config.cjs'), options);
+    const sdwConfig = scriptPath ? require(scriptPath) : require('../../sdw-config/scripts/sdw_config.cjs');
     if (sdwConfig && typeof sdwConfig.loadConfig === 'function') {
-      return sdwConfig.loadConfig(targetRoot);
+      return sdwConfig.loadConfig(targetRoot, options);
     }
   } catch (e) {}
 
@@ -512,7 +582,31 @@ function resolveSpecPath(specInput, targetRoot, config) {
 
 function cmdRun(options) {
   const targetRoot = options.root ? path.resolve(options.root) : process.cwd();
-  const config = loadProjectConfig(targetRoot);
+
+  let sdwConfig = null;
+  try {
+    const sdwConfigScript = resolveSkillScript(targetRoot, 'sdw-config', path.join('scripts', 'sdw_config.cjs'), options);
+    sdwConfig = sdwConfigScript ? require(sdwConfigScript) : require('../../sdw-config/scripts/sdw_config.cjs');
+  } catch (e) {}
+  const config = loadProjectConfig(targetRoot, options);
+  // AC9/AC10: fail closed, but resolve configuration first so a configured
+  // skillsRoot (or {skillsRoot} token) is honored instead of only CLI options.
+  const detectedSkillsRoot = config && config.skillsMode && config.skillsMode !== 'unknown'
+    ? config.skillsRoot
+    : undefined;
+  const skillsInfo = sdwConfig && typeof sdwConfig.resolveSkillsRoot === 'function'
+    ? sdwConfig.resolveSkillsRoot({ root: targetRoot, callerDir: __dirname, skillsRoot: options.skillsRoot || detectedSkillsRoot })
+    : null;
+  if (!skillsInfo || !skillsInfo.exists) {
+    console.error('Error: No valid skills directory found on disk (checked configured skillsRoot, project-local, and global $HOME/.agents/skills).');
+    options._runResult = { error: 'Missing skills directory on disk' };
+    return 1;
+  }
+
+  // AC10: honor the skills root resolved from .sdw/config.json for dynamic script resolution
+  const resolveOptions = (detectedSkillsRoot && !options.skillsRoot)
+    ? { ...options, skillsRoot: detectedSkillsRoot }
+    : options;
   const effectiveMinScore = options.minScore !== undefined ? options.minScore : (config.scoreMin !== undefined ? config.scoreMin : 8);
 
   const resolvedSpec = resolveSpecPath(options.specPath, targetRoot, config);
@@ -536,7 +630,7 @@ function cmdRun(options) {
   }
 
   // Quality check: inspect index.specs.md status if available
-  const specIndex = getSpecIndexHelper();
+  const specIndex = getSpecIndexHelper(targetRoot, resolveOptions);
   if (specIndex) {
     try {
       const idxData = specIndex.readIndex({ root: targetRoot });
@@ -851,9 +945,9 @@ function cmdRun(options) {
       });
       console.log(`\n[Step 4: Implementation] Status: awaiting_implementation.`);
       console.log(`Please implement tasks respecting DAG dependencies and submit evidence with:`);
-      console.log(`  node skills/sdw-orch/scripts/sdw_orch.cjs task finish --run-id ${state.runId} --task <taskId> --evidence <evidencePath>`);
+      console.log(`  node "${orchCommandPath()}" task finish --run-id ${state.runId} --task <taskId> --evidence <evidencePath>`);
       console.log(`Once all tasks have accepted evidence, continue with:`);
-      console.log(`  node skills/sdw-orch/scripts/sdw_orch.cjs resume --run-id ${state.runId}`);
+      console.log(`  node "${orchCommandPath()}" resume --run-id ${state.runId}`);
 
       options._runResult = {
         runId: state.runId,
@@ -1054,6 +1148,9 @@ function cmdRun(options) {
     console.log(`[Step 5: Conformance Scoring] Score: ${scoreReport.score}/10 (Required: ${effectiveMinScore}/10). Passed: ${scoreReport.passed}`);
     console.log(`  Verified ACs: ${scoreReport.verifiedCount}/${scoreReport.totalAcs}`);
     console.log(`  Failing ACs:  ${scoreReport.failingCount}/${scoreReport.totalAcs}`);
+    if (scoreReport.passed && scoreReport.failingCount > 0) {
+      console.warn(`[Step 5: Conformance Scoring] Warning: ${scoreReport.failingCount} AC(s) failed verification despite meeting minScore threshold (${effectiveMinScore}/10).`);
+    }
 
     const step5Artifact = artifactWriter.writeStep5Artifact({
       targetRoot,
@@ -1165,24 +1262,29 @@ function cmdRun(options) {
         } catch (e) {}
       }
 
-      // Scoped delivery commit: stage only tracked spec files (evidence
-      // filesChanged + spec index). Unrelated worktree changes are left alone.
-      const deliveryFiles = collectDeliveryFiles(targetRoot, specSlug, state);
-      if (deliveryFiles.length > 0) {
-        console.log(`[Step 6: Delivery Commit] Staging scoped delivery files (${deliveryFiles.length}): ${deliveryFiles.join(', ')}`);
-        const res = stageAndCommitOnly(targetRoot, deliveryFiles, `feat(${specSlug}): implement ${specSlug}`);
-        commitSha = res.commitSha;
-        if (res.committed) {
-          console.log(`[Step 6: Delivery Commit] Created delivery commit ${commitSha}`);
-        } else {
-          console.log(`[Step 6: Delivery Commit] No scoped changes to commit; using commit ${commitSha}`);
-        }
+      if (!isGitRepo(targetRoot)) {
+        console.log(`[Step 6: Delivery Commit] Non-git workspace: delivery commit skipped.`);
+        commitSha = null;
       } else {
-        commitSha = getBaseCommit(targetRoot) || baseCommit;
-        console.log(`[Step 6: Delivery Commit] No tracked spec files to commit; using commit ${commitSha}`);
+        // Scoped delivery commit: stage only tracked spec files (evidence
+        // filesChanged + spec index). Unrelated worktree changes are left alone.
+        const deliveryFiles = collectDeliveryFiles(targetRoot, specSlug, state);
+        if (deliveryFiles.length > 0) {
+          console.log(`[Step 6: Delivery Commit] Staging scoped delivery files (${deliveryFiles.length}): ${deliveryFiles.join(', ')}`);
+          const res = stageAndCommitOnly(targetRoot, deliveryFiles, `feat(${specSlug}): implement ${specSlug}`);
+          commitSha = res.commitSha;
+          if (res.committed) {
+            console.log(`[Step 6: Delivery Commit] Created delivery commit ${commitSha}`);
+          } else {
+            console.log(`[Step 6: Delivery Commit] No scoped changes to commit; using commit ${commitSha}`);
+          }
+        } else {
+          commitSha = getBaseCommit(targetRoot) || baseCommit;
+          console.log(`[Step 6: Delivery Commit] No tracked spec files to commit; using commit ${commitSha}`);
+        }
       }
     } catch (err) {
-      console.log(`[Step 6: Delivery Commit] Git note: ${err.message}`);
+      console.error(`[Step 6: Delivery Commit] Git error: ${err.message}`);
       commitSha = getBaseCommit(targetRoot);
     }
     state.deliveryCommit = commitSha;
@@ -1193,9 +1295,14 @@ function cmdRun(options) {
   // Step 7: Delegated Code Review via sdw-code-review (Spec 025)
   // Sole review authority is skills/sdw-code-review; orchestrator dispatches
   // CLI runner (or subagent in handoff) and inspects the JSON report.
-  if (startStep <= 7 && state.steps[7].status !== 'completed' && !options.skipReview) {
+  if (startStep <= 7 && state.steps[7].status !== 'completed' && !options.skipReview && !isGitRepo(targetRoot)) {
+    // sdw-code-review requires a git range to review; a non-git workspace cannot host it.
+    console.log('[Step 7: Delegated Review] Non-git workspace: review skipped.');
+    state = stateManager.updateStepState(targetRoot, state.runId, 7, 'skipped', { reason: 'non-git workspace' });
+  } else if (startStep <= 7 && state.steps[7].status !== 'completed' && !options.skipReview) {
     state = stateManager.updateStepState(targetRoot, state.runId, 7, 'in_progress');
-    const codeReviewScript = path.resolve(__dirname, '../../sdw-code-review/scripts/sdw_code_review.cjs');
+    const resolvedCodeReviewScript = resolveSkillScript(targetRoot, 'sdw-code-review', path.join('scripts', 'sdw_code_review.cjs'), resolveOptions);
+    const codeReviewScript = resolvedCodeReviewScript || path.resolve(__dirname, '../../sdw-code-review/scripts/sdw_code_review.cjs');
     const hasCodeReview = fs.existsSync(codeReviewScript);
 
     if (!hasCodeReview) {
@@ -1241,7 +1348,7 @@ function cmdRun(options) {
 
     function invokeCodeReviewModule(useFix) {
       try {
-        const cr = require('../../sdw-code-review/scripts/sdw_code_review.cjs');
+        const cr = require(codeReviewScript);
         const report = cr.runCodeReview({
           projectRoot: targetRoot,
           base: state.baseCommit || null,
@@ -1322,11 +1429,12 @@ function cmdRun(options) {
   }
 
   // Step 8: PR Preparation, Pre-PR Gates & Remote Comment Loop (AC5, AC6, AC7, AC8, AC9, AC10, AC11, AC12, AC14, AC15)
+  const resolvedShipPrScript = resolveSkillScript(targetRoot, 'sdw-ship-pr', path.join('scripts', 'sdw_ship_pr.cjs'), resolveOptions);
+  const shipPrScript = resolvedShipPrScript || path.resolve(__dirname, '../../sdw-ship-pr/scripts/sdw_ship_pr.cjs');
+  const hasShipPr = fs.existsSync(shipPrScript);
+
   if (startStep <= 8 && state.steps[8].status !== 'completed' && !options.skipPr) {
     state = stateManager.updateStepState(targetRoot, state.runId, 8, 'in_progress');
-
-    const shipPrScript = path.resolve(__dirname, '../../sdw-ship-pr/scripts/sdw_ship_pr.cjs');
-    const hasShipPr = fs.existsSync(shipPrScript);
 
     // If sdw-ship-pr is available and no unit-test fixer hooks are passed, delegate pre-PR gates to sdw-ship-pr as single owner
     if (!hasShipPr || options.testFixer || options.buildFixer || options.prePrHook) {
@@ -1498,7 +1606,7 @@ function cmdRun(options) {
       currentScm.skipped = true;
       currentScm.skipReason = 'scmProvider is set to "none"';
     } else {
-      const scmContract = getScmProviderContract();
+      const scmContract = getScmProviderContract(targetRoot, resolveOptions);
       const capability = scmContract ? scmContract.checkScmCapability(currentScm.provider) : { available: false, error: 'contract unavailable' };
       currentScm.cliInstalled = capability.installed;
       currentScm.cliAuthenticated = capability.authenticated;
@@ -1561,8 +1669,12 @@ function cmdRun(options) {
         }
 
         if (shipResult) {
-          if (shipResult.success === false || shipResult.shipStatus === 'failed') {
+          const hasActivePr = Boolean(shipResult.pullRequest && (shipResult.pullRequest.url || shipResult.pullRequest.number));
+          if (shipResult.shipStatus === 'failed' || (shipResult.success === false && !hasActivePr)) {
             throw new Error(shipResult.error || 'sdw-ship-pr reported delivery failure');
+          }
+          if (hasActivePr && shipResult.shipStatus === 'review_pending') {
+            console.log(`[sdw-orch Step 8] Active pull request #${shipResult.pullRequest.number || ''} is in review / awaiting approval (${shipResult.pullRequest.url || ''}). Notice: Amending an active pull request while review/approval is pending is not a recommended practice; adapting non-blocking workflow.`);
           }
           if (shipResult.pullRequest) {
             state.pullRequest = shipResult.pullRequest;
@@ -1606,22 +1718,26 @@ function cmdRun(options) {
   // Remote Push / Branch Publishing (--push or config.pushDelivery) fallback
   const shouldPush = options.push !== undefined ? options.push : (config && config.pushDelivery);
   if (shouldPush && !state.pushedBranch) {
-    try {
-      const remotes = execSync('git remote', { cwd: targetRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-      const currentBranch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: targetRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-      if (remotes && currentBranch && currentBranch !== 'HEAD') {
-        console.log(`[sdw-orch] Pushing delivery branch to origin/${currentBranch}...`);
-        git(targetRoot, ['push', 'origin', currentBranch], { stdio: 'inherit' });
-        state.pushedBranch = currentBranch;
-      } else if (!remotes) {
-        console.log(`[sdw-orch] Remote push skipped: no git remote configured.`);
+    if (!isGitRepo(targetRoot)) {
+      console.log(`[sdw-orch] Remote push skipped: not a git repository.`);
+    } else {
+      try {
+        const remotes = execSync('git remote', { cwd: targetRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+        const currentBranch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: targetRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+        if (remotes && currentBranch && currentBranch !== 'HEAD') {
+          console.log(`[sdw-orch] Pushing delivery branch to origin/${currentBranch}...`);
+          git(targetRoot, ['push', 'origin', currentBranch], { stdio: 'inherit' });
+          state.pushedBranch = currentBranch;
+        } else if (!remotes) {
+          console.log(`[sdw-orch] Remote push skipped: no git remote configured.`);
+        }
+      } catch (pushErr) {
+        console.error(`[sdw-orch] Warning: git push failed: ${pushErr.message}`);
+        if (!state.errors) state.errors = [];
+        state.errors.push({ step: 8, timestamp: new Date().toISOString(), error: `git push failed: ${pushErr.message}` });
       }
-    } catch (pushErr) {
-      console.error(`[sdw-orch] Warning: git push failed: ${pushErr.message}`);
-      if (!state.errors) state.errors = [];
-      state.errors.push({ step: 8, timestamp: new Date().toISOString(), error: `git push failed: ${pushErr.message}` });
     }
-  } else if (!shouldPush) {
+  } else if (!shouldPush && !options.skipPr && !hasShipPr) {
     console.log(`[Step 8: PR Preparation] Pre-PR verification passed. PR payload assembled (remote push disabled).`);
   }
 
@@ -1680,7 +1796,7 @@ function cmdTaskFinish(options) {
     return 1;
   }
 
-  const config = loadProjectConfig(targetRoot);
+  const config = loadProjectConfig(targetRoot, options);
   const useWorktrees = options.worktrees ? true : (options.noWorktrees ? false : Boolean(config.useWorktrees));
 
   const dagTasks = (Array.isArray(state.dagTasks) && state.dagTasks.length > 0)
@@ -1706,13 +1822,19 @@ function cmdTaskFinish(options) {
     return 1;
   }
 
-  // Load spec to validate AC IDs
+  // Load spec to validate AC IDs (fail closed: unknown-AC detection requires a known AC set)
   let specAcs = [];
-  if (state.specPath && fs.existsSync(state.specPath)) {
+  if (state.specPath) {
     try {
       const specContent = fs.readFileSync(state.specPath, 'utf8');
       specAcs = dagPlanner.parseAcceptanceCriteria(specContent);
-    } catch (e) {}
+    } catch (e) {
+      specAcs = [];
+    }
+  }
+  if (!Array.isArray(specAcs) || specAcs.length === 0) {
+    console.error(`Error: Cannot validate evidence for task "${taskId}": specification at "${state.specPath}" is unreadable or declares no acceptance criteria.`);
+    return 1;
   }
 
   // Validate evidence schema & content (AC8, AC28, AC29)
@@ -1829,7 +1951,7 @@ function cmdTaskFinish(options) {
       gates: state.steps[4].gates
     });
     console.log(`Step 4 completed successfully! Proceed to Step 5 by running:`);
-    console.log(`  node skills/sdw-orch/scripts/sdw_orch.cjs resume --run-id ${state.runId}`);
+    console.log(`  node "${orchCommandPath()}" resume --run-id ${state.runId}`);
   }
 
   options._finishResult = { runId: state.runId, taskId, status: 'completed' };
@@ -1887,7 +2009,7 @@ function cmdResume(options) {
     const incompleteTasks = dagTasks.filter(t => !completedTasks.includes(t.id));
 
     if (incompleteTasks.length > 0) {
-      const resumeConfig = loadProjectConfig(targetRoot);
+      const resumeConfig = loadProjectConfig(targetRoot, options);
       const implMode = options.implementationMode || (resumeConfig.implementation && resumeConfig.implementation.mode) || 'handoff';
       if (implMode === 'command') {
         console.log(`[sdw-orch resume] Command mode detected; re-entering Step 4 to dispatch the configured command.`);
@@ -1906,12 +2028,12 @@ function cmdResume(options) {
         console.log(`  [${isDone ? 'COMPLETED' : 'PENDING'}] ${t.id}: ${t.title}`);
       });
       console.error(`\nPlease complete remaining tasks and submit accepted evidence via:`);
-      console.error(`  node skills/sdw-orch/scripts/sdw_orch.cjs task finish --run-id ${state.runId} --task <taskId> --evidence <evidencePath>`);
+      console.error(`  node "${orchCommandPath()}" task finish --run-id ${state.runId} --task <taskId> --evidence <evidencePath>`);
       return 4;
     }
 
     // All tasks completed. Execute build and test verification gates (AC20)
-    const config = loadProjectConfig(targetRoot);
+    const config = loadProjectConfig(targetRoot, options);
     console.log(`[sdw-orch resume] All ${dagTasks.length} DAG task(s) completed. Running verification gates...`);
     const gateResults = runVerificationGates(targetRoot, config, { ...options, runId: state.runId, slug: state.specSlug });
     state.steps[4].gates = gateResults.gates;
@@ -2125,5 +2247,6 @@ module.exports = {
   stageAndCommitOnly,
   getStatusFiles,
   snapshotStats,
-  diffSinceSnapshot
+  diffSinceSnapshot,
+  resolveSkillScript
 };

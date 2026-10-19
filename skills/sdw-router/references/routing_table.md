@@ -120,4 +120,4 @@ The router is designed to be completely unobtrusive:
 
 If an intent matches a skill whose directory does not exist or is unreadable on disk:
 - The router fails closed with an actionable error.
-- Example message: `[sdw-router] Error: Routed skill "sdw-orch" directory not found at "skills/sdw-orch" or ".agents/skills/sdw-orch". Run packaging installer to restore skills.`
+- Example message: `[sdw-router] Error: Routed skill "sdw-orch" directory not found at "skills/sdw-orch", ".agents/skills/sdw-orch", or "$HOME/.agents/skills/sdw-orch". Run packaging installer to restore skills.`

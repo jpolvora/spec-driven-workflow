@@ -20,6 +20,8 @@ Manages `.sdw/` workspace configuration and directory structure for consumer pro
 - `check`: Verifies `.sdw/` existence, JSON validity, required keys, and directory conformance.
 - `parse`: Resolves path tokens (such as `{projectRoot}`) in `config.json` and outputs effective configuration.
 
+The active skills directory is resolved from `--skills-root`, then `SDW_SKILLS_ROOT`, then `config.json` `skillsRoot`, then auto-detection (canonical, consumer, global `$HOME/.agents/skills`), and reported as `skillsRoot` + `skillsMode` in `check`/`parse` JSON output.
+
 ## Steps
 
 1. **Identify Subcommand and Target Root**

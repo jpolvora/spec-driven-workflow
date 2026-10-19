@@ -384,6 +384,139 @@ test('sdw-ship-pr - active threads are not resolved without a verified fixer', a
   }
 });
 
+function setupPreemptionWorkspace(checkScript) {
+  const { tmpDir, config } = setupTestWorkspace();
+  config.scmProvider = 'github';
+  config.scmCodeReviewEnabled = true;
+  const calls = [];
+  const fakeExecutor = (cmd) => {
+    calls.push(cmd);
+    if (cmd.includes('pr checks')) {
+      return JSON.stringify(checkScript());
+    }
+    if (cmd.includes('reviewThreads')) {
+      const fileMatch = cmd.match(/--input\s+"([^"]+)"/);
+      if (fileMatch && fs.existsSync(fileMatch[1])) {
+        const fileContent = fs.readFileSync(fileMatch[1], 'utf8');
+        if (!fileContent.includes('reviewThreads')) return '';
+      }
+      return JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } });
+    }
+    if (cmd.includes('gh repo view')) {
+      return JSON.stringify({ owner: { login: 'fake-owner' }, name: 'fake-repo' });
+    }
+    if (cmd.includes('gh pr list')) {
+      return JSON.stringify([{ number: 42, url: 'https://github.com/fake-owner/fake-repo/pull/42', headRefName: 'develop', baseRefName: 'master' }]);
+    }
+    if (cmd.includes('where gh') || cmd.includes('command -v gh')) return '/usr/bin/gh';
+    if (cmd.includes('gh auth status')) return 'Logged in';
+    return '';
+  };
+  return { tmpDir, config, calls, fakeExecutor };
+}
+
+test('sdw-ship-pr - superseded checks are not treated as failures', async () => {
+  const { tmpDir, config, fakeExecutor } = setupPreemptionWorkspace(() => [
+    { name: 'review', state: 'cancelled', bucket: 'fail' },
+    { name: 'ci/build', state: 'pending', bucket: 'pending' }
+  ]);
+  try {
+    const report = await sdwShipPr.runShipPr({
+      projectRoot: tmpDir,
+      config,
+      head: 'develop',
+      base: 'master',
+      maxIterations: 1,
+      pollIntervalMs: 0
+    }, fakeExecutor);
+
+    assert.strictEqual(report.shipStatus, 'review_pending');
+    assert.deepStrictEqual(report.reviewConvergence.failingChecks, [], 'cancelled checks must not be reported as failing');
+    assert.strictEqual(report.reviewConvergence.supersededChecks.length, 1, 'cancelled check must be reported as superseded');
+    assert.strictEqual(report.reviewConvergence.preemptions, 0);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('sdw-ship-pr - terminal CI states are treated as failing checks, not superseded', async () => {
+  const { tmpDir, config, fakeExecutor } = setupPreemptionWorkspace(() => [
+    { name: 'review', state: 'timed_out', bucket: 'fail' },
+    { name: 'ci/build', state: 'startup_failure', bucket: 'fail' }
+  ]);
+  try {
+    const report = await sdwShipPr.runShipPr({
+      projectRoot: tmpDir,
+      config,
+      head: 'develop',
+      base: 'master',
+      maxIterations: 1,
+      pollIntervalMs: 0
+    }, fakeExecutor);
+
+    assert.strictEqual(report.shipStatus, 'review_pending');
+    assert.deepStrictEqual(report.reviewConvergence.supersededChecks, [], 'terminal CI states must not be reported as superseded');
+    assert.strictEqual(report.reviewConvergence.failingChecks.length, 2, 'timed_out and startup_failure must feed the blocker path');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('sdw-ship-pr - concurrent push preemption resets the convergence window instead of halting', async () => {
+  const scripted = [
+    [{ name: 'review', state: 'cancelled', bucket: 'fail' }],
+    [{ name: 'review', state: 'pending', bucket: 'pending' }],
+    [{ name: 'review', state: 'pending', bucket: 'pending' }],
+    [{ name: 'review', state: 'pass', bucket: 'pass' }]
+  ];
+  let call = 0;
+  const { tmpDir, config, fakeExecutor } = setupPreemptionWorkspace(() => scripted[Math.min(call++, scripted.length - 1)]);
+  try {
+    const report = await sdwShipPr.runShipPr({
+      projectRoot: tmpDir,
+      config,
+      head: 'develop',
+      base: 'master',
+      maxIterations: 2,
+      pollIntervalMs: 0
+    }, fakeExecutor);
+
+    assert.strictEqual(report.reviewConvergence.preemptions, 1, 'superseded run must trigger one adaptation');
+    assert.strictEqual(report.reviewConvergence.converged, true, 'replacement run must be followed to convergence');
+    assert.strictEqual(report.success, true);
+    assert.strictEqual(report.shipStatus, 'delivered');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('sdw-ship-pr - preemption budget cap falls back to review_pending', async () => {
+  const scripted = [
+    [{ name: 'review', state: 'cancelled', bucket: 'fail' }],
+    [{ name: 'review', state: 'pending', bucket: 'pending' }],
+    [{ name: 'review', state: 'pass', bucket: 'pass' }]
+  ];
+  let call = 0;
+  const { tmpDir, config, fakeExecutor } = setupPreemptionWorkspace(() => scripted[Math.min(call++, scripted.length - 1)]);
+  try {
+    const report = await sdwShipPr.runShipPr({
+      projectRoot: tmpDir,
+      config,
+      head: 'develop',
+      base: 'master',
+      maxIterations: 2,
+      pollIntervalMs: 0,
+      maxPreemptions: 0
+    }, fakeExecutor);
+
+    assert.strictEqual(report.reviewConvergence.preemptions, 0, 'no adaptation allowed when budget is zero');
+    assert.strictEqual(report.shipStatus, 'review_pending');
+    assert.strictEqual(report.success, false);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test('sdw-ship-pr - locateStateFile honors the configured stateDir token', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-state-dir-'));
   try {
@@ -557,6 +690,113 @@ test('sdw-ship-pr - prePrCommand commit stages only files it created', async () 
     assert.doesNotMatch(committed, /unrelated\.txt/);
     const status = execSync('git status --porcelain', { cwd: tmpDir, encoding: 'utf8' });
     assert.match(status, /unrelated\.txt/);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('sdw-ship-pr - active PR reuse complements PR description with amending delivery info', async () => {
+  const { tmpDir, config } = setupTestWorkspace();
+  config.scmProvider = 'github';
+  config.scmCodeReviewEnabled = false;
+
+  const calls = [];
+  let updatedBody = null;
+  const fakeExecutor = (cmd) => {
+    calls.push(cmd);
+    if (cmd.includes('where gh') || cmd.includes('command -v gh')) return '/usr/bin/gh';
+    if (cmd.includes('gh auth status')) return 'Logged in';
+    if (cmd.includes('gh pr list')) {
+      return JSON.stringify([{ number: 77, url: 'https://github.com/fake-owner/fake-repo/pull/77', headRefName: 'develop', baseRefName: 'master', title: 'Existing PR' }]);
+    }
+    if (cmd.includes('gh pr view 77 --json body')) {
+      return JSON.stringify({ body: 'Initial PR Body' });
+    }
+    if (cmd.includes('gh pr edit 77')) {
+      const match = cmd.match(/--body-file "([^"]+)"/);
+      if (match && fs.existsSync(match[1])) {
+        updatedBody = fs.readFileSync(match[1], 'utf8');
+      }
+      return '';
+    }
+    if (cmd.includes('git rev-parse --short HEAD')) return 'abc1234';
+    return '';
+  };
+
+  try {
+    const report = await sdwShipPr.runShipPr({
+      projectRoot: tmpDir,
+      config,
+      head: 'develop',
+      base: 'master',
+      specSlug: '026-ensure-hybrid-mode'
+    }, fakeExecutor);
+
+    assert.strictEqual(report.success, true);
+    assert.strictEqual(report.shipStatus, 'delivered');
+    assert.ok(report.pullRequest);
+    assert.strictEqual(report.pullRequest.reused, true);
+    assert.strictEqual(report.pullRequest.number, '77');
+    assert.ok(updatedBody, 'PR description must be updated');
+    assert.match(updatedBody, /Initial PR Body/);
+    assert.match(updatedBody, /### Amending Delivery: 026-ensure-hybrid-mode/);
+    assert.match(updatedBody, /Commit: `abc1234`/);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('sdw-ship-pr - active PR with review_pending adapts as non-blocking and records completed state step', async () => {
+  const { tmpDir, config } = setupTestWorkspace();
+  config.scmProvider = 'github';
+  config.scmCodeReviewEnabled = true;
+
+  const stateDir = path.join(tmpDir, '.sdw', 'state');
+  fs.mkdirSync(stateDir, { recursive: true });
+  const runId = 'run-test-active-pr-nonblocking';
+  const stateFilePath = path.join(stateDir, `${runId}.state.json`);
+  fs.writeFileSync(stateFilePath, JSON.stringify({
+    runId,
+    status: 'in_progress',
+    steps: { 8: { step: 8, name: 'pr_preparation', status: 'in_progress' } }
+  }, null, 2), 'utf8');
+
+  const fakeExecutor = (cmd) => {
+    if (cmd.includes('where gh') || cmd.includes('command -v gh')) return '/usr/bin/gh';
+    if (cmd.includes('gh auth status')) return 'Logged in';
+    if (cmd.includes('gh pr list')) {
+      return JSON.stringify([{ number: 88, url: 'https://github.com/fake-owner/fake-repo/pull/88', headRefName: 'develop', baseRefName: 'master' }]);
+    }
+    if (cmd.includes('pr checks')) {
+      return JSON.stringify([{ name: 'review', state: 'pending', bucket: 'pending' }]);
+    }
+    if (cmd.includes('reviewThreads')) {
+      return JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } });
+    }
+    if (cmd.includes('gh repo view')) {
+      return JSON.stringify({ owner: { login: 'fake-owner' }, name: 'fake-repo' });
+    }
+    return '';
+  };
+
+  try {
+    const report = await sdwShipPr.runShipPr({
+      projectRoot: tmpDir,
+      config,
+      head: 'develop',
+      base: 'master',
+      runId,
+      maxIterations: 1,
+      pollIntervalMs: 0
+    }, fakeExecutor);
+
+    assert.strictEqual(report.shipStatus, 'review_pending');
+    assert.strictEqual(report.nonBlocking, true);
+    assert.strictEqual(report.adaptedActivePr, true);
+
+    // Verify state file marks step 8 as completed
+    const stateContent = JSON.parse(fs.readFileSync(stateFilePath, 'utf8'));
+    assert.strictEqual(stateContent.steps[8].status, 'completed', 'Step 8 must be marked completed for non-blocking active PR adaptation');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

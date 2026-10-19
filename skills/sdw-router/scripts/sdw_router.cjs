@@ -3,6 +3,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 
 /**
  * Finds the project root by locating .git, .sdw, or package.json, or skills directory.
@@ -60,16 +61,20 @@ function parseFrontmatter(content) {
 }
 
 /**
- * Scans available skills in both canonical (skills/) and consumer (.agents/skills/) directories.
+ * Scans available skills in canonical (skills/), consumer (.agents/skills/), and global ($HOME/.agents/skills/) directories.
  */
 function scanSkills(options) {
   const root = path.resolve((options && options.root) || findProjectRoot());
   const discovered = new Map();
 
+  const home = (options && 'homeDir' in options) ? options.homeDir : os.homedir();
   const searchLocations = [
     { dir: path.join(root, 'skills'), type: 'canonical' },
     { dir: path.join(root, '.agents', 'skills'), type: 'consumer' }
   ];
+  if (home && (!options || !options.ignoreGlobal)) {
+    searchLocations.push({ dir: path.join(home, '.agents', 'skills'), type: 'global' });
+  }
 
   for (const loc of searchLocations) {
     if (fs.existsSync(loc.dir)) {
@@ -99,8 +104,13 @@ function scanSkills(options) {
             }
 
             const skillName = metadata.name || entry;
-            // Prefer canonical if duplicate exists
-            if (!discovered.has(skillName) || loc.type === 'canonical') {
+            // Precedence: canonical > consumer > global
+            const existing = discovered.get(skillName);
+            const shouldReplace = !existing ||
+              (loc.type === 'canonical') ||
+              (loc.type === 'consumer' && existing.locationType === 'global');
+
+            if (shouldReplace) {
               discovered.set(skillName, {
                 name: skillName,
                 dirName: entry,
@@ -209,7 +219,7 @@ function routePrompt(prompt, options) {
             confidence: 1.0,
             reason: 'explicit_invocation',
             hasError: true,
-            error: `Routed skill "${skill.name}" directory is missing or unreadable on disk at "${skill.path}". Please ensure the skill is installed under skills/ or .agents/skills/.`
+            error: `Routed skill "${skill.name}" directory is missing or unreadable on disk at "${skill.path}". Please ensure the skill is installed under skills/, .agents/skills/, or $HOME/.agents/skills/.`
           };
         }
 
@@ -237,7 +247,7 @@ function routePrompt(prompt, options) {
         confidence: 1.0,
         reason: 'explicit_invocation',
         hasError: true,
-        error: `Routed skill "${sdwName}" directory is missing or unreadable on disk at "skills/${sdwName}" or ".agents/skills/${sdwName}". Please ensure the skill is installed.`
+        error: `Routed skill "${sdwName}" directory is missing or unreadable on disk at "skills/${sdwName}", ".agents/skills/${sdwName}", or "$HOME/.agents/skills/${sdwName}". Please ensure the skill is installed.`
       };
     }
   }
@@ -254,7 +264,7 @@ function routePrompt(prompt, options) {
           confidence: 1.0,
           reason: 'explicit_invocation',
           hasError: true,
-          error: `Routed skill "${s}" directory is missing or unreadable on disk. Please ensure the skill is installed under skills/ or .agents/skills/.`
+          error: `Routed skill "${s}" directory is missing or unreadable on disk. Please ensure the skill is installed under skills/, .agents/skills/, or $HOME/.agents/skills/.`
         };
       }
     }
@@ -332,7 +342,7 @@ function routePrompt(prompt, options) {
       confidence: Math.min(1.0, topScore / 6),
       reason: 'intent_match',
       hasError: true,
-      error: `Routed skill "${winningSkillName}" directory is missing or unreadable on disk at "${targetSkillInfo ? targetSkillInfo.path : 'skills/' + winningSkillName}". Please ensure the skill is installed under skills/ or .agents/skills/.`
+      error: `Routed skill "${winningSkillName}" directory is missing or unreadable on disk at "${targetSkillInfo ? targetSkillInfo.path : 'skills/' + winningSkillName}". Please ensure the skill is installed under skills/, .agents/skills/, or $HOME/.agents/skills/.`
     };
   }
 
@@ -351,10 +361,18 @@ function routePrompt(prompt, options) {
  */
 function doctorCheck(options) {
   const root = path.resolve((options && options.root) || findProjectRoot());
-  const skills = scanSkills({ root });
+  const skills = scanSkills({ root, ...options });
   const issues = [];
 
   const expectedSkills = ['sdw-config', 'sdw-spec', 'sdw-orch', 'sdw-router'];
+
+  if (skills.length === 0) {
+    issues.push({
+      severity: 'error',
+      skill: 'all',
+      message: 'No skills found. Neither local (skills/, .agents/skills/) nor global ($HOME/.agents/skills/) skills directories exist on disk.'
+    });
+  }
 
   for (const expected of expectedSkills) {
     const found = skills.find(s => s.name === expected);
@@ -362,7 +380,7 @@ function doctorCheck(options) {
       issues.push({
         severity: 'warning',
         skill: expected,
-        message: `Expected skill "${expected}" not found in canonical skills/ or consumer .agents/skills/.`
+        message: `Expected skill "${expected}" not found in canonical skills/, consumer .agents/skills/, or global $HOME/.agents/skills/.`
       });
     } else {
       if (!found.hasSkillMd) {
@@ -414,7 +432,7 @@ Usage:
   node sdw_router.cjs <subcommand> [options]
 
 Subcommands:
-  scan                   Discover and list all installed skills in canonical & consumer directories
+  scan                   Discover and list all installed skills in canonical, consumer, and global ($HOME/.agents/skills) directories
   route <prompt>         Analyze prompt intent, detect explicit invocations, or pass-through
   doctor                 Run router health check and diagnostic audit on skills integrity
 

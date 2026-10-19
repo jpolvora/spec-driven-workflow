@@ -29,6 +29,7 @@ Mandatory repository rules and development guidelines for all AI agents working 
    - All helper scripts must use **Node.js 22 CommonJS (`.cjs`)** and **Node standard library only** (`fs`, `path`, `process`, `child_process`).
    - Zero runtime npm dependencies are permitted in packaged skills.
    - Never author Python (`.py`) scripts for skill helpers or tooling anchors.
+   - Prefer Node.js for all scripting: use `node -e` / `node *.cjs` for local computation, file parsing, templating, and automation. Use Python only when explicitly requested by the user or required by external tooling.
 
 4. **Deterministic Tool Anchors:**
    - Skills must invoke helpers via explicit launchers (e.g., `node skills/<skill-name>/scripts/<helper>.cjs`).
@@ -116,9 +117,15 @@ Instructions and skills specific to the development environment are sourced from
 
 2. **Autoload spec-memo runtime skills (`@.agents/skills/ws-memo/SKILL.md`):**
    - Load [`@.agents/skills/ws-memo/SKILL.md`](.agents/skills/ws-memo/SKILL.md) at the start of **every session**, after the Karpathy guidelines.
-   - `ws-memo` is the only entry point for vault memory operations;
+   - `ws-memo` is the only entry point for vault memory operations.
 
-   
+3. **Local Project Skills Take Priority (Overlap Resolution):**
+   - When a skill name exists in **both** the local project (`.agents/skills/<skill-name>/`) and a globally installed location (e.g., a harness-level global config directory), **always load and execute the local project version**.
+   - This rule applies regardless of version numbers: the local copy is considered the authoritative, development-current version for this repository.
+   - If the harness supports explicit skill path resolution (e.g., via scoped `@.agents/skills/<name>` references), always prefer the scoped local path over the bare skill name.
+   - If the harness cannot disambiguate and silently resolves to the global version, log a warning to the user and explicitly re-load the local skill file via its relative path before proceeding.
+
+
 ## 7. Spec-Driven Workflow (SDW) Autoload
 
 This repository uses Spec-Driven Workflow for spec management, configuration, and implementation.
@@ -171,11 +178,12 @@ npm run review:dry
 | Variable | Default |
 |----------|---------|
 | `AGENTIC_CODE_REVIEWERS_ENGINE` | `opencode` |
-| `AGENTIC_CODE_REVIEWERS_MODEL` | `opencode-go/deepseek-v4.1-flash` |
+| `AGENTIC_CODE_REVIEWERS_MODEL` | `opencode-go/claude-haiku-5-5` |
 | `AGENTIC_CODE_REVIEWERS_VARIANT` | `medium` |
 | `AGENTIC_CODE_REVIEWERS_TARGET_BRANCH` | `refs/heads/master` |
 | `AGENTIC_CODE_REVIEWERS_OPENCODE_BIN` | pinned `opencode-ai@1.19.1` binary |
 | `AGENTIC_CODE_REVIEWERS_TIMEOUT_MS` | `1200000` |
+| `AGENTIC_CODE_REVIEWERS_MAX_ROUNDS` | `20` |
 
-`opencode/deepseek-v4.1-flash` (Zen provider) is not the default because the OS `OPENCODE_API_KEY` is a Go key; using the Zen provider returns HTTP `402 Insufficient account funds`.
+`opencode/claude-haiku-5-5` (Zen provider) is not the default because the OS `OPENCODE_API_KEY` is a Go key; using the Zen provider returns HTTP `402 Insufficient account funds`.
 

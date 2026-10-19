@@ -226,6 +226,33 @@ test('AC11: Dry-run simulates fixes without modifying files', () => {
   }
 });
 
+test('AC11b: Dry-run without an explicit report path exposes no report path and writes nothing', () => {
+  const dir = initRepoWithMain();
+  try {
+    const report = codeReview.runCodeReview({ projectRoot: dir, base: 'HEAD', fix: false, dryRun: true, maxIterations: 1 });
+    assert.equal(report.dryRun, true);
+    assert.strictEqual(report.reportPath, null, 'no report path when nothing was written');
+    assert.strictEqual(report.reportAbsPath, null, 'no absolute report path when nothing was written');
+    assert.ok(!fs.existsSync(path.join(dir, '.sdw', 'state', 'code-review.report.md')), 'default report must not be created in dry-run');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Finding IDs follow numeric file:line:rule order (line 9 before line 10)', () => {
+  const dir = initRepoWithMain();
+  try {
+    const pad = Array.from({ length: 8 }, (_, i) => `const pad${i} = ${i};`).join('\n');
+    fs.writeFileSync(path.join(dir, 'order.cjs'), `${pad}\ndebugger;\ndebugger;\nmodule.exports = {};\n`, 'utf8');
+    const report = codeReview.runCodeReview({ projectRoot: dir, base: 'HEAD', report: path.join(dir, 'r.md'), fix: false, dryRun: false, maxIterations: 1 });
+    const ids = report.findings.filter(f => f.rule === 'no_debugger_statements').map(f => ({ id: f.id, line: f.line }));
+    assert.deepEqual(ids.map(i => i.line), [9, 10], 'findings sorted numerically by line');
+    assert.deepEqual(ids.map(i => i.id), ['CR-001', 'CR-002'], 'IDs assigned in sorted order');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('AC12, AC13 & AC14: Orchestrator Step 7 delegates to sdw-code-review as sole authority', () => {
   const orchSkill = fs.readFileSync(path.join(REPO_ROOT, 'skills', 'sdw-orch', 'SKILL.md'), 'utf8');
   assert.ok(orchSkill.includes('sdw-code-review'), 'SKILL.md Step 7 references sdw-code-review');

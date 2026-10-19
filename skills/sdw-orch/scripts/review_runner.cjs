@@ -52,15 +52,26 @@ function runAutomatedReview(options) {
           ? (warningCount === 0 ? 'Code review passed with zero findings.' : `Code review passed with ${warningCount} advisory warnings.`)
           : `Code review failed with ${errorCount} blocking errors.`
       };
-    } catch (e) {}
+    } catch (e) {
+      return {
+        passed: false,
+        errorCount: 1,
+        warningCount: 0,
+        totalFindings: 0,
+        findings: [],
+        summary: e && e.message ? e.message : 'Code review failed.',
+        error: e && e.message ? e.message : String(e)
+      };
+    }
   }
   return {
-    passed: true,
-    errorCount: 0,
+    passed: false,
+    errorCount: 1,
     warningCount: 0,
     totalFindings: 0,
     findings: [],
-    summary: 'Code review passed with zero findings.'
+    summary: 'sdw-code-review module unavailable.',
+    error: 'sdw-code-review module unavailable.'
   };
 }
 

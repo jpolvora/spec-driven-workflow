@@ -43,7 +43,7 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
     },
     "specsDir": {
       "type": "string",
-      "description": "Path to the directory containing feature specifications. Supports token {projectRoot}.",
+      "description": "Path to the directory containing feature specifications. Supports tokens {projectRoot} and {skillsRoot}.",
       "default": "{projectRoot}/.sdw/specs"
     },
     "scoreMin": {
@@ -65,8 +65,12 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
     },
     "stateDir": {
       "type": "string",
-      "description": "Path to the directory storing run session state files. Supports token {projectRoot}.",
+      "description": "Path to the directory storing run session state files. Supports tokens {projectRoot} and {skillsRoot}.",
       "default": "{projectRoot}/.sdw/state"
+    },
+    "skillsRoot": {
+      "type": "string",
+      "description": "Path to the active skills directory. Supports tokens {projectRoot} and {skillsRoot}."
     },
     "autoResolveGaps": {
       "type": "boolean",
@@ -123,6 +127,17 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
       "type": "string",
       "description": "Optional project-specific instructions or checklist for agents to verify prior to PR submission.",
       "default": ""
+    },
+    "reviewFixCommand": {
+      "type": "string",
+      "description": "Optional command that applies review-thread fixes. When unset, sdw-ship-pr never resolves active threads automatically.",
+      "default": ""
+    },
+    "maxPreemptions": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Maximum concurrent-push adaptation budget for post-PR review convergence before draining rounds.",
+      "default": 3
     }
   },
   "additionalProperties": true
@@ -134,11 +149,12 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
 | Key | Type | Default | Description |
 |:---|:---|:---|:---|
 | `$schema` | `string` | `"./config.schema.json"` | Schema definition reference for editor autocomplete and validation |
-| `specsDir` | `string` | `"{projectRoot}/.sdw/specs"` | Path to specifications directory (supports `{projectRoot}`) |
+| `specsDir` | `string` | `"{projectRoot}/.sdw/specs"` | Path to specifications directory (supports `{projectRoot}` and `{skillsRoot}`) |
 | `scoreMin` | `integer` | `8` | Minimum acceptable conformance score (range: 0–10) |
 | `scmCodeReviewEnabled` | `boolean` | `false` | Whether remote PR comment polling and automated fix resolution loop is active |
 | `pushDelivery` | `boolean` | `false` | Whether to automatically push delivery commits to remote origin |
-| `stateDir` | `string` | `"{projectRoot}/.sdw/state"` | Path to isolated execution run state directory (supports `{projectRoot}`) |
+| `stateDir` | `string` | `"{projectRoot}/.sdw/state"` | Path to isolated execution run state directory (supports `{projectRoot}` and `{skillsRoot}`) |
+| `skillsRoot` | `string` | — | Path to the active skills directory (supports `{projectRoot}` and `{skillsRoot}`) |
 | `autoResolveGaps` | `boolean` | `true` | Whether to auto-apply recommended grilling defaults when non-interactive |
 | `securityChecksEnabled` | `boolean` | `false` | Enable pre-commit secrets and credentials leak scanning |
 | `useWorktrees` | `boolean` | `false` | Enable per-task isolated git worktrees for dispatched subagents under `.sdw/worktrees/{runId}/` |
@@ -150,10 +166,13 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
 | `testCommand` | `string` | `"npm test"` | Command to execute for test verification pass |
 | `prePrCommand` | `string` | `""` | Optional project-specific shell command to execute before PR preparation |
 | `prePrInstructions` | `string` | `""` | Optional project-specific instructions or checklist for agents to verify prior to PR |
+| `reviewFixCommand` | `string` | `""` | Optional command that applies review-thread fixes. When unset, sdw-ship-pr never resolves active threads automatically |
+| `maxPreemptions` | `integer` | `3` | Maximum concurrent-push adaptation budget for post-PR review convergence before draining rounds |
 
 ### 2.2 Supported Path Tokens
 
 - `{projectRoot}`: Replaced by the absolute, forward-slash normalized path of the consumer project root (e.g., `C:/projects/my-app` or `/home/user/my-app`).
+- `{skillsRoot}`: Replaced by the absolute, forward-slash normalized path of the resolved active skills directory.
 
 ### 2.3 Default Configuration Baseline
 
@@ -171,7 +190,9 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
   "useFeatureBranches": false,
   "scmProvider": "none",
   "requiredBuild": false,
-  "runAllTests": false
+  "runAllTests": false,
+  "reviewFixCommand": "",
+  "maxPreemptions": 3
 }
 ```
 
@@ -183,6 +204,7 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
 - **Purpose**: Creates `.sdw/`, `.sdw/specs/`, `.sdw/state/`, `.sdw/config.json`, `.sdw/config.schema.json`, and `.sdw/directory-structure.md` in the target project root.
 - **Flags**:
   - `--root <path>`: Explicit project root directory (defaults to current working directory).
+  - `--skills-root <path>`: Explicit active skills directory; `SDW_SKILLS_ROOT` is honored when the flag is absent, and both take precedence over `.sdw/config.json` `skillsRoot`.
   - `--force`: Overwrites existing configuration and documentation files.
   - `--json`: Returns structured JSON summary of created and skipped files.
 - **Exit Code**: Always `0` on success.
@@ -191,13 +213,15 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
 - **Purpose**: Validates presence of `.sdw/`, validates `config.json` against `config.schema.json` (syntax, required keys, types, value bounds), disk existence of `specsDir`, and presence of `directory-structure.md`.
 - **Flags**:
   - `--root <path>`: Explicit project root directory.
-  - `--json`: Emits `{ "valid": boolean, "root": string, "checks": [...], "errors": [...] }`.
+  - `--skills-root <path>`: Optional explicit active skills directory override (falls back to `SDW_SKILLS_ROOT`, then `.sdw/config.json` `skillsRoot`, then auto-detection).
+  - `--json`: Emits `{ "valid": boolean, "root": string, "skillsRoot": string, "skillsMode": string, "checks": [...], "errors": [...] }`.
 - **Exit Code**: `0` when all checks pass; `1` if any check fails.
 
 ### 3.3 `parse`
 - **Purpose**: Reads `.sdw/config.json`, substitutes tokens (e.g. `{projectRoot}`), and outputs the resolved configuration.
 - **Flags**:
   - `--root <path>`: Explicit project root directory.
-  - `--json`: Emits pure JSON formatted output.
+  - `--skills-root <path>`: Optional explicit active skills directory override (precedence: flag, then `SDW_SKILLS_ROOT`, then `.sdw/config.json` `skillsRoot`).
+  - `--json`: Emits pure JSON formatted output including the resolved `projectRoot`, `skillsRoot`, and `skillsMode` (`canonical`, `local`, `global`, or `unknown`).
   - `--key <name>`: Extracts a single resolved configuration key.
 - **Exit Code**: `0` on success; `1` on missing file, invalid JSON, or missing key.

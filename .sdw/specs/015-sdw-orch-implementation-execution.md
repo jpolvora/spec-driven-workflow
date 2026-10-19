@@ -97,7 +97,7 @@ Restore the pipeline's central guarantee: code is implemented, verified, and onl
   1. `sdw-orch run <spec>` executes Steps 1–3, decomposes DAG tasks, and writes task prompts.
   2. Step 4 sets `status: "awaiting_implementation"`, persists task records, prints the prompt and evidence paths, and exits with code 4.
   3. The host agent selects tasks respecting DAG dependency order (`dependencies: []` first).
-  4. In worktree mode, the task worktree `.sdw/worktrees/{runId}/{taskId}` is created branching from the latest primary tree `HEAD`.
+  4. Handoff mode executes in the primary working tree: Step 4 records `worktreeSkipReason` and never advertises a worktree directory it did not create. Task worktrees (`.sdw/worktrees/{runId}/{taskId}`, AC10–AC14) are created in `command` mode only, where each task's worktree is branched immediately before that task runs.
   5. The host agent implements the task in the assigned working tree and writes `task-{taskId}.evidence.json`.
   6. `sdw-orch task finish --run-id <id> --task <taskId> --evidence <path>` verifies dependencies are complete, validates the evidence schema, checks for actual file changes, commits inside the worktree, cherry-picks the commit into the primary tree, removes the worktree, and marks the task accepted. In primary-tree mode, it verifies modifications exist directly on `filesChanged`.
   7. Once every DAG task has accepted evidence, `sdw-orch resume --run-id <id>` runs required build and test gates, marks Step 4 completed, and advances to Step 5.

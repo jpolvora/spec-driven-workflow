@@ -3,6 +3,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const { execSync } = require('child_process');
 
 function normalizePath(p) {
@@ -25,13 +26,132 @@ function findProjectRoot(startDir) {
   return path.resolve(startDir || process.cwd());
 }
 
+function hasSdwSkills(dir) {
+  if (!dir) return false;
+  try {
+    const stat = fs.statSync(dir);
+    if (!stat.isDirectory()) return false;
+    const entries = fs.readdirSync(dir);
+    return entries.some(e => {
+      if (!e.startsWith('sdw-')) return false;
+      try {
+        const skillDir = path.join(dir, e);
+        return fs.statSync(skillDir).isDirectory() && fs.existsSync(path.join(skillDir, 'SKILL.md'));
+      } catch (err) {
+        return false;
+      }
+    });
+  } catch (e) {
+    return false;
+  }
+}
+
+function findEnclosingSkillsDir(startDir) {
+  if (!startDir) return null;
+  let curr = path.resolve(startDir);
+  while (true) {
+    const base = path.basename(curr);
+    if (base === 'skills') {
+      if (hasSdwSkills(curr)) return curr;
+    }
+    const parent = path.dirname(curr);
+    if (parent === curr) break;
+    curr = parent;
+  }
+  return null;
+}
+
+function detectSkillsMode(skillsPath, targetRoot, homeDir) {
+  const normSkills = normalizePath(skillsPath);
+  const root = targetRoot ? normalizePath(path.resolve(targetRoot)) : normalizePath(findProjectRoot(process.cwd()));
+  if (normSkills === `${root}/skills`) return 'canonical';
+  if (normSkills === `${root}/.agents/skills`) return 'local';
+  const home = normalizePath(homeDir || os.homedir());
+  const globalSkills = home ? normalizePath(path.join(home, '.agents', 'skills')) : '';
+  if (globalSkills && (normSkills === globalSkills || normSkills.startsWith(`${globalSkills}/`))) return 'global';
+  return 'local';
+}
+
+function resolveSkillsRoot(options = {}) {
+  // 1. Explicit CLI / options override or environment variable (AC2)
+  const explicit = options.skillsRoot || process.env.SDW_SKILLS_ROOT;
+  if (explicit && typeof explicit === 'string' && explicit.trim()) {
+    const norm = normalizePath(path.resolve(explicit.trim()));
+    if (!hasSdwSkills(norm)) {
+      return {
+        skillsRoot: norm,
+        mode: 'unknown',
+        exists: false,
+        error: `Configured skillsRoot is not a valid SDW skills directory: ${norm}`
+      };
+    }
+    return {
+      skillsRoot: norm,
+      mode: detectSkillsMode(norm, options.root, options.homeDir),
+      exists: true
+    };
+  }
+
+  const targetRoot = options.root ? path.resolve(options.root) : findProjectRoot(process.cwd());
+
+  // 2. Project-local canonical skills directory: {projectRoot}/skills (AC2, AC3)
+  const canonicalDir = path.join(targetRoot, 'skills');
+  if (!options.ignoreLocal && fs.existsSync(canonicalDir) && hasSdwSkills(canonicalDir)) {
+    return {
+      skillsRoot: normalizePath(canonicalDir),
+      mode: 'canonical',
+      exists: true
+    };
+  }
+
+  // 3. Project-local consumer skills directory: {projectRoot}/.agents/skills (AC2, AC3)
+  const consumerDir = path.join(targetRoot, '.agents', 'skills');
+  if (!options.ignoreLocal && fs.existsSync(consumerDir) && hasSdwSkills(consumerDir)) {
+    return {
+      skillsRoot: normalizePath(consumerDir),
+      mode: 'local',
+      exists: true
+    };
+  }
+
+  // 4. Enclosing directory of caller/executing script (AC2)
+  const callerDir = options.callerDir !== undefined ? options.callerDir : __dirname;
+  if (callerDir && !options.ignoreCaller) {
+    const enclosing = findEnclosingSkillsDir(callerDir);
+    if (enclosing && fs.existsSync(enclosing)) {
+      return {
+        skillsRoot: normalizePath(enclosing),
+        mode: detectSkillsMode(enclosing, targetRoot, options.homeDir),
+        exists: true
+      };
+    }
+  }
+
+  // 5. Global user directory: $HOME/.agents/skills (AC2, AC4)
+  const home = options.homeDir || os.homedir();
+  if (home) {
+    const globalDir = path.join(home, '.agents', 'skills');
+    if (fs.existsSync(globalDir) && hasSdwSkills(globalDir)) {
+      return {
+        skillsRoot: normalizePath(globalDir),
+        mode: 'global',
+        exists: true
+      };
+    }
+  }
+
+  return null;
+}
+
 function parseArgs(args) {
   const result = {
     subcommand: null,
     root: null,
+    skillsRoot: null,
     force: false,
     json: false,
     key: null,
+    executor: null
   };
 
   const positional = [];
@@ -43,12 +163,20 @@ function parseArgs(args) {
       result.json = true;
     } else if (arg === '--root') {
       result.root = args[++i];
+    } else if (arg === '--skills-root') {
+      result.skillsRoot = args[++i];
     } else if (arg === '--key') {
       result.key = args[++i];
+    } else if (arg === '--executor') {
+      result.executor = args[++i];
     } else if (arg.startsWith('--root=')) {
       result.root = arg.slice(7);
+    } else if (arg.startsWith('--skills-root=')) {
+      result.skillsRoot = arg.slice(14);
     } else if (arg.startsWith('--key=')) {
       result.key = arg.slice(6);
+    } else if (arg.startsWith('--executor=')) {
+      result.executor = arg.slice(11);
     } else if (!arg.startsWith('-')) {
       positional.push(arg);
     }
@@ -86,7 +214,9 @@ const DEFAULT_CONFIG = {
   runAllTests: false,
   testCommand: 'npm test',
   prePrCommand: '',
-  prePrInstructions: ''
+  prePrInstructions: '',
+  reviewFixCommand: '',
+  maxPreemptions: 3
 };
 
 const DEFAULT_SCHEMA = {
@@ -103,7 +233,7 @@ const DEFAULT_SCHEMA = {
     },
     "specsDir": {
       "type": "string",
-      "description": "Path to the directory containing feature specifications. Supports token {projectRoot}.",
+      "description": "Path to the directory containing feature specifications. Supports tokens {projectRoot} and {skillsRoot}.",
       "default": "{projectRoot}/.sdw/specs"
     },
     "scoreMin": {
@@ -125,8 +255,12 @@ const DEFAULT_SCHEMA = {
     },
     "stateDir": {
       "type": "string",
-      "description": "Path to the directory storing run session state files. Supports token {projectRoot}.",
+      "description": "Path to the directory storing run session state files. Supports tokens {projectRoot} and {skillsRoot}.",
       "default": "{projectRoot}/.sdw/state"
+    },
+    "skillsRoot": {
+      "type": "string",
+      "description": "Path to the active skills directory. Supports tokens {projectRoot} and {skillsRoot}."
     },
     "autoResolveGaps": {
       "type": "boolean",
@@ -234,6 +368,17 @@ const DEFAULT_SCHEMA = {
       "type": "string",
       "description": "Optional project-specific instructions or checklist for agents to verify prior to PR submission.",
       "default": ""
+    },
+    "reviewFixCommand": {
+      "type": "string",
+      "description": "Optional command that applies review-thread fixes. When unset, sdw-ship-pr never resolves active threads automatically.",
+      "default": ""
+    },
+    "maxPreemptions": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Maximum concurrent-push adaptation budget for post-PR review convergence before draining rounds.",
+      "default": 3
     }
   },
   "additionalProperties": true
@@ -255,6 +400,16 @@ Baseline directory layout for consumer projects adopting Spec-Driven Workflow:
     ├── traps.md                 # Central anti-regression trap log
     └── worktrees/               # Ephemeral per-task git worktrees for isolated subagents
 \`\`\`
+
+## Skills Installation Topologies
+
+SDW supports three installation topologies with automatic \`{skillsRoot}\` token resolution in \`.sdw/config.json\`:
+
+1. **Canonical Development Repository:** \`{projectRoot}/skills/\`
+2. **Consumer Project-Local Vendoring:** \`{projectRoot}/.agents/skills/\`
+3. **User-Wide Shared Installation (Hybrid Mode):** \`$HOME/.agents/skills/\`
+
+In **Hybrid Mode**, skills are installed once globally under \`$HOME/.agents/skills/\` and shared across all projects on the workstation, while each consumer project strictly maintains its own isolated \`.sdw/\` directory. All configuration (\`.sdw/config.json\`), specs (\`.sdw/specs/\`), and run states (\`.sdw/state/\`) remain local to the consumer repository and never leak into global storage.
 `;
 
 function validateConfigSchema(config) {
@@ -288,6 +443,13 @@ function validateConfigSchema(config) {
   if ('stateDir' in config) {
     if (typeof config.stateDir !== 'string' || config.stateDir.trim().length === 0) {
       errors.push('Property "stateDir" must be a string.');
+    }
+  }
+
+  // skillsRoot
+  if ('skillsRoot' in config) {
+    if (typeof config.skillsRoot !== 'string' || config.skillsRoot.trim().length === 0) {
+      errors.push('Property "skillsRoot" must be a string.');
     }
   }
 
@@ -438,13 +600,27 @@ function validateConfigSchema(config) {
     }
   }
 
+  // reviewFixCommand
+  if ('reviewFixCommand' in config) {
+    if (typeof config.reviewFixCommand !== 'string') {
+      errors.push('Property "reviewFixCommand" must be a string.');
+    }
+  }
+
+  // maxPreemptions
+  if ('maxPreemptions' in config) {
+    if (typeof config.maxPreemptions !== 'number' || !Number.isInteger(config.maxPreemptions) || config.maxPreemptions < 0) {
+      errors.push('Property "maxPreemptions" must be a non-negative integer.');
+    }
+  }
+
   return {
     valid: errors.length === 0,
     errors
   };
 }
 
-function loadConfig(targetRoot) {
+function loadConfig(targetRoot, options = {}) {
   const root = targetRoot ? path.resolve(targetRoot) : findProjectRoot(process.cwd());
   const normalizedRoot = normalizePath(root);
   const configFile = path.join(root, '.sdw', 'config.json');
@@ -457,6 +633,16 @@ function loadConfig(targetRoot) {
       // Fallback
     }
   }
+
+  const configuredSkillsRoot = rawConfig && typeof rawConfig.skillsRoot === 'string' && rawConfig.skillsRoot.trim()
+    ? normalizePath(path.resolve(root, rawConfig.skillsRoot.trim().replace(/\{projectRoot\}/g, normalizedRoot)))
+    : undefined;
+  const skillsInfo = resolveSkillsRoot({
+    root,
+    ...options,
+    skillsRoot: options.skillsRoot || process.env.SDW_SKILLS_ROOT || configuredSkillsRoot
+  });
+  const resolvedSkillsRoot = skillsInfo ? skillsInfo.skillsRoot : normalizedRoot;
 
   const merged = {
     ...DEFAULT_CONFIG,
@@ -474,7 +660,9 @@ function loadConfig(targetRoot) {
 
   for (const [key, value] of Object.entries(merged)) {
     if (typeof value === 'string') {
-      resolved[key] = value.replace(/\{projectRoot\}/g, normalizedRoot);
+      resolved[key] = value
+        .replace(/\{projectRoot\}/g, normalizedRoot)
+        .replace(/\{skillsRoot\}/g, resolvedSkillsRoot);
     } else {
       resolved[key] = value;
     }
@@ -483,6 +671,8 @@ function loadConfig(targetRoot) {
   return {
     ...resolved,
     projectRoot: normalizedRoot,
+    skillsRoot: resolvedSkillsRoot,
+    skillsMode: skillsInfo ? skillsInfo.mode : 'unknown',
     raw: rawConfig,
     resolved
   };
@@ -536,9 +726,12 @@ function cmdInit(options) {
     skipped.push('.sdw/directory-structure.md (already exists)');
   }
 
+  const skillsInfo = resolveSkillsRoot({ root: targetRoot, ...options });
   const result = {
     success: true,
     root: normalizePath(targetRoot),
+    skillsRoot: skillsInfo ? skillsInfo.skillsRoot : null,
+    skillsMode: skillsInfo ? skillsInfo.mode : null,
     created,
     skipped
   };
@@ -547,6 +740,9 @@ function cmdInit(options) {
     console.log(JSON.stringify(result, null, 2));
   } else {
     console.log(`[sdw-config init] Initialized .sdw at ${normalizePath(targetRoot)}`);
+    if (skillsInfo) {
+      console.log(`[sdw-config init] Resolved skillsRoot: ${skillsInfo.skillsRoot} (Mode: ${skillsInfo.mode})`);
+    }
     if (created.length > 0) {
       console.log('Created:');
       created.forEach(f => console.log(`  + ${f}`));
@@ -645,6 +841,28 @@ function cmdCheck(options) {
     }
   }
 
+  // Pre-resolve skillsInfo so {skillsRoot} can be expanded across checks (AC1, AC6)
+  const configuredSkillsRoot = parsedConfig && typeof parsedConfig.skillsRoot === 'string' && parsedConfig.skillsRoot.trim()
+    ? normalizePath(path.resolve(targetRoot, parsedConfig.skillsRoot.trim().replace(/\{projectRoot\}/g, normalizePath(targetRoot))))
+    : undefined;
+  const checkOptions = {
+    root: targetRoot,
+    ...options,
+    skillsRoot: options.skillsRoot || process.env.SDW_SKILLS_ROOT || configuredSkillsRoot
+  };
+  if (options.callerDir === undefined && options.ignoreCaller === undefined) {
+    const enclosing = findEnclosingSkillsDir(__dirname);
+    const normTarget = normalizePath(targetRoot);
+    const normEnclosing = enclosing ? normalizePath(enclosing) : '';
+    const home = normalizePath(options.homeDir || os.homedir());
+    const globalSkills = home ? normalizePath(path.join(home, '.agents', 'skills')) : '';
+    const isGlobal = Boolean(globalSkills) && (normEnclosing === globalSkills || normEnclosing.startsWith(`${globalSkills}/`));
+    if (normEnclosing && !normEnclosing.startsWith(normTarget) && !isGlobal) {
+      checkOptions.callerDir = null;
+    }
+  }
+  const skillsInfo = resolveSkillsRoot(checkOptions);
+
   // 4. Validate specsDir key and path
   if (parsedConfig) {
     const hasSpecsDir = typeof parsedConfig.specsDir === 'string' && parsedConfig.specsDir.trim().length > 0;
@@ -658,7 +876,9 @@ function cmdCheck(options) {
       valid = false;
       errors.push('config.json missing required string property "specsDir".');
     } else {
-      const resolvedSpecs = parsedConfig.specsDir.replace(/\{projectRoot\}/g, normalizePath(targetRoot));
+      const resolvedSpecs = parsedConfig.specsDir
+        .replace(/\{projectRoot\}/g, normalizePath(targetRoot))
+        .replace(/\{skillsRoot\}/g, skillsInfo ? skillsInfo.skillsRoot : normalizePath(targetRoot));
       const specsExists = fs.existsSync(resolvedSpecs) && fs.statSync(resolvedSpecs).isDirectory();
       checks.push({
         name: 'specs_dir_exists_on_disk',
@@ -673,6 +893,9 @@ function cmdCheck(options) {
 
     // 4.5 Validate scmProvider CLI presence and authentication status (AC16)
     const provider = parsedConfig.scmProvider || 'none';
+    const executor = typeof options.executor === 'function'
+      ? options.executor
+      : ((cmd) => execSync(cmd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }));
     if (provider === 'none') {
       checks.push({
         name: 'scm_provider_status',
@@ -680,12 +903,12 @@ function cmdCheck(options) {
         passed: true,
         detail: 'SCM integration disabled (none)'
       });
-    } else {
+    } else if (provider === 'github' || provider === 'ado') {
       const binName = provider === 'github' ? 'gh' : 'az';
       let installed = false;
       try {
         const probeCmd = process.platform === 'win32' ? `where ${binName}` : `command -v ${binName}`;
-        const out = execSync(probeCmd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+        const out = executor(probeCmd);
         installed = Boolean(out && out.trim());
       } catch (e) {
         installed = false;
@@ -703,7 +926,7 @@ function cmdCheck(options) {
         let authenticated = false;
         try {
           const authCmd = binName === 'gh' ? 'gh auth status' : 'az account show';
-          execSync(authCmd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+          executor(authCmd);
           authenticated = true;
         } catch (e) {
           authenticated = false;
@@ -718,6 +941,17 @@ function cmdCheck(options) {
           valid = false;
           errors.push(`Configured SCM provider "${provider}" CLI "${binName}" is not authenticated.`);
         }
+      }
+    } else {
+      valid = false;
+      checks.push({
+        name: 'scm_provider_status',
+        target: `scmProvider: ${provider}`,
+        passed: false,
+        detail: `Unsupported or invalid SCM provider: ${provider}`
+      });
+      if (!errors.some(e => e.includes('scmProvider'))) {
+        errors.push(`Property "scmProvider" must be one of: none, ado, github.`);
       }
     }
   }
@@ -734,9 +968,28 @@ function cmdCheck(options) {
     errors.push('Missing .sdw/directory-structure.md documentation.');
   }
 
+  // 6. Check skillsRoot resolution (AC6, AC9)
+  const hasSkills = Boolean(skillsInfo && skillsInfo.exists);
+  const skillsDetail = hasSkills
+    ? `Mode: ${skillsInfo.mode} (${skillsInfo.skillsRoot})`
+    : (skillsInfo && skillsInfo.error ? skillsInfo.error : 'Missing skills directory on disk');
+  checks.push({
+    name: 'skills_root_resolution',
+    target: hasSkills ? skillsInfo.skillsRoot : (skillsInfo && skillsInfo.skillsRoot ? skillsInfo.skillsRoot : 'none'),
+    passed: hasSkills,
+    detail: skillsDetail
+  });
+  if (!hasSkills) {
+    valid = false;
+    if (skillsInfo && skillsInfo.error) errors.push(skillsInfo.error);
+    errors.push('No valid skills directory found on disk (checked project-local and global $HOME/.agents/skills).');
+  }
+
   const result = {
     valid,
     root: normalizePath(targetRoot),
+    skillsRoot: skillsInfo ? skillsInfo.skillsRoot : null,
+    skillsMode: skillsInfo ? skillsInfo.mode : null,
     checks,
     errors
   };
@@ -745,6 +998,9 @@ function cmdCheck(options) {
     console.log(JSON.stringify(result, null, 2));
   } else {
     console.log(`[sdw-config check] Target root: ${normalizePath(targetRoot)}`);
+    if (skillsInfo) {
+      console.log(`[sdw-config check] Skills root: ${skillsInfo.skillsRoot} (Mode: ${skillsInfo.mode})`);
+    }
     console.log(`Status: ${valid ? 'PASS' : 'FAIL'}`);
     console.log('\nChecks:');
     checks.forEach(c => {
@@ -790,17 +1046,34 @@ function cmdParse(options) {
   }
 
   const normalizedRoot = normalizePath(targetRoot);
+  const configuredSkillsRoot = rawConfig && typeof rawConfig.skillsRoot === 'string' && rawConfig.skillsRoot.trim()
+    ? normalizePath(path.resolve(targetRoot, rawConfig.skillsRoot.trim().replace(/\{projectRoot\}/g, normalizedRoot)))
+    : undefined;
+  const skillsInfo = resolveSkillsRoot({
+    root: targetRoot,
+    ...options,
+    skillsRoot: options.skillsRoot || process.env.SDW_SKILLS_ROOT || configuredSkillsRoot
+  });
+  const resolvedSkillsRoot = skillsInfo ? skillsInfo.skillsRoot : normalizedRoot;
   const resolved = {};
 
   for (const [key, value] of Object.entries(rawConfig)) {
     if (typeof value === 'string') {
-      resolved[key] = value.replace(/\{projectRoot\}/g, normalizedRoot);
+      resolved[key] = value
+        .replace(/\{projectRoot\}/g, normalizedRoot)
+        .replace(/\{skillsRoot\}/g, resolvedSkillsRoot);
     } else {
       resolved[key] = value;
     }
   }
 
   if (options.key) {
+    if (options.key === 'skillsRoot' && !(options.key in resolved)) {
+      resolved.skillsRoot = resolvedSkillsRoot;
+    }
+    if (options.key === 'skillsMode' && !(options.key in resolved)) {
+      resolved.skillsMode = skillsInfo ? skillsInfo.mode : 'unknown';
+    }
     if (options.key in resolved) {
       if (options.json) {
         console.log(JSON.stringify({ [options.key]: resolved[options.key] }, null, 2));
@@ -821,6 +1094,8 @@ function cmdParse(options) {
 
   const output = {
     projectRoot: normalizedRoot,
+    skillsRoot: resolvedSkillsRoot,
+    skillsMode: skillsInfo ? skillsInfo.mode : 'unknown',
     raw: rawConfig,
     resolved
   };
@@ -829,6 +1104,7 @@ function cmdParse(options) {
     console.log(JSON.stringify(output, null, 2));
   } else {
     console.log(`[sdw-config parse] Project Root: ${normalizedRoot}`);
+    console.log(`[sdw-config parse] Skills Root: ${resolvedSkillsRoot} (${skillsInfo ? skillsInfo.mode : 'unknown'})`);
     console.log('\nResolved Configuration:');
     for (const [k, v] of Object.entries(resolved)) {
       console.log(`  ${k}: ${v}`);
@@ -844,14 +1120,15 @@ function showHelp() {
 Subcommands:
   init     Scaffold .sdw directory and default files in project root
   check    Verify .sdw directory structure, config syntax, and paths
-  parse    Parse and resolve .sdw/config.json with {projectRoot} tokens
+  parse    Parse and resolve .sdw/config.json with {projectRoot} and {skillsRoot} tokens
 
 Options:
-  --root <path>   Explicit project root directory (default: auto-detected)
-  --force         Overwrite existing files on init
-  --json          Output results in JSON format
-  --key <name>    (parse only) Extract a single resolved config key
-  -h, --help      Show this help message
+  --root <path>        Explicit project root directory (default: auto-detected)
+  --skills-root <path> Explicit skills root directory (default: auto-detected)
+  --force              Overwrite existing files on init
+  --json               Output results in JSON format
+  --key <name>         (parse only) Extract a single resolved config key
+  -h, --help           Show this help message
 `);
 }
 
@@ -895,6 +1172,10 @@ module.exports = {
   cmdParse,
   loadConfig,
   validateConfigSchema,
+  resolveSkillsRoot,
+  hasSdwSkills,
+  findEnclosingSkillsDir,
+  detectSkillsMode,
   DEFAULT_CONFIG,
   DEFAULT_SCHEMA,
   findProjectRoot,

@@ -31,7 +31,11 @@ function assertSafeRef(ref, label) {
 
 function resolveStateDir(projectRoot, config = {}) {
   const configured = config.stateDir || '{projectRoot}/.sdw/state';
-  const raw = String(configured).replace(/\{projectRoot\}/g, projectRoot);
+  let skillsRootVal = typeof config.skillsRoot === 'string' && config.skillsRoot.trim()
+    ? config.skillsRoot.replace(/\{projectRoot\}/g, projectRoot)
+    : projectRoot;
+  if (skillsRootVal.includes('{skillsRoot}')) skillsRootVal = projectRoot;
+  const raw = String(configured).replace(/\{projectRoot\}/g, projectRoot).replace(/\{skillsRoot\}/g, skillsRootVal).replace(/\{projectRoot\}/g, projectRoot);
   return path.isAbsolute(raw) ? path.normalize(raw) : path.resolve(projectRoot, raw);
 }
 
@@ -88,7 +92,8 @@ function parseArgs(args) {
     dryRun: false,
     json: false,
     maxIterations: 3,
-    pollIntervalMs: 20000
+    pollIntervalMs: 20000,
+    maxPreemptions: null
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -128,6 +133,9 @@ function parseArgs(args) {
     } else if (arg === '--poll-interval' && args[i + 1]) {
       const parsedInterval = parseInt(args[++i], 10);
       options.pollIntervalMs = Number.isFinite(parsedInterval) && parsedInterval >= 0 ? parsedInterval : 20000;
+    } else if (arg === '--max-preemptions' && args[i + 1]) {
+      const parsedPreemptions = parseInt(args[++i], 10);
+      options.maxPreemptions = Number.isFinite(parsedPreemptions) && parsedPreemptions >= 0 ? parsedPreemptions : 3;
     } else if (arg === '--review-fix-command' && args[i + 1]) {
       options.reviewFixCommand = args[++i];
     } else if ((arg === '--root' || arg === '--project-root') && args[i + 1]) {
@@ -142,6 +150,13 @@ function parseArgs(args) {
  * Loads project configuration from .sdw/config.json
  */
 function loadConfig(projectRoot = process.cwd()) {
+  try {
+    const sdwConfig = require('../../sdw-config/scripts/sdw_config.cjs');
+    if (sdwConfig && typeof sdwConfig.loadConfig === 'function') {
+      const loaded = sdwConfig.loadConfig(projectRoot);
+      if (loaded && typeof loaded === 'object') return loaded;
+    }
+  } catch (e) {}
   const configPath = path.join(projectRoot, '.sdw', 'config.json');
   if (fs.existsSync(configPath)) {
     try {
@@ -222,7 +237,7 @@ async function runShipPr(options = {}, customExecutor = null) {
     }
   }
 
-  const specSlug = options.spec || null;
+  const specSlug = options.spec || options.specSlug || null;
   if (specSlug) assertSafeSlug(specSlug);
   assertSafeRef(head, 'head');
   assertSafeRef(base, 'base');
@@ -352,6 +367,24 @@ async function runShipPr(options = {}, customExecutor = null) {
       report.prePrPassed = true;
     }
 
+    // Check if an active PR is already open for this branch
+    let activePrEarly = null;
+    let providerEarly = null;
+    if (scmProviderName !== 'none' && scmContract) {
+      try {
+        const capability = scmContract.checkScmCapability(scmProviderName, { executor });
+        if (capability.available || dryRun) {
+          providerEarly = scmContract.createScmProvider(scmProviderName, { executor });
+          if (typeof providerEarly.findActivePullRequest === 'function') {
+            activePrEarly = await providerEarly.findActivePullRequest({ head, base });
+            if (activePrEarly) {
+              log(`[sdw-ship-pr] Active PR #${activePrEarly.number} detected (${activePrEarly.url || 'open'}). Notice: Amending an active pull request while review/approval is pending is not a recommended practice, but adapting as a non-blocking operation: complementing PR with new commits and delivery details.`);
+            }
+          }
+        }
+      } catch (e) {}
+    }
+
     // Step 2: Remote Branch Publishing
     if (pushDelivery) {
       if (dryRun) {
@@ -367,7 +400,7 @@ async function runShipPr(options = {}, customExecutor = null) {
         if (!hasRemote) {
           log('[sdw-ship-pr] Remote push skipped: no git remote configured.');
         } else {
-          log(`[sdw-ship-pr] Pushing branch ${head} to remote origin...`);
+          log(`[sdw-ship-pr] Pushing branch ${head} to remote origin${activePrEarly ? ` (complementing active PR #${activePrEarly.number})` : ''}...`);
           try {
             executor(`git push -u origin ${head}`);
             report.pushed = true;
@@ -394,7 +427,7 @@ async function runShipPr(options = {}, customExecutor = null) {
       }
 
       log(`[sdw-ship-pr] Preparing pull request via ${scmProviderName}...`);
-      const provider = scmContract.createScmProvider(scmProviderName, { executor });
+      const provider = providerEarly || scmContract.createScmProvider(scmProviderName, { executor });
 
       const prResult = await provider.createPullRequest({
         title,
@@ -415,6 +448,30 @@ async function runShipPr(options = {}, customExecutor = null) {
       };
 
       log(`[sdw-ship-pr] Pull request ${prResult.reused ? 'reused' : 'created'}: ${prResult.url || '(dry-run simulated)'}`);
+
+      // When an active PR is open/reused, complement the PR and update description if relevant
+      if (prResult.reused && prResult.number && typeof provider.updatePullRequest === 'function') {
+        let headCommit = '';
+        try { headCommit = executor('git rev-parse --short HEAD').toString().trim(); } catch (e) {}
+        const amendmentNote = specSlug && specSlug !== 'unspecified'
+          ? `### Amending Delivery: ${specSlug}\n- Commit: \`${headCommit || 'HEAD'}\`\n- Timestamp: ${new Date().toISOString()}`
+          : null;
+        const newBodyContent = amendmentNote || body;
+        if (newBodyContent) {
+          try {
+            log(`[sdw-ship-pr] Notice: Amending an active pull request while review/approval is pending is not a recommended practice, but adapting as a non-blocking operation: complementing PR #${prResult.number} description with amending delivery...`);
+            await provider.updatePullRequest({
+              prNumber: prResult.number,
+              body: newBodyContent,
+              appendBody: true,
+              dryRun
+            });
+            log(`[sdw-ship-pr] Successfully updated PR description for PR #${prResult.number}.`);
+          } catch (editErr) {
+            warn(`[sdw-ship-pr] Warning: Could not update description for active PR #${prResult.number}: ${editErr.message}`);
+          }
+        }
+      }
 
       // Step 4: Post-PR Review Convergence
       if (scmCodeReviewEnabled) {
@@ -444,6 +501,31 @@ async function runShipPr(options = {}, customExecutor = null) {
         let round = 0;
         let converged = false;
 
+        // Concurrent-push adaptation: CI check states observed per round so a
+        // superseded run (cancelled by a newer push) is recognized as preemption,
+        // not failure. A preempted round grants the replacement run a fresh
+        // convergence window instead of burning the iteration budget.
+        const FAILED_CHECK_STATES = new Set(['fail', 'failure', 'failed', 'action_required', 'rejected', 'broken', 'timed_out', 'startup_failure']);
+        const SUPERSEDED_CHECK_STATES = new Set(['cancelled', 'cancel']);
+        const PENDING_CHECK_STATES = new Set(['pending', 'in_progress', 'queued', 'waiting', 'running']);
+        const stateOf = c => String(c.state || '').toLowerCase();
+        const bucketOf = c => String(c.bucket || '').toLowerCase();
+        const isFailedCheck = c => !isSupersededCheck(c) && (FAILED_CHECK_STATES.has(stateOf(c)) || FAILED_CHECK_STATES.has(bucketOf(c)));
+        const isSupersededCheck = c => SUPERSEDED_CHECK_STATES.has(stateOf(c)) || SUPERSEDED_CHECK_STATES.has(bucketOf(c));
+        const checkClassOf = c => {
+          if (isFailedCheck(c)) return 'failed';
+          if (isSupersededCheck(c)) return 'superseded';
+          if (PENDING_CHECK_STATES.has(stateOf(c)) || PENDING_CHECK_STATES.has(bucketOf(c))) return 'pending';
+          return 'passed';
+        };
+        const maxPreemptions = Number.isFinite(Number(options.maxPreemptions ?? config.maxPreemptions))
+          ? Math.max(0, Number(options.maxPreemptions ?? config.maxPreemptions))
+          : 3;
+        let preemptions = 0;
+        let prevCheckClasses = null;
+        report.reviewConvergence.preemptions = 0;
+        report.reviewConvergence.supersededChecks = [];
+
         while (round < maxRounds && !converged) {
           round++;
           report.reviewConvergence.rounds = round;
@@ -471,11 +553,50 @@ async function runShipPr(options = {}, customExecutor = null) {
           }
 
           const activeList = reviewThreads.threads.filter(t => !t.isResolved);
-          const failingChecks = (status.checks || []).filter(c => {
-            const value = String(c.state || c.bucket || '').toLowerCase();
-            return ['fail', 'failure', 'cancelled', 'cancel', 'timed_out', 'action_required', 'startup_failure'].includes(value);
-          });
+          const failingChecks = (status.checks || []).filter(isFailedCheck);
+          const supersededChecks = (status.checks || []).filter(isSupersededCheck);
           report.reviewConvergence.failingChecks = failingChecks;
+          report.reviewConvergence.supersededChecks = supersededChecks;
+
+          // Adaptation: a check that moved from a terminal state back to pending
+          // (or a changed check set between rounds) means a newer CI run replaced
+          // the observed one, typically after a concurrent push to the head branch.
+          // Grant the replacement run a fresh window instead of halting.
+          const checkClasses = new Map((status.checks || []).map(c => [c.name, checkClassOf(c)]));
+          let preempted = false;
+          if (prevCheckClasses && prevCheckClasses.size > 0) {
+            if (checkClasses.size !== prevCheckClasses.size) {
+              preempted = true;
+            } else {
+              for (const [name, cls] of checkClasses) {
+                const prev = prevCheckClasses.get(name);
+                const wasTerminal = prev === 'superseded' || prev === 'failed' || prev === 'passed';
+                if (wasTerminal && cls === 'pending') {
+                  preempted = true;
+                  break;
+                }
+                if ((prev === 'superseded' || prev === 'failed') && cls === 'passed') {
+                  preempted = true;
+                  break;
+                }
+              }
+            }
+          }
+          prevCheckClasses = checkClasses;
+          if (preempted) {
+            if (preemptions < maxPreemptions) {
+              preemptions++;
+              report.reviewConvergence.preemptions = preemptions;
+              log(`[sdw-ship-pr] Detected superseded CI run replaced by a newer run (preemption ${preemptions}/${maxPreemptions}). Adapting: resetting convergence window.`);
+              round = 0;
+              if (pollIntervalMs > 0) await new Promise(r => setTimeout(r, pollIntervalMs));
+              continue;
+            }
+            warn(`[sdw-ship-pr] Preemption budget exhausted (${maxPreemptions}); continuing with latest status.`);
+          }
+          if (supersededChecks.length > 0 && failingChecks.length === 0) {
+            log(`[sdw-ship-pr] ${supersededChecks.length} superseded check(s) awaiting replacement run; waiting without treating them as failures.`);
+          }
 
           // Failing CI with no review threads still needs a fixer. Reuse the same
           // test/security/scoped-commit/push gates before polling again.
@@ -490,6 +611,7 @@ async function runShipPr(options = {}, customExecutor = null) {
               if (changed.length > 0) {
                 executor('git commit -m "fix(review): address failing checks"');
                 executor(`git push origin ${head}`);
+                if (pollIntervalMs > 0) await new Promise(r => setTimeout(r, pollIntervalMs));
                 continue;
               }
               warn('[sdw-ship-pr] reviewFixCommand produced no changes for the failing checks.');
@@ -504,6 +626,7 @@ async function runShipPr(options = {}, customExecutor = null) {
               });
               if (fixResult && fixResult.fixed === true) {
                 runReviewSecurityGate();
+                if (pollIntervalMs > 0) await new Promise(r => setTimeout(r, pollIntervalMs));
                 continue;
               }
               warn('[sdw-ship-pr] threadFixer did not confirm a fix for the failing checks.');
@@ -633,6 +756,12 @@ async function runShipPr(options = {}, customExecutor = null) {
 
         if (!converged && !dryRun) {
           report.shipStatus = 'review_pending';
+          const hasActivePr = Boolean(report.pullRequest && (report.pullRequest.url || report.pullRequest.number));
+          if (hasActivePr) {
+            log(`[sdw-ship-pr] Active PR #${report.pullRequest.number || ''} is in review / awaiting approval. Notice: Amending an active pull request while review/approval is pending is not a recommended practice; adapting non-blocking workflow.`);
+            report.nonBlocking = true;
+            report.adaptedActivePr = true;
+          }
           report.success = false;
         } else {
           report.shipStatus = 'delivered';
@@ -652,17 +781,21 @@ async function runShipPr(options = {}, customExecutor = null) {
           const stateData = JSON.parse(fs.readFileSync(stateFilePath, 'utf8'));
           if (!stateData.steps) stateData.steps = {};
           
+          const hasActivePr = Boolean(report.pullRequest && (report.pullRequest.url || report.pullRequest.number));
+          const isStepCompleted = report.success || (hasActivePr && report.shipStatus === 'review_pending');
           const existingStep8 = stateData.steps[8] || {};
           stateData.steps[8] = {
             step: 8,
             name: 'pr_preparation',
-            status: report.success ? 'completed' : 'failed',
+            status: isStepCompleted ? 'completed' : 'failed',
             timestamp: new Date().toISOString(),
             artifact: existingStep8.artifact !== undefined ? existingStep8.artifact : null,
             output: {
               ...(existingStep8.output || {}),
               pullRequest: report.pullRequest,
               shipStatus: report.shipStatus,
+              nonBlocking: Boolean(report.nonBlocking),
+              adaptedActivePr: Boolean(report.adaptedActivePr),
               pushedBranch: report.pushed ? head : null,
               reviewConvergence: report.reviewConvergence
             }
@@ -735,7 +868,17 @@ async function cmdResolveThread(options, customExecutor) {
   const comment = options.comment;
   if (!prNumber) throw new Error('--pr <prNumber> is required for resolve-thread.');
   if (!threadId) throw new Error('--thread <threadId> is required for resolve-thread.');
-  if (!comment) throw new Error('--comment <comment> is required for resolve-thread.');
+  if (scmContract && scmContract.assertResolutionComment) {
+    scmContract.assertResolutionComment(comment);
+  } else {
+    const normalized = String(comment || '')
+      .replace(/<!--\s*resolution-reply\s*-->/gi, '')
+      .replace(/^[\s`'"]+|[\s`'"]+$/g, '')
+      .trim();
+    if (!normalized || /^[0-9a-f]{4,64}$/i.test(normalized)) {
+      throw new Error('A resolution comment must explain the fix and cannot be empty or a bare commit hash.');
+    }
+  }
 
   const providerName = options.provider || config.scmProvider || 'github';
   const provider = (scmContract && scmContract.createScmProvider)
@@ -824,7 +967,11 @@ if (require.main === module) {
           console.log(`  PR URL:       ${result.pullRequest.url}`);
         }
       }
-      process.exit((result && (result.success !== false && result.resolved !== false)) ? 0 : 1);
+      const hasActivePr = Boolean(result && result.pullRequest && (result.pullRequest.url || result.pullRequest.number));
+      const ok = options.subcommand === 'check-status'
+        ? Boolean(result && result.allPassed === true)
+        : Boolean(result && (result.success !== false || (hasActivePr && result.shipStatus === 'review_pending')) && result.resolved !== false);
+      process.exit(ok ? 0 : 1);
     })
     .catch(err => {
       console.error(`\n[sdw-ship-pr] Error: ${err.message}`);

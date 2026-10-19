@@ -163,7 +163,7 @@ test('AC10: Discovers skills in both canonical (skills/) and consumer (.agents/s
     fs.writeFileSync(path.join(canonDir, 'SKILL.md'), '---\nname: my-canon-skill\n---\n# Canon\n', 'utf8');
     fs.writeFileSync(path.join(consDir, 'SKILL.md'), '---\nname: my-cons-skill\n---\n# Cons\n', 'utf8');
 
-    const discovered = sdwRouter.scanSkills({ root: tmpDir });
+    const discovered = sdwRouter.scanSkills({ root: tmpDir, homeDir: null });
     assert.equal(discovered.length, 2);
 
     const canon = discovered.find(s => s.name === 'my-canon-skill');

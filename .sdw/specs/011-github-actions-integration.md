@@ -71,7 +71,7 @@ The specification originated from the user request to automate GitHub-side integ
   5. Packaging verification (`node scripts/verify_skills.cjs`) guarded by an existence check so it activates automatically once spec 006 lands.
   - Deliberately dropped from the source example: ripgrep installation and the `ws-check-workflows` simulation, both specific to `workflow-skills`.
 - Code Review Workflow (adapted from `workflow-skills/.github/workflows/agentic-code-review.yml`):
-  - Repository Variables: `SDW_CODE_REVIEW_ENGINE` (default `opencode`), `SDW_CODE_REVIEW_MODEL` (default `opencode-go/deepseek-v4.1-flash`), `SDW_CODE_REVIEW_VARIANT` (default `medium`).
+  - Repository Variables: `SDW_CODE_REVIEW_ENGINE` (default `opencode`), `SDW_CODE_REVIEW_MODEL` (default `opencode-go/claude-haiku-5-5`), `SDW_CODE_REVIEW_VARIANT` (default `medium`).
   - Secrets: `OPENCODE_API_KEY` for the opencode engine, `CURSOR_API_KEY` for the cursor-sdk engine; exactly one is required at run time.
   - Runner: `curl` of `agentic-code-reviewers` `release/run.sh`, invoked with `--engine`, `--model`, `--variant`, `--gh`, `--pr-id`, `--stack Custom`, `--custom-prompt .github/agentic-code-reviewers-prompt.md`, `--source-branch`, and `--target-branch`.
   - Credential detection runs before the review step; when the required secret is absent the job logs a skip notice and exits 0 (fork-safe).
@@ -97,7 +97,7 @@ The specification originated from the user request to automate GitHub-side integ
 
 | Assumption | Chosen default | Rationale | Confirmed |
 |------------|----------------|-----------|-----------|
-| Review engine default | `opencode` with `opencode-go/deepseek-v4.1-flash` | Matches the proven default in the `workflow-skills` example | y |
+| Review engine default | `opencode` with `opencode-go/claude-haiku-5-5` | Matches the proven default in the `workflow-skills` example | y |
 | Credential-less behavior | Skip review with notice | Keeps fork pull requests and fresh clones green without secrets | y |
 | Release trigger | Tag push matching `v*.*.*` | Consistent with spec 006 and standard release practice | y |
 | Review prompt source | Adapted copy of the `workflow-skills` prompt | The source prompt is validated in production and only needs SDW-specific checks added | y |
@@ -121,7 +121,7 @@ The specification originated from the user request to automate GitHub-side integ
 ### Telemetry & Observable Signals
 
 - CI check runs appear on pull requests with per-step logs for spec validation, tests, and packaging verification.
-- Review workflow logs the selected engine, model, and variant before execution, e.g. `engine=opencode model=opencode-go/deepseek-v4.1-flash variant=medium`.
+- Review workflow logs the selected engine, model, and variant before execution, e.g. `engine=opencode model=opencode-go/claude-haiku-5-5 variant=medium`.
 - Skip notice emitted when no credential is configured: `Review skipped: no OPENCODE_API_KEY or CURSOR_API_KEY secret configured`.
 - Unresolved-thread gate prints the active thread count and fails with an actionable error listing the count.
 - Release workflow logs the tag, validation results, and the created release URL.

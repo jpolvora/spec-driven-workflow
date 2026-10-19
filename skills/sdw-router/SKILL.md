@@ -17,7 +17,7 @@ Always-autoloaded entrypoint and traffic controller routing agent tasks across a
 
 ## Subcommands
 
-- `scan`: Discovers all installed SDW skills across canonical and consumer locations.
+- `scan`: Discovers all installed SDW skills across canonical, consumer, and global (`$HOME/.agents/skills`) locations.
 - `route <prompt>`: Evaluates prompt intent, checks explicit invocations, and routes to the target skill.
 - `doctor`: Validates router health, skill directory integrity, and reports missing or broken skill paths.
 
@@ -36,7 +36,7 @@ Always-autoloaded entrypoint and traffic controller routing agent tasks across a
 ## Steps
 
 1. **Scan Available Skills**
-   Discover skills installed under `{projectRoot}/skills/` (canonical) and `{projectRoot}/.agents/skills/` (consumer).
+   Discover skills installed under `{projectRoot}/skills/` (canonical), `{projectRoot}/.agents/skills/` (consumer), and `$HOME/.agents/skills/` (global/hybrid).
    - Run: `node skills/sdw-router/scripts/sdw_router.cjs scan [--json]`
    - Done when: Discovered skills list is returned with presence and readability status.
 

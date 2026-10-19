@@ -247,7 +247,9 @@ const SCANNABLE_EXTS = new Set(['.js', '.cjs', '.mjs', '.jsx', '.ts', '.tsx', '.
 
 function isTestFile(file) {
   const n = normalizePath(file);
-  return n.includes('test') || n.includes('.spec.') || n.includes('__tests__') || n.startsWith('tests/');
+  return /(^|\/)tests?\//.test(n)
+    || /(^|\/)__tests__\//.test(n)
+    || /\.(test|spec)\.[^/]+$/.test(n);
 }
 
 function getAddedLines(projectRoot, base, file) {
@@ -538,7 +540,7 @@ function writeMarkdownReport(report, destPath) {
   } else {
     md += `Execute in order (surgical, one finding at a time):\n\n`;
     open.forEach(f => { md += `- [ ] ${f.id} (${f.severity}) \`${f.path}\` — ${f.fix}\n`; });
-    md += `\nRe-run \`node skills/sdw-code-review/scripts/sdw_code_review.cjs run --json\` until blocking findings reach 0.\n`;
+    md += `\nRe-run \`node "${normalizePath(__filename)}" run --json\` until blocking findings reach 0.\n`;
   }
 
   fs.writeFileSync(destPath, md, 'utf8');
@@ -593,14 +595,27 @@ function runCodeReview(options) {
   const blockingCount = criticalOpen + warningOpen;
   const passed = blockingCount === 0;
 
-  const allFindings = [...openFindings, ...fixedRecords].sort((a, b) => (a.id < b.id ? -1 : 1));
+  const seenFindingKeys = new Set();
+  const allFindings = [...openFindings, ...fixedRecords]
+    .filter(f => {
+      const key = `${f.file}:${f.line}:${f.rule}`;
+      if (seenFindingKeys.has(key)) return false;
+      seenFindingKeys.add(key);
+      return true;
+    })
+    .sort((a, b) => {
+      if (a.file !== b.file) return a.file < b.file ? -1 : 1;
+      if (a.line !== b.line) return a.line - b.line;
+      return a.rule < b.rule ? -1 : 1;
+    })
+    .map((f, index) => ({ ...f, id: `CR-${String(index + 1).padStart(3, '0')}` }));
   const plannedAll = findings.filter(f => f.status === 'planned');
   const reportFindings = dryRun ? findings : allFindings;
 
   let reportPath = options.reportPath || options.report || null;
   if (reportPath) {
     reportPath = path.isAbsolute(reportPath) ? reportPath : path.resolve(projectRoot, reportPath);
-  } else {
+  } else if (!dryRun) {
     reportPath = defaultReportPath(projectRoot);
   }
 
@@ -621,12 +636,14 @@ function runCodeReview(options) {
     fixedFiles,
     plannedFixes: plannedAll.map(f => f.id),
     findings: reportFindings,
-    reportPath: normalizePath(path.relative(projectRoot, reportPath) || reportPath),
-    reportAbsPath: reportPath,
+    reportPath: reportPath ? normalizePath(path.relative(projectRoot, reportPath) || reportPath) : null,
+    reportAbsPath: reportPath || null,
     dryRun
   };
 
-  writeMarkdownReport(report, reportPath);
+  if (reportPath) {
+    writeMarkdownReport(report, reportPath);
+  }
   return report;
 }
 
@@ -722,7 +739,11 @@ function main() {
     if (opts.json) {
       console.log(JSON.stringify(report, null, 2));
     } else {
-      log(`[sdw-code-review] Report written to ${report.reportPath}`);
+      if (report.reportAbsPath) {
+        log(`[sdw-code-review] Report written to ${report.reportPath}`);
+      } else {
+        log('[sdw-code-review] (dry-run) Report not written; no files modified.');
+      }
       if (report.passed) {
         const total = report.findings.filter(f => f.status === 'open').length;
         if (total === 0) log('[sdw-code-review] Code review passed with 0 findings.');

@@ -94,8 +94,10 @@ test('sdw-config: cmdInit creates config.schema.json, config.json with $schema, 
     assert.equal(config.$schema, './config.schema.json', 'config.json specifies $schema reference');
     assert.equal(config.scoreMin, 8);
 
-    // cmdCheck passes on newly initialized project
-    const checkCode = sdwConfig.cmdCheck({ root: tmpDir });
+    const skillsFixture = path.resolve(__dirname, '../skills');
+
+    // cmdCheck passes on newly initialized project with skillsRoot fixture
+    const checkCode = sdwConfig.cmdCheck({ root: tmpDir, skillsRoot: skillsFixture });
     assert.equal(checkCode, 0, 'cmdCheck passes for freshly initialized project');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -114,7 +116,8 @@ test('sdw-config: cmdCheck fails when config violates schema bounds', () => {
       scoreMin: 99
     }, null, 2), 'utf8');
 
-    const checkCode = sdwConfig.cmdCheck({ root: tmpDir });
+    const skillsFixture = path.resolve(__dirname, '../skills');
+    const checkCode = sdwConfig.cmdCheck({ root: tmpDir, skillsRoot: skillsFixture });
     assert.equal(checkCode, 1, 'cmdCheck exits with 1 when schema validation fails');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -179,7 +182,8 @@ test('sdw-config: validates pushDelivery boolean setting', () => {
       specsDir: '{projectRoot}/.sdw/specs',
       pushDelivery: true
     }, null, 2), 'utf8');
-    const validCheck = sdwConfig.cmdCheck({ root: tmpDir });
+    const skillsFixture = path.resolve(__dirname, '../skills');
+    const validCheck = sdwConfig.cmdCheck({ root: tmpDir, skillsRoot: skillsFixture });
     assert.equal(validCheck, 0, 'Accepts boolean pushDelivery');
 
     // Invalid non-boolean
@@ -187,7 +191,7 @@ test('sdw-config: validates pushDelivery boolean setting', () => {
       specsDir: '{projectRoot}/.sdw/specs',
       pushDelivery: 'invalid-string'
     }, null, 2), 'utf8');
-    const invalidCheck = sdwConfig.cmdCheck({ root: tmpDir });
+    const invalidCheck = sdwConfig.cmdCheck({ root: tmpDir, skillsRoot: skillsFixture });
     assert.equal(invalidCheck, 1, 'Rejects non-boolean pushDelivery');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });

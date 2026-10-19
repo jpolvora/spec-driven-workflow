@@ -26,7 +26,7 @@ function setupTestRepo() {
   const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
   cfg.implementation = {
     mode: 'command',
-    command: 'node -e "const fs = require(\'fs\'); const ev = { taskId: process.env.SDW_TASK_ID, acIds: [\'AC1\'], filesChanged: [\'README.md\'], summary: \'task done\' }; fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify(ev)); fs.appendFileSync(\'README.md\', \'\\n# update for \' + process.env.SDW_TASK_ID);"'
+    command: 'node -e "const fs = require(\'fs\'); const acs = process.env.SDW_AC_IDS ? process.env.SDW_AC_IDS.split(\',\').filter(Boolean) : [\'AC1\']; const ev = { taskId: process.env.SDW_TASK_ID, acIds: acs.length > 0 ? acs : [\'AC1\'], filesChanged: [\'README.md\'], summary: \'task done\' }; fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify(ev)); fs.appendFileSync(\'README.md\', \'\\n# update for \' + process.env.SDW_TASK_ID);"'
   };
   fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
 
@@ -267,13 +267,13 @@ test('sdw-orch branch & worktree - AC12, AC14, AC15, AC17: Multi-task worktree l
       root: tmpDir,
       runId,
       worktrees: true,
-      minScore: 0,
       skipReview: true,
       skipPr: true
     });
     assert.strictEqual(code, 0);
 
     const state = stateManager.loadRunState(tmpDir, runId);
+    assert.strictEqual(state.score, 10, 'All acceptance criteria must be satisfied');
     assert.ok(state.worktrees.length > 0, 'Must record worktrees for multi-task plan');
 
     for (const wt of state.worktrees) {
@@ -347,7 +347,6 @@ test('sdw-orch branch & worktree - AC22: status subcommand displays branch and w
       runId,
       worktrees: true,
       featureBranch: true,
-      minScore: 0,
       skipReview: true,
       skipPr: true
     });

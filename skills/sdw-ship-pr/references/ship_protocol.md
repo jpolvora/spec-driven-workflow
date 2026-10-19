@@ -37,9 +37,11 @@ Before publishing branches or creating remote pull requests, `sdw-ship-pr` evalu
    - Reads `scmProvider` from `.sdw/config.json`.
    - If `none`: PR creation is skipped. Standalone delivery is marked complete locally.
    - If `github` or `ado`: SCM CLI capability (`gh` or `az`) is verified.
-2. **Idempotent Reuse:**
+2. **Idempotent Reuse & Active PR Adaptation:**
    - Queries open pull requests matching head branch into base branch (`gh pr list --head ...` or `az repos pr list --source-branch ...`).
    - If an open PR already exists, reuses the existing PR number and URL without creating duplicates.
+   - **Complementing Active PR:** Commits are pushed to the existing branch, and the PR description is updated with an amending delivery section (`### Amending Delivery: {specSlug}\n- Commit: \`{sha}\`\n- Timestamp: {iso}`).
+   - **Non-blocking Adaptation:** While amending an active PR undergoing code review or awaiting approval is not a recommended practice, the system adapts as a non-blocking operation rather than halting or failing. If review convergence ends while checks or approvals are pending, it records `shipStatus: review_pending`, marks delivery completed in state, and exits 0 cleanly.
 3. **Creation Payload:**
    - `title`: Extracted from specification title or `--title`.
    - `body`: Markdown PR body describing delivered features, referenced issue number, and verification summary.
@@ -72,6 +74,12 @@ When `scmCodeReviewEnabled: true` or `--poll-pr` is active, `sdw-ship-pr` execut
 - Runs up to `--max-iterations` convergence rounds (default `3`).
 - Polls `provider.checkPrStatus(prNumber)` and `provider.listReviewThreads(prNumber)`.
 - If all checks pass and `activeCount === 0`, marks review converged.
+
+### 4.2b Concurrent-Push Preemption Adaptation
+Concurrent pushes to the shipped head branch while polling are an allowed event, not a failure. The loop adapts instead of halting:
+- **Superseded checks are not failures:** `cancelled` and `cancel` states are reported as `supersededChecks` and waited out. Only `fail`, `failure`, `action_required`, and the terminal `timed_out`/`startup_failure` states feed the fixer/blocker path, since those indicate a run that executed and failed (or never started) rather than one replaced by a newer push. A superseded `state` takes precedence over a coarse `bucket` value.
+- **Fresh window for the replacement run:** check states are snapshotted per round. When a check moves from a terminal state back to pending/passing, or the check set changes between rounds, a newer CI run replaced the observed one: the loop logs the preemption, resets the round counter, and follows the latest status. Resets are capped by `--max-preemptions` (default `3`, also readable from `maxPreemptions` config); beyond the cap the loop falls back to the normal exhaustion path (`review_pending`).
+- **No extra provider queries:** preemption is inferred from `checkPrStatus` state transitions already polled each round; no head-SHA lookup is required, so the behavior is identical for `github` and `ado`.
 
 ### 4.3 Cooperative & Proactive Analysis & Fixing
 When active review threads or failing checks are detected:
@@ -125,6 +133,8 @@ When invoked with `--json`, `sdw-ship-pr` emits JSON with the following structur
     "resolvedThreads": 2,
     "activeThreads": 0,
     "pendingThreads": [],
+    "preemptions": 0,
+    "supersededChecks": [],
     "issuesFixed": [
       {
         "threadId": "PRRT_kwTEST123",

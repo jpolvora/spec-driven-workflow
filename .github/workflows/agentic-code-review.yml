@@ -4,8 +4,9 @@ name: Agentic Code Review
 #
 # Repository Variables (configure via Settings -> Secrets and variables -> Actions -> Variables):
 #   - SDW_CODE_REVIEW_ENGINE: Review engine ('opencode' or 'cursor-sdk', default: 'opencode')
-#   - SDW_CODE_REVIEW_MODEL: Model identifier (default: 'opencode-go/deepseek-v4.1-flash')
+#   - SDW_CODE_REVIEW_MODEL: Model identifier (default: 'opencode-go/claude-haiku-5-5')
 #   - SDW_CODE_REVIEW_VARIANT: Review variant/intensity (default: 'medium')
+#   - SDW_CODE_REVIEW_MAX_ROUNDS: PR review round budget before human handoff (default: '20')
 #
 # Required Secrets (configure via Settings -> Secrets and variables -> Actions -> Secrets):
 #   - OPENCODE_API_KEY: Required when using the 'opencode' engine
@@ -39,7 +40,7 @@ concurrency:
 
 env:
   REVIEW_ENGINE: ${{ vars.SDW_CODE_REVIEW_ENGINE || 'opencode' }}
-  REVIEW_MODEL: ${{ vars.SDW_CODE_REVIEW_MODEL || 'opencode-go/deepseek-v4.1-flash' }}
+  REVIEW_MODEL: ${{ vars.SDW_CODE_REVIEW_MODEL || 'opencode-go/claude-haiku-5-5' }}
   REVIEW_VARIANT: ${{ vars.SDW_CODE_REVIEW_VARIANT || 'medium' }}
 
 jobs:
@@ -89,8 +90,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          VERSION="$(gh api repos/anomalyco/opencode/releases/latest --jq '.tag_name' | sed 's/^v//')"
-          echo "Installing opencode v${VERSION}"
+          VERSION="1.19.1"
+          echo "Installing opencode v${VERSION} (pinned)"
           curl -fsSL https://opencode.ai/install -o /tmp/opencode-install.sh
           bash /tmp/opencode-install.sh --version "$VERSION"
           echo "${HOME}/.opencode/bin" >> "$GITHUB_PATH"
@@ -103,21 +104,30 @@ jobs:
         if: ${{ steps.creds.outputs.has_creds == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_HEAD_REF: ${{ github.head_ref }}
+          EVENT_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          INPUT_PR_NUMBER: ${{ github.event.inputs.pr_number }}
         run: |
           set -euo pipefail
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            PR="${{ github.event.pull_request.number }}"
-            HEAD_REF="${{ github.head_ref }}"
-            BASE_REF="${{ github.event.pull_request.base.ref }}"
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            PR="$EVENT_PR_NUMBER"
+            HEAD_REF="$EVENT_HEAD_REF"
+            BASE_REF="$EVENT_BASE_REF"
           else
-            PR="${{ github.event.inputs.pr_number }}"
+            PR="$INPUT_PR_NUMBER"
             [[ -n "$PR" ]] || { echo "::error::workflow_dispatch requires pr_number"; exit 1; }
+            [[ "$PR" =~ ^[0-9]+$ ]] || { echo "::error::PR number must be numeric"; exit 1; }
             HEAD_REF="$(gh pr view "$PR" --json headRefName --jq .headRefName)"
             BASE_REF="$(gh pr view "$PR" --json baseRefName --jq .baseRefName)"
           fi
-          echo "number=$PR" >> "$GITHUB_OUTPUT"
-          echo "head_ref=$HEAD_REF" >> "$GITHUB_OUTPUT"
-          echo "base_ref=$BASE_REF" >> "$GITHUB_OUTPUT"
+          [[ "$PR" =~ ^[0-9]+$ ]] || { echo "::error::PR number must be numeric"; exit 1; }
+          [[ -n "$HEAD_REF" ]] || { echo "::error::head ref is empty"; exit 1; }
+          [[ -n "$BASE_REF" ]] || { echo "::error::base ref is empty"; exit 1; }
+          printf 'number=%s\n' "$PR" >> "$GITHUB_OUTPUT"
+          printf 'head_ref=%s\n' "$HEAD_REF" >> "$GITHUB_OUTPUT"
+          printf 'base_ref=%s\n' "$BASE_REF" >> "$GITHUB_OUTPUT"
           echo "Reviewing PR #$PR ($HEAD_REF → $BASE_REF)"
 
       - name: Execute agentic code reviewer
@@ -127,7 +137,13 @@ jobs:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           GITHUB_TOKEN: ${{ github.token }}
           AGENTIC_CODE_REVIEWERS_TIMEOUT_MS: "1200000"
+          AGENTIC_CODE_REVIEWERS_MAX_ROUNDS: ${{ vars.SDW_CODE_REVIEW_MAX_ROUNDS || '20' }}
           AGENTIC_CODE_REVIEWERS_EXTRA_EXCLUDE_PATTERNS: ".sdw/state/**"
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          HEAD_REF: ${{ steps.pr.outputs.head_ref }}
+          BASE_REF: ${{ steps.pr.outputs.base_ref }}
+          AGENTIC_CODE_REVIEWERS_REF: ${{ vars.SDW_CODE_REVIEWERS_REF || 'release' }}
+          AGENTIC_CODE_REVIEWERS_SHA256: ${{ vars.SDW_CODE_REVIEWERS_SHA256 || '' }}
         run: |
           set -euo pipefail
           if [[ "${REVIEW_ENGINE}" == "cursor-sdk" || "${REVIEW_ENGINE}" == "cursor" ]]; then
@@ -136,20 +152,24 @@ jobs:
             ENGINE_ARG="opencode"
             export PATH="${HOME}/.opencode/bin:${PATH}"
           fi
-          curl -fsSL https://raw.githubusercontent.com/jpolvora/agentic-code-reviewers/release/run.sh \
+          [[ "$PR_NUMBER" =~ ^[0-9]+$ ]] || { echo "::error::PR number must be numeric"; exit 1; }
+          curl -fsSL "https://raw.githubusercontent.com/jpolvora/agentic-code-reviewers/${AGENTIC_CODE_REVIEWERS_REF}/run.sh" \
             -o /tmp/agentic-code-reviewers-run.sh
+          if [[ -n "$AGENTIC_CODE_REVIEWERS_SHA256" ]]; then
+            echo "${AGENTIC_CODE_REVIEWERS_SHA256}  /tmp/agentic-code-reviewers-run.sh" | sha256sum -c -
+          fi
           bash /tmp/agentic-code-reviewers-run.sh \
             --engine "$ENGINE_ARG" \
             --model "$REVIEW_MODEL" \
             --variant "$REVIEW_VARIANT" \
             --gh \
-            --pr-id "${{ steps.pr.outputs.number }}" \
+            --pr-id "$PR_NUMBER" \
             --stack Custom \
             --custom-prompt .github/agentic-code-reviewers-prompt.md \
             --score-min 5 \
             --include-patterns "**/*.md,**/*.yml,**/*.yaml,**/*.json,**/*.js,**/*.ts,**/*.cjs,**/*.sh" \
-            --source-branch "refs/heads/${{ steps.pr.outputs.head_ref }}" \
-            --target-branch "refs/heads/${{ steps.pr.outputs.base_ref }}"
+            --source-branch "refs/heads/${HEAD_REF}" \
+            --target-branch "refs/heads/${BASE_REF}"
 
       - name: Check for unresolved threads
         id: check-threads
@@ -157,8 +177,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
         run: |
           set -euo pipefail
+          [[ "$PR_NUMBER" =~ ^[0-9]+$ ]] || { echo "::error::PR number must be numeric"; exit 1; }
           ACTIVE="$(gh api graphql \
             -f query='query($o:String!,$n:String!,$p:Int!){
               repository(owner:$o,name:$n){
@@ -167,8 +190,8 @@ jobs:
                 }
               }
             }' \
-            -f o="${{ github.repository_owner }}" \
-            -f n="${{ github.event.repository.name }}" \
+            -f o="$REPO_OWNER" \
+            -f n="$REPO_NAME" \
             -F p="$PR_NUMBER" \
             --jq '[.data.repository.pullRequest.reviewThreads.nodes[]
               | select(.isResolved == false and .isOutdated == false)] | length')"

@@ -1,6 +1,6 @@
 {
   "name": "spec-driven-workflow",
-  "version": "0.0.16",
+  "version": "0.0.20",
   "description": "This is a rework of workflow-skills project\r The goal is to simplify.\r Today AI Models are smarter, it is not necessary a lot of instructions and complexity\r This will increase speed of execution and token consumption, minimize request load.",
   "main": "index.cjs",
   "scripts": {

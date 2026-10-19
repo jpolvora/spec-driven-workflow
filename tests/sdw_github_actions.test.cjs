@@ -66,7 +66,7 @@ test('AC6, AC7, AC8, AC9, AC10, AC16, AC17 & AC20: Agentic Code Review workflow'
   assert.ok(content.includes('vars.SDW_CODE_REVIEW_ENGINE'), 'Must check SDW_CODE_REVIEW_ENGINE');
   assert.ok(content.includes("'opencode'"), 'Default engine must be opencode');
   assert.ok(content.includes('vars.SDW_CODE_REVIEW_MODEL'), 'Must check SDW_CODE_REVIEW_MODEL');
-  assert.ok(content.includes("'opencode-go/deepseek-v4.1-flash'"), 'Default model must be opencode-go/deepseek-v4.1-flash');
+  assert.ok(content.includes("'opencode-go/claude-haiku-5-5'"), 'Default model must be opencode-go/claude-haiku-5-5');
   assert.ok(content.includes('vars.SDW_CODE_REVIEW_VARIANT'), 'Must check SDW_CODE_REVIEW_VARIANT');
   assert.ok(content.includes("'medium'"), 'Default variant must be medium');
 
@@ -95,21 +95,16 @@ test('AC11: Review prompt asset encoding SDW conformance checks', () => {
   assert.ok(fs.existsSync(promptMdPath), 'Prompt markdown file must exist');
   const content = fs.readFileSync(promptMdPath, 'utf8');
 
-  // Architectural rules
-  assert.ok(content.includes('Agent and Harness Agnosticism'), 'Must check agent agnosticism');
-  assert.ok(content.includes('Zero External Runtime Dependencies'), 'Must check zero external dependencies');
-  assert.ok(content.includes('Breaking Changes Encouraged'), 'Must check breaking changes policy');
-  assert.ok(content.includes('No Unrequested Version Control Operations'), 'Must check version control operations safety');
+  // SDW conformance checks the reviewer must still enforce
+  assert.ok(content.includes('harness'), 'Must check harness/vendor coupling');
+  assert.ok(content.includes('Runtime dependency'), 'Must check zero external runtime dependencies');
+  assert.ok(content.includes('git commit'), 'Must check version control operations safety');
+  assert.ok(content.includes('Acceptance criterion'), 'Must check acceptance criteria conformance');
 
-  // Skill line budget & 3-tier standard
-  assert.ok(content.includes('~120 lines') || content.includes('120 lines'), 'Must enforce Tier 1 line budget');
-  assert.ok(content.includes('Done when:'), 'Must check Done when gates');
-
-  // EARS acceptance criteria syntax
-  assert.ok(content.includes('EARS'), 'Must enforce EARS acceptance criteria syntax');
-
-  // Score threshold
-  assert.ok(content.includes('score_min: 5') || content.includes('>= 5'), 'Must enforce score threshold >= 5');
+  // Behavioral gating and noise control
+  assert.ok(content.includes('Maximum 6 findings'), 'Must cap findings per review');
+  assert.ok(content.includes('ONE thread'), 'Must require one thread per defect class');
+  assert.ok(content.includes('Documentation wording'), 'Must exclude documentation wording churn');
 });
 
 test('AC12, AC13, AC14 & AC18: Release and distribution workflow', () => {

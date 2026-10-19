@@ -94,7 +94,7 @@ function renderTaskPrompt(options) {
 
   prompt += `## Task Finish Command\n`;
   prompt += `\`\`\`bash\n`;
-  prompt += `node skills/sdw-orch/scripts/sdw_orch.cjs task finish --run-id ${runId} --task ${task.id} --evidence ${evidenceFileRel}\n`;
+  prompt += `node "${normalizePath(path.join(__dirname, 'sdw_orch.cjs'))}" task finish --run-id ${runId} --task ${task.id} --evidence ${evidenceFileRel}\n`;
   prompt += `\`\`\`\n`;
 
   fs.writeFileSync(promptFileAbs, prompt, 'utf8');
@@ -202,11 +202,13 @@ function checkTaskChanges(targetRoot, taskWorktreeAbs, useWorktrees, filesChange
     if (statusOut) {
       const changedInStatus = statusOut.split('\n')
         .map(l => l.trim().replace(/^[A-Z?]{1,2}\s+/, '').trim())
-        .map(normalizePath);
+        .map(p => p.replace(/^"(.*)"$/, '$1'))
+        .map(normalizePath)
+        .map(p => p.replace(/^\.\//, ''));
 
       for (const f of filesChanged) {
-        const normF = normalizePath(f);
-        if (changedInStatus.some(cs => cs === normF || cs.endsWith(normF) || normF.endsWith(cs))) {
+        const normF = normalizePath(f).replace(/^\.\//, '');
+        if (changedInStatus.includes(normF)) {
           return true;
         }
       }
@@ -276,7 +278,9 @@ function integrateTaskWorktree(options) {
   try {
     const rmProc = spawnSync('git', ['worktree', 'remove', taskWorktreeRel], { cwd: root, stdio: 'ignore' });
     if (rmProc.status !== 0) throw new Error('git worktree remove failed');
-    const delProc = spawnSync('git', ['branch', '-d', taskBranch], { cwd: root, stdio: 'ignore' });
+    // The cherry-pick above integrated the task commit as a new SHA, so the task
+    // branch tip is never an ancestor of HEAD: `-d` would always refuse (AC13).
+    const delProc = spawnSync('git', ['branch', '-D', taskBranch], { cwd: root, stdio: 'ignore' });
     if (delProc.status !== 0) throw new Error('git branch delete failed');
   } catch (rmErr) {
     console.warn(`[sdw-orch] Warning: Failed to cleanly remove worktree ${taskWorktreeRel}: ${rmErr.message}`);
@@ -311,14 +315,23 @@ function executeTaskCommand(options) {
   const absWorkingDir = normalizePath(cwd);
   const absTargetRoot = normalizePath(root);
 
-  // Token substitutions (AC22)
+  // Token substitutions (AC22). Path-valued tokens are shell-quoted per spec 015
+  // (Security): an unquoted path breaks the command on spaces and metacharacters.
+  const quotePath = (value) => {
+    const str = String(value);
+    if (process.platform === 'win32') {
+      if (/["\r\n]/.test(str)) throw new Error(`Unsafe path for command substitution: ${str}`);
+      return `"${str}"`;
+    }
+    return `'${str.replace(/'/g, "'\\''")}'`;
+  };
   const substituted = rawCommand
     .replace(/\{taskId\}/g, task.id)
-    .replace(/\{promptFile\}/g, absPromptFile)
-    .replace(/\{evidenceFile\}/g, absEvidenceFile)
-    .replace(/\{workingDir\}/g, absWorkingDir)
-    .replace(/\{targetRoot\}/g, absTargetRoot)
-    .replace(/\{cwd\}/g, absWorkingDir)
+    .replace(/\{promptFile\}/g, quotePath(absPromptFile))
+    .replace(/\{evidenceFile\}/g, quotePath(absEvidenceFile))
+    .replace(/\{workingDir\}/g, quotePath(absWorkingDir))
+    .replace(/\{targetRoot\}/g, quotePath(absTargetRoot))
+    .replace(/\{cwd\}/g, quotePath(absWorkingDir))
     .replace(/\{slug\}/g, specSlug);
 
   // Environment allowlist (AC23)
@@ -339,6 +352,12 @@ function executeTaskCommand(options) {
   filteredEnv.SDW_WORKING_DIR = absWorkingDir;
   filteredEnv.SDW_TARGET_ROOT = absTargetRoot;
   filteredEnv.SDW_SPEC_SLUG = specSlug;
+  const acList = Array.isArray(task.coveredAcs)
+    ? task.coveredAcs
+    : (Array.isArray(task.acceptanceCriteria)
+      ? task.acceptanceCriteria
+      : (Array.isArray(task.acIds) ? task.acIds : []));
+  filteredEnv.SDW_AC_IDS = acList.join(',');
 
   const timeoutMs = implConfig.timeoutMs || 1800000;
 

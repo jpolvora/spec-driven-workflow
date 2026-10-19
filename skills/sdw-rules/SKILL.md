@@ -26,6 +26,7 @@ Shared behavioral rules and engineering discipline enforcing simplicity first, s
 2. **Simplicity First (YAGNI):** Write the minimum code required to satisfy acceptance criteria. Prohibit speculative abstractions, single-use helper modules, and unnecessary configuration options. If a solution takes 50 lines but could be done in 20, choose 20.
 3. **Surgical Scope Enclosure:** Touch only what the task requires. Avoid modifying adjacent code, reformatting working files, or refactoring functional logic.
 4. **Empirical Goal-Driven Verification:** Transform every requirement into a verifiable check, test, or empirical pass/fail signal.
+5. **Explicit Authorization Before Acting:** Never start implementing, editing files, or running state-changing commands on the basis of a topic statement, observation, or implied direction. Act only on an explicit user command or an approved plan. In case of any ambiguity about what was asked, stop and ask for clarification before inferring intent or deciding on the user's behalf.
 
 ## Steps
 
