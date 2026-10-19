@@ -143,3 +143,39 @@ This repository uses Spec-Driven Workflow for spec management, configuration, an
 
 ** Before submiting a PR, ensure version incremented `package.json`.
 
+## 10. Local code review dry run (agentic-code-reviewers)
+
+Run the same reviewer recipe as [`.github/workflows/agentic-code-review.yml`](.github/workflows/agentic-code-review.yml) locally, without publishing PR threads.
+
+**Prerequisites:**
+- Node.js 22 and `npm install` (installs the pinned `opencode-ai@1.19.1` dev dependency).
+- `OPENCODE_API_KEY` in the OS environment. The existing key authenticates through the `opencode-go` provider.
+- `bash` and `curl` on `PATH` (Git Bash on Windows).
+
+**Command:**
+
+```bash
+npm run review:dry
+# Alias: npm run review
+```
+
+**What it does:**
+- Downloads `agentic-code-reviewers/release/run.sh` to a temporary file.
+- Forces the pinned OpenCode `1.19.1` binary from `node_modules` via `AGENTIC_CODE_REVIEWERS_OPENCODE_BIN`; it never installs or upgrades the global CLI.
+- Reviews the current branch against `refs/heads/master` with the `Custom` stack and [`.github/agentic-code-reviewers-prompt.md`](.github/agentic-code-reviewers-prompt.md).
+- Runs with `--dry-run`, `--score-min 5`, and the CI include patterns. It does **not** pass `--gh`/`--pr-id`, so no review threads are created.
+- Exits `0` even when findings exist; findings are printed as `::error` / `::warning` annotations.
+
+**Overrides (environment variables):**
+
+| Variable | Default |
+|----------|---------|
+| `AGENTIC_CODE_REVIEWERS_ENGINE` | `opencode` |
+| `AGENTIC_CODE_REVIEWERS_MODEL` | `opencode-go/deepseek-v4.1-flash` |
+| `AGENTIC_CODE_REVIEWERS_VARIANT` | `medium` |
+| `AGENTIC_CODE_REVIEWERS_TARGET_BRANCH` | `refs/heads/master` |
+| `AGENTIC_CODE_REVIEWERS_OPENCODE_BIN` | pinned `opencode-ai@1.19.1` binary |
+| `AGENTIC_CODE_REVIEWERS_TIMEOUT_MS` | `1200000` |
+
+`opencode/deepseek-v4.1-flash` (Zen provider) is not the default because the OS `OPENCODE_API_KEY` is a Go key; using the Zen provider returns HTTP `402 Insufficient account funds`.
+

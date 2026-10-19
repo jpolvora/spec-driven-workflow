@@ -14,6 +14,7 @@ yarn-error.log*
 
 # Ephemeral SDW Run State (keep directory structure and specs tracked)
 .sdw/state/*
+.tmp-agentic-code-reviewers/
 !.sdw/state/.gitkeep
 .sdw/worktrees/
 
