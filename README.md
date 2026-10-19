@@ -172,13 +172,18 @@ The `sdw-orch` skill executes the end-to-end 8-step delivery workflow:
 # Execute the full delivery pipeline for a specification
 node skills/sdw-orch/scripts/sdw_orch.cjs run .sdw/specs/<spec-name>.md [--push]
 
-# Resume an interrupted or paused run
+# Execute a multi-specification sequential batch queue
+node skills/sdw-orch/scripts/sdw_orch.cjs run <spec1.md> <spec2.md> ... [--continue-on-error] [--dry-run]
+
+# Resume an interrupted single-spec run
 node skills/sdw-orch/scripts/sdw_orch.cjs resume [--run-id <runId>]
+
+# Resume an interrupted multi-spec batch queue
+node skills/sdw-orch/scripts/sdw_orch.cjs resume-batch [batchId]
 
 # Inspect status of active execution
 node skills/sdw-orch/scripts/sdw_orch.cjs status
-
----
+```
 
 ## 5. License & Contribution
 

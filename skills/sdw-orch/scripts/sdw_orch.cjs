@@ -11,6 +11,7 @@ const specGrilling = require('./spec_grilling.cjs');
 const dagPlanner = require('./dag_planner.cjs');
 const scoreEvaluator = require('./score_evaluator.cjs');
 const reviewRunner = require('./review_runner.cjs');
+const batchRunner = require('./batch_runner.cjs');
 
 function getSpecIndexHelper() {
   try {
@@ -24,6 +25,11 @@ function parseArgs(args) {
   const result = {
     subcommand: null,
     specPath: null,
+    specPaths: [],
+    batchId: null,
+    continueOnError: false,
+    dryRun: false,
+    noSync: false,
     runId: null,
     root: null,
     minScore: undefined,
@@ -53,6 +59,11 @@ function parseArgs(args) {
     else if (arg === '--force') result.force = true;
     else if (arg === '--allow-archived') result.allowArchived = true;
     else if (arg === '--latest') result.latest = true;
+    else if (arg === '--continue-on-error') result.continueOnError = true;
+    else if (arg === '--dry-run') result.dryRun = true;
+    else if (arg === '--no-sync') result.noSync = true;
+    else if (arg === '--batch-id') result.batchId = args[++i];
+    else if (arg.startsWith('--batch-id=')) result.batchId = arg.slice(11);
     else if (arg === '--root') result.root = args[++i];
     else if (arg.startsWith('--root=')) result.root = arg.slice(7);
     else if (arg === '--run-id') result.runId = args[++i];
@@ -65,7 +76,13 @@ function parseArgs(args) {
   }
 
   result.subcommand = positional[0] || null;
+  result.specPaths = positional.slice(1);
   result.specPath = positional[1] || null;
+
+  if (result.subcommand === 'resume-batch') {
+    result.batchId = result.batchId || positional[1] || null;
+  }
+
   return result;
 }
 
@@ -150,6 +167,7 @@ function cmdRun(options) {
   const resolvedSpec = resolveSpecPath(options.specPath, targetRoot, config);
   if (!resolvedSpec || !fs.existsSync(resolvedSpec)) {
     console.error(`Error: Specification file not found: "${options.specPath}"`);
+    options._runResult = { error: `Specification file not found: "${options.specPath}"` };
     return 1;
   }
 
@@ -169,6 +187,7 @@ function cmdRun(options) {
           // AC25: While a specification is marked archived, prevent execution unless override flag
           if (entry.status === 'archived' && !options.force && !options.allowArchived) {
             console.error(`[sdw-orch] Blocked: Specification "${specSlug}" is marked "archived" in index.specs.md. Execution prohibited unless --force or --allow-archived is provided.`);
+            options._runResult = { error: `Specification "${specSlug}" is marked "archived" in index.specs.md` };
             return 1;
           }
           // AC23: Update or verify specification status as pending
@@ -232,6 +251,7 @@ function cmdRun(options) {
         state = stateManager.updateStepState(targetRoot, state.runId, 2, 'paused_grilling_gate', grillingResult);
         state.status = 'paused';
         stateManager.saveRunState(targetRoot, state);
+        options._runResult = { runId: state.runId, status: 'paused', error: 'User cancellation at grilling gate' };
         return 3;
       }
 
@@ -272,6 +292,7 @@ function cmdRun(options) {
     if (options.simulateFailure) {
       console.error(`[Step 4: Implementation] Unrecoverable failure occurred during subagent execution (AC16).`);
       stateManager.recordError(targetRoot, state.runId, 4, 'Simulated unrecoverable subagent execution failure');
+      options._runResult = { runId: state.runId, status: 'failed', error: 'Simulated unrecoverable subagent execution failure' };
       return 1;
     }
 
@@ -300,6 +321,7 @@ function cmdRun(options) {
       state.scoreIteration = (state.scoreIteration || 0) + 1;
       state.status = 'failed';
       stateManager.saveRunState(targetRoot, state);
+      options._runResult = { runId: state.runId, status: 'failed', score: scoreReport.score, error: 'Conformance score below threshold' };
       return 2; // Exit code 2 indicates score failure / re-implementation needed
     }
 
@@ -445,6 +467,15 @@ function cmdRun(options) {
   state = stateManager.saveRunState(targetRoot, state);
   console.log(`\n[sdw-orch] Workflow completed successfully for run "${state.runId}".`);
 
+  options._runResult = {
+    runId: state.runId,
+    deliveryCommit: state.deliveryCommit,
+    branch: state.branch || null,
+    status: 'completed',
+    score: state.score,
+    error: null
+  };
+
   if (options.json) {
     console.log(JSON.stringify(state, null, 2));
   }
@@ -528,31 +559,47 @@ function cmdStatus(options) {
   return 0;
 }
 
+function cmdBatchRun(options) {
+  const specs = options.specPaths && options.specPaths.length > 0
+    ? options.specPaths
+    : (options.specPath ? [options.specPath] : []);
+  return batchRunner.runBatch(specs, options, cmdRun);
+}
+
+function cmdResumeBatch(options) {
+  return batchRunner.resumeBatch(options.batchId, options, cmdRun);
+}
+
 function showHelp() {
-  console.log(`Usage: node sdw_orch.cjs <subcommand> [specPath] [options]
+  console.log(`Usage: node sdw_orch.cjs <subcommand> [specPath...] [options]
 
 Subcommands:
-  run <specPath>      Execute full 8-step orchestration workflow for specification
-  resume              Resume paused or incomplete execution run from state file
-  status              Check status of current or specified run state
-  help                Display this help documentation
+  run <specPath...>      Execute orchestration workflow for single spec or batch queue
+  resume                 Resume paused or incomplete execution run from state file
+  resume-batch [batchId] Resume paused or incomplete multi-spec batch execution
+  status                 Check status of current or specified run state
+  help                   Display this help documentation
 
 Options:
-  --run-id <id>       Explicit run identifier (default: auto-generated)
-  --root <path>       Target workspace project root directory
-  --step <n>          Start or run specific step (1-8)
-  --min-score <n>     Minimum acceptable conformance score (default: 8)
-  --poll-pr           Enable remote PR review polling
-  --abort-on-gaps     Halt at grilling gate if decision gaps are detected
-  --simulate-failure  Simulate subagent unrecoverable failure for testing
-  --latest            (status/resume) Target the most recent run state
-  --push              Push active branch and delivery commit to remote origin
-  --skip-review       Skip code review step
-  --skip-pr           Skip pull request preparation step
-  --force             Override quality gates or allow execution on archived specs
-  --allow-archived    Permit execution of specs marked archived in index.specs.md
-  --json              Output response in JSON format
-  -h, --help          Show help message
+  --run-id <id>          Explicit run identifier (default: auto-generated)
+  --batch-id <id>        Explicit batch identifier for resume-batch
+  --continue-on-error    Continue queue execution when a batch item fails
+  --dry-run              Validate specs and display batch execution plan without executing
+  --no-sync              Skip automatic sdw-spec sync between batch queue items
+  --root <path>          Target workspace project root directory
+  --step <n>             Start or run specific step (1-8)
+  --min-score <n>        Minimum acceptable conformance score (default: 8)
+  --poll-pr              Enable remote PR review polling
+  --abort-on-gaps        Halt at grilling gate if decision gaps are detected
+  --simulate-failure     Simulate subagent unrecoverable failure for testing
+  --latest               (status/resume) Target the most recent run state
+  --push                 Push active branch and delivery commit to remote origin
+  --skip-review          Skip code review step
+  --skip-pr              Skip pull request preparation step
+  --force                Override quality gates or allow execution on archived specs
+  --allow-archived       Permit execution of specs marked archived in index.specs.md
+  --json                 Output response in JSON format
+  -h, --help             Show help message
 `);
 }
 
@@ -568,7 +615,14 @@ function main() {
   let code = 0;
   switch (options.subcommand) {
     case 'run':
-      code = cmdRun(options);
+      if (options.specPaths && options.specPaths.length > 1) {
+        code = cmdBatchRun(options);
+      } else {
+        code = cmdRun(options);
+      }
+      break;
+    case 'resume-batch':
+      code = cmdResumeBatch(options);
       break;
     case 'resume':
       code = cmdResume(options);
@@ -591,7 +645,11 @@ if (require.main === module) {
 
 module.exports = {
   cmdRun,
+  cmdBatchRun,
+  cmdResumeBatch,
   cmdResume,
   cmdStatus,
-  showHelp
+  showHelp,
+  loadProjectConfig,
+  resolveSpecPath
 };

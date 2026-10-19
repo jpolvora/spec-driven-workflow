@@ -49,3 +49,53 @@ Each execution session is completely isolated within a dedicated JSON state file
 6. **Delivery Commit:** Creates an atomic, structured git commit for verified code.
 7. **Automated Code Review:** Compares current branch changes to `baseCommit`, verifying rule invariants and clean syntax in an iterative loop.
 8. **PR Preparation & Remote Push:** Assembles pull request metadata, marks the spec completed, pushes the active branch to remote origin (when `--push` or `pushDelivery` enabled), and provides PR review resolution polling.
+
+## 3. Multi-Specification Batch Queue Lifecycle (`.sdw/state/batch-{batchId}.json`)
+
+When multiple specifications are provided to `sdw-orch run <spec1> <spec2> ...`, queue state is managed through a batch manifest:
+
+```json
+{
+  "batchId": "batch-1792386000000",
+  "createdAt": "2026-10-19T00:55:00.000Z",
+  "updatedAt": "2026-10-19T00:58:00.000Z",
+  "status": "in_progress",
+  "policy": {
+    "continueOnError": false,
+    "syncIndex": true
+  },
+  "total": 2,
+  "currentIndex": 0,
+  "queue": [
+    {
+      "index": 0,
+      "spec": ".sdw/specs/001-feature-a.md",
+      "slug": "001-feature-a",
+      "status": "completed",
+      "runId": "run-1792386010000-001-feature-a",
+      "branch": null,
+      "deliveryCommit": "a1b2c3d",
+      "durationMs": 4200,
+      "error": null
+    },
+    {
+      "index": 1,
+      "spec": ".sdw/specs/002-feature-b.md",
+      "slug": "002-feature-b",
+      "status": "pending",
+      "runId": null,
+      "branch": null,
+      "deliveryCommit": null,
+      "durationMs": null,
+      "error": null
+    }
+  ]
+}
+```
+
+### Batch Operational Guarantees:
+- **Pre-Flight Disk Validation:** Rejects execution before creating manifests if any queued specification file is missing on disk.
+- **Side-Effect-Free Dry-Run:** `--dry-run` validates all specifications and emits the execution plan without creating files or writing state.
+- **Sequential Context Isolation:** Each specification runs in an independent child run context with its own distinct `runId` and `.state.json` file.
+- **Deterministic Resumption:** `resume-batch [batchId]` skips completed items and resumes strictly from the first pending or failed item.
+- **Index Synchronization:** Automatically executes `sdw-spec sync` upon each item completion unless `--no-sync` is specified.
