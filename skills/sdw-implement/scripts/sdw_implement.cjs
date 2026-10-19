@@ -72,7 +72,7 @@ function cmdRun(options) {
   const baseCommit = getBaseCommit(targetRoot);
 
   // Initialize Run State (AC1)
-  const state = stateManager.createRunState({
+  let state = stateManager.createRunState({
     root: targetRoot,
     specPath: options.specPath,
     slug: specSlug,
@@ -84,20 +84,20 @@ function cmdRun(options) {
   console.log(`[sdw-implement] State file: ${stateManager.getStateFilePath(targetRoot, state.runId)}`);
 
   // Step 1: Spec Ingestion & Derivation (AC3, AC4)
-  stateManager.updateStepState(targetRoot, state.runId, 1, 'in_progress');
+  state = stateManager.updateStepState(targetRoot, state.runId, 1, 'in_progress');
   const derivationResult = specDerivation.deriveAgentSpec(rawSpecContent, { slug: specSlug });
   let effectiveSpecContent = rawSpecContent;
   if (derivationResult.derivationNeeded) {
     console.log(`[Step 1: Derivation] Spec reformulated for agentic execution.`);
     effectiveSpecContent = derivationResult.specContent;
-    stateManager.updateStepState(targetRoot, state.runId, 1, 'completed', { derivationNeeded: true });
+    state = stateManager.updateStepState(targetRoot, state.runId, 1, 'completed', { derivationNeeded: true });
   } else {
     console.log(`[Step 1: Derivation] Skipped: input spec is already agent-ready.`);
-    stateManager.updateStepState(targetRoot, state.runId, 1, 'skipped', { derivationNeeded: false });
+    state = stateManager.updateStepState(targetRoot, state.runId, 1, 'skipped', { derivationNeeded: false });
   }
 
   // Step 2: Grilling Round & Gap Resolution (AC5, AC6)
-  stateManager.updateStepState(targetRoot, state.runId, 2, 'in_progress');
+  state = stateManager.updateStepState(targetRoot, state.runId, 2, 'in_progress');
   const grillingResult = specGrilling.analyzeSpecificationGaps(effectiveSpecContent);
   if (grillingResult.hasGaps) {
     console.log(`[Step 2: Grilling] Detected ${grillingResult.gapsCount} specification decision gaps.`);
@@ -107,26 +107,26 @@ function cmdRun(options) {
   } else {
     console.log(`[Step 2: Grilling] Decision tree walk completed: zero unhandled gaps.`);
   }
-  stateManager.updateStepState(targetRoot, state.runId, 2, 'completed', grillingResult);
+  state = stateManager.updateStepState(targetRoot, state.runId, 2, 'completed', grillingResult);
 
   // Step 3: Complexity Analysis & DAG Task Decomposition (AC7)
-  stateManager.updateStepState(targetRoot, state.runId, 3, 'in_progress');
+  state = stateManager.updateStepState(targetRoot, state.runId, 3, 'in_progress');
   const dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug });
   console.log(`[Step 3: DAG Generation] Complexity: ${dagPlan.complexity.level}. Generated ${dagPlan.totalTasks} task(s).`);
   state.dagTasks = dagPlan.tasks;
-  stateManager.saveRunState(targetRoot, state);
-  stateManager.updateStepState(targetRoot, state.runId, 3, 'completed', dagPlan);
+  state = stateManager.saveRunState(targetRoot, state);
+  state = stateManager.updateStepState(targetRoot, state.runId, 3, 'completed', dagPlan);
 
   // Step 4: Subagent Context Fencing & Dispatch (AC8)
-  stateManager.updateStepState(targetRoot, state.runId, 4, 'in_progress');
+  state = stateManager.updateStepState(targetRoot, state.runId, 4, 'in_progress');
   console.log(`[Step 4: Implementation] Prepared ${dagPlan.tasks.length} context-fenced task prompt(s).`);
   dagPlan.tasks.forEach(t => {
     console.log(`  + [${t.id}] ${t.title} (Covering: ${t.coveredAcs.join(', ')})`);
   });
-  stateManager.updateStepState(targetRoot, state.runId, 4, 'completed', { tasksPrepared: dagPlan.tasks.length });
+  state = stateManager.updateStepState(targetRoot, state.runId, 4, 'completed', { tasksPrepared: dagPlan.tasks.length });
 
   // Step 5: Conformance Scoring Loop (AC9, AC10)
-  stateManager.updateStepState(targetRoot, state.runId, 5, 'in_progress');
+  state = stateManager.updateStepState(targetRoot, state.runId, 5, 'in_progress');
   let scoreReport = scoreEvaluator.evaluateScore(effectiveSpecContent, {
     projectRoot: targetRoot,
     baseCommit,
@@ -141,10 +141,10 @@ function cmdRun(options) {
     console.log(`[Step 5: Scoring Loop] Score below threshold. Feedback:`);
     console.log(scoreReport.feedback);
   }
-  stateManager.updateStepState(targetRoot, state.runId, 5, 'completed', scoreReport);
+  state = stateManager.updateStepState(targetRoot, state.runId, 5, 'completed', scoreReport);
 
   // Step 6: Delivery Commit (AC11)
-  stateManager.updateStepState(targetRoot, state.runId, 6, 'in_progress');
+  state = stateManager.updateStepState(targetRoot, state.runId, 6, 'in_progress');
   let commitSha = null;
   try {
     const statusOut = execSync('git status --porcelain', { cwd: targetRoot, encoding: 'utf8' }).trim();
@@ -162,12 +162,12 @@ function cmdRun(options) {
     console.log(`[Step 6: Delivery Commit] Git commit note: ${err.message}`);
   }
   state.deliveryCommit = commitSha;
-  stateManager.saveRunState(targetRoot, state);
-  stateManager.updateStepState(targetRoot, state.runId, 6, 'completed', { commitSha });
+  state = stateManager.saveRunState(targetRoot, state);
+  state = stateManager.updateStepState(targetRoot, state.runId, 6, 'completed', { commitSha });
 
   // Step 7: Automated Code Review Loop (AC12, AC13)
   if (!options.skipReview) {
-    stateManager.updateStepState(targetRoot, state.runId, 7, 'in_progress');
+    state = stateManager.updateStepState(targetRoot, state.runId, 7, 'in_progress');
     const reviewResult = reviewRunner.runAutomatedReview({
       projectRoot: targetRoot,
       baseCommit
@@ -178,14 +178,14 @@ function cmdRun(options) {
         console.log(`  [${f.severity.toUpperCase()}] ${f.file}: ${f.message}`);
       });
     }
-    stateManager.updateStepState(targetRoot, state.runId, 7, reviewResult.passed ? 'completed' : 'failed', reviewResult);
+    state = stateManager.updateStepState(targetRoot, state.runId, 7, reviewResult.passed ? 'completed' : 'failed', reviewResult);
   } else {
-    stateManager.updateStepState(targetRoot, state.runId, 7, 'skipped', { reason: 'User requested skip' });
+    state = stateManager.updateStepState(targetRoot, state.runId, 7, 'skipped', { reason: 'User requested skip' });
   }
 
   // Step 8: PR Preparation & Tracking (AC14, AC15)
   if (!options.skipPr) {
-    stateManager.updateStepState(targetRoot, state.runId, 8, 'in_progress');
+    state = stateManager.updateStepState(targetRoot, state.runId, 8, 'in_progress');
     const prPayload = {
       title: `feat(${specSlug}): implement ${specSlug}`,
       specPath: options.specPath,
@@ -194,13 +194,14 @@ function cmdRun(options) {
       deliveryCommit: state.deliveryCommit
     };
     console.log(`[Step 8: PR Preparation] Specification marked completed. PR package prepared: "${prPayload.title}".`);
-    stateManager.updateStepState(targetRoot, state.runId, 8, 'completed', prPayload);
+    state = stateManager.updateStepState(targetRoot, state.runId, 8, 'completed', prPayload);
   } else {
-    stateManager.updateStepState(targetRoot, state.runId, 8, 'skipped', { reason: 'User requested skip' });
+    state = stateManager.updateStepState(targetRoot, state.runId, 8, 'skipped', { reason: 'User requested skip' });
   }
 
   state.status = 'completed';
-  stateManager.saveRunState(targetRoot, state);
+  state.currentStep = 8;
+  state = stateManager.saveRunState(targetRoot, state);
   console.log(`\n[sdw-implement] Workflow completed successfully for run "${state.runId}".`);
 
   if (options.json) {

@@ -1,3 +1,4 @@
 {
-    "specsDir": "{projectRoot}/.sdw/specs"
+    "specsDir": "{projectRoot}/.sdw/specs",
+    "scmCodeReviewEnabled": false
 }
