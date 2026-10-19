@@ -117,9 +117,15 @@ Instructions and skills specific to the development environment are sourced from
 
 2. **Autoload spec-memo runtime skills (`@.agents/skills/ws-memo/SKILL.md`):**
    - Load [`@.agents/skills/ws-memo/SKILL.md`](.agents/skills/ws-memo/SKILL.md) at the start of **every session**, after the Karpathy guidelines.
-   - `ws-memo` is the only entry point for vault memory operations;
+   - `ws-memo` is the only entry point for vault memory operations.
 
-   
+3. **Local Project Skills Take Priority (Overlap Resolution):**
+   - When a skill name exists in **both** the local project (`.agents/skills/<skill-name>/`) and a globally installed location (e.g., a harness-level global config directory), **always load and execute the local project version**.
+   - This rule applies regardless of version numbers: the local copy is considered the authoritative, development-current version for this repository.
+   - If the harness supports explicit skill path resolution (e.g., via scoped `@.agents/skills/<name>` references), always prefer the scoped local path over the bare skill name.
+   - If the harness cannot disambiguate and silently resolves to the global version, log a warning to the user and explicitly re-load the local skill file via its relative path before proceeding.
+
+
 ## 7. Spec-Driven Workflow (SDW) Autoload
 
 This repository uses Spec-Driven Workflow for spec management, configuration, and implementation.
