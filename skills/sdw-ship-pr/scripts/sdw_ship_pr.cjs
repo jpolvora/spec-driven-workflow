@@ -375,6 +375,7 @@ async function runShipPr(options = {}, customExecutor = null) {
             }));
 
             let fixSummary = 'Applied and verified the requested review fix.';
+            let canResolve = false;
             if (typeof options.threadFixer === 'function') {
               // The caller owns applying, testing, committing, and pushing the fix.
               const fixResult = await options.threadFixer({
@@ -390,6 +391,7 @@ async function runShipPr(options = {}, customExecutor = null) {
                 break;
               }
               fixSummary = fixResult.summary || fixSummary;
+              canResolve = true;
             } else if (reviewFixCommand) {
               log(`[sdw-ship-pr] Applying review fixes via reviewFixCommand: ${reviewFixCommand}`);
               executor(reviewFixCommand);
@@ -409,35 +411,39 @@ async function runShipPr(options = {}, customExecutor = null) {
               executor('git add -A');
               executor('git commit -m "fix(review): address review feedback"');
               executor(`git push origin ${head}`);
+              canResolve = true;
             } else {
-              warn('[sdw-ship-pr] Active review threads require a code fix. Set reviewFixCommand, pass threadFixer, or resolve them outside this loop; refusing to resolve them without a verified fix.');
+              warn('[sdw-ship-pr] Active review threads require a code fix. Set reviewFixCommand, pass threadFixer, or resolve them outside this loop; refusing to resolve them without a verified fix. Continuing to poll for an external reviewer.');
               report.reviewConvergence.pendingThreads = pendingThreads;
-              break;
+              // Do not break: the external reviewer or a separate agent may resolve the threads
+              // after applying fixes. The loop only observes and never resolves them itself.
             }
 
-            for (const thread of activeList) {
-              const summaryNote = `Resolved review issue: applied fix and verified acceptance criteria.\n\nSummary: ${fixSummary}`;
+            if (canResolve) {
+              for (const thread of activeList) {
+                const summaryNote = `Resolved review issue: applied fix and verified acceptance criteria.\n\nSummary: ${fixSummary}`;
 
-              const resolveRes = await provider.resolveReviewThread({
-                prNumber: prResult.number,
-                threadId: thread.id,
-                commentId: thread.comments && thread.comments[0] ? thread.comments[0].id : null,
-                comment: summaryNote,
-                model: 'sdw-ship-pr',
-                dryRun
-              });
-
-              if (resolveRes.resolved) {
-                report.reviewConvergence.resolvedThreads++;
-                report.reviewConvergence.issuesFixed.push({
+                const resolveRes = await provider.resolveReviewThread({
+                  prNumber: prResult.number,
                   threadId: thread.id,
-                  resolution: summaryNote
+                  commentId: thread.comments && thread.comments[0] ? thread.comments[0].id : null,
+                  comment: summaryNote,
+                  model: 'sdw-ship-pr',
+                  dryRun
                 });
-                log(`[sdw-ship-pr] Closed and resolved review thread ${thread.id} with resolution summary.`);
+
+                if (resolveRes.resolved) {
+                  report.reviewConvergence.resolvedThreads++;
+                  report.reviewConvergence.issuesFixed.push({
+                    threadId: thread.id,
+                    resolution: summaryNote
+                  });
+                  log(`[sdw-ship-pr] Closed and resolved review thread ${thread.id} with resolution summary.`);
+                }
               }
             }
 
-            // Re-evaluate review threads after resolution
+            // Re-evaluate review threads after the resolution pass
             const updatedThreads = await provider.listReviewThreads(prResult.number);
             report.reviewConvergence.activeThreads = updatedThreads.activeCount;
             if (status.allPassed && updatedThreads.activeCount === 0) {
