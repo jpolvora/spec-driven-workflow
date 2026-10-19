@@ -363,14 +363,13 @@ class GitHubProvider extends ScmProvider {
                 author: c.author ? c.author.login : 'unknown',
                 createdAt: c.createdAt || ''
               }));
-              const hasResolution = Boolean(t.isResolved) || comments.some(c =>
-                c.body.includes('<!-- resolution-reply -->')
-              );
+              // GitHub's isResolved is authoritative. A resolution reply marker does not
+              // resolve the thread for branch protection, so it must not be treated as resolved.
               return {
                 id: String(t.id),
                 path: t.path,
                 line: t.line,
-                isResolved: hasResolution,
+                isResolved: Boolean(t.isResolved),
                 comments
               };
             });
@@ -415,13 +414,8 @@ class GitHubProvider extends ScmProvider {
         });
       }
 
-      for (const [id, thread] of threadMap.entries()) {
-        const hasResolution = thread.comments.some(c => 
-          c.body.includes('<!-- resolution-reply -->')
-        );
-        thread.isResolved = hasResolution;
-      }
-
+      // REST comments do not expose review-thread resolution state. Keep them active so the
+      // caller never reports convergence from a marker that branch protection does not honor.
       const threads = Array.from(threadMap.values());
       const activeCount = threads.filter(t => !t.isResolved).length;
 
@@ -507,11 +501,14 @@ class GitHubProvider extends ScmProvider {
 
       const cmd = `gh api repos/:owner/:repo/pulls/${prNumber}/comments/${targetId}/replies -f body="${bodyWithMarker.replace(/"/g, '\\"')}"`;
       this.executor(cmd);
+      // A REST reply cannot resolve a GitHub review thread. Report the truth so the
+      // convergence loop does not mark the PR as delivered while branch protection blocks it.
       return {
-        resolved: true,
+        resolved: false,
         dryRun: false,
         threadId: String(targetId),
-        comment: bodyWithMarker
+        comment: bodyWithMarker,
+        reason: 'GitHub REST replies cannot resolve a review thread; a PRRT_ thread id is required.'
       };
     } catch (err) {
       const errMsg = err.stderr ? err.stderr.toString().trim() : err.message;

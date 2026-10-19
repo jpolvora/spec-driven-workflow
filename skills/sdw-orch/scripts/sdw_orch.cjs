@@ -309,6 +309,9 @@ function runVerificationGates(targetRoot, config, options = {}) {
   const runId = options.runId;
 
   const verificationConfig = (config && config.verification) || {};
+  const gateTimeoutMs = Number(verificationConfig.timeoutMs) > 0
+    ? Number(verificationConfig.timeoutMs)
+    : 600000;
   const reqBuild = options.requiredBuild !== undefined
     ? options.requiredBuild
     : Boolean(config.requiredBuild || (verificationConfig.buildCommand && typeof verificationConfig.buildCommand === 'string'));
@@ -327,7 +330,7 @@ function runVerificationGates(targetRoot, config, options = {}) {
 
     while (!buildPassed && buildAttempts <= maxFixAttempts) {
       try {
-        execSync(buildCmd, { cwd: targetRoot, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8' });
+        execSync(buildCmd, { cwd: targetRoot, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', timeout: gateTimeoutMs });
         buildPassed = true;
         const durationMs = Date.now() - start;
         gates.build = { status: 'passed', exitCode: 0, durationMs };
@@ -385,7 +388,7 @@ function runVerificationGates(targetRoot, config, options = {}) {
 
     while (!testPassed && testAttempts <= maxFixAttempts) {
       try {
-        execSync(testCmd, { cwd: targetRoot, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8' });
+        execSync(testCmd, { cwd: targetRoot, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', timeout: gateTimeoutMs });
         testPassed = true;
         const durationMs = Date.now() - start;
         gates.test = { status: 'passed', exitCode: 0, durationMs };
@@ -1284,6 +1287,9 @@ function cmdRun(options) {
       // 2. Pre-PR Quality Gates (Build Verification & Full Test Pass) (AC5, AC6, AC7, AC8, AC9, AC10)
       const requiredBuild = Boolean(config.requiredBuild);
       const runAllTests = Boolean(config.runAllTests);
+      const gateTimeoutMs = Number(config.verification && config.verification.timeoutMs) > 0
+        ? Number(config.verification.timeoutMs)
+        : 600000;
 
       if (!requiredBuild && !runAllTests) {
         console.log(`[Step 8: Pre-PR Verification] Build and test verification skipped (requiredBuild: false, runAllTests: false).`);
@@ -1298,7 +1304,7 @@ function cmdRun(options) {
 
           while (!buildPassed && buildAttempts <= maxFixAttempts) {
             try {
-              execSync(buildCmd, { cwd: targetRoot, stdio: ['ignore', 'pipe', 'pipe'] });
+              execSync(buildCmd, { cwd: targetRoot, stdio: ['ignore', 'pipe', 'pipe'], timeout: gateTimeoutMs });
               buildPassed = true;
             } catch (buildErr) {
               buildAttempts++;
@@ -1347,7 +1353,7 @@ function cmdRun(options) {
 
           while (!testPassed && testAttempts <= maxFixAttempts) {
             try {
-              execSync(testCmd, { cwd: targetRoot, stdio: ['ignore', 'pipe', 'pipe'] });
+              execSync(testCmd, { cwd: targetRoot, stdio: ['ignore', 'pipe', 'pipe'], timeout: gateTimeoutMs });
               testPassed = true;
             } catch (testErr) {
               testAttempts++;

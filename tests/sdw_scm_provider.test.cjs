@@ -683,3 +683,52 @@ test('sdw-scm-provider - GitHub checkPrStatus treats no checks as not passed', a
   assert.strictEqual(status.allPassed, false);
   assert.strictEqual(status.completed, false);
 });
+
+test('sdw-scm-provider - GitHub REST fallback does not treat resolution markers as resolved', async () => {
+  const provider = createScmProvider('github', {
+    executor: (cmd) => {
+      if (cmd.includes('gh repo view')) {
+        return JSON.stringify({ owner: { login: 'fake-owner' }, name: 'fake-repo' });
+      }
+      if (cmd.includes('gh api graphql')) {
+        throw new Error('graphql unavailable');
+      }
+      if (cmd.includes('/comments')) {
+        return JSON.stringify([
+          {
+            id: 1,
+            in_reply_to_id: null,
+            body: '<!-- resolution-reply -->\nResolved review issue',
+            path: 'src/index.js',
+            line: 10,
+            user: { login: 'reviewer' },
+            created_at: '2026-10-19T00:00:00Z'
+          }
+        ]);
+      }
+      throw new Error(`Unexpected command: ${cmd}`);
+    }
+  });
+
+  const result = await provider.listReviewThreads(42);
+  assert.strictEqual(result.activeCount, 1, 'A REST marker must not resolve a GitHub thread');
+  assert.strictEqual(result.threads[0].isResolved, false);
+});
+
+test('sdw-scm-provider - GitHub REST resolveReviewThread reports unresolved', async () => {
+  const provider = createScmProvider('github', {
+    executor: (cmd) => {
+      if (cmd.includes('/replies')) return '{}';
+      throw new Error(`Unexpected command: ${cmd}`);
+    }
+  });
+
+  const result = await provider.resolveReviewThread({
+    prNumber: 42,
+    threadId: '123',
+    comment: 'fixed'
+  });
+
+  assert.strictEqual(result.resolved, false);
+  assert.match(result.reason, /PRRT_/);
+});

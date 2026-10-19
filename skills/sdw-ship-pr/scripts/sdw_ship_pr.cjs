@@ -40,6 +40,11 @@ function resolveStateDir(projectRoot, config = {}) {
  */
 function parseArgs(args) {
   const options = {
+    subcommand: null,
+    pr: null,
+    threadId: null,
+    commentId: null,
+    comment: null,
     runId: null,
     spec: null,
     head: null,
@@ -56,7 +61,17 @@ function parseArgs(args) {
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (arg === '--run-id' && args[i + 1]) {
+    if (arg === 'list-threads' || arg === 'resolve-thread' || arg === 'check-status') {
+      options.subcommand = arg;
+    } else if ((arg === '--pr' || arg === '--pr-number') && args[i + 1]) {
+      options.pr = args[++i];
+    } else if ((arg === '--thread' || arg === '--thread-id') && args[i + 1]) {
+      options.threadId = args[++i];
+    } else if (arg === '--comment-id' && args[i + 1]) {
+      options.commentId = args[++i];
+    } else if (arg === '--comment' && args[i + 1]) {
+      options.comment = args[++i];
+    } else if (arg === '--run-id' && args[i + 1]) {
       options.runId = args[++i];
     } else if (arg === '--spec' && args[i + 1]) {
       options.spec = args[++i];
@@ -145,6 +160,9 @@ async function runShipPr(options = {}, customExecutor = null) {
 
   const config = options.config || loadConfig(projectRoot);
   const dryRun = Boolean(options.dryRun);
+  const verificationTimeoutMs = Number(config.verification && config.verification.timeoutMs) > 0
+    ? Number(config.verification.timeoutMs)
+    : 600000;
 
   // 1. Resolve branches
   let head = options.head;
@@ -222,7 +240,7 @@ async function runShipPr(options = {}, customExecutor = null) {
       if (config.prePrCommand) {
         log(`[sdw-ship-pr] Running prePrCommand: "${config.prePrCommand}"...`);
         try {
-          executor(config.prePrCommand);
+          executor(config.prePrCommand, { timeout: verificationTimeoutMs });
         } catch (cmdErr) {
           throw new Error(`prePrCommand failed: ${cmdErr.message}`);
         }
@@ -245,7 +263,7 @@ async function runShipPr(options = {}, customExecutor = null) {
         const buildCmd = config.buildCommand || (config.verification && config.verification.buildCommand) || 'npm run build';
         log(`[sdw-ship-pr] Running requiredBuild (${buildCmd})...`);
         try {
-          executor(buildCmd);
+          executor(buildCmd, { timeout: verificationTimeoutMs });
         } catch (buildErr) {
           throw new Error(`requiredBuild failed: ${buildErr.message}`);
         }
@@ -255,7 +273,7 @@ async function runShipPr(options = {}, customExecutor = null) {
         const testCmd = config.testCommand || (config.verification && config.verification.testCommand) || 'npm test';
         log(`[sdw-ship-pr] Running runAllTests (${testCmd})...`);
         try {
-          executor(testCmd);
+          executor(testCmd, { timeout: verificationTimeoutMs });
         } catch (testErr) {
           throw new Error(`runAllTests failed: ${testErr.message}`);
         }
@@ -455,15 +473,30 @@ async function runShipPr(options = {}, customExecutor = null) {
               executor(`git push origin ${head}`);
               canResolve = true;
             } else {
-              warn('[sdw-ship-pr] Active review threads require a code fix. Set reviewFixCommand, pass threadFixer, or resolve them outside this loop; refusing to resolve them without a verified fix. Continuing to poll for an external reviewer.');
+              warn('[sdw-ship-pr] Active review threads require a code fix. Follow the cooperative review fix protocol:');
+              warn('  1. Fetch all threads (list-threads)');
+              warn('  2. Analyze root causes & name defect class across the pull request');
+              warn('  3. Proactively fix all occurrences in sibling files');
+              warn('  4. Verify with test suite (npm test)');
+              warn('  5. Stage and commit (git commit -m "fix(review): address review feedback")');
+              warn('  6. Push to remote tracking branch (git push origin <head>)');
+              warn('  7. Close related threads with resolution comment (resolve-thread)');
               report.reviewConvergence.pendingThreads = pendingThreads;
               // Do not break: the external reviewer or a separate agent may resolve the threads
               // after applying fixes. The loop only observes and never resolves them itself.
             }
 
             if (canResolve) {
+              let commitSha = '';
+              try {
+                commitSha = executor('git rev-parse --short HEAD').toString().trim();
+              } catch (e) {}
+
               for (const thread of activeList) {
-                const summaryNote = `Resolved review issue: applied fix and verified acceptance criteria.\n\nSummary: ${fixSummary}`;
+                const perThreadSummary = (typeof fixResult !== 'undefined' && fixResult && fixResult.resolutions && fixResult.resolutions[thread.id])
+                  || fixSummary;
+                const commitLine = commitSha ? `Fixed in commit ${commitSha}.\n\n` : '';
+                const summaryNote = `<!-- resolution-reply -->\nResolved review issue: applied fix and verified acceptance criteria.\n\n${commitLine}Summary: ${perThreadSummary}`;
 
                 const resolveRes = await provider.resolveReviewThread({
                   prNumber: prResult.number,
@@ -578,26 +611,127 @@ async function runShipPr(options = {}, customExecutor = null) {
   }
 }
 
+/**
+ * Lists review threads for a pull request
+ */
+async function cmdListThreads(options, customExecutor) {
+  const projectRoot = options.projectRoot || process.cwd();
+  const config = loadConfig(projectRoot);
+  const prNumber = options.pr || options.prNumber;
+  if (!prNumber) {
+    throw new Error('--pr <prNumber> is required for list-threads.');
+  }
+  const providerName = options.provider || config.scmProvider || 'github';
+  const provider = (scmContract && scmContract.createScmProvider)
+    ? scmContract.createScmProvider(providerName, { cwd: projectRoot, executor: customExecutor })
+    : null;
+  if (!provider) {
+    throw new Error(`SCM provider contract is not available for provider: ${providerName}`);
+  }
+  return await provider.listReviewThreads(prNumber);
+}
+
+/**
+ * Resolves a review thread on a pull request with an explanatory comment
+ */
+async function cmdResolveThread(options, customExecutor) {
+  const projectRoot = options.projectRoot || process.cwd();
+  const config = loadConfig(projectRoot);
+  const prNumber = options.pr || options.prNumber;
+  const threadId = options.threadId || options.thread;
+  const comment = options.comment;
+  if (!prNumber) throw new Error('--pr <prNumber> is required for resolve-thread.');
+  if (!threadId) throw new Error('--thread <threadId> is required for resolve-thread.');
+  if (!comment) throw new Error('--comment <comment> is required for resolve-thread.');
+
+  const providerName = options.provider || config.scmProvider || 'github';
+  const provider = (scmContract && scmContract.createScmProvider)
+    ? scmContract.createScmProvider(providerName, { cwd: projectRoot, executor: customExecutor })
+    : null;
+  if (!provider) {
+    throw new Error(`SCM provider contract is not available for provider: ${providerName}`);
+  }
+
+  // Format comment with resolution reply marker if not already present
+  const formattedComment = comment.includes('<!-- resolution-reply -->')
+    ? comment
+    : `<!-- resolution-reply -->\n${comment}`;
+
+  return await provider.resolveReviewThread({
+    prNumber,
+    threadId,
+    commentId: options.commentId || null,
+    comment: formattedComment,
+    model: options.model || 'sdw-ship-pr',
+    dryRun: Boolean(options.dryRun)
+  });
+}
+
+/**
+ * Checks CI check runs and review status for a pull request
+ */
+async function cmdCheckStatus(options, customExecutor) {
+  const projectRoot = options.projectRoot || process.cwd();
+  const config = loadConfig(projectRoot);
+  const prNumber = options.pr || options.prNumber;
+  if (!prNumber) throw new Error('--pr <prNumber> is required for check-status.');
+
+  const providerName = options.provider || config.scmProvider || 'github';
+  const provider = (scmContract && scmContract.createScmProvider)
+    ? scmContract.createScmProvider(providerName, { cwd: projectRoot, executor: customExecutor })
+    : null;
+  if (!provider) {
+    throw new Error(`SCM provider contract is not available for provider: ${providerName}`);
+  }
+  return await provider.checkPrStatus(prNumber);
+}
+
 // CLI Execution entrypoint
 if (require.main === module) {
   const args = process.argv.slice(2);
   const options = parseArgs(args);
 
-  runShipPr(options)
-    .then(report => {
+  let runnerPromise;
+  if (options.subcommand === 'list-threads') {
+    runnerPromise = cmdListThreads(options);
+  } else if (options.subcommand === 'resolve-thread') {
+    runnerPromise = cmdResolveThread(options);
+  } else if (options.subcommand === 'check-status') {
+    runnerPromise = cmdCheckStatus(options);
+  } else {
+    runnerPromise = runShipPr(options);
+  }
+
+  runnerPromise
+    .then(result => {
       if (options.json) {
-        process.stdout.write(JSON.stringify(report, null, 2) + '\n');
+        process.stdout.write(JSON.stringify(result, null, 2) + '\n');
+      } else if (options.subcommand === 'list-threads') {
+        console.log(`\n[sdw-ship-pr] PR #${options.pr} Review Threads (${result.activeCount} active, ${result.totalCount} total):`);
+        for (const t of result.threads) {
+          const status = t.isResolved ? 'RESOLVED' : 'ACTIVE';
+          const fileLoc = t.path ? ` [${t.path}:${t.line || 1}]` : '';
+          const snippet = t.comments && t.comments[0] ? t.comments[0].body.split('\n')[0].slice(0, 80) : '';
+          console.log(`  - [${status}] Thread ${t.id}${fileLoc}: ${snippet}`);
+        }
+      } else if (options.subcommand === 'resolve-thread') {
+        console.log(`\n[sdw-ship-pr] Resolved thread ${options.threadId} on PR #${options.pr}:`);
+        console.log(`  Status: ${result.resolved ? 'Resolved' : 'Pending'}`);
+      } else if (options.subcommand === 'check-status') {
+        console.log(`\n[sdw-ship-pr] PR #${options.pr} Status:`);
+        console.log(`  All passed: ${result.allPassed}`);
+        console.log(`  State:      ${result.state}`);
       } else {
         console.log('\n[sdw-ship-pr] Delivery Complete:');
-        console.log(`  Status:       ${report.shipStatus}`);
-        console.log(`  Head:         ${report.head}`);
-        console.log(`  Base:         ${report.base}`);
-        console.log(`  SCM Provider: ${report.scmProvider}`);
-        if (report.pullRequest && report.pullRequest.url) {
-          console.log(`  PR URL:       ${report.pullRequest.url}`);
+        console.log(`  Status:       ${result.shipStatus}`);
+        console.log(`  Head:         ${result.head}`);
+        console.log(`  Base:         ${result.base}`);
+        console.log(`  SCM Provider: ${result.scmProvider}`);
+        if (result.pullRequest && result.pullRequest.url) {
+          console.log(`  PR URL:       ${result.pullRequest.url}`);
         }
       }
-      process.exit(report.success ? 0 : 1);
+      process.exit((result && (result.success !== false && result.resolved !== false)) ? 0 : 1);
     })
     .catch(err => {
       console.error(`\n[sdw-ship-pr] Error: ${err.message}`);
@@ -612,5 +746,8 @@ module.exports = {
   runShipPr,
   parseArgs,
   loadConfig,
-  locateStateFile
+  locateStateFile,
+  cmdListThreads,
+  cmdResolveThread,
+  cmdCheckStatus
 };

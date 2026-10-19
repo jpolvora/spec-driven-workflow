@@ -416,3 +416,98 @@ test('sdw-ship-pr - resolveReviewThread rejects GraphQL application errors', asy
     /GraphQL mutation failed: permission denied/
   );
 });
+
+test('sdw-ship-pr - subcommands cmdListThreads, cmdResolveThread, cmdCheckStatus operate correctly', async () => {
+  const fakeExecutor = (cmd) => {
+    if (cmd.includes('--input')) {
+      const match = cmd.match(/--input\s+"([^"]+)"/);
+      if (match && fs.existsSync(match[1])) {
+        const fileContent = fs.readFileSync(match[1], 'utf8');
+        if (fileContent.includes('resolveReviewThread')) {
+          return JSON.stringify({ data: { resolveReviewThread: { thread: { isResolved: true } } } });
+        }
+        if (fileContent.includes('reviewThreads')) {
+          return JSON.stringify({
+            data: {
+              repository: {
+                pullRequest: {
+                  reviewThreads: {
+                    nodes: [
+                      {
+                        id: 'PRRT_kw101',
+                        isResolved: false,
+                        path: 'src/app.js',
+                        line: 12,
+                        comments: { nodes: [{ id: 'PRRC_1', body: 'Missing check' }] }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          });
+        }
+      }
+    }
+    if (cmd.includes('resolveReviewThread')) {
+      return JSON.stringify({ data: { resolveReviewThread: { thread: { isResolved: true } } } });
+    }
+    if (cmd.includes('pr checks')) {
+      return JSON.stringify([{ name: 'test', state: 'pass', bucket: 'pass' }]);
+    }
+    if (cmd.includes('gh repo view')) {
+      return JSON.stringify({ owner: { login: 'owner' }, name: 'repo' });
+    }
+    if (cmd.includes('where gh') || cmd.includes('command -v gh')) {
+      return '/usr/bin/gh';
+    }
+    if (cmd.includes('gh auth status')) {
+      return 'Logged in';
+    }
+    return '';
+  };
+
+  const listRes = await sdwShipPr.cmdListThreads({ pr: '42', provider: 'github' }, fakeExecutor);
+  assert.strictEqual(listRes.activeCount, 1);
+  assert.strictEqual(listRes.threads[0].id, 'PRRT_kw101');
+
+  const resolveRes = await sdwShipPr.cmdResolveThread({
+    pr: '42',
+    threadId: 'PRRT_kw101',
+    comment: 'Applied fix in commit abc1234',
+    provider: 'github'
+  }, fakeExecutor);
+  assert.strictEqual(resolveRes.resolved, true);
+
+  const statusRes = await sdwShipPr.cmdCheckStatus({ pr: '42', provider: 'github' }, fakeExecutor);
+  assert.strictEqual(statusRes.allPassed, true);
+});
+
+
+test('sdw-ship-pr - pre-PR test gate receives verification.timeoutMs', async () => {
+  const calls = [];
+  const fakeExecutor = (cmd, opts) => {
+    calls.push({ cmd, opts });
+    return '';
+  };
+  const { tmpDir, config } = setupTestWorkspace();
+  config.runAllTests = true;
+  config.testCommand = 'npm test';
+  config.verification = { ...(config.verification || {}), timeoutMs: 1234 };
+
+  try {
+    const report = await sdwShipPr.runShipPr({
+      projectRoot: tmpDir,
+      config,
+      head: 'develop',
+      base: 'master'
+    }, fakeExecutor);
+
+    assert.strictEqual(report.success, true);
+    const testCall = calls.find(call => call.cmd === 'npm test');
+    assert.ok(testCall, 'Test command must be executed');
+    assert.strictEqual(testCall.opts && testCall.opts.timeout, 1234);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
