@@ -16,6 +16,9 @@ const implementationRunner = require('../skills/sdw-orch/scripts/implementation_
 const scoreEvaluator = require('../skills/sdw-orch/scripts/score_evaluator.cjs');
 const batchRunner = require('../skills/sdw-orch/scripts/batch_runner.cjs');
 
+// Spec 027: wire the deterministic judge stub for unattended runs past Step 4.
+require('./fixtures/judge_env.cjs').installJudgeEnv();
+
 function setupTestRepo() {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-impl-test-'));
   execSync('git init', { cwd: tmpDir, stdio: 'ignore' });
@@ -96,44 +99,58 @@ None.
 // ---------------------------------------------------------------------------
 // AC1 - AC5: Handoff Mode Default, Task Prompts, Pause State, Exit Code 4
 // ---------------------------------------------------------------------------
-test('AC1, AC2, AC3, AC4, AC5: Handoff mode defaults, writes prompts, sets awaiting_implementation, exits code 4', () => {
+test('Spec 028 AC1, AC2, AC4, AC5, AC14, AC15, AC29: subagent mode dispatches exactly one task and pauses', () => {
   const tmpDir = setupTestRepo();
   try {
-    createTestSpec(tmpDir, 'handoff-demo', 2);
+    createTestSpec(tmpDir, 'dispatch-demo', 2);
 
     const exitCode = sdwOrch.cmdRun({
       root: tmpDir,
-      specPath: '.sdw/specs/handoff-demo.md',
+      specPath: '.sdw/specs/dispatch-demo.md',
       skipReview: true,
       skipPr: true
     });
 
-    assert.equal(exitCode, 4, 'Handoff mode must exit with code 4 (AC5)');
+    assert.equal(exitCode, 4, 'Subagent mode pauses with exit code 4 (AC29)');
 
     const state = stateManager.findLatestRunState(tmpDir);
-    assert.ok(state, 'Run state must exist');
-    assert.equal(state.status, 'paused', 'Run status must be paused (AC4)');
-    assert.equal(state.steps[4].status, 'awaiting_implementation', 'Step 4 status must be awaiting_implementation (AC4)');
+    assert.equal(state.status, 'paused', 'Run status must be paused');
+    assert.equal(state.steps[4].status, 'awaiting_implementation', 'Step 4 awaits implementation');
 
-    const tasks = state.steps[4].tasks;
-    assert.ok(tasks, 'Tasks map must exist on Step 4');
-    const taskIds = Object.keys(tasks);
-    assert.ok(taskIds.length >= 1, 'At least one task must be prepared');
+    const dispatch = state.steps[4].dispatch;
+    assert.ok(dispatch.activeTaskId, 'A task is dispatched (AC5)');
+    assert.equal(dispatch.sequence, 1, 'The first dispatch has sequence 1');
+    assert.ok(dispatch.dispatchedAt, 'The dispatch timestamp is recorded');
 
-    for (const taskId of taskIds) {
-      const task = tasks[taskId];
-      assert.equal(task.status, 'pending', 'Task status must be pending (AC4)');
-      assert.ok(task.promptPath, 'Task must specify promptPath (AC3)');
-      assert.ok(task.evidencePath, 'Task must specify evidencePath (AC3)');
+    const dispatchedTasks = Object.values(state.steps[4].tasks).filter(task => task.status === 'dispatched');
+    assert.equal(dispatchedTasks.length, 1, 'Exactly one task is in flight');
 
-      const absPromptPath = path.resolve(tmpDir, task.promptPath);
-      assert.ok(fs.existsSync(absPromptPath), 'Rendered prompt file must exist on disk (AC3)');
+    const task = state.steps[4].tasks[dispatch.activeTaskId];
+    assert.ok(task.promptPath, 'The dispatched task records its prompt path (AC14)');
+    assert.ok(task.evidencePath, 'The dispatched task records its evidence path');
 
-      const promptContent = fs.readFileSync(absPromptPath, 'utf8');
-      assert.ok(promptContent.includes(taskId), 'Prompt contains taskId');
-      assert.ok(promptContent.includes(state.specSlug), 'Prompt contains specSlug');
-      assert.ok(promptContent.includes(task.evidencePath), 'Prompt contains expected evidence path');
-    }
+    const absPromptPath = path.resolve(tmpDir, task.promptPath);
+    assert.ok(fs.existsSync(absPromptPath), 'The prompt file is rendered before the task is marked dispatched (AC14)');
+
+    const promptContent = fs.readFileSync(absPromptPath, 'utf8');
+    [
+      '## Task Context',
+      '## Assigned Acceptance Criteria',
+      '## Target Files',
+      '## Scope Fence',
+      '## Prohibited Actions',
+      '## Evidence Schema',
+      '## Report Contract',
+      '## Finish Command'
+    ].forEach(section => {
+      assert.ok(promptContent.includes(section), `Prompt contains ${section} (AC18-AC23)`);
+    });
+    assert.ok(promptContent.includes('Do not spawn subagents'), 'Prompt forbids recursive subagents (AC20)');
+    assert.ok(promptContent.includes('git commit'), 'Prompt forbids git mutation (AC19)');
+    assert.ok(!promptContent.includes('"status": "passed"'), 'The evidence template never pre-fills a passing test (AC22)');
+    assert.ok(promptContent.includes('"status": ""'), 'The evidence status is not pre-filled (AC22, AC25)');
+    assert.ok(promptContent.includes('`partial`') && promptContent.includes('`blocked`'), 'Allowed status values are documented (AC25)');
+    assert.ok(promptContent.includes('task finish --run-id'), 'The finish command is included (AC23)');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
@@ -382,7 +399,7 @@ test('AC17, AC18, AC19, AC20, AC21, AC22: Verification gates run build/test, rec
 // ---------------------------------------------------------------------------
 // AC23 - AC24: Evidence-Based Conformance Scoring & Closed Failure
 // ---------------------------------------------------------------------------
-test('AC23, AC24: Conformance score strictly evidence-based, fails closed with 0 when no ACs exist', () => {
+test('Spec 027: Conformance score derives from judge verdicts and fails closed with 0 when no ACs exist', () => {
   const tmpDir = setupTestRepo();
   try {
     const specWithAcs = `## Acceptance Criteria
@@ -391,34 +408,33 @@ test('AC23, AC24: Conformance score strictly evidence-based, fails closed with 0
 - AC3: Third criterion.
 - AC4: Fourth criterion.
 `;
+    const acs = dagPlanner.parseAcceptanceCriteria(specWithAcs);
 
-    // Only AC1 and AC2 covered by accepted evidence with real file
-    const reportPartial = scoreEvaluator.evaluateScore(specWithAcs, {
-      projectRoot: tmpDir,
-      minScore: 5,
-      evidenceRecords: [
-        {
-          taskId: 'task-1',
-          acIds: ['AC1', 'AC2'],
-          filesChanged: ['package.json'],
-          summary: 'partial implementation'
-        }
+    // Two of four criteria verified by the judge => round(2/4 * 10) = 5
+    const partialVerdict = {
+      score: 5,
+      verdicts: [
+        { id: 'AC1', verdict: 'verified', evidence: 'package.json:1' },
+        { id: 'AC2', verdict: 'verified', evidence: 'package.json:2' },
+        { id: 'AC3', verdict: 'failed', evidence: 'Not implemented.' },
+        { id: 'AC4', verdict: 'failed', evidence: 'Not implemented.' }
       ]
-    });
+    };
+    const validated = scoreEvaluator.validateVerdict(partialVerdict, { acs });
+    assert.equal(validated.valid, true, 'A complete verdict validates');
 
-    assert.equal(reportPartial.score, 5, 'Math.round(2/4 * 10) = 5 (AC23)');
+    const reportPartial = scoreEvaluator.applyVerdict(validated.data, { acs, minScore: 5 });
+    assert.equal(reportPartial.score, 5, 'Math.round(2/4 * 10) = 5');
     assert.equal(reportPartial.verifiedCount, 2);
     assert.equal(reportPartial.failingCount, 2);
     assert.equal(reportPartial.passed, true, 'Passes when score >= minScore 5');
 
-    // Fails closed on spec with 0 ACs
+    // Zero ACs => score 0 and fail closed without a judge verdict.
     const emptySpec = `# No ACs Here\nJust some notes.`;
-    const reportEmpty = scoreEvaluator.evaluateScore(emptySpec, {
-      projectRoot: tmpDir,
-      minScore: 0
-    });
-
-    assert.equal(reportEmpty.score, 0, 'Must score 0 when 0 ACs present (AC23)');
+    const emptyAcs = dagPlanner.parseAcceptanceCriteria(emptySpec);
+    assert.equal(emptyAcs.length, 0);
+    const reportEmpty = scoreEvaluator.applyVerdict({ score: 0, verdicts: [] }, { acs: emptyAcs, minScore: 0 });
+    assert.equal(reportEmpty.score, 0, 'Must score 0 when 0 ACs present');
     assert.equal(reportEmpty.passed, false, 'Must fail closed when 0 ACs present');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -548,8 +564,7 @@ test('AC33, AC34, AC35, AC36: Config schema validates implementation/verificatio
     const cfgPath = path.join(tmpDir, '.sdw', 'config.json');
     const validCfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
     validCfg.implementation = {
-      mode: 'handoff',
-      worktrees: true,
+      mode: 'subagent',
       timeoutMs: 120000
     };
     validCfg.verification = {

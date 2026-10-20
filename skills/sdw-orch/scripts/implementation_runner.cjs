@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { spawnSync, execSync } = require('child_process');
 const stateManager = require('./state_manager.cjs');
 
@@ -10,10 +11,18 @@ function normalizePath(p) {
 }
 
 /**
- * Renders task prompt markdown file for a DAG task.
+ * Renders the dispatch prompt for a DAG task (Spec 028).
+ *
+ * The prompt is a complete brief: assigned criteria verbatim, the criteria it
+ * must not regress, its target files, a scope fence, dependency context,
+ * partial progress inherited from an abandoned dispatch, explicit prohibitions,
+ * an honest evidence template, a report contract, and the finish command.
  */
 function renderTaskPrompt(options) {
-  const { targetRoot, specSlug, runId, stateDir, task, specAcs, useWorktrees, taskWorktreeRel } = options;
+  const {
+    targetRoot, specSlug, specPath, runId, stateDir, task, specAcs, useWorktrees, taskWorktreeRel,
+    dagTasks, taskStates, abandonments
+  } = options;
   const root = targetRoot ? path.resolve(targetRoot) : process.cwd();
   const absStateDir = stateDir ? (path.isAbsolute(stateDir) ? stateDir : path.resolve(root, stateDir)) : path.join(root, '.sdw', 'state');
   const taskPromptDir = path.join(absStateDir, specSlug, runId);
@@ -29,42 +38,95 @@ function renderTaskPrompt(options) {
   const evidenceFileRel = normalizePath(path.relative(root, evidenceFileAbs));
 
   const workingDirRel = (useWorktrees && taskWorktreeRel) ? normalizePath(taskWorktreeRel) : '.';
-  const workingDirAbs = path.resolve(root, workingDirRel);
 
-  const coveredAcs = task.coveredAcs || [];
-  const acList = [];
-  if (Array.isArray(specAcs)) {
-    for (const a of specAcs) {
-      const id = typeof a === 'string' ? a : a.id;
-      const text = typeof a === 'string' ? '' : a.text;
-      if (coveredAcs.includes(id)) {
-        acList.push(`- **${id}**: ${text || '(see specification)'}`);
-      }
-    }
-  }
+  const coveredAcs = Array.isArray(task.coveredAcs) ? task.coveredAcs : [];
+  const normalizedAcs = Array.isArray(specAcs)
+    ? specAcs.map(ac => (typeof ac === 'string' ? { id: ac, text: '' } : { id: ac.id, text: ac.text || '' }))
+    : [];
+
+  const assignedAcs = normalizedAcs.filter(ac => coveredAcs.includes(ac.id));
+  const remainingAcs = normalizedAcs.filter(ac => !coveredAcs.includes(ac.id));
+
+  const dependencies = Array.isArray(task.dependencies) ? task.dependencies : [];
+  const acceptedById = (taskStates && typeof taskStates === 'object') ? taskStates : {};
 
   let prompt = `# Implementation Task Prompt: ${task.id} (${specSlug})\n\n`;
+
   prompt += `## Task Context\n`;
   prompt += `- **Task ID:** ${task.id}\n`;
   prompt += `- **Task Title:** ${task.title || task.id}\n`;
+  prompt += `- **Specification:** ${specPath ? normalizePath(specPath) : '(not recorded)'}\n`;
   prompt += `- **Specification Slug:** ${specSlug}\n`;
   prompt += `- **Run ID:** ${runId}\n`;
-  prompt += `- **Assigned Working Directory:** \`${workingDirRel}\`\n`;
+  prompt += `- **Working Directory:** \`${workingDirRel}\`\n`;
   prompt += `- **Evidence File Destination:** \`${evidenceFileRel}\`\n\n`;
 
   prompt += `## Description\n`;
   prompt += `${task.description || 'Implement the assigned requirements in accordance with the specification.'}\n\n`;
 
-  if (acList.length > 0) {
-    prompt += `## Assigned Acceptance Criteria\n`;
-    prompt += `${acList.join('\n')}\n\n`;
+  prompt += `## Assigned Acceptance Criteria\n`;
+  if (assignedAcs.length > 0) {
+    assignedAcs.forEach(ac => { prompt += `- ${ac.id}: ${ac.text || '(see specification)'}\n`; });
+  } else {
+    prompt += `- (none assigned; treat the task description as the requirement)\n`;
+  }
+  prompt += `\n`;
+
+  if (remainingAcs.length > 0) {
+    prompt += `## Remaining Acceptance Criteria (do not regress)\n`;
+    prompt += `Other tasks own these criteria. Do not claim them and do not break them:\n`;
+    prompt += remainingAcs.map(ac => `- ${ac.id}`).join('\n') + `\n\n`;
   }
 
-  if (task.targetFiles && task.targetFiles.length > 0) {
-    prompt += `## Target Files\n`;
-    task.targetFiles.forEach(f => {
-      prompt += `- \`${normalizePath(f)}\`\n`;
-    });
+  prompt += `## Target Files\n`;
+  if (Array.isArray(task.targetFiles) && task.targetFiles.length > 0) {
+    task.targetFiles.forEach(f => { prompt += `- \`${normalizePath(f)}\`\n`; });
+  } else {
+    prompt += `- No explicit targets. Modify the minimum number of files required to satisfy the assigned criteria.\n`;
+  }
+  prompt += `\n`;
+
+  prompt += `## Scope Fence\n`;
+  prompt += `- **Permitted:** the target files above, plus new files required by the assigned criteria.\n`;
+  prompt += `- **Forbidden:** files owned by other tasks, \`.sdw/state/**\`, task prompt and evidence files of other tasks, and \`.git/**\`.\n`;
+  if (specPath) {
+    prompt += `- **Forbidden:** editing the specification (\`${normalizePath(specPath)}\`); report a needed spec change instead.\n`;
+  }
+  prompt += `\n`;
+
+  if (dependencies.length > 0) {
+    const acceptedDeps = dependencies
+      .map(depId => ({ depId, record: acceptedById[depId] }))
+      .filter(entry => entry.record && entry.record.status === 'completed');
+    if (acceptedDeps.length > 0) {
+      prompt += `## Dependency Context\n`;
+      prompt += `Previously accepted tasks this task builds on:\n`;
+      acceptedDeps.forEach(({ depId, record }) => {
+        const files = Array.isArray(record.filesChanged) && record.filesChanged.length > 0
+          ? record.filesChanged.map(normalizePath).join(', ')
+          : '(no files recorded)';
+        const summary = String(record.summary || '(no summary recorded)').replace(/\s+/g, ' ').trim();
+        prompt += `- ${depId}: ${summary} — files: ${files}\n`;
+      });
+      prompt += `\n`;
+    }
+  }
+
+  const abandoned = Array.isArray(abandonments)
+    ? abandonments.filter(entry => entry && entry.taskId === task.id)
+    : [];
+  if (abandoned.length > 0) {
+    const lastAbandonment = abandoned[abandoned.length - 1];
+    const dirty = collectModifiedPaths(root);
+    prompt += `## Prior Partial Progress\n`;
+    prompt += `A previous worker was abandoned for this task: ${lastAbandonment.reason || 'no reason recorded'}.\n`;
+    if (dirty.length > 0) {
+      prompt += `The working tree already carries modifications. Inspect them first and keep what is correct; do not revert blindly:\n`;
+      dirty.slice(0, 20).forEach(f => { prompt += `- \`${f}\`\n`; });
+      if (dirty.length > 20) prompt += `- ... and ${dirty.length - 20} more modified path(s)\n`;
+    } else {
+      prompt += `The working tree carries no modifications, so start from the current files.\n`;
+    }
     prompt += `\n`;
   }
 
@@ -73,26 +135,48 @@ function renderTaskPrompt(options) {
     prompt += `${task.contextPrompt}\n\n`;
   }
 
-  prompt += `## Implementation Constraints & Rules (sdw-rules)\n`;
-  prompt += `1. **Simplicity First:** Write the minimum necessary code to fulfill the assigned acceptance criteria. Avoid speculative abstractions.\n`;
-  prompt += `2. **Surgical Changes:** Modify only target files and direct dependencies. Do not perform unrelated refactoring.\n`;
-  prompt += `3. **Do NOT Git Commit:** Do not run \`git commit\` directly in the product repository. The orchestrator will verify evidence, commit, and integrate changes automatically.\n`;
-  prompt += `4. **Provide Evidence:** Once implementation is complete, create the evidence JSON file at \`${evidenceFileRel}\` conforming to the schema below, then execute the finish command.\n\n`;
+  prompt += `## Implementation Rules (sdw-rules)\n`;
+  prompt += `- **Simplicity first:** write the minimum code that satisfies the assigned criteria; no speculative abstraction, layering, or configurability.\n`;
+  prompt += `- **Surgical changes:** touch only the scope fence; no drive-by refactors, renames, or formatting churn.\n`;
+  prompt += `- **No unrequested features:** implement exactly what the assigned criteria require.\n\n`;
 
-  prompt += `## Task Evidence Schema (\`${evidenceFileRel}\`)\n`;
+  prompt += `## Prohibited Actions\n`;
+  prompt += `- Do not run \`git commit\`, \`git push\`, \`git branch\`, \`git checkout\`, \`git worktree\`, or \`git tag\`. The orchestrator owns version control.\n`;
+  prompt += `- Do not spawn subagents or delegate this task to another agent.\n`;
+  prompt += `- Do not modify files outside the scope fence.\n`;
+  prompt += `- Do not write run state, prompt files, or the specification.\n`;
+  prompt += `- Do not record a test you did not execute.\n`;
+  prompt += `- Do not report \`status: "success"\` while any assigned criterion is unmet.\n\n`;
+
+  prompt += `## Evidence Schema (\`${evidenceFileRel}\`)\n`;
+  prompt += `Write this file when the work is done. Fill every field honestly; no field is pre-filled:\n`;
   prompt += `\`\`\`json\n`;
   prompt += JSON.stringify({
     taskId: task.id,
-    acIds: coveredAcs,
-    filesChanged: task.targetFiles || [],
-    tests: [
-      { name: `Verifies ${task.id} requirements`, status: 'passed', command: 'npm test' }
-    ],
-    summary: `Completed implementation of ${task.id}.`
+    status: '',
+    acIds: [],
+    filesChanged: [],
+    tests: [],
+    summary: ''
   }, null, 2) + `\n`;
-  prompt += `\`\`\`\n\n`;
+  prompt += `\`\`\`\n`;
+  prompt += `- \`status\`: \`success\` when every assigned criterion is met; otherwise \`partial\`, \`failed\`, or \`blocked\`.\n`;
+  prompt += `- \`acIds\`: the assigned criteria this task satisfies.\n`;
+  prompt += `- \`filesChanged\`: project-relative paths you actually modified or created.\n`;
+  prompt += `- \`tests\`: only commands you actually ran, with their real result; \`[]\` when nothing is testable.\n`;
+  prompt += `- \`summary\`: one or two sentences describing what changed.\n\n`;
 
-  prompt += `## Task Finish Command\n`;
+  prompt += `## Report Contract\n`;
+  prompt += `Reply to the parent agent with a compact report, not code and not logs:\n`;
+  prompt += `1. \`taskId\` and \`status\` (\`success\`, \`partial\`, \`failed\`, or \`blocked\`).\n`;
+  prompt += `2. The project-relative \`filesChanged\` list.\n`;
+  prompt += `3. The acceptance criteria ids satisfied.\n`;
+  prompt += `4. Each test command executed with its result.\n`;
+  prompt += `5. Blockers, when any criterion could not be met.\n`;
+  prompt += `When \`status\` is not \`success\`, do not write a success evidence file; the parent will abandon and re-dispatch.\n\n`;
+
+  prompt += `## Finish Command\n`;
+  prompt += `Run this once the evidence file exists:\n`;
   prompt += `\`\`\`bash\n`;
   prompt += `node "${normalizePath(path.join(__dirname, 'sdw_orch.cjs'))}" task finish --run-id ${runId} --task ${task.id} --evidence ${evidenceFileRel}\n`;
   prompt += `\`\`\`\n`;
@@ -105,8 +189,28 @@ function renderTaskPrompt(options) {
     evidenceFileAbs,
     evidenceFileRel,
     workingDirRel,
-    workingDirAbs
+    promptBytes: Buffer.byteLength(prompt, 'utf8')
   };
+}
+
+/**
+ * Lists working-tree paths with uncommitted modifications (Spec 028 AC14).
+ */
+function collectModifiedPaths(root) {
+  try {
+    const statusOut = execSync('git status --porcelain', {
+      cwd: root,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore']
+    });
+    return statusOut.split('\n')
+      .map(line => line.trim().replace(/^[A-Z?]{1,2}\s+/, '').trim())
+      .filter(Boolean)
+      .map(line => normalizePath(line.replace(/^"(.*)"$/, '$1')))
+      .filter(p => !p.startsWith('.sdw/state/'));
+  } catch (e) {
+    return [];
+  }
 }
 
 /**
@@ -165,10 +269,60 @@ function createTaskWorktree(targetRoot, runId, taskId) {
 }
 
 /**
- * Checks whether changes exist in the task working tree or primary repository.
+ * Captures the working-tree state at dispatch time (Spec 028 AC24, AC27).
+ *
+ * Records the paths already dirty before the task started, with a content hash
+ * for each, so a task can be corroborated by comparing content instead of
+ * trusting filesystem timestamps (which have coarse granularity on some hosts).
  */
-function checkTaskChanges(targetRoot, taskWorktreeAbs, useWorktrees, filesChanged = []) {
+function captureDispatchBaseline(root) {
+  const cwd = root ? path.resolve(root) : process.cwd();
+  const dirty = collectModifiedPaths(cwd);
+  const hashes = {};
+  for (const relPath of dirty) {
+    try {
+      const absPath = path.resolve(cwd, relPath);
+      if (fs.existsSync(absPath) && fs.statSync(absPath).isFile()) {
+        hashes[relPath] = crypto.createHash('sha256').update(fs.readFileSync(absPath)).digest('hex');
+      }
+    } catch (e) {
+      // Unreadable at dispatch: treat as changed, never as inherited dirt.
+    }
+  }
+  return { dirty, hashes };
+}
+
+function hashFile(root, relPath) {
+  try {
+    const absPath = path.resolve(root, relPath);
+    if (!fs.existsSync(absPath) || !fs.statSync(absPath).isFile()) return null;
+    return crypto.createHash('sha256').update(fs.readFileSync(absPath)).digest('hex');
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * Checks whether a task produced real changes (Spec 015 AC14/AC15, Spec 028 AC27).
+ *
+ * In primary-tree mode a listed file corroborates the task only when it is
+ * modified now and either it was clean at dispatch or its content differs from
+ * the hash captured then, so edits inherited from an earlier task never
+ * satisfy the check. Non-git workspaces fall back to existence only (AC28).
+ */
+function checkTaskChanges(targetRoot, taskWorktreeAbs, useWorktrees, filesChanged = [], options = {}) {
   const root = targetRoot ? path.resolve(targetRoot) : process.cwd();
+  const baseline = options.baseline && typeof options.baseline === 'object' ? options.baseline : null;
+  const baselineDirty = new Set(Array.isArray(baseline && baseline.dirty) ? baseline.dirty.map(normalizePath) : []);
+  const baselineHashes = (baseline && baseline.hashes && typeof baseline.hashes === 'object') ? baseline.hashes : {};
+
+  const isInheritedDirt = (relPath) => {
+    if (!baselineDirty.has(normalizePath(relPath))) return false;
+    const priorHash = baselineHashes[normalizePath(relPath)];
+    if (!priorHash) return false;
+    const currentHash = hashFile(root, relPath);
+    return currentHash === priorHash;
+  };
 
   if (useWorktrees && taskWorktreeAbs && fs.existsSync(taskWorktreeAbs)) {
     try {
@@ -193,6 +347,7 @@ function checkTaskChanges(targetRoot, taskWorktreeAbs, useWorktrees, filesChange
   }
 
   try {
+    const changed = new Set();
     const statusOut = execSync('git status --porcelain', {
       cwd: root,
       encoding: 'utf8',
@@ -200,38 +355,32 @@ function checkTaskChanges(targetRoot, taskWorktreeAbs, useWorktrees, filesChange
     }).trim();
 
     if (statusOut) {
-      const changedInStatus = statusOut.split('\n')
+      statusOut.split('\n')
         .map(l => l.trim().replace(/^[A-Z?]{1,2}\s+/, '').trim())
         .map(p => p.replace(/^"(.*)"$/, '$1'))
         .map(normalizePath)
-        .map(p => p.replace(/^\.\//, ''));
-
-      for (const f of filesChanged) {
-        const normF = normalizePath(f).replace(/^\.\//, '');
-        if (changedInStatus.includes(normF)) {
-          return true;
-        }
-      }
+        .map(p => p.replace(/^\.\//, ''))
+        .forEach(p => changed.add(p));
     }
 
-    // Check git diff against HEAD
     const diffOut = execSync('git diff --name-only HEAD', {
       cwd: root,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore']
     }).trim();
-
     if (diffOut) {
-      const changedInDiff = diffOut.split('\n').map(l => normalizePath(l.trim()));
-      for (const f of filesChanged) {
-        const normF = normalizePath(f);
-        if (changedInDiff.includes(normF)) {
-          return true;
-        }
-      }
+      diffOut.split('\n').map(l => normalizePath(l.trim())).filter(Boolean).forEach(p => changed.add(p));
     }
 
-  } catch (e) {}
+    for (const f of filesChanged) {
+      const normF = normalizePath(f).replace(/^\.\//, '');
+      if (changed.has(normF) && !isInheritedDirt(normF)) {
+        return true;
+      }
+    }
+  } catch (e) {
+    return false;
+  }
 
   return false;
 }
@@ -399,6 +548,9 @@ function executeTaskCommand(options) {
 
 module.exports = {
   renderTaskPrompt,
+  collectModifiedPaths,
+  captureDispatchBaseline,
+  hashFile,
   checkTaskDependencies,
   createTaskWorktree,
   checkTaskChanges,

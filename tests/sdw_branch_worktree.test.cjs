@@ -11,6 +11,9 @@ const sdwConfig = require('../skills/sdw-config/scripts/sdw_config.cjs');
 const sdwOrch = require('../skills/sdw-orch/scripts/sdw_orch.cjs');
 const stateManager = require('../skills/sdw-orch/scripts/state_manager.cjs');
 
+// Spec 027: wire the deterministic judge stub for unattended runs past Step 4.
+require('./fixtures/judge_env.cjs').installJudgeEnv();
+
 function setupTestRepo() {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-bw-test-'));
   execSync('git init', { cwd: tmpDir, stdio: 'ignore' });

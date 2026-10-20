@@ -101,6 +101,8 @@ function parseArgs(args) {
     featureBranch: false,
     taskId: null,
     evidencePath: null,
+    verdictPath: null,
+    reason: null,
     skillsRoot: null,
     implementationMode: null
   };
@@ -144,6 +146,10 @@ function parseArgs(args) {
     else if (arg.startsWith('--evidence-path=')) result.evidencePath = arg.slice(16);
     else if (arg === '--mode') result.implementationMode = args[++i];
     else if (arg.startsWith('--mode=')) result.implementationMode = arg.slice(7);
+    else if (arg === '--verdict') result.verdictPath = args[++i];
+    else if (arg.startsWith('--verdict=')) result.verdictPath = arg.slice(10);
+    else if (arg === '--reason') result.reason = args[++i];
+    else if (arg.startsWith('--reason=')) result.reason = arg.slice(9);
     else if (arg === '--step') result.step = parseInt(args[++i], 10);
     else if (arg.startsWith('--step=')) result.step = parseInt(arg.slice(7), 10);
     else if (arg === '--min-score') result.minScore = parseInt(args[++i], 10);
@@ -151,12 +157,29 @@ function parseArgs(args) {
     else if (!arg.startsWith('-')) positional.push(arg);
   }
 
-  if ((positional[0] === 'task' && positional[1] === 'finish') || positional[0] === 'task-finish') {
-    result.subcommand = 'task-finish';
-    const rest = positional[0] === 'task-finish' ? positional.slice(1) : positional.slice(2);
-    result.specPaths = rest;
+  const COMBINED = {
+    'task finish': 'task-finish',
+    'task next': 'task-next',
+    'task abandon': 'task-abandon',
+    'score submit': 'score-submit'
+  };
+  const combinedMatch = COMBINED[positional.slice(0, 2).join(' ')];
+  if (combinedMatch) {
+    result.subcommand = combinedMatch;
+    const rest = positional.slice(2);
+    result.specPaths = [];
+    result.specPath = null;
     if (!result.taskId && rest[0]) result.taskId = rest[0];
-    if (!result.evidencePath && rest[1]) result.evidencePath = rest[1];
+    if (combinedMatch === 'task-finish' && !result.evidencePath && rest[1]) result.evidencePath = rest[1];
+    if (combinedMatch === 'task-abandon' && !result.reason && rest[1]) result.reason = rest[1];
+  } else if (['task-finish', 'task-next', 'task-abandon', 'score-submit'].includes(positional[0])) {
+    result.subcommand = positional[0];
+    const rest = positional.slice(1);
+    result.specPaths = [];
+    result.specPath = null;
+    if (!result.taskId && rest[0]) result.taskId = rest[0];
+    if (result.subcommand === 'task-finish' && !result.evidencePath && rest[1]) result.evidencePath = rest[1];
+    if (result.subcommand === 'task-abandon' && !result.reason && rest[1]) result.reason = rest[1];
   } else {
     result.subcommand = positional[0] || null;
     result.specPaths = positional.slice(1);
@@ -864,9 +887,9 @@ function cmdRun(options) {
     dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint });
   }
 
-  // Step 4: Implementation Execution Contract & Evidence Gate (Spec 015)
+  // Step 4: Implementation execution (Spec 028 subagent dispatch / Spec 015 command mode)
   const implConfig = (options.implementation || config.implementation || {});
-  const implMode = options.implementationMode || implConfig.mode || 'handoff';
+  const implMode = options.implementationMode || implConfig.mode || 'subagent';
 
   if (startStep <= 4 && state.steps[4].status !== 'completed') {
     state.steps[4].tasks = state.steps[4].tasks || {};
@@ -888,75 +911,64 @@ function cmdRun(options) {
 
     const specAcs = dagPlanner.parseAcceptanceCriteria(effectiveSpecContent);
 
-    if (implMode === 'handoff') {
+    if (implMode !== 'subagent' && implMode !== 'command') {
+      // Spec 028 AC3: `handoff` (and anything unknown) is rejected, never silently skipped.
+      const remediation = implMode === 'handoff'
+        ? ' The "handoff" mode was replaced by "subagent".'
+        : '';
+      const errMsg = `Unknown implementation mode "${implMode}". Allowed: subagent, command.${remediation}`;
+      console.error(`[Step 4: Implementation] ${errMsg}`);
+      state = stateManager.updateStepState(targetRoot, state.runId, 4, 'failed', { error: errMsg });
+      state.status = 'failed';
+      stateManager.saveRunState(targetRoot, state);
+      options._runResult = { runId: state.runId, status: 'failed', error: errMsg };
+      return 1;
+    }
+
+    if (implMode === 'subagent') {
+      // AC52: subagent mode runs in the primary tree; task worktrees stay command-mode only.
       if (useWorktrees) {
-        // Handoff prepares prompts for an external worker; task worktrees are not created here.
-        // Fall back to the primary tree instead of advertising a non-existent working directory.
         useWorktrees = false;
-        state.worktreeSkipReason = 'handoff mode uses the primary working tree; task worktrees are only created in command mode';
+        state.worktreeSkipReason = 'subagent mode uses the primary working tree; task worktrees are only created in command mode';
         state = stateManager.saveRunState(targetRoot, state);
-        console.log(`[Step 4: Worktree] Worktrees skipped in handoff mode; using the primary working tree.`);
+        console.log(`[Step 4: Worktree] Worktrees skipped in subagent mode; using the primary working tree.`);
       }
 
-      // AC3: write one prompt file per DAG task
-      const preparedTasks = [];
-      for (const task of dagPlan.tasks) {
-        let taskWorktreeRel = null;
-        if (useWorktrees) {
-          taskWorktreeRel = `.sdw/worktrees/${state.runId}/${task.id}`;
-        }
-        const rendered = implementationRunner.renderTaskPrompt({
-          targetRoot,
-          specSlug,
-          runId: state.runId,
-          stateDir: stateManager.resolveStateDir(targetRoot),
-          task,
-          specAcs,
-          useWorktrees,
-          taskWorktreeRel
-        });
+      const dispatch = dispatchNextTask({
+        targetRoot,
+        state,
+        dagPlan,
+        specAcs,
+        specSlug,
+        specPath: state.specPath,
+        options
+      });
+      state = dispatch.state;
 
-        const existingTask = state.steps[4].tasks[task.id] || {};
-        state.steps[4].tasks[task.id] = {
-          ...existingTask,
-          id: task.id,
-          title: task.title,
-          status: existingTask.status || 'pending',
-          promptPath: rendered.promptFileRel,
-          evidencePath: existingTask.evidencePath || rendered.evidenceFileRel,
-          workingDir: rendered.workingDirRel,
-          coveredAcs: task.coveredAcs || [],
-          dependencies: task.dependencies || []
-        };
-        preparedTasks.push(task.id);
+      if (!dispatch.ok) {
+        console.error(`[Step 4: Dispatch] ${dispatch.reason}`);
+        state.steps[4].status = 'failed';
+        state.status = 'failed';
+        stateManager.saveRunState(targetRoot, state);
+        options._runResult = { runId: state.runId, status: 'failed', error: dispatch.reason };
+        return 1;
       }
 
-      // AC4: set Step 4 status to awaiting_implementation
       state.status = 'paused';
       state.steps[4].status = 'awaiting_implementation';
       state = stateManager.saveRunState(targetRoot, state);
 
-      console.log(`\n[Step 4: Implementation] Prepared ${dagPlan.tasks.length} task prompt file(s) under handoff mode.`);
-      dagPlan.tasks.forEach(t => {
-        const tState = state.steps[4].tasks[t.id];
-        console.log(`  + [${t.id}] ${t.title}`);
-        console.log(`      Prompt:   ${tState.promptPath}`);
-        console.log(`      Evidence: ${tState.evidencePath}`);
-      });
-      console.log(`\n[Step 4: Implementation] Status: awaiting_implementation.`);
-      console.log(`Please implement tasks respecting DAG dependencies and submit evidence with:`);
-      console.log(`  node "${orchCommandPath()}" task finish --run-id ${state.runId} --task <taskId> --evidence <evidencePath>`);
-      console.log(`Once all tasks have accepted evidence, continue with:`);
-      console.log(`  node "${orchCommandPath()}" resume --run-id ${state.runId}`);
+      printDispatchEnvelope(dispatch.envelope, state, options);
 
       options._runResult = {
         runId: state.runId,
         status: 'awaiting_implementation',
         currentStep: 4,
-        tasksPrepared: preparedTasks.length
+        activeTaskId: dispatch.envelope.taskId,
+        sequence: dispatch.envelope.sequence
       };
 
-      // AC5: exit with code 4
+      // AC29: dispatch pause
       return 4;
     } else if (implMode === 'command') {
       // AC21: execute implementation.command once per DAG task
@@ -1015,6 +1027,7 @@ function cmdRun(options) {
         });
 
         // Execute command
+        const commandBaseline = implementationRunner.captureDispatchBaseline(targetRoot);
         const cmdResult = implementationRunner.executeTaskCommand({
           config: {
             ...config,
@@ -1056,7 +1069,8 @@ function cmdRun(options) {
           targetRoot,
           wtInfo ? wtInfo.worktreeAbs : null,
           useWorktrees,
-          evidenceData.filesChanged
+          evidenceData.filesChanged,
+          useWorktrees ? {} : { baseline: commandBaseline }
         );
 
         if (!hasChanges) {
@@ -1131,18 +1145,184 @@ function cmdRun(options) {
     }
   }
 
-  // Step 5: Conformance Scoring Loop (AC9, AC10, AC18, AC19, AC23, AC24)
+  // Step 5: Conformance Scoring — LLM judge (Spec 027)
   let scoreReport = null;
   if (startStep <= 5 && state.steps[5].status !== 'completed') {
     state = stateManager.updateStepState(targetRoot, state.runId, 5, 'in_progress');
-    scoreReport = scoreEvaluator.evaluateScore(effectiveSpecContent, {
-      projectRoot: targetRoot,
+
+    const specAcs = dagPlanner.parseAcceptanceCriteria(effectiveSpecContent);
+    const judgeConfig = scoreEvaluator.resolveJudgeConfig({ scoring: options.scoring || config.scoring });
+    const judgePaths = scoreEvaluator.resolveJudgePaths({
+      targetRoot,
+      stateDir: stateManager.resolveStateDir(targetRoot),
       slug: specSlug,
-      baseCommit: state.baseCommit,
+      runId: state.runId
+    });
+    const scoringTouchedFiles = scoreEvaluator.getTouchedFiles(state.baseCommit, targetRoot);
+
+    const failClosedScoring = (message, judgeMeta) => {
+      const failedReport = {
+        score: 0,
+        passed: false,
+        minScore: effectiveMinScore,
+        totalAcs: specAcs.length,
+        verifiedCount: 0,
+        failingCount: specAcs.length,
+        verifiedAcs: [],
+        failingAcs: specAcs.map(ac => ({ id: ac.id, text: ac.text, reason: message })),
+        touchedFiles: scoringTouchedFiles,
+        evidenceLinks: {},
+        judge: {
+          mode: (judgeMeta && judgeMeta.mode) || judgeConfig.mode,
+          criticity: (judgeMeta && judgeMeta.criticity) || judgeConfig.criticity,
+          model: judgeConfig.model,
+          provider: judgeConfig.provider,
+          effort: judgeConfig.effort,
+          apiEndpoint: judgeConfig.apiEndpoint,
+          reportedScore: null,
+          scoreMismatch: false,
+          notes: null,
+          diffBytes: judgeMeta ? judgeMeta.diffBytes : null,
+          diffTruncated: judgeMeta ? Boolean(judgeMeta.diffTruncated) : false
+        },
+        feedback: `Conformance scoring failed closed: ${message}`
+      };
+      const failedArtifact = artifactWriter.writeStep5Artifact({
+        targetRoot,
+        specSlug,
+        runId: state.runId,
+        scoreReport: failedReport,
+        dagPlan,
+        artifactsDir: state.artifactsDir
+      });
+      state = stateManager.updateStepState(targetRoot, state.runId, 5, 'reimplementation_needed', failedReport, message, { artifact: failedArtifact });
+      state.score = 0;
+      state.scoreIteration = (state.scoreIteration || 0) + 1;
+      state.status = 'failed';
+      stateManager.saveRunState(targetRoot, state);
+      console.error(`[Step 5: Conformance Scoring] ${message}`);
+      options._runResult = { runId: state.runId, status: 'failed', score: 0, error: message };
+      return 2;
+    };
+
+    // AC8: a specification without acceptance criteria scores 0 and never invokes the judge.
+    if (specAcs.length === 0) {
+      return failClosedScoring('Specification has no acceptance criteria. Fails closed with score 0/10; the judge is not invoked.', { mode: 'none' });
+    }
+
+    const priorScoring = state.steps[5] && state.steps[5].output;
+    let verdict = (priorScoring && priorScoring.verdict) || null;
+    let judgeResolution = (priorScoring && priorScoring.judgeResolution) || 'agent';
+    let judgeMeta = (priorScoring && priorScoring.judge) || {
+      mode: judgeConfig.mode,
+      criticity: judgeConfig.criticity,
+      model: judgeConfig.model,
+      provider: judgeConfig.provider,
+      effort: judgeConfig.effort,
+      apiEndpoint: judgeConfig.apiEndpoint,
+      diffBytes: null,
+      diffTruncated: false
+    };
+
+    // The verdict must cover the criteria the judge actually received, which are
+    // recorded when the judge prompt is written.
+    const judgeCriteria = (priorScoring && Array.isArray(priorScoring.judgeAcIds) && priorScoring.judgeAcIds.length > 0)
+      ? priorScoring.judgeAcIds.map(id => {
+          const match = specAcs.find(ac => ac.id === id);
+          return { id, text: match ? match.text : '' };
+        })
+      : specAcs;
+
+    if (verdict) {
+      console.log(`[Step 5: Conformance Scoring] Reusing submitted judge verdict (${judgeResolution}).`);
+    } else {
+      const judgeDiff = scoreEvaluator.collectDiff(targetRoot, state.baseCommit);
+      const judgeBundle = scoreEvaluator.buildJudgePrompt({
+        slug: specSlug,
+        acs: specAcs,
+        diff: judgeDiff,
+        criticity: judgeConfig.criticity,
+        judge: judgeConfig
+      });
+
+      fs.mkdirSync(judgePaths.dir, { recursive: true });
+      fs.writeFileSync(judgePaths.promptFileAbs, judgeBundle.prompt, 'utf8');
+      fs.writeFileSync(judgePaths.diffFileAbs, judgeDiff.text || '', 'utf8');
+      fs.writeFileSync(judgePaths.criteriaFileAbs, judgeBundle.criteriaText, 'utf8');
+
+      judgeMeta = {
+        mode: judgeConfig.mode,
+        criticity: judgeBundle.criticity,
+        model: judgeConfig.model,
+        provider: judgeConfig.provider,
+        effort: judgeConfig.effort,
+        apiEndpoint: judgeConfig.apiEndpoint,
+        diffBytes: judgeBundle.diffBytes,
+        diffTruncated: judgeBundle.diffTruncated
+      };
+
+      if (judgeConfig.command) {
+        console.log(`[Step 5: Conformance Scoring] Invoking configured judge command (criticity: ${judgeBundle.criticity}).`);
+        const judgeRun = scoreEvaluator.runJudgeCommand({
+          config,
+          judge: judgeConfig,
+          promptFileAbs: judgePaths.promptFileAbs,
+          verdictFileAbs: judgePaths.verdictFileAbs,
+          diffFileAbs: judgePaths.diffFileAbs,
+          criteriaFileAbs: judgePaths.criteriaFileAbs,
+          slug: specSlug,
+          targetRoot
+        });
+        if (!judgeRun.success) {
+          return failClosedScoring(`Judge command failed: ${judgeRun.error}`, judgeMeta);
+        }
+        const judgeRead = scoreEvaluator.readVerdictFile(judgePaths.verdictFileAbs);
+        if (!judgeRead.ok) {
+          return failClosedScoring(judgeRead.error, judgeMeta);
+        }
+        verdict = judgeRead.verdict;
+        judgeResolution = 'command';
+      } else {
+        const pausedOutput = {
+          status: 'awaiting_judgment',
+          judgePromptPath: judgePaths.promptFileRel,
+          judgeVerdictPath: judgePaths.verdictFileRel,
+          judgeAcIds: specAcs.map(ac => ac.id),
+          judge: judgeMeta
+        };
+        state = stateManager.updateStepState(targetRoot, state.runId, 5, 'awaiting_judgment', pausedOutput);
+        state.status = 'paused';
+        stateManager.saveRunState(targetRoot, state);
+        console.log(`\n[Step 5: Conformance Scoring] Status: awaiting_judgment (criticity: ${judgeBundle.criticity}).`);
+        console.log(`Judge context is fenced to the acceptance criteria and the generated diff only (${judgeBundle.diffBytes} bytes${judgeBundle.diffTruncated ? ', truncated' : ''}).`);
+        console.log(`  Prompt:  ${judgePaths.promptFileRel}`);
+        console.log(`  Verdict: ${judgePaths.verdictFileRel}`);
+        console.log(`\nJudge each criterion against the diff, write the verdict JSON, then submit it with:`);
+        console.log(`  node "${orchCommandPath()}" score submit --run-id ${state.runId} --verdict <verdictFile>`);
+        options._runResult = {
+          runId: state.runId,
+          status: 'awaiting_judgment',
+          currentStep: 5,
+          judgePromptPath: judgePaths.promptFileRel,
+          judgeVerdictPath: judgePaths.verdictFileRel
+        };
+        return 5;
+      }
+    }
+
+    const verdictValidation = scoreEvaluator.validateVerdict(verdict, { acs: judgeCriteria });
+    if (!verdictValidation.valid) {
+      return failClosedScoring(
+        'Judge verdict is malformed or incomplete:\n  - ' + verdictValidation.errors.join('\n  - '),
+        judgeMeta
+      );
+    }
+
+    scoreReport = scoreEvaluator.applyVerdict(verdictValidation.data, {
+      acs: judgeCriteria,
       minScore: effectiveMinScore,
-      blueprint,
-      tasks: (state.steps && state.steps[4] && state.steps[4].tasks) || {},
-      state
+      touchedFiles: scoringTouchedFiles,
+      judge: { ...judgeMeta, mode: judgeResolution }
     });
 
     console.log(`[Step 5: Conformance Scoring] Score: ${scoreReport.score}/10 (Required: ${effectiveMinScore}/10). Passed: ${scoreReport.passed}`);
@@ -1161,9 +1341,19 @@ function cmdRun(options) {
       artifactsDir: state.artifactsDir
     });
 
+    const scoredOutput = {
+      ...scoreReport,
+      verdict: verdictValidation.data,
+      judgeResolution,
+      judgePromptPath: judgePaths.promptFileRel,
+      judgeVerdictPath: judgePaths.verdictFileRel,
+      judgeAcIds: judgeCriteria.map(ac => ac.id),
+      judgedAt: new Date().toISOString()
+    };
+
     if (!scoreReport.passed) {
       console.error(`[Step 5: Conformance Scoring] Conformance score below threshold (${scoreReport.score} < ${effectiveMinScore}). Triggering re-implementation feedback loop.`);
-      state = stateManager.updateStepState(targetRoot, state.runId, 5, 'reimplementation_needed', scoreReport, null, { artifact: step5Artifact });
+      state = stateManager.updateStepState(targetRoot, state.runId, 5, 'reimplementation_needed', scoredOutput, null, { artifact: step5Artifact });
       state.score = scoreReport.score;
       state.scoreIteration = (state.scoreIteration || 0) + 1;
       state.status = 'failed';
@@ -1172,7 +1362,7 @@ function cmdRun(options) {
       return 2; // Exit code 2 indicates score failure / re-implementation needed
     }
 
-    state = stateManager.updateStepState(targetRoot, state.runId, 5, 'completed', scoreReport, null, { artifact: step5Artifact });
+    state = stateManager.updateStepState(targetRoot, state.runId, 5, 'completed', scoredOutput, null, { artifact: step5Artifact });
     state.score = scoreReport.score;
     state.scoreIteration = (state.scoreIteration || 0) + 1;
     state = stateManager.saveRunState(targetRoot, state);
@@ -1761,6 +1951,259 @@ function cmdRun(options) {
   return 0;
 }
 
+function getDispatchRecord(state) {
+  const step4 = state.steps && state.steps[4];
+  if (!step4) return { activeTaskId: null, sequence: 0, dispatchedAt: null, abandonments: [] };
+  step4.dispatch = step4.dispatch || { activeTaskId: null, sequence: 0, dispatchedAt: null, abandonments: [] };
+  step4.dispatch.abandonments = Array.isArray(step4.dispatch.abandonments) ? step4.dispatch.abandonments : [];
+  return step4.dispatch;
+}
+
+function getDagTasksForState(state) {
+  if (Array.isArray(state.dagTasks) && state.dagTasks.length > 0) return state.dagTasks;
+  return (state.steps && state.steps[3] && state.steps[3].output && state.steps[3].output.tasks) || [];
+}
+
+function readSpecAcsForState(targetRoot, state) {
+  if (!state.specPath) return [];
+  try {
+    const content = fs.readFileSync(path.resolve(targetRoot, state.specPath), 'utf8');
+    return dagPlanner.parseAcceptanceCriteria(content);
+  } catch (e) {
+    return [];
+  }
+}
+
+/**
+ * Dispatches the next ready DAG task (Spec 028 AC4-AC8).
+ * Exactly one task may be in flight: a second dispatch is rejected.
+ */
+function dispatchNextTask(context) {
+  const { targetRoot, state, dagPlan, specAcs, specSlug, specPath, options } = context;
+  const step4 = state.steps[4];
+  step4.tasks = step4.tasks || {};
+  const tasks = step4.tasks;
+  const dispatch = getDispatchRecord(state);
+
+  if (dispatch.activeTaskId) {
+    return {
+      ok: false,
+      state,
+      reason: `Task "${dispatch.activeTaskId}" is already dispatched. Finish it or abandon it before dispatching another task.`
+    };
+  }
+
+  const dagTasks = (dagPlan && Array.isArray(dagPlan.tasks) && dagPlan.tasks.length > 0)
+    ? dagPlan.tasks
+    : getDagTasksForState(state);
+  const completedIds = new Set(Object.keys(tasks).filter(id => tasks[id].status === 'completed'));
+  const incomplete = dagTasks.filter(task => !completedIds.has(task.id));
+
+  if (incomplete.length === 0) {
+    return {
+      ok: false,
+      exhausted: true,
+      state,
+      reason: `All ${dagTasks.length} DAG task(s) are completed. Continue with: node "${orchCommandPath()}" resume --run-id ${state.runId}`
+    };
+  }
+
+  const ready = incomplete.find(task => (task.dependencies || []).every(dep => completedIds.has(dep)));
+  if (!ready) {
+    const blocking = [...new Set(incomplete.flatMap(task => (task.dependencies || []).filter(dep => !completedIds.has(dep))))];
+    return {
+      ok: false,
+      state,
+      reason: `No DAG task is dispatchable. Pending task(s) ${incomplete.map(task => task.id).join(', ')} are blocked by: ${blocking.join(', ')}.`
+    };
+  }
+
+  const rendered = implementationRunner.renderTaskPrompt({
+    targetRoot,
+    specSlug,
+    specPath: specPath || state.specPath,
+    runId: state.runId,
+    stateDir: stateManager.resolveStateDir(targetRoot),
+    task: ready,
+    specAcs,
+    useWorktrees: false,
+    taskWorktreeRel: null,
+    dagTasks,
+    taskStates: tasks,
+    abandonments: dispatch.abandonments
+  });
+
+  const previous = tasks[ready.id] || {};
+  dispatch.activeTaskId = ready.id;
+  dispatch.sequence = (dispatch.sequence || 0) + 1;
+  dispatch.dispatchedAt = new Date().toISOString();
+  dispatch.baseline = implementationRunner.captureDispatchBaseline(targetRoot);
+
+  tasks[ready.id] = {
+    ...previous,
+    id: ready.id,
+    title: ready.title,
+    status: 'dispatched',
+    promptPath: rendered.promptFileRel,
+    evidencePath: rendered.evidenceFileRel,
+    workingDir: rendered.workingDirRel,
+    coveredAcs: ready.coveredAcs || [],
+    dependencies: ready.dependencies || [],
+    sequence: dispatch.sequence,
+    dispatchedAt: dispatch.dispatchedAt
+  };
+
+  const envelope = {
+    runId: state.runId,
+    specSlug,
+    taskId: ready.id,
+    title: ready.title,
+    status: 'dispatched',
+    sequence: dispatch.sequence,
+    promptFile: rendered.promptFileRel,
+    promptBytes: rendered.promptBytes,
+    evidenceFile: rendered.evidenceFileRel,
+    specPath: specPath || state.specPath,
+    workingDir: rendered.workingDirRel,
+    acIds: ready.coveredAcs || [],
+    dependencies: ready.dependencies || [],
+    subagentBrief: `Spawn one subagent for this task only. Give it: read ${rendered.promptFileRel} and execute it exactly as written, then report back per its report contract.`,
+    finishCommand: `node "${orchCommandPath()}" task finish --run-id ${state.runId} --task ${ready.id} --evidence ${rendered.evidenceFileRel}`
+  };
+
+  return { ok: true, state, envelope, sequence: dispatch.sequence };
+}
+
+function printDispatchEnvelope(envelope, state, options) {
+  if (options && options.json) {
+    console.log(JSON.stringify(envelope, null, 2));
+    return;
+  }
+  console.log(`\n[Step 4: Dispatch] ${envelope.taskId} dispatched (sequence ${envelope.sequence}, ${envelope.acIds.length} ACs, ${envelope.dependencies.length} dependency(ies)).`);
+  console.log(`  Title:    ${envelope.title}`);
+  console.log(`  Prompt:   ${envelope.promptFile} (${envelope.promptBytes} bytes)`);
+  console.log(`  Evidence: ${envelope.evidenceFile}`);
+  console.log(`  Spec:     ${envelope.specPath}`);
+  console.log(`\nSpawn one subagent for this task only:`);
+  console.log(`  ${envelope.subagentBrief}`);
+  console.log(`\nWhen the worker reports back, submit its evidence with:`);
+  console.log(`  ${envelope.finishCommand}`);
+  console.log(`\n[Step 4: Dispatch] Status: awaiting_implementation (one task in flight).`);
+}
+
+function cmdTaskNext(options) {
+  const targetRoot = options.root ? path.resolve(options.root) : process.cwd();
+  let state = null;
+  try {
+    state = options.runId ? stateManager.loadRunState(targetRoot, options.runId) : stateManager.findLatestRunState(targetRoot);
+  } catch (err) {
+    console.error(`[sdw-orch task next] ${err.message}`);
+    return 1;
+  }
+  if (!state) {
+    console.error('[sdw-orch task next] No run state found. Start a run first.');
+    return 1;
+  }
+  if (!state.steps || !state.steps[4]) {
+    console.error(`[sdw-orch task next] Run "${state.runId}" has not reached Step 4 yet.`);
+    return 1;
+  }
+
+  const dispatchConfig = loadProjectConfig(targetRoot, options);
+  const dispatchMode = options.implementationMode || (dispatchConfig.implementation && dispatchConfig.implementation.mode) || 'subagent';
+  if (dispatchMode !== 'subagent') {
+    console.error(`[sdw-orch task next] Dispatch requires implementation.mode "subagent" (current: "${dispatchMode}").`);
+    return 1;
+  }
+
+  const specAcs = readSpecAcsForState(targetRoot, state);
+  if (specAcs.length === 0) {
+    console.error(`[sdw-orch task next] Specification "${state.specPath}" is unreadable or declares no acceptance criteria.`);
+    return 1;
+  }
+
+  const result = dispatchNextTask({
+    targetRoot,
+    state,
+    dagPlan: { tasks: getDagTasksForState(state) },
+    specAcs,
+    specSlug: state.specSlug,
+    specPath: state.specPath,
+    options
+  });
+
+  if (result.exhausted) {
+    console.log(`[sdw-orch task next] ${result.reason}`);
+    return 0;
+  }
+  if (!result.ok) {
+    console.error(`[sdw-orch task next] ${result.reason}`);
+    return 1;
+  }
+
+  stateManager.saveRunState(targetRoot, result.state);
+  printDispatchEnvelope(result.envelope, result.state, options);
+  return 0;
+}
+
+function cmdTaskAbandon(options) {
+  const targetRoot = options.root ? path.resolve(options.root) : process.cwd();
+  let state = null;
+  try {
+    state = options.runId ? stateManager.loadRunState(targetRoot, options.runId) : stateManager.findLatestRunState(targetRoot);
+  } catch (err) {
+    console.error(`[sdw-orch task abandon] ${err.message}`);
+    return 1;
+  }
+  if (!state) {
+    console.error('[sdw-orch task abandon] No run state found.');
+    return 1;
+  }
+
+  const taskId = options.taskId;
+  if (!taskId) {
+    console.error('[sdw-orch task abandon] Task ID is required (--task <taskId>).');
+    return 1;
+  }
+  const reason = options.reason || options.abandonReason;
+  if (!reason || String(reason).trim().length === 0) {
+    console.error('[sdw-orch task abandon] A reason is required (--reason "<text>").');
+    return 1;
+  }
+
+  const step4 = state.steps && state.steps[4];
+  if (!step4) {
+    console.error(`[sdw-orch task abandon] Run "${state.runId}" has not reached Step 4.`);
+    return 1;
+  }
+
+  const dispatch = getDispatchRecord(state);
+  if (!dispatch.activeTaskId) {
+    console.error('[sdw-orch task abandon] No task is currently dispatched.');
+    return 1;
+  }
+  if (dispatch.activeTaskId !== taskId) {
+    console.error(`[sdw-orch task abandon] Task "${taskId}" is not the dispatched task. Active task: "${dispatch.activeTaskId}".`);
+    return 1;
+  }
+
+  step4.tasks = step4.tasks || {};
+  const record = step4.tasks[taskId] || { id: taskId };
+  const abandonedAt = new Date().toISOString();
+  dispatch.abandonments.push({ taskId, reason: String(reason).trim(), at: abandonedAt });
+  dispatch.activeTaskId = null;
+  dispatch.dispatchedAt = null;
+  step4.tasks[taskId] = { ...record, status: 'pending', abandonedAt, abandonmentReason: String(reason).trim() };
+  step4.status = 'awaiting_implementation';
+  state.status = 'paused';
+  stateManager.saveRunState(targetRoot, state);
+
+  console.log(`[sdw-orch task abandon] ${taskId} returned to pending (reason: ${String(reason).trim()}).`);
+  console.log(`Dispatch it again with:`);
+  console.log(`  node "${orchCommandPath()}" task next --run-id ${state.runId}`);
+  return 0;
+}
+
 function cmdTaskFinish(options) {
   const targetRoot = options.root ? path.resolve(options.root) : process.cwd();
   let state = null;
@@ -1811,6 +2254,16 @@ function cmdTaskFinish(options) {
   state.steps[4] = state.steps[4] || { name: 'implementation', status: 'awaiting_implementation', tasks: {}, gates: {} };
   state.steps[4].tasks = state.steps[4].tasks || {};
 
+  // Spec 028 AC9: only the dispatched task may be completed, which also rules out
+  // out-of-order acceptance and a second worker finishing someone else's task.
+  const dispatch = getDispatchRecord(state);
+  if (dispatch.activeTaskId !== taskId) {
+    console.error(dispatch.activeTaskId
+      ? `Error: Task "${taskId}" is not the dispatched task. Active task: "${dispatch.activeTaskId}". Finish or abandon "${dispatch.activeTaskId}" first.`
+      : `Error: No task is currently dispatched. Dispatch one with: node "${orchCommandPath()}" task next --run-id ${state.runId}`);
+    return 1;
+  }
+
   const completedTaskIds = new Set(
     Object.keys(state.steps[4].tasks).filter(k => state.steps[4].tasks[k].status === 'completed')
   );
@@ -1826,7 +2279,7 @@ function cmdTaskFinish(options) {
   let specAcs = [];
   if (state.specPath) {
     try {
-      const specContent = fs.readFileSync(state.specPath, 'utf8');
+      const specContent = fs.readFileSync(path.resolve(targetRoot, state.specPath), 'utf8');
       specAcs = dagPlanner.parseAcceptanceCriteria(specContent);
     } catch (e) {
       specAcs = [];
@@ -1851,7 +2304,14 @@ function cmdTaskFinish(options) {
 
   const evidenceData = evValidation.data;
 
-  // Corroborate changes (AC13, AC14, AC15)
+  // Spec 028 AC25/AC26: only an honest success closes a task.
+  const evidenceStatus = String(evidenceData.status || '').trim().toLowerCase();
+  if (evidenceStatus !== 'success') {
+    console.error(`Error: Task "${taskId}" reported status "${evidenceStatus || 'unknown'}". Only "success" is accepted; abandon it with task abandon --reason to re-dispatch.`);
+    return 1;
+  }
+
+  // Corroborate changes (Spec 015 AC13-AC15, Spec 028 AC27)
   let commitSha = null;
   const taskWorktreeRel = `.sdw/worktrees/${state.runId}/${taskId}`;
   const taskWorktreeAbs = path.resolve(targetRoot, taskWorktreeRel);
@@ -1863,13 +2323,14 @@ function cmdTaskFinish(options) {
     targetRoot,
     effectiveUseWorktrees ? taskWorktreeAbs : null,
     effectiveUseWorktrees,
-    evidenceData.filesChanged
+    evidenceData.filesChanged,
+    effectiveUseWorktrees ? {} : { baseline: dispatch.baseline }
   );
 
   if (!hasChanges) {
     const errMsg = effectiveUseWorktrees
       ? `Task working tree for ${taskId} contains no changes.`
-      : `None of the files listed in filesChanged contain modifications in primary working tree.`;
+      : `None of the files listed in filesChanged changed since this task was dispatched.`;
     console.error(`Error: ${errMsg}`);
     return 1;
   }
@@ -1902,7 +2363,9 @@ function cmdTaskFinish(options) {
     commitSha = getBaseCommit(targetRoot);
   }
 
-  // Record task completion in state (AC16)
+  // Record task completion in state (Spec 015 AC16, Spec 028 AC10)
+  dispatch.activeTaskId = null;
+  dispatch.dispatchedAt = null;
   state.steps[4].tasks[taskId] = {
     ...(state.steps[4].tasks[taskId] || {}),
     id: taskId,
@@ -1912,6 +2375,8 @@ function cmdTaskFinish(options) {
     commitSha,
     filesChanged: evidenceData.filesChanged,
     acIds: evidenceData.acIds,
+    summary: evidenceData.summary,
+    evidenceStatus: 'success',
     completedAt: new Date().toISOString()
   };
 
@@ -1928,8 +2393,10 @@ function cmdTaskFinish(options) {
   // Check if all DAG tasks are completed
   const remainingTasks = dagTasks.filter(t => !completedTaskIds.has(t.id));
   if (remainingTasks.length > 0) {
-    console.log(`\nRemaining tasks to complete (${remainingTasks.length}):`);
+    console.log(`\nRemaining tasks to dispatch (${remainingTasks.length}):`);
     remainingTasks.forEach(t => console.log(`  - [${t.id}] ${t.title}`));
+    console.log(`\nDispatch the next task with:`);
+    console.log(`  node "${orchCommandPath()}" task next --run-id ${state.runId}`);
   } else {
     console.log(`\nAll ${dagTasks.length} DAG tasks have completed!`);
     // Run verification gates (AC17, AC18, AC19)
@@ -2010,7 +2477,7 @@ function cmdResume(options) {
 
     if (incompleteTasks.length > 0) {
       const resumeConfig = loadProjectConfig(targetRoot, options);
-      const implMode = options.implementationMode || (resumeConfig.implementation && resumeConfig.implementation.mode) || 'handoff';
+      const implMode = options.implementationMode || (resumeConfig.implementation && resumeConfig.implementation.mode) || 'subagent';
       if (implMode === 'command') {
         console.log(`[sdw-orch resume] Command mode detected; re-entering Step 4 to dispatch the configured command.`);
         return cmdRun({
@@ -2022,13 +2489,47 @@ function cmdResume(options) {
         });
       }
 
-      console.error(`[sdw-orch resume] Cannot advance past Step 4: ${incompleteTasks.length} task(s) remain incomplete:`);
-      dagTasks.forEach(t => {
-        const isDone = completedTasks.includes(t.id);
-        console.log(`  [${isDone ? 'COMPLETED' : 'PENDING'}] ${t.id}: ${t.title}`);
-      });
-      console.error(`\nPlease complete remaining tasks and submit accepted evidence via:`);
-      console.error(`  node "${orchCommandPath()}" task finish --run-id ${state.runId} --task <taskId> --evidence <evidencePath>`);
+      if (implMode === 'subagent') {
+        const dispatch = getDispatchRecord(state);
+        if (dispatch.activeTaskId) {
+          // AC31: re-emit the in-flight envelope so a lost dispatch is recoverable.
+          const activeRecord = (state.steps[4].tasks || {})[dispatch.activeTaskId] || {};
+          const activeTask = dagTasks.find(t => t.id === dispatch.activeTaskId) || {};
+          const envelope = {
+            runId: state.runId,
+            specSlug: state.specSlug,
+            taskId: dispatch.activeTaskId,
+            title: activeRecord.title || activeTask.title || dispatch.activeTaskId,
+            status: 'dispatched',
+            sequence: dispatch.sequence,
+            promptFile: activeRecord.promptPath || null,
+            promptBytes: null,
+            evidenceFile: activeRecord.evidencePath || null,
+            specPath: state.specPath,
+            workingDir: activeRecord.workingDir || '.',
+            acIds: activeRecord.coveredAcs || activeTask.coveredAcs || [],
+            dependencies: activeRecord.dependencies || activeTask.dependencies || [],
+            subagentBrief: `Spawn one subagent for this task only. Give it: read ${activeRecord.promptPath} and execute it exactly as written, then report back per its report contract.`,
+            finishCommand: `node "${orchCommandPath()}" task finish --run-id ${state.runId} --task ${dispatch.activeTaskId} --evidence ${activeRecord.evidencePath}`
+          };
+          printDispatchEnvelope(envelope, state, options);
+          console.log(`\n[sdw-orch resume] Task "${dispatch.activeTaskId}" is still in flight. If that worker is gone, release it with:`);
+          console.log(`  node "${orchCommandPath()}" task abandon --run-id ${state.runId} --task ${dispatch.activeTaskId} --reason "<why>"`);
+          return 4;
+        }
+
+        // AC32: no dispatch in flight: refuse the gates and hand out the next task.
+        console.error(`[sdw-orch resume] Cannot advance past Step 4: ${incompleteTasks.length} task(s) remain incomplete:`);
+        dagTasks.forEach(t => {
+          const isDone = completedTasks.includes(t.id);
+          console.log(`  [${isDone ? 'COMPLETED' : 'PENDING'}] ${t.id}: ${t.title}`);
+        });
+        console.error(`\nDispatch the next task with:`);
+        console.error(`  node "${orchCommandPath()}" task next --run-id ${state.runId}`);
+        return 4;
+      }
+
+      console.error(`[sdw-orch resume] Cannot advance past Step 4: ${incompleteTasks.length} task(s) remain incomplete.`);
       return 4;
     }
 
@@ -2116,6 +2617,23 @@ function cmdStatus(options) {
     const statusMark = step.status === 'completed' ? 'PASS' : step.status === 'skipped' ? 'SKIP' : step.status === 'in_progress' ? 'RUN ' : 'WAIT';
     console.log(`  [Step ${s}] [${statusMark}] ${step.name}: ${step.status}`);
   }
+
+  // Spec 028 AC37: dispatch visibility.
+  const step4 = state.steps[4];
+  if (step4 && step4.tasks && Object.keys(step4.tasks).length > 0) {
+    const dispatch = step4.dispatch || {};
+    console.log(`\nDispatch:`);
+    console.log(`  Active task: ${dispatch.activeTaskId || 'none'}`);
+    if (dispatch.activeTaskId && dispatch.dispatchedAt) {
+      const ageMs = Date.now() - Date.parse(dispatch.dispatchedAt);
+      console.log(`  Dispatched:  ${dispatch.dispatchedAt} (${Math.max(0, Math.round(ageMs / 60000))}m ago)`);
+    }
+    console.log(`  Tasks:`);
+    for (const [taskId, record] of Object.entries(step4.tasks)) {
+      console.log(`    [${String(record.status || 'pending').toUpperCase()}] ${taskId}: ${record.title || ''}`);
+    }
+  }
+
   if (state.errors && state.errors.length > 0) {
     console.log('\nRecorded Errors:');
     state.errors.forEach(e => {
@@ -2146,6 +2664,113 @@ function cmdResumeBatch(options) {
   return batchRunner.resumeBatch(options.batchId, batchOpts, cmdRun);
 }
 
+function cmdScoreSubmit(options) {
+  const targetRoot = options.root ? path.resolve(options.root) : process.cwd();
+  let state = null;
+  if (options.runId) {
+    state = stateManager.loadRunState(targetRoot, options.runId);
+  } else {
+    state = stateManager.findLatestRunState(targetRoot);
+  }
+  if (!state) {
+    console.error('Error: No run state found to submit a judge verdict.');
+    return 1;
+  }
+
+  if (!options.verdictPath) {
+    console.error('Error: Verdict path is required (--verdict <path>).');
+    return 1;
+  }
+  const verdictFileAbs = path.isAbsolute(options.verdictPath)
+    ? options.verdictPath
+    : path.resolve(targetRoot, options.verdictPath);
+
+  const scoringStep = state.steps && state.steps[5];
+  const scoringStatus = scoringStep ? scoringStep.status : 'pending';
+  if (!['awaiting_judgment', 'judged', 'reimplementation_needed', 'in_progress'].includes(scoringStatus)) {
+    console.error(`[sdw-orch score submit] Run "${state.runId}" is not awaiting a judge verdict (Step 5 status: "${scoringStatus}").`);
+    return 1;
+  }
+
+  let specContent = '';
+  if (state.specPath) {
+    try {
+      specContent = fs.readFileSync(path.resolve(targetRoot, state.specPath), 'utf8');
+    } catch (e) {
+      specContent = '';
+    }
+  }
+  const specAcs = dagPlanner.parseAcceptanceCriteria(specContent);
+  if (specAcs.length === 0) {
+    console.error(`Error: Specification "${state.specPath}" is unreadable or declares no acceptance criteria.`);
+    return 1;
+  }
+
+  const verdictRead = scoreEvaluator.readVerdictFile(verdictFileAbs);
+  if (!verdictRead.ok) {
+    console.error(`Error: ${verdictRead.error}`);
+    return 1;
+  }
+
+  const priorOutput = (state.steps[5] && state.steps[5].output) || {};
+  const judgeCriteria = (Array.isArray(priorOutput.judgeAcIds) && priorOutput.judgeAcIds.length > 0)
+    ? priorOutput.judgeAcIds.map(id => {
+        const match = specAcs.find(ac => ac.id === id);
+        return { id, text: match ? match.text : '' };
+      })
+    : specAcs;
+
+  const validation = scoreEvaluator.validateVerdict(verdictRead.verdict, { acs: judgeCriteria });
+  if (!validation.valid) {
+    console.error('Error: Judge verdict rejected:');
+    validation.errors.forEach(item => console.error(`  - ${item}`));
+    return 1;
+  }
+
+  const config = loadProjectConfig(targetRoot, options);
+  const minScore = options.minScore !== undefined
+    ? options.minScore
+    : (config.scoreMin !== undefined ? config.scoreMin : 8);
+  const judgeConfig = scoreEvaluator.resolveJudgeConfig({ scoring: options.scoring || config.scoring });
+  const report = scoreEvaluator.applyVerdict(validation.data, {
+    acs: judgeCriteria,
+    minScore,
+    touchedFiles: scoreEvaluator.getTouchedFiles(state.baseCommit, targetRoot),
+    judge: { ...judgeConfig, ...(priorOutput.judge || {}), mode: 'submitted' }
+  });
+
+  state.steps[5] = state.steps[5] || { name: 'scoring', status: 'pending', output: null, artifact: null };
+  state.steps[5].status = report.passed ? 'judged' : 'reimplementation_needed';
+  state.steps[5].output = {
+    ...report,
+    verdict: validation.data,
+    judgeResolution: 'submitted',
+    judgePromptPath: priorOutput.judgePromptPath || null,
+    judgeVerdictPath: priorOutput.judgeVerdictPath || null,
+    judgedAt: new Date().toISOString()
+  };
+  state.score = report.score;
+  state.scoreIteration = (state.scoreIteration || 0) + 1;
+  state.status = report.passed ? 'paused' : 'failed';
+  stateManager.saveRunState(targetRoot, state);
+
+  console.log(`[sdw-orch score submit] Score: ${report.score}/10 (Required: ${minScore}/10). Passed: ${report.passed}`);
+  console.log(`  Verified ACs: ${report.verifiedCount}/${report.totalAcs}`);
+  console.log(`  Failing ACs:  ${report.failingCount}/${report.totalAcs}`);
+  if (report.judge.scoreMismatch) {
+    console.warn(`[sdw-orch score submit] Warning: the judge reported ${report.judge.reportedScore}/10 while its per-criterion verdicts yield ${report.score}/10; the verdicts are authoritative.`);
+  }
+
+  if (report.passed) {
+    console.log(`\nContinue the workflow with:`);
+    console.log(`  node "${orchCommandPath()}" resume --run-id ${state.runId}`);
+    return 0;
+  }
+
+  console.error(`[sdw-orch score submit] Conformance below threshold. Address the failing criteria, then re-run or re-judge.`);
+  return 2;
+}
+
 function showHelp() {
   console.log(`Usage: node sdw_orch.cjs <subcommand> [specPath...] [options]
 
@@ -2153,15 +2778,20 @@ Subcommands:
   run <specPath...>      Execute orchestration workflow for single spec or batch queue
   resume                 Resume paused or incomplete execution run from state file
   resume-batch [batchId] Resume paused or incomplete multi-spec batch execution
-  task finish            Submit accepted evidence for a completed DAG task
+  task next              Dispatch the next ready DAG task to one worker (subagent mode)
+  task finish            Submit accepted evidence for the dispatched DAG task
+  task abandon           Return the dispatched DAG task to the queue
+  score submit           Submit a judge verdict for Step 5 conformance scoring
   status                 Check status of current or specified run state
   help                   Display this help documentation
 
 Options:
   --run-id <id>          Explicit run identifier (default: auto-generated or latest)
-  --task <id>            DAG task ID for task finish (alias: --task-id)
+  --task <id>            DAG task ID for task next/finish/abandon (alias: --task-id)
   --evidence <path>      Path to evidence JSON file (alias: --evidence-path)
-  --mode <mode>          Implementation mode (handoff | command)
+  --reason <text>        Why the dispatched task is being abandoned
+  --verdict <path>       Path to judge verdict JSON file for score submit
+  --mode <mode>          Implementation mode (subagent | command)
   --batch-id <id>        Explicit batch identifier for resume-batch
   --continue-on-error    Continue queue execution when a batch item fails
   --dry-run              Validate specs and display batch execution plan without executing
@@ -2217,6 +2847,15 @@ function main() {
     case 'task-finish':
       code = cmdTaskFinish(options);
       break;
+    case 'task-next':
+      code = cmdTaskNext(options);
+      break;
+    case 'task-abandon':
+      code = cmdTaskAbandon(options);
+      break;
+    case 'score-submit':
+      code = cmdScoreSubmit(options);
+      break;
     case 'status':
       code = cmdStatus(options);
       break;
@@ -2239,7 +2878,10 @@ module.exports = {
   cmdResumeBatch,
   cmdResume,
   cmdStatus,
+  cmdTaskNext,
+  cmdTaskAbandon,
   cmdTaskFinish,
+  cmdScoreSubmit,
   showHelp,
   loadProjectConfig,
   resolveSpecPath,

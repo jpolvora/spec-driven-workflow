@@ -190,6 +190,14 @@ const DEFAULT_CONFIG = {
   $schema: './config.schema.json',
   specsDir: '{projectRoot}/.sdw/specs',
   scoreMin: 8,
+  scoring: {
+    judgeCommand: null,
+    judgeModel: null,
+    judgeProvider: null,
+    judgeEffort: null,
+    judgeApiEndpoint: null,
+    judgeCriticity: 'strict'
+  },
   scmCodeReviewEnabled: false,
   pushDelivery: false,
   stateDir: '{projectRoot}/.sdw/state',
@@ -199,7 +207,7 @@ const DEFAULT_CONFIG = {
   useFeatureBranches: false,
   scmProvider: 'none',
   implementation: {
-    mode: 'handoff',
+    mode: 'subagent',
     command: null,
     timeoutMs: 1800000,
     envAllowlist: ['PATH', 'HOME', 'USERPROFILE', 'TEMP', 'TMP', 'LANG', 'LC_ALL']
@@ -243,6 +251,44 @@ const DEFAULT_SCHEMA = {
       "maximum": 10,
       "default": 8
     },
+    "scoring": {
+      "type": "object",
+      "description": "Configuration for Step 5 LLM-judge conformance scoring (Spec 027).",
+      "properties": {
+        "judgeCommand": {
+          "type": ["string", "null"],
+          "default": null,
+          "description": "Optional command that judges conformance and writes the verdict JSON. Supports {promptFile}, {verdictFile}, {diffFile}, {criteriaFile}, {slug}, {targetRoot}. When null, the current agent model instance judges and submits the verdict via 'score submit'."
+        },
+        "judgeModel": {
+          "type": ["string", "null"],
+          "default": null,
+          "description": "Judge model identifier passed to the judge command or the host agent."
+        },
+        "judgeProvider": {
+          "type": ["string", "null"],
+          "default": null,
+          "description": "Judge provider identifier passed to the judge command or the host agent."
+        },
+        "judgeEffort": {
+          "type": ["string", "null"],
+          "default": null,
+          "description": "Judge reasoning-effort hint passed to the judge command or the host agent."
+        },
+        "judgeApiEndpoint": {
+          "type": ["string", "null"],
+          "default": null,
+          "description": "Judge API endpoint passed to the judge command or the host agent."
+        },
+        "judgeCriticity": {
+          "type": "string",
+          "enum": ["permissive", "strict", "perfectionist"],
+          "default": "strict",
+          "description": "Judge strictness: permissive credits partial attempts, strict requires the demanded behaviour, perfectionist requires complete implementation with verification."
+        }
+      },
+      "additionalProperties": false
+    },
     "scmCodeReviewEnabled": {
       "type": "boolean",
       "description": "Enable remote pull request review polling loop and automated review comment resolution.",
@@ -274,7 +320,7 @@ const DEFAULT_SCHEMA = {
     },
     "useWorktrees": {
       "type": "boolean",
-      "description": "Enable per-task isolated git worktrees for dispatched subagents under .sdw/worktrees/{runId}/.",
+      "description": "Enable per-task isolated git worktrees under .sdw/worktrees/{runId}/ for implementation.mode: command.",
       "default": false
     },
     "useFeatureBranches": {
@@ -294,9 +340,9 @@ const DEFAULT_SCHEMA = {
       "properties": {
         "mode": {
           "type": "string",
-          "enum": ["handoff", "command"],
-          "default": "handoff",
-          "description": "Implementation execution mode: handoff or command."
+          "enum": ["subagent", "command"],
+          "default": "subagent",
+          "description": "Implementation execution mode: subagent (sequential host-dispatched workers, one task at a time) or command (automated subprocess per task)."
         },
         "command": {
           "type": ["string", "null"],
@@ -396,9 +442,11 @@ Baseline directory layout for consumer projects adopting Spec-Driven Workflow:
     ├── directory-structure.md   # Structural guidelines and layout rules
     ├── specs/                   # Target directory for canonical specifications
     ├── state/                   # Ephemeral execution run state files (*.state.json)
-    │   └── {slug}/{runId}/      # Human-auditable intermediate step artifacts ({slug}-step-{N}.md)
+    │   └── {slug}/{runId}/      # Step artifacts ({slug}-step-{N}.md), dispatch prompts
+    │                            # (task-{taskId}.prompt.md), task evidence (task-{taskId}.evidence.json),
+    │                            # and Step 5 judge files (step-5-judge.prompt.md, .verdict.json)
     ├── traps.md                 # Central anti-regression trap log
-    └── worktrees/               # Ephemeral per-task git worktrees for isolated subagents
+    └── worktrees/               # Ephemeral per-task git worktrees (command mode only)
 \`\`\`
 
 ## Skills Installation Topologies
@@ -429,6 +477,25 @@ function validateConfigSchema(config) {
   if ('scoreMin' in config) {
     if (typeof config.scoreMin !== 'number' || !Number.isInteger(config.scoreMin) || config.scoreMin < 0 || config.scoreMin > 10) {
       errors.push('Property "scoreMin" must be an integer between 0 and 10.');
+    }
+  }
+
+  // scoring (Spec 027)
+  if ('scoring' in config) {
+    if (!config.scoring || typeof config.scoring !== 'object' || Array.isArray(config.scoring)) {
+      errors.push('Property "scoring" must be an object.');
+    } else {
+      for (const key of ['judgeCommand', 'judgeModel', 'judgeProvider', 'judgeEffort', 'judgeApiEndpoint']) {
+        if (key in config.scoring && config.scoring[key] !== null && typeof config.scoring[key] !== 'string') {
+          errors.push(`Property "scoring.${key}" must be a string or null.`);
+        }
+      }
+      if ('judgeCriticity' in config.scoring) {
+        const allowedCriticity = ['permissive', 'strict', 'perfectionist'];
+        if (typeof config.scoring.judgeCriticity !== 'string' || !allowedCriticity.includes(config.scoring.judgeCriticity)) {
+          errors.push(`Property "scoring.judgeCriticity" must be one of: ${allowedCriticity.join(', ')}.`);
+        }
+      }
     }
   }
 
@@ -495,9 +562,12 @@ function validateConfigSchema(config) {
       errors.push('Property "implementation" must be an object.');
     } else {
       if ('mode' in config.implementation) {
-        const allowedModes = ['handoff', 'command'];
+        const allowedModes = ['subagent', 'command'];
         if (typeof config.implementation.mode !== 'string' || !allowedModes.includes(config.implementation.mode)) {
-          errors.push(`Property "implementation.mode" must be one of: ${allowedModes.join(', ')}.`);
+          const remediation = String(config.implementation.mode) === 'handoff'
+            ? ' The "handoff" mode was replaced by "subagent"; set implementation.mode to "subagent".'
+            : '';
+          errors.push(`Property "implementation.mode" must be one of: ${allowedModes.join(', ')}.${remediation}`);
         }
       }
       if (config.implementation.mode === 'command') {

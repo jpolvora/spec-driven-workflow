@@ -116,16 +116,14 @@ function createRunState(options) {
       1: { name: 'derivation', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null },
       2: { name: 'refinement', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null },
       3: { name: 'dag_generation', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null },
-      4: { name: 'implementation', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null, tasks: {}, gates: {} },
+      4: { name: 'implementation', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null, tasks: {}, gates: {}, dispatch: { activeTaskId: null, sequence: 0, dispatchedAt: null, abandonments: [] } },
       5: { name: 'scoring', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null },
       6: { name: 'delivery_commit', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null },
       7: { name: 'code_review', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null },
       8: { name: 'pr_preparation', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null }
     },
-    handoffs: {},
     errors: []
   };
-
   fs.writeFileSync(stateFilePath, JSON.stringify(state, null, 2) + '\n', 'utf8');
   return state;
 }

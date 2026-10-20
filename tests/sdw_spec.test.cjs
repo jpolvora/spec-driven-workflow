@@ -13,6 +13,9 @@ const { syncIndex } = require('../skills/sdw-spec/scripts/spec_sync.cjs');
 const { ScmProvider, createScmProvider } = require('../skills/sdw-spec/scripts/scm_provider_contract.cjs');
 const sdwOrch = require('../skills/sdw-orch/scripts/sdw_orch.cjs');
 
+// Spec 027: wire the deterministic judge stub for unattended runs past Step 4.
+require('./fixtures/judge_env.cjs').installJudgeEnv();
+
 function setupTestWorkspace() {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-spec-test-'));
   const sdwDir = path.join(tmpDir, '.sdw');

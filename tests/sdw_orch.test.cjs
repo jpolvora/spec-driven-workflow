@@ -15,6 +15,17 @@ const scoreEvaluator = require('../skills/sdw-orch/scripts/score_evaluator.cjs')
 const reviewRunner = require('../skills/sdw-orch/scripts/review_runner.cjs');
 const sdwOrch = require('../skills/sdw-orch/scripts/sdw_orch.cjs');
 
+// Spec 027: wire the deterministic judge stub for unattended runs past Step 4.
+require('./fixtures/judge_env.cjs').installJudgeEnv();
+
+const JUDGE_STUB = path.resolve(__dirname, 'fixtures', 'judge_stub.cjs');
+
+// Spec 027: Step 5 delegates scoring to a judge. Unattended tests wire the stub
+// through `scoring.judgeCommand`; without it Step 5 pauses with exit code 5.
+function judgeScoring(mode = 'all') {
+  return { judgeCommand: `node "${JUDGE_STUB}" {promptFile} {verdictFile} ${mode}` };
+}
+
 test('AC1 & AC2: Run State Isolation & Resumption Lifecycle', async (t) => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-test-'));
   try {
@@ -121,34 +132,51 @@ test('AC9 & AC10: Conformance Scoring & Re-implementation Loop Gating', () => {
 - AC1: The orchestrator shall maintain an isolated state JSON file for each execution run.
 - AC2: When a paused execution run resumes, the orchestrator shall restore session state from the state file.
 `;
+  const acs = dagPlanner.parseAcceptanceCriteria(spec);
+  const diff = { text: 'diff --git a/state.cjs b/state.cjs\n+state', bytes: 44, truncated: false, files: ['state.cjs'] };
 
-  // Evaluator handles evidence-based scoring (Spec 015)
-  const reportWithEvidence = scoreEvaluator.evaluateScore(spec, {
-    projectRoot: path.resolve(__dirname, '..'),
-    minScore: 8,
-    evidenceRecords: [
-      {
-        taskId: 'task-1',
-        acIds: ['AC1', 'AC2'],
-        filesChanged: ['skills/sdw-orch/scripts/state_manager.cjs'],
-        summary: 'State manager implementation'
-      }
+  // AC3: the judge context holds the criteria and the diff and nothing else.
+  const bundle = scoreEvaluator.buildJudgePrompt({ slug: 'demo', acs, diff, criticity: 'strict', judge: {} });
+  assert.ok(bundle.prompt.includes('- AC1: The orchestrator shall maintain an isolated state JSON file'), 'Criteria text is inlined');
+  assert.ok(bundle.prompt.includes('diff --git a/state.cjs b/state.cjs'), 'Diff is inlined');
+  assert.ok(bundle.prompt.includes('## Criticity: strict'), 'Criticity is stated');
+  assert.ok(!/transcript/i.test(bundle.prompt), 'No transcript content is included');
+
+  // AC7: per-criterion verdicts are required, and only they drive the score.
+  const passingVerdict = {
+    score: 10,
+    verdicts: acs.map(ac => ({ id: ac.id, verdict: 'verified', evidence: 'state.cjs:1' }))
+  };
+  const passingValidation = scoreEvaluator.validateVerdict(passingVerdict, { acs });
+  assert.equal(passingValidation.valid, true, 'A complete verdict is accepted');
+
+  const passingReport = scoreEvaluator.applyVerdict(passingValidation.data, { acs, minScore: 8 });
+  assert.equal(passingReport.score, 10);
+  assert.equal(passingReport.verifiedCount, 2);
+  assert.equal(passingReport.passed, true);
+
+  // AC9: below threshold keeps the re-implementation loop.
+  const partialVerdict = {
+    score: 5,
+    verdicts: [
+      { id: 'AC1', verdict: 'verified', evidence: 'state.cjs:1' },
+      { id: 'AC2', verdict: 'failed', evidence: 'Resume restoration is absent.' }
     ]
-  });
+  };
+  const partialReport = scoreEvaluator.applyVerdict(
+    scoreEvaluator.validateVerdict(partialVerdict, { acs }).data,
+    { acs, minScore: 8 }
+  );
+  assert.equal(partialReport.score, 5, 'Score derives from the per-criterion verdicts');
+  assert.equal(partialReport.passed, false, 'Below threshold does not pass');
+  assert.equal(partialReport.failingAcs.length, 1);
 
-  assert.equal(typeof reportWithEvidence.score, 'number');
-  assert.equal(reportWithEvidence.score, 10, 'Score is 10/10 with valid accepted evidence');
-  assert.equal(reportWithEvidence.verifiedAcs.length, 2, 'All ACs verified with evidence');
-  assert.equal(reportWithEvidence.passed, true);
-
-  // Evaluator without evidence fails closed with score 0
-  const reportWithoutEvidence = scoreEvaluator.evaluateScore(spec, {
-    projectRoot: path.resolve(__dirname, '..'),
-    minScore: 8
-  });
-  assert.equal(reportWithoutEvidence.score, 0, 'Score is 0 without evidence');
-  assert.equal(reportWithoutEvidence.passed, false);
-  assert.equal(reportWithoutEvidence.failingAcs.length, 2);
+  // AC10: malformed verdicts fail closed instead of scoring.
+  const malformed = scoreEvaluator.validateVerdict({ score: 42, verdicts: [{ id: 'AC9', verdict: 'maybe' }] }, { acs });
+  assert.equal(malformed.valid, false);
+  assert.ok(malformed.errors.some(e => e.includes('score')), 'Rejects an out-of-range score');
+  assert.ok(malformed.errors.some(e => e.includes('AC9')), 'Rejects an unknown criterion id');
+  assert.ok(malformed.errors.some(e => e.includes('Missing verdict')), 'Rejects incomplete coverage');
 });
 
 test('AC12 & AC13: Code Review Detection & Automated Fix Application', () => {
@@ -232,7 +260,8 @@ slug: low-score
       implementation: {
         mode: 'command',
         command: 'node -e "const fs = require(\'fs\'); fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({ taskId: process.env.SDW_TASK_ID, acIds: [\'AC1\'], filesChanged: [\'.sdw/specs/low-score.md\'], summary: \'partial\' }));"'
-      }
+      },
+      scoring: judgeScoring('none')
     });
 
     assert.equal(exitCode, 2, 'Must exit with code 2 when conformance score fails threshold');
@@ -416,7 +445,8 @@ slug: push-feature
       implementation: {
         mode: 'command',
         command: 'node -e "const fs = require(\'fs\'); fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({ taskId: process.env.SDW_TASK_ID, acIds: [\'AC1\'], filesChanged: [\'.sdw/specs/push-feature.md\'], summary: \'push feature done\' }));"'
-      }
+      },
+      scoring: judgeScoring()
     });
 
     assert.equal(exitCode, 0, 'Cleanly finishes run with --push flag without unhandled exceptions');
@@ -460,7 +490,8 @@ slug: 002-feature-b
       implementation: {
         mode: 'command',
         command: 'node -e "const fs = require(\'fs\'); fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({ taskId: process.env.SDW_TASK_ID, acIds: [\'AC1\'], filesChanged: [process.env.SDW_SPEC_SLUG ? \'.sdw/specs/\' + process.env.SDW_SPEC_SLUG + \'.md\' : \'package.json\'], summary: \'batch done\' }));"'
-      }
+      },
+      scoring: judgeScoring()
     });
 
     assert.equal(exitCode, 0, 'Batch execution must exit with code 0 on success (AC1)');
@@ -621,7 +652,8 @@ slug: 002-todo
       implementation: {
         mode: 'command',
         command: 'node -e "const fs = require(\'fs\'); fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({ taskId: process.env.SDW_TASK_ID, acIds: [\'AC1\'], filesChanged: [process.env.SDW_SPEC_SLUG ? \'.sdw/specs/\' + process.env.SDW_SPEC_SLUG + \'.md\' : \'package.json\'], summary: \'batch resume done\' }));"'
-      }
+      },
+      scoring: judgeScoring()
     });
 
     assert.equal(exitCode, 0, 'Resuming batch must succeed');
@@ -718,7 +750,8 @@ slug: 002-feature-y
       implementation: {
         mode: 'command',
         command: 'node -e "const fs = require(\'fs\'); fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({ taskId: process.env.SDW_TASK_ID, acIds: [\'AC1\'], filesChanged: [process.env.SDW_SPEC_SLUG ? \'.sdw/specs/\' + process.env.SDW_SPEC_SLUG + \'.md\' : \'package.json\'], summary: \'unattended done\' }));"'
-      }
+      },
+      scoring: judgeScoring()
     });
 
     assert.equal(exitCode, 0, 'Unattended batch execution must complete successfully');

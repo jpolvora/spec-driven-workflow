@@ -13,6 +13,9 @@ const stateManager = require('../skills/sdw-orch/scripts/state_manager.cjs');
 const { resolveScmProvider, checkScmCapability, createScmProvider } = require('../skills/sdw-spec/scripts/scm_provider_contract.cjs');
 const { importRemoteSpec } = require('../skills/sdw-spec/scripts/spec_creator.cjs');
 
+// Spec 027: wire the deterministic judge stub for unattended runs past Step 4.
+require('./fixtures/judge_env.cjs').installJudgeEnv();
+
 function setupTestRepo() {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-scm-test-'));
   execSync('git init', { cwd: tmpDir, stdio: 'ignore' });

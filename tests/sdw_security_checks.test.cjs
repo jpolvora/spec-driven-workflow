@@ -11,6 +11,9 @@ const secChecks = require('../skills/sdw-security-checks/scripts/sdw_security_ch
 const sdwConfig = require('../skills/sdw-config/scripts/sdw_config.cjs');
 const sdwOrch = require('../skills/sdw-orch/scripts/sdw_orch.cjs');
 
+// Spec 027: wire the deterministic judge stub for unattended runs past Step 4.
+require('./fixtures/judge_env.cjs').installJudgeEnv();
+
 test('sdw-security-checks - AC1 & AC2: Tier 1 SKILL.md layout and announcement banner', () => {
   const skillPath = path.resolve(__dirname, '../skills/sdw-security-checks/SKILL.md');
   assert.strictEqual(fs.existsSync(skillPath), true, 'SKILL.md must exist');
@@ -254,7 +257,7 @@ None
     cfg.securityChecksEnabled = true;
     cfg.implementation = {
       mode: 'command',
-      command: 'node -e "const fs = require(\'fs\'); fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({ taskId: process.env.SDW_TASK_ID, acIds: [\'AC1\'], filesChanged: [\'leak.js\'], summary: \'leak\' }));"'
+      command: 'node -e "const fs = require(\'fs\'); fs.appendFileSync(\'leak.js\', \'// touched by the task\\n\'); fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({ taskId: process.env.SDW_TASK_ID, status: \'success\', acIds: [\'AC1\'], filesChanged: [\'leak.js\'], summary: \'leak\' }));"'
     };
     fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2), 'utf8');
 
