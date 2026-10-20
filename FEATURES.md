@@ -155,7 +155,7 @@
 *Engineering rigor backed by 100% native automated tests.*
 
 - **Native Node.js Test Runner:** Built with `node:test` and `node:assert/strict` — zero third-party testing frameworks required.
-- **236 Comprehensive Test Scenarios:**
+- **238 Comprehensive Test Scenarios:**
   - `sdw_code_review.test.cjs`: Standalone execution, base auto-detection, report generation, surgical auto-fix, dry-run simulation, orchestrator delegation, router registration, and fail-closed negatives.
   - `sdw_config.test.cjs`: Configuration parsing, schema validation, token expansion, and initialization gates.
   - `sdw_spec.test.cjs`: Index bootstrapping, EARS validation, synthesis, SCM provider contract, state synchronization, and archival quality gates.

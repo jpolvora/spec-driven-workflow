@@ -342,6 +342,35 @@ test('AC42: dry run fails closed when the validator cannot run', () => {
   }
 });
 
+test('AC44: any config load inside a sandbox clone inherits isolation', () => {
+  const dir = createRepo();
+  try {
+    const meta = sandbox.createSandbox({ sourceRoot: dir, runId: 'run-iso' });
+    fs.mkdirSync(path.join(meta.absoluteRoot, '.sdw'), { recursive: true });
+    fs.writeFileSync(path.join(meta.absoluteRoot, '.sdw', 'config.json'), JSON.stringify({
+      specsDir: '{projectRoot}/.sdw/specs',
+      pushDelivery: true,
+      scmProvider: 'github',
+      scmCodeReviewEnabled: true,
+      useWorktrees: true,
+      useFeatureBranches: true
+    }, null, 2));
+
+    const options = {};
+    const config = sdwOrch.loadProjectConfig(meta.absoluteRoot, options);
+    assert.equal(config.pushDelivery, false, 'push forced off');
+    assert.equal(config.scmProvider, 'none', 'SCM forced off');
+    assert.equal(config.scmCodeReviewEnabled, false);
+    assert.equal(config.useWorktrees, false);
+    assert.equal(config.useFeatureBranches, false);
+    assert.equal(options.push, false);
+    assert.ok(options._sandbox && options._sandbox.runId === 'run-iso', 'sandbox marker applied to options');
+    assert.equal(options._effectiveRoot, meta.absoluteRoot);
+  } finally {
+    removeRepo(dir);
+  }
+});
+
 test('AC16: sandbox prompts carry absolute working directory and evidence path', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-prompt-'));
   try {

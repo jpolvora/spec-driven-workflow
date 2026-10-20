@@ -546,51 +546,56 @@ function runVerificationGates(targetRoot, config, options = {}) {
 }
 
 function loadProjectConfig(targetRoot, options = {}) {
+  const root = targetRoot ? path.resolve(targetRoot) : process.cwd();
+  let config = null;
+
   try {
-    const scriptPath = resolveSkillScript(targetRoot, 'sdw-config', path.join('scripts', 'sdw_config.cjs'), options);
+    const scriptPath = resolveSkillScript(root, 'sdw-config', path.join('scripts', 'sdw_config.cjs'), options);
     const sdwConfig = scriptPath ? require(scriptPath) : require('../../sdw-config/scripts/sdw_config.cjs');
     if (sdwConfig && typeof sdwConfig.loadConfig === 'function') {
-      return sdwConfig.loadConfig(targetRoot, options);
+      config = sdwConfig.loadConfig(root, options);
     }
   } catch (e) {}
 
-  const root = targetRoot || process.cwd();
-  const configFile = path.join(root, '.sdw', 'config.json');
-  if (fs.existsSync(configFile)) {
-    try {
-      const raw = JSON.parse(fs.readFileSync(configFile, 'utf8'));
-      const normRoot = root.replace(/\\/g, '/');
-      const resolved = {};
-      for (const [k, v] of Object.entries(raw)) {
-        resolved[k] = typeof v === 'string' ? v.replace(/\{projectRoot\}/g, normRoot) : v;
-      }
-      return {
-        specsDir: path.join(root, '.sdw', 'specs').replace(/\\/g, '/'),
-        scoreMin: 8,
-        scmCodeReviewEnabled: false,
-        pushDelivery: false,
-        stateDir: path.join(root, '.sdw', 'state').replace(/\\/g, '/'),
-        securityChecksEnabled: false,
-        useWorktrees: false,
-        useFeatureBranches: false,
-        scmProvider: 'none',
-        ...resolved
-      };
-    } catch (e) {}
+  if (!config) {
+    const configFile = path.join(root, '.sdw', 'config.json');
+    let raw = null;
+    if (fs.existsSync(configFile)) {
+      try { raw = JSON.parse(fs.readFileSync(configFile, 'utf8')); } catch (e) {}
+    }
+    const normRoot = root.replace(/\\/g, '/');
+    const resolved = {};
+    for (const [k, v] of Object.entries(raw || {})) {
+      resolved[k] = typeof v === 'string' ? v.replace(/\{projectRoot\}/g, normRoot) : v;
+    }
+    config = {
+      specsDir: path.join(root, '.sdw', 'specs').replace(/\\/g, '/'),
+      scoreMin: 8,
+      scmCodeReviewEnabled: false,
+      pushDelivery: false,
+      stateDir: path.join(root, '.sdw', 'state').replace(/\\/g, '/'),
+      autoResolveGaps: false,
+      securityChecksEnabled: false,
+      useWorktrees: false,
+      useFeatureBranches: false,
+      scmProvider: 'none',
+      ...resolved
+    };
   }
 
-  return {
-    specsDir: path.join(root, '.sdw', 'specs').replace(/\\/g, '/'),
-    scoreMin: 8,
-    scmCodeReviewEnabled: false,
-    pushDelivery: false,
-    stateDir: path.join(root, '.sdw', 'state').replace(/\\/g, '/'),
-    autoResolveGaps: false,
-    securityChecksEnabled: false,
-    useWorktrees: false,
-    useFeatureBranches: false,
-    scmProvider: 'none'
-  };
+  // Every subcommand that reads configuration from a sandbox clone must inherit
+  // the isolation, not only cmdRun. The marker is the single source of truth.
+  const marker = sandbox.readMarker(root);
+  if (marker) {
+    applySandboxIsolation(config, options, {
+      runId: marker.runId,
+      root,
+      branch: marker.branch,
+      sourceRoot: marker.sourceRoot
+    });
+    options._effectiveRoot = root;
+  }
+  return config;
 }
 
 function resolveSpecPath(specInput, targetRoot, config) {
@@ -724,17 +729,6 @@ function cmdRun(options) {
     sdwConfig = sdwConfigScript ? require(sdwConfigScript) : require('../../sdw-config/scripts/sdw_config.cjs');
   } catch (e) {}
   let config = loadProjectConfig(targetRoot, options);
-  // A command executed inside a sandbox clone inherits its isolation.
-  const existingSandboxMarker = sandbox.readMarker(targetRoot);
-  if (existingSandboxMarker) {
-    applySandboxIsolation(config, options, {
-      runId: existingSandboxMarker.runId,
-      root: targetRoot,
-      branch: existingSandboxMarker.branch,
-      sourceRoot: existingSandboxMarker.sourceRoot
-    });
-    options._effectiveRoot = targetRoot;
-  }
   // AC9/AC10: fail closed, but resolve configuration first so a configured
   // skillsRoot (or {skillsRoot} token) is honored instead of only CLI options.
   const detectedSkillsRoot = config && config.skillsMode && config.skillsMode !== 'unknown'
@@ -810,7 +804,6 @@ function cmdRun(options) {
     options.runId = runId;
     options._effectiveRoot = targetRoot;
     config = loadProjectConfig(targetRoot, options);
-    applySandboxIsolation(config, options, sandboxMeta);
     options._config = config;
     console.log(`[sandbox] Clone created at ${sandboxMeta.root} (branch ${sandboxMeta.branch}, origin removed).`);
     if (sandboxMeta.baselineDirty) {
