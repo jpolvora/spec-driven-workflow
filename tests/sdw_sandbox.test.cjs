@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { execSync } = require('child_process');
+const { execSync, execFileSync } = require('child_process');
 
 const sandbox = require('../skills/sdw-orch/scripts/sandbox.cjs');
 const sdwOrch = require('../skills/sdw-orch/scripts/sdw_orch.cjs');
@@ -66,7 +66,7 @@ test('AC34: only the source branch is cloned (single-branch)', () => {
     execSync(`git switch -q ${originalBranch}`, { cwd: dir });
 
     const meta = sandbox.createSandbox({ sourceRoot: dir, runId: 'run-single' });
-    const branches = execSync('git branch --format=%(refname:short)', { cwd: meta.absoluteRoot, encoding: 'utf8' }).trim().split(/\r?\n/);
+    const branches = execFileSync('git', ['branch', '--format=%(refname:short)'], { cwd: meta.absoluteRoot, encoding: 'utf8' }).trim().split(/\r?\n/);
     assert.ok(!branches.includes('feature'), 'other branches are not cloned');
     assert.equal(meta.clone.sourceBranch, originalBranch);
     assert.equal(meta.clone.fallback, false);
@@ -322,6 +322,24 @@ test('AC1-AC3: plan-only dry run prints the plan and returns 0', () => {
     options: {}
   });
   assert.equal(code, 0);
+});
+
+test('AC42: dry run fails closed when the validator cannot run', () => {
+  const root = path.resolve(__dirname, '..');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-plan-'));
+  try {
+    const missing = path.join(dir, 'missing-spec.md');
+    const code = sdwOrch.printRunDryRunPlan({
+      targetRoot: root,
+      resolvedSpec: missing,
+      specSlug: 'missing',
+      config: {},
+      options: {}
+    });
+    assert.equal(code, 1);
+  } finally {
+    removeRepo(dir);
+  }
 });
 
 test('AC16: sandbox prompts carry absolute working directory and evidence path', () => {

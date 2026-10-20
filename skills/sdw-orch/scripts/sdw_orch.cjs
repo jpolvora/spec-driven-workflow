@@ -638,15 +638,21 @@ function applySandboxIsolation(config, options, meta) {
 function printRunDryRunPlan(context) {
   const { targetRoot, resolvedSpec, specSlug, config, options } = context;
   let validation = null;
+  let validatorFailure = null;
   try {
     const validatorPath = resolveSkillScript(targetRoot, 'sdw-spec', path.join('scripts', 'validate_spec.cjs'), options);
     const validator = validatorPath ? require(validatorPath) : require('../../sdw-spec/scripts/validate_spec.cjs');
     validation = validator.validateFile(resolvedSpec, { mode: 'authoring' });
   } catch (e) {
-    validation = null;
+    // Fail closed: an unvalidated specification must never look like a passing plan.
+    validatorFailure = e;
   }
 
-  const valid = !validation || validation.ok;
+  const validationErrors = validation && Array.isArray(validation.errors) ? validation.errors : [];
+  const errors = validatorFailure
+    ? [{ message: `Validator unavailable: ${validatorFailure.message}` }]
+    : validationErrors;
+  const valid = Boolean(validation && validation.ok);
   const steps = [
     '1 derivation',
     '2 refinement',
@@ -675,14 +681,14 @@ function printRunDryRunPlan(context) {
       root: normalizePath(targetRoot),
       settings,
       steps,
-      errors: validation ? validation.errors : []
+      errors
     }, null, 2));
     return valid ? 0 : 1;
   }
 
   if (!valid) {
     console.error(`[sdw-orch dry-run] Specification validation failed: ${normalizePath(path.relative(targetRoot, resolvedSpec))}`);
-    for (const error of (validation.errors || [])) {
+    for (const error of errors) {
       console.error(`  ${error.ac ? `${error.ac}: ` : ''}${error.message}`);
     }
     return 1;

@@ -67,6 +67,8 @@ The value of a sandboxed run is that the operator can watch a real delivery — 
 - AC39: If `sandboxDir` resolves inside the project root and differs from the default location, then the system shall reject the configuration with an actionable error.
 - AC40: If the resolved sandbox target directory already exists, then the system shall halt sandbox creation with an actionable message naming the target and the `sandbox clean --run-id` command.
 - AC41: If a sandbox target exists without metadata, then the system shall remove the orphaned directory during `sandbox clean`.
+- AC42: If the specification validator is unavailable or throws during `--dry-run`, then the system shall fail closed with a non-zero exit code and the validator error.
+- AC43: When the source repository has a local `user.name` and `user.email`, the system shall configure the sandbox clone with the same identity.
 
 ## Notes
 
@@ -94,6 +96,8 @@ The value of a sandboxed run is that the operator can watch a real delivery — 
 - Remote isolation: Step 8 is invoked with `--dry-run` and without `--push`; `config.pushDelivery` is forced `false` and `config.scmProvider` is forced `none` in memory for the sandbox run; the removed `origin` prevents an accidental push from inside the clone. Because `sdw-ship-pr` simulates its own pre-PR command, build, and test gates under `--dry-run`, real verification in a sandbox comes from the orchestrator's Step 4 gates; Step 8 stays remote-free by design.
 - Dirty baseline: the clone is cut from committed `HEAD`; uncommitted tracked and untracked changes are absent. The operator sees `[sandbox] Warning: working tree is dirty; uncommitted changes are not part of the sandbox baseline.` and `baselineDirty: true` in metadata. Carrying uncommitted changes into a sandbox is out of scope for this iteration.
 - Plan output (dry run): resolved specification path and slug, target root, branch strategy facts (`useFeatureBranches`, `useWorktrees`), delivery facts (`pushDelivery`, `scmProvider`), the eight step names, and `No steps executed (--dry-run).` Exit code 0.
+- Plan-only dry run fails closed: a missing or throwing validator returns exit code 1 with the validator error, never a passing plan.
+- Sandbox commits work on hosts without a global git identity: `createSandbox` copies the source repository's local `user.name` and `user.email` into the clone, because git does not clone repository-local config.
 - Exit codes are otherwise unchanged: `0` success, `1` operational failure, `2` conformance score below threshold, `3` user gate, `4` awaiting implementation.
 - The report includes the plain-git inspection commands for the kept clone, e.g. `git -C {sandboxDir}/{runId}/repo log --oneline` and `git -C {sandboxDir}/{runId}/repo diff --stat <baseCommit>..HEAD`, plus the source-side fetch form `git fetch {sandboxDir}/{runId}/repo sdw-sandbox/{runId}:refs/heads/sdw-sandbox/{runId}` so a kept branch can be imported before deletion.
 - Tests use `node:test`, `node:assert/strict`, and temporary git fixtures. Clone tests assert `.git` is a directory (not a worktree link file), `origin` is absent, the branch name is recorded, and the report exists after a simulated paused run.

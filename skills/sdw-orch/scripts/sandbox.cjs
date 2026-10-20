@@ -139,6 +139,17 @@ function removeTree(dir) {
   fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }
 
+function copyGitIdentity(sourceRoot, cloneRoot) {
+  // A local identity in the source repository is not cloned. Without it, the
+  // orchestrator's delivery commits fail on hosts that only configure it per repo.
+  for (const key of ['user.name', 'user.email']) {
+    try {
+      const value = runGit(sourceRoot, ['config', '--local', '--get', key]);
+      if (value) runGit(cloneRoot, ['config', '--local', key, value]);
+    } catch (e) {}
+  }
+}
+
 function resolveSourceHead(sourceRoot) {
   let branch = null;
   try {
@@ -201,6 +212,7 @@ function createSandbox(options = {}) {
   let cloneInfo = null;
   try {
     cloneInfo = cloneSource(sourceRoot, cloneRoot);
+    copyGitIdentity(sourceRoot, cloneRoot);
     runGit(cloneRoot, ['switch', '-c', branch]);
     runGit(cloneRoot, ['remote', 'remove', 'origin']);
   } catch (err) {
