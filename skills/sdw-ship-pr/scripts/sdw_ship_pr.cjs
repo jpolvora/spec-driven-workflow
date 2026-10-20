@@ -258,7 +258,12 @@ async function runShipPr(options = {}, customExecutor = null) {
     pushed: false,
     prePrPassed: false,
     pullRequest: null,
-    merge: null,
+    // Spec 024 AC26: when merge is requested, an audit record exists from the
+    // start, so a delivery that fails before the merge step still explains why
+    // no merge happened.
+    merge: options.merge
+      ? { requested: true, attempted: false, ok: null, reason: 'delivery did not reach merge step' }
+      : null,
     reviewConvergence: {
       enabled: scmCodeReviewEnabled,
       converged: false,
@@ -790,6 +795,8 @@ async function runShipPr(options = {}, customExecutor = null) {
         report.merge.reason = 'dry-run';
       } else if (mergePrNumber === null || mergePrNumber === undefined) {
         report.merge.reason = 'no pull request';
+      } else if (!report.reviewConvergence.enabled) {
+        report.merge.reason = 'review convergence disabled';
       } else if (!convergedOk) {
         report.merge.reason = 'review did not converge';
       } else if (scmProviderName === 'none' || !scmContract) {
@@ -860,6 +867,8 @@ async function runShipPr(options = {}, customExecutor = null) {
     report.success = false;
     report.shipStatus = 'failed';
     report.error = err.message;
+    // Expose the partial report (including the merge audit record) to callers.
+    err.report = report;
 
     if (options.runId) {
       const stateFilePath = locateStateFile(projectRoot, options.runId, specSlug, config);

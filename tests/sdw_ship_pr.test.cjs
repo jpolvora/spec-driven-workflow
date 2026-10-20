@@ -808,8 +808,14 @@ test('sdw-ship-pr - active PR with review_pending adapts as non-blocking and rec
 
 function setupMergeWorkspace(options = {}) {
   const calls = [];
+  const failCommand = options.failCommand || null;
   const fakeExecutor = (cmd) => {
     calls.push(cmd);
+    if (failCommand && cmd.includes(failCommand)) {
+      const err = new Error(`${failCommand} exited 1`);
+      err.stderr = `${failCommand} exited 1`;
+      throw err;
+    }
     if (cmd.includes('--input')) {
       const match = cmd.match(/--input\s+"([^"]+)"/);
       if (match && fs.existsSync(match[1])) {
@@ -991,6 +997,54 @@ test('sdw-ship-pr - merge is opt-in only', async () => {
 
     assert.strictEqual(report.merge, null, 'No merge state unless requested');
     assert.strictEqual(calls.some(c => c.startsWith('gh pr merge')), false, 'The merge command is never issued by default');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('sdw-ship-pr - merge records a skip reason when convergence is disabled', async () => {
+  const { tmpDir, config, calls, fakeExecutor } = setupMergeWorkspace();
+  config.scmCodeReviewEnabled = false;
+  try {
+    const report = await sdwShipPr.runShipPr({
+      projectRoot: tmpDir,
+      config,
+      head: 'develop',
+      base: 'master',
+      merge: true
+    }, fakeExecutor);
+
+    assert.strictEqual(report.reviewConvergence.enabled, false, 'Convergence was not enabled');
+    assert.strictEqual(report.merge.attempted, false);
+    assert.strictEqual(report.merge.reason, 'review convergence disabled', 'The reason names the real cause, not "did not converge"');
+    assert.strictEqual(calls.some(c => c.startsWith('gh pr merge')), false);
+    assert.strictEqual(report.success, true, 'Delivery still succeeds without merge');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('sdw-ship-pr - merge keeps an audit record when the delivery fails before the merge step', async () => {
+  const { tmpDir, config, fakeExecutor } = setupMergeWorkspace({ failCommand: 'failing-pre-pr' });
+  config.prePrCommand = 'failing-pre-pr';
+  try {
+    let captured = null;
+    await assert.rejects(
+      () => sdwShipPr.runShipPr({
+        projectRoot: tmpDir,
+        config,
+        head: 'develop',
+        base: 'master',
+        merge: true
+      }, fakeExecutor),
+      (err) => { captured = err; return /prePrCommand failed/.test(err.message); }
+    );
+
+    assert.ok(captured, 'The delivery failed at the pre-PR gate');
+    assert.ok(captured.report, 'The partial report is attached to the error');
+    assert.strictEqual(captured.report.merge.requested, true, 'Merge request is still audited');
+    assert.strictEqual(captured.report.merge.attempted, false);
+    assert.strictEqual(captured.report.merge.reason, 'delivery did not reach merge step');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
