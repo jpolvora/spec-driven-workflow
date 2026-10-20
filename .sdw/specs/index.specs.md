@@ -38,5 +38,5 @@ Central repository index tracking specification lifecycle states, metadata, and 
 | 024 | 024-sdw-ship-pr | SDW Ship PR Skill — Standalone Delivery, SCM Submission, and Review Convergence | completed | local | 2026-10-19 | PASS | - |
 | 025 | 025-sdw-code-review-skill | SDW Code Review Skill — Deep Working Directory Code Review, Actionable Fix Planning, and Orchestrator Delegation | completed | local | 2026-10-19 | PASS | - |
 | 026 | 026-ensure-hybrid-mode-compatiblity | Ensure Hybrid Mode Compatibility — Global and Local Skills Resolution | completed | local | 2026-10-19 | PASS | - |
-| 027 | 027-llm-judge-conformance-scoring | LLM-Judge Conformance Scoring | pending | local | 2026-10-19 | PASS | - |
-| 028 | 028-sdw-orch-sequential-subagent-implementation | SDW Orchestrator Sequential Subagent Implementation Dispatch | pending | local | 2026-10-19 | PASS | - |
+| 027 | 027-llm-judge-conformance-scoring | LLM-Judge Conformance Scoring | completed | local | 2026-10-19 | PASS | - |
+| 028 | 028-sdw-orch-sequential-subagent-implementation | SDW Orchestrator Sequential Subagent Implementation Dispatch | completed | local | 2026-10-19 | PASS | - |
