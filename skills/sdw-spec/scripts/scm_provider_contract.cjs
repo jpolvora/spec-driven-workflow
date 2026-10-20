@@ -69,6 +69,10 @@ class ScmProvider {
   async checkPrStatus(prIdentifier) {
     throw new Error('checkPrStatus must be implemented by provider.');
   }
+
+  async mergePullRequest(options = {}) {
+    throw new Error('mergePullRequest must be implemented by provider.');
+  }
 }
 
 /**
@@ -642,6 +646,32 @@ class GitHubProvider extends ScmProvider {
       throw new Error(`GitHub resolveReviewThread failed: ${errMsg}`);
     }
   }
+
+  /**
+   * Merges a pull request with the GitHub CLI. Callers treat the outcome as
+   * advisory: permissions and branch protection are outside this contract.
+   */
+  async mergePullRequest(options = {}) {
+    const { prNumber, method = 'merge', deleteBranch = false, dryRun = false } = options;
+    if (!prNumber) {
+      throw new Error('prNumber is required to merge a GitHub pull request.');
+    }
+    if (!/^\d+$/.test(String(prNumber))) {
+      throw new Error(`prNumber must be numeric for GitHub merge: ${prNumber}`);
+    }
+    const strategy = method === 'squash' ? '--squash' : (method === 'rebase' ? '--rebase' : '--merge');
+    if (dryRun) {
+      return { merged: true, dryRun: true, prNumber: Number(prNumber), method };
+    }
+    const deleteFlag = deleteBranch ? ' --delete-branch' : '';
+    try {
+      this.executor(`gh pr merge ${prNumber} ${strategy}${deleteFlag}`);
+      return { merged: true, dryRun: false, prNumber: Number(prNumber), method };
+    } catch (err) {
+      const errMsg = err.stderr ? err.stderr.toString().trim() : err.message;
+      throw new Error(`GitHub mergePullRequest failed: ${errMsg}`);
+    }
+  }
 }
 
 /**
@@ -1040,6 +1070,31 @@ class AzureDevOpsProvider extends ScmProvider {
       if (tempFile && fs.existsSync(tempFile)) {
         try { fs.unlinkSync(tempFile); } catch (e) {}
       }
+    }
+  }
+
+  /**
+   * Completes a pull request with the Azure CLI. Callers treat the outcome as
+   * advisory: policies and permissions are outside this contract.
+   */
+  async mergePullRequest(options = {}) {
+    const { prNumber, deleteSourceBranch = false, dryRun = false } = options;
+    if (!prNumber) {
+      throw new Error('prNumber is required to complete an Azure DevOps pull request.');
+    }
+    if (!/^\d+$/.test(String(prNumber))) {
+      throw new Error(`prNumber must be numeric for Azure DevOps merge: ${prNumber}`);
+    }
+    if (dryRun) {
+      return { merged: true, dryRun: true, prNumber: Number(prNumber) };
+    }
+    const deleteFlag = deleteSourceBranch ? ' --delete-source-branch true' : '';
+    try {
+      this.executor(`az repos pr update --id ${prNumber} --status completed${deleteFlag}`);
+      return { merged: true, dryRun: false, prNumber: Number(prNumber) };
+    } catch (err) {
+      const errMsg = err.stderr ? err.stderr.toString().trim() : err.message;
+      throw new Error(`Azure DevOps mergePullRequest failed: ${errMsg}`);
     }
   }
 }

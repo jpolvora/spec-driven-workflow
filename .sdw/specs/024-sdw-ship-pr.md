@@ -44,6 +44,10 @@ Preserve lean context budgets and modular separation of concerns. By extracting 
 - AC20: If a thread resolution comment is posted, then the system shall reject empty, whitespace-only, or hash-only resolution comments.
 - AC21: Where a thread is resolved via `resolve-thread`, the system shall format the resolution comment with the standard prefix and commit reference.
 - AC22: When CI checks are superseded by a newer push during convergence, the system shall wait out the superseded checks, reset the convergence window up to the preemption budget, and continue polling instead of halting.
+- AC23: The system shall provide opt-in `merge` and `allow merge` invocation parameters that default to disabled.
+- AC24: When merge is enabled and the pull request converged, the system shall issue exactly one merge command through the configured SCM provider CLI.
+- AC25: If the merge command fails, then the system shall record the failure and keep the delivery outcome unchanged.
+- AC26: When merge is enabled but convergence, a pull request, or an SCM provider is unavailable, the system shall skip the merge and record the skip reason.
 
 ## Notes
 

@@ -801,3 +801,197 @@ test('sdw-ship-pr - active PR with review_pending adapts as non-blocking and rec
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------------------
+// Optional merge (--merge / --allow-merge): fire and forget after convergence
+// ---------------------------------------------------------------------------
+
+function setupMergeWorkspace(options = {}) {
+  const calls = [];
+  const fakeExecutor = (cmd) => {
+    calls.push(cmd);
+    if (cmd.includes('--input')) {
+      const match = cmd.match(/--input\s+"([^"]+)"/);
+      if (match && fs.existsSync(match[1])) {
+        const payload = fs.readFileSync(match[1], 'utf8');
+        if (payload.includes('reviewThreads')) {
+          const nodes = options.activeThread
+            ? [{
+                id: 'PRRT_kwTEST123',
+                isResolved: false,
+                path: 'src/index.js',
+                line: 10,
+                comments: { nodes: [{ id: 'PRRC_1', body: 'Missing null check', author: { login: 'reviewer' } }] }
+              }]
+            : [];
+          return JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes } } } } });
+        }
+      }
+    }
+    if (cmd.includes('pr checks')) return JSON.stringify([{ name: 'ci/build', state: 'pass', bucket: 'pass' }]);
+    if (cmd.includes('gh repo view')) return JSON.stringify({ owner: { login: 'fake-owner' }, name: 'fake-repo' });
+    if (cmd.includes('gh pr list')) {
+      return JSON.stringify([{ number: 42, url: 'https://github.com/fake-owner/fake-repo/pull/42', headRefName: 'develop', baseRefName: 'master' }]);
+    }
+    if (cmd.includes('where gh') || cmd.includes('command -v gh')) return '/usr/bin/gh';
+    if (cmd.includes('gh auth status')) return 'Logged in';
+    if (cmd.includes('gh pr merge')) {
+      if (options.mergeFailure) {
+        const err = new Error(options.mergeFailure);
+        err.stderr = options.mergeFailure;
+        throw err;
+      }
+      return '';
+    }
+    return '';
+  };
+
+  const { tmpDir, config } = setupTestWorkspace();
+  config.scmProvider = 'github';
+  config.scmCodeReviewEnabled = true;
+  return { tmpDir, config, calls, fakeExecutor };
+}
+
+test('sdw-ship-pr - CLI --merge / --allow-merge flags are parsed and default to false', () => {
+  assert.strictEqual(sdwShipPr.parseArgs(['--merge']).merge, true, '--merge enables the merge intent');
+  assert.strictEqual(sdwShipPr.parseArgs(['--allow-merge']).merge, true, '--allow-merge is the same intent');
+  assert.strictEqual(sdwShipPr.parseArgs(['--poll-pr']).merge, undefined, 'Merge is off unless requested');
+  assert.strictEqual(sdwShipPr.parseArgs([]).merge, undefined, 'Default is no merge');
+});
+
+test('sdw-ship-pr - mergePullRequest builds the GitHub CLI command and surfaces failures', async () => {
+  const issued = [];
+  const provider = createScmProvider('github', { executor: (cmd) => { issued.push(cmd); return ''; } });
+
+  const result = await provider.mergePullRequest({ prNumber: 42 });
+  assert.strictEqual(result.merged, true);
+  assert.strictEqual(issued[0], 'gh pr merge 42 --merge', 'Merges with the GitHub CLI');
+
+  const squashProvider = createScmProvider('github', { executor: (cmd) => { issued.push(cmd); return ''; } });
+  await squashProvider.mergePullRequest({ prNumber: 7, method: 'squash' });
+  assert.strictEqual(issued[issued.length - 1], 'gh pr merge 7 --squash', 'Honours the merge method');
+
+  const dryProvider = createScmProvider('github', { executor: () => { throw new Error('must not run'); } });
+  const dryResult = await dryProvider.mergePullRequest({ prNumber: 42, dryRun: true });
+  assert.strictEqual(dryResult.dryRun, true, 'Dry-run never invokes the CLI');
+
+  const failingProvider = createScmProvider('github', {
+    executor: () => { const err = new Error('Resource not accessible by integration'); err.stderr = 'Resource not accessible by integration'; throw err; }
+  });
+  await assert.rejects(
+    () => failingProvider.mergePullRequest({ prNumber: 42 }),
+    /GitHub mergePullRequest failed: Resource not accessible by integration/,
+    'CLI failures are reported, not swallowed, by the contract'
+  );
+
+  await assert.rejects(
+    () => createScmProvider('github', { executor: () => '' }).mergePullRequest({}),
+    /prNumber is required/,
+    'A missing PR number is rejected'
+  );
+});
+
+test('sdw-ship-pr - mergePullRequest completes the pull request through the Azure DevOps CLI', async () => {
+  const issued = [];
+  const provider = createScmProvider('ado', { executor: (cmd) => { issued.push(cmd); return ''; } });
+
+  const result = await provider.mergePullRequest({ prNumber: 512 });
+  assert.strictEqual(result.merged, true);
+  assert.strictEqual(issued[0], 'az repos pr update --id 512 --status completed', 'Completes the PR with the Azure CLI');
+
+  const dryResult = await createScmProvider('ado', { executor: () => { throw new Error('must not run'); } })
+    .mergePullRequest({ prNumber: 512, dryRun: true });
+  assert.strictEqual(dryResult.dryRun, true);
+});
+
+test('sdw-ship-pr - --merge merges the PR after convergence and records the outcome', async () => {
+  const { tmpDir, config, calls, fakeExecutor } = setupMergeWorkspace();
+  try {
+    const report = await sdwShipPr.runShipPr({
+      projectRoot: tmpDir,
+      config,
+      head: 'develop',
+      base: 'master',
+      maxIterations: 1,
+      pollIntervalMs: 0,
+      merge: true
+    }, fakeExecutor);
+
+    assert.strictEqual(report.reviewConvergence.converged, true, 'Review converged first');
+    assert.strictEqual(report.merge.requested, true);
+    assert.strictEqual(report.merge.attempted, true, 'Merge is attempted once converged');
+    assert.strictEqual(report.merge.ok, true);
+    assert.strictEqual(report.merge.reason, null);
+    assert.ok(calls.some(c => c === 'gh pr merge 42 --merge'), 'The SCM merge command was issued');
+    assert.strictEqual(report.success, true, 'Delivery stays successful');
+    assert.strictEqual(report.shipStatus, 'delivered');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('sdw-ship-pr - a failing merge is recorded but never fails the delivery', async () => {
+  const { tmpDir, config, calls, fakeExecutor } = setupMergeWorkspace({ mergeFailure: 'Pull request is not mergeable: required status check pending' });
+  try {
+    const report = await sdwShipPr.runShipPr({
+      projectRoot: tmpDir,
+      config,
+      head: 'develop',
+      base: 'master',
+      maxIterations: 1,
+      pollIntervalMs: 0,
+      merge: true
+    }, fakeExecutor);
+
+    assert.strictEqual(report.merge.attempted, true);
+    assert.strictEqual(report.merge.ok, false, 'The failure is recorded');
+    assert.match(report.merge.error, /not mergeable/, 'The CLI message is preserved for audit');
+    assert.strictEqual(report.success, true, 'Fire and forget: delivery still succeeds');
+    assert.strictEqual(report.shipStatus, 'delivered');
+    assert.ok(calls.some(c => c.startsWith('gh pr merge')), 'The merge was still attempted');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('sdw-ship-pr - merge waits for convergence and is skipped when review did not converge', async () => {
+  const { tmpDir, config, calls, fakeExecutor } = setupMergeWorkspace({ activeThread: true });
+  try {
+    const report = await sdwShipPr.runShipPr({
+      projectRoot: tmpDir,
+      config,
+      head: 'develop',
+      base: 'master',
+      maxIterations: 1,
+      pollIntervalMs: 0,
+      merge: true
+    }, fakeExecutor);
+
+    assert.strictEqual(report.reviewConvergence.converged, false);
+    assert.strictEqual(report.merge.attempted, false, 'No merge without convergence');
+    assert.strictEqual(report.merge.reason, 'review did not converge');
+    assert.strictEqual(calls.some(c => c.startsWith('gh pr merge')), false, 'The merge command is never issued');
+    assert.strictEqual(report.success, false, 'The PR stays pending review');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('sdw-ship-pr - merge is opt-in only', async () => {
+  const { tmpDir, config, calls, fakeExecutor } = setupMergeWorkspace();
+  try {
+    const report = await sdwShipPr.runShipPr({
+      projectRoot: tmpDir,
+      config,
+      head: 'develop',
+      base: 'master',
+      maxIterations: 1,
+      pollIntervalMs: 0
+    }, fakeExecutor);
+
+    assert.strictEqual(report.merge, null, 'No merge state unless requested');
+    assert.strictEqual(calls.some(c => c.startsWith('gh pr merge')), false, 'The merge command is never issued by default');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

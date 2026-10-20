@@ -249,6 +249,7 @@ Step 8 delegates all final PR verification gates, remote publishing, SCM submiss
   - Remote branch pushing (`pushDelivery` or `--push`).
   - Pull request creation and idempotent reuse across SCM providers (`github`, `ado`, `none`).
   - Post-PR review convergence loop, remote CI polling, cooperative defect class fixing, and thread resolution.
+  - Opt-in merge after convergence (`--merge` / `--allow-merge`): one SCM merge command, fire and forget. The outcome is recorded in `steps[8].output.merge` and never changes the delivery result, because permissions, approvals, and branch rules are operator concerns.
 - **Orchestrator Lifecycle Finalization:**
   - Consumes structured JSON report from `sdw-ship-pr`.
   - Records delivery outcome (`pullRequest`, `shipStatus`, `pushedBranch`, `reviewConvergence`) into `.sdw/state/{runId}.state.json`.

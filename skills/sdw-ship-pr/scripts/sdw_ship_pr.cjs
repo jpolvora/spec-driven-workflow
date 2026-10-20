@@ -124,6 +124,8 @@ function parseArgs(args) {
       options.push = true;
     } else if (arg === '--poll-pr') {
       options.pollPr = true;
+    } else if (arg === '--merge' || arg === '--allow-merge') {
+      options.merge = true;
     } else if (arg === '--dry-run') {
       options.dryRun = true;
     } else if (arg === '--json') {
@@ -256,6 +258,7 @@ async function runShipPr(options = {}, customExecutor = null) {
     pushed: false,
     prePrPassed: false,
     pullRequest: null,
+    merge: null,
     reviewConvergence: {
       enabled: scmCodeReviewEnabled,
       converged: false,
@@ -773,6 +776,46 @@ async function runShipPr(options = {}, customExecutor = null) {
       }
     }
 
+    // Step 4.5: Optional merge (opt-in, fire and forget)
+    // `--merge` / `--allow-merge` asks the SCM CLI to merge the converged pull
+    // request. The outcome is advisory: missing permissions, approvals, or
+    // unmet branch rules are outside this skill's contract and must never fail
+    // the delivery.
+    if (options.merge) {
+      const mergePrNumber = report.pullRequest ? report.pullRequest.number : null;
+      const convergedOk = Boolean(report.reviewConvergence && report.reviewConvergence.converged);
+      report.merge = { requested: true, attempted: false, ok: null, reason: null };
+
+      if (dryRun) {
+        report.merge.reason = 'dry-run';
+      } else if (mergePrNumber === null || mergePrNumber === undefined) {
+        report.merge.reason = 'no pull request';
+      } else if (!convergedOk) {
+        report.merge.reason = 'review did not converge';
+      } else if (scmProviderName === 'none' || !scmContract) {
+        report.merge.reason = 'scm provider disabled';
+      } else {
+        report.merge.attempted = true;
+        const mergeStartedAt = Date.now();
+        try {
+          const mergeProvider = providerEarly || scmContract.createScmProvider(scmProviderName, { executor });
+          const mergeResult = await mergeProvider.mergePullRequest({ prNumber: mergePrNumber });
+          report.merge.ok = true;
+          report.merge.result = mergeResult;
+          log(`[sdw-ship-pr] Merge command accepted for PR #${mergePrNumber} (fire and forget).`);
+        } catch (mergeErr) {
+          report.merge.ok = false;
+          report.merge.error = mergeErr.message;
+          warn(`[sdw-ship-pr] Merge attempt for PR #${mergePrNumber} did not complete (${mergeErr.message}). Ignored by design: permissions, approvals, and branch rules are outside this skill's contract.`);
+        }
+        report.merge.durationMs = Date.now() - mergeStartedAt;
+      }
+
+      if (report.merge.reason) {
+        log(`[sdw-ship-pr] Merge skipped: ${report.merge.reason}.`);
+      }
+    }
+
     // Step 5: State Persistence
     if (options.runId) {
       const stateFilePath = locateStateFile(projectRoot, options.runId, specSlug, config);
@@ -797,6 +840,7 @@ async function runShipPr(options = {}, customExecutor = null) {
               nonBlocking: Boolean(report.nonBlocking),
               adaptedActivePr: Boolean(report.adaptedActivePr),
               pushedBranch: report.pushed ? head : null,
+              merge: report.merge || null,
               reviewConvergence: report.reviewConvergence
             }
           };
