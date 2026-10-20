@@ -31,7 +31,7 @@ Before publishing branches or creating remote pull requests, `sdw-ship-pr` evalu
 
 ## 3. Pull Request Creation & Idempotency
 
-`sdw-ship-pr` delegates to `skills/sdw-spec/scripts/scm_provider_contract.cjs`:
+`sdw-ship-pr` delegates to `skills/sdw-spec/scripts/scm_provider_contract.cjs`, a facade over `skills/sdw-spec/scripts/providers/{base,github,ado}.cjs`:
 
 1. **Provider Resolution:**
    - Reads `scmProvider` from `.sdw/config.json`.

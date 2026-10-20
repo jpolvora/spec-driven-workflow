@@ -382,7 +382,7 @@ test('sdw-scm-provider - createPullRequest on GitHubProvider (creation, reuse, a
       throw new Error(`Unexpected command: ${cmd}`);
     }
   });
-  const reuseRes = await reuseProvider.createPr({
+  const reuseRes = await reuseProvider.createPullRequest({
     title: 'New PR title',
     head: 'feature/existing',
     base: 'master'
@@ -444,7 +444,7 @@ test('sdw-scm-provider - createPullRequest on AzureDevOpsProvider (creation, reu
       throw new Error(`Unexpected command: ${cmd}`);
     }
   });
-  const reuseRes = await reuseProvider.createPr({
+  const reuseRes = await reuseProvider.createPullRequest({
     title: 'New title',
     head: 'feature/ado-test',
     base: 'master'
