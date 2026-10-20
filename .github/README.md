@@ -41,56 +41,16 @@ When a pull request originates from a fork or runs in an environment where neith
 
 ---
 
-## 4. Branch Protection (two-tier model)
+## 4. Branch Protection Recommendations
 
-This repository separates integration from release, so the two long-lived branches carry different rules:
+For repository maintainers, the following branch protection rules are recommended on `main` and `develop`:
 
-| Rule | `develop` (integration / staging) | `master` (release) |
-|---|---|---|
-| Purpose | Features from feature branches are integrated and prepared here | Only selected, gated work goes live |
-| Required status checks | `test` | `test` + `review` |
-| Required approvals | 0 (PR required, self-merge allowed) | 0 (PR required, self-merge allowed) |
-| Require conversation resolution | — | yes |
-| Require up-to-date branch | no | no |
-| Force pushes / deletions | blocked | blocked |
-| Enforce for admins | no | no |
-| Code review gate | advisory (runs, not required) | **enforced** |
-
-Workflow: create a feature branch from `develop`, integrate it into `develop` through a pull request that passes `CI / test`, then release `develop` into `master` through the quality gate (`CI / test` **and** `Agentic Code Review / review`, with all conversations resolved).
-
-Admins are not subject to the PR requirement, which is what lets `sdw-ship-pr` push `develop` directly after a delivery. Removing that bypass means the delivery flow must move to feature branches.
-
-Apply or refresh the rules with the REST API (requires admin):
-
-```bash
-# develop: CI only
-gh api -X PUT repos/{owner}/{repo}/branches/develop/protection --input develop-protection.json
-
-# master: CI + agentic review + conversation resolution
-gh api -X PUT repos/{owner}/{repo}/branches/master/protection --input master-protection.json
-```
-
-with `develop-protection.json`:
-
-```json
-{
-  "required_status_checks": { "strict": false, "contexts": ["test"] },
-  "enforce_admins": false,
-  "required_pull_request_reviews": { "dismiss_stale_reviews": false, "require_code_owner_reviews": false, "required_approving_review_count": 0 },
-  "restrictions": null,
-  "required_conversation_resolution": false,
-  "allow_force_pushes": false,
-  "allow_deletions": false,
-  "required_linear_history": false
-}
-```
-
-and `master-protection.json` (identical except `contexts: ["test", "review"]`, `required_conversation_resolution: true`, `dismiss_stale_reviews: true`).
-
-Notes:
-- Context names are the **job** names reported by Actions (`test`, `review`), not `Workflow / job`. A context that never runs would block merges forever.
-- `required_linear_history` stays `false` because releases are merged with `gh pr merge --merge` (merge commits).
-- The unresolved-thread gate in `agentic-code-review.yml` (GraphQL `reviewThreads`) is what makes `review` fail on open threads; `required_conversation_resolution` covers the native conversation model at the same time.
+1. **Require status checks to pass before merging**:
+   - `CI / test` (from `ci.yml`)
+   - `Agentic Code Review / review` (from `agentic-code-review.yml`)
+2. **Require review thread resolution**:
+   - The unresolved thread check in `agentic-code-review.yml` queries active GraphQL review threads and blocks merge until all reviewer comments have been addressed or resolved.
+3. **Require linear history** or squash merges to keep the commit history clean and atomic.
 
 ---
 
