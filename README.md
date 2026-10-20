@@ -58,17 +58,18 @@ flowchart TD
    - Generates a Directed Acyclic Graph (DAG) dividing the work into discrete, atomic execution units with context prompts.
    - Persists the DAG plan artifact `{slug}-step-3.md`. Supports isolated git worktrees (`useWorktrees: true`) for multi-task plans.
 
-4. **Implementation Execution Contract & Evidence Gate**
-   - Dispatches implementation via default handoff mode (writes prompt files, sets `awaiting_implementation`, exits code 4) or opt-in command mode (executing subprocesses with token substitution and environment sanitization).
-   - In worktree mode (`useWorktrees: true`), isolates tasks in sequential git worktrees branching from primary `HEAD`, committing in worktree, cherry-picking to primary, and cleaning up safely.
-   - Corroborates changes in worktrees or primary tree, rejecting empty worktrees or unmodified working trees.
-   - Requires task completion via `sdw-orch task finish` with schema-validated evidence files.
+4. **Sequential Subagent Dispatch & Evidence Gate**
+   - Dispatches exactly one DAG task at a time: `task next` emits a self-sufficient brief (verbatim criteria, scope fence, prohibitions, dependency context, honest evidence template, report contract) and the host agent runs one worker per envelope. `command` mode instead runs a configured subprocess per task with token substitution and environment sanitization.
+   - Enforces single-flight ordering — a second dispatch, or a `task finish` for any task but the dispatched one, is rejected — and releases a lost worker's task with `task abandon --reason`.
+   - Corroborates each task against its own dispatch timestamp, so edits inherited from an earlier task never satisfy the evidence gate. `command` mode still isolates multi-task plans in sequential git worktrees branching from primary `HEAD`.
+   - Requires task completion via `sdw-orch task finish` with schema-validated evidence, including a required `status` where only `success` is accepted.
    - Executes build and test verification gates (`verification.buildCommand`, `verification.testCommand`) once all tasks are accepted.
 
-5. **Evidence-Based Conformance Scoring**
-   - Strictly evaluates conformance score based on accepted task evidence records (`round(verified / total * 10)`).
-   - Verifies criteria only when referenced by accepted evidence confirming real existing changed files on disk. Fails closed with 0/10 if no ACs exist.
-   - Persists the preliminary implementation report artifact `{slug}-step-5.md` with verified criteria and evidence links.
+5. **LLM-Judge Conformance Scoring**
+   - Delegates scoring to an LLM judge fenced to the acceptance criteria plus the generated diff, excluding transcripts and evidence claims.
+   - Accepts a configured judge (`scoring.judgeCommand`, model/provider/effort/endpoint hints) or defaults to the current agent model, which submits its verdict through `score submit` after Step 5 pauses with exit code 5.
+   - Derives the score from per-criterion verdicts (`round(verified / total * 10)`), applies the configurable criticity rubric, and fails closed on zero criteria, an unavailable judge, or a malformed verdict.
+   - Persists the scoring artifact `{slug}-step-5.md` with per-criterion verdicts and evidence references.
    - If the score falls below the required threshold (default `< 8/10`), triggers a feedback re-implementation loop (code 2).
 
 6. **Delivery Commit & Quality Guard**

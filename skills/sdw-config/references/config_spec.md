@@ -151,6 +151,15 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
 | `$schema` | `string` | `"./config.schema.json"` | Schema definition reference for editor autocomplete and validation |
 | `specsDir` | `string` | `"{projectRoot}/.sdw/specs"` | Path to specifications directory (supports `{projectRoot}` and `{skillsRoot}`) |
 | `scoreMin` | `integer` | `8` | Minimum acceptable conformance score (range: 0–10) |
+| `scoring.judgeCommand` | `string \| null` | `null` | Optional judge command that writes the Step 5 verdict JSON. Supports `{promptFile}`, `{verdictFile}`, `{diffFile}`, `{criteriaFile}`, `{slug}`, `{targetRoot}`. When unset, the current agent model instance judges via `score submit`. Env fallback: `SDW_JUDGE_COMMAND` |
+| `scoring.judgeModel` | `string \| null` | `null` | Judge model identifier passed to the judge command or host agent |
+| `scoring.judgeProvider` | `string \| null` | `null` | Judge provider identifier passed to the judge command or host agent |
+| `scoring.judgeEffort` | `string \| null` | `null` | Judge reasoning-effort hint passed to the judge command or host agent |
+| `scoring.judgeApiEndpoint` | `string \| null` | `null` | Judge API endpoint passed to the judge command or host agent |
+| `scoring.judgeCriticity` | `string` | `"strict"` | Judge strictness: `permissive`, `strict`, or `perfectionist` |
+| `implementation.mode` | `string` | `"subagent"` | Step 4 mode: `subagent` (sequential host-dispatched workers) or `command` (automated subprocess per task). `handoff` was replaced by `subagent` |
+| `implementation.command` | `string \| null` | `null` | Required when `implementation.mode` is `command`; supports `{taskId}`, `{promptFile}`, `{evidenceFile}`, `{workingDir}`, `{targetRoot}`, `{slug}` |
+| `implementation.timeoutMs` | `integer` | `1800000` | Per-task execution timeout for `command` mode |
 | `scmCodeReviewEnabled` | `boolean` | `false` | Whether remote PR comment polling and automated fix resolution loop is active |
 | `pushDelivery` | `boolean` | `false` | Whether to automatically push delivery commits to remote origin |
 | `stateDir` | `string` | `"{projectRoot}/.sdw/state"` | Path to isolated execution run state directory (supports `{projectRoot}` and `{skillsRoot}`) |

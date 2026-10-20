@@ -4,7 +4,9 @@
   "title": "SDW Configuration Schema",
   "description": "Configuration schema for Spec-Driven Workflow (.sdw/config.json).",
   "type": "object",
-  "required": ["specsDir"],
+  "required": [
+    "specsDir"
+  ],
   "properties": {
     "$schema": {
       "type": "string",
@@ -21,6 +23,63 @@
       "minimum": 0,
       "maximum": 10,
       "default": 8
+    },
+    "scoring": {
+      "type": "object",
+      "description": "Configuration for Step 5 LLM-judge conformance scoring (Spec 027).",
+      "properties": {
+        "judgeCommand": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "description": "Optional command that judges conformance and writes the verdict JSON. Supports {promptFile}, {verdictFile}, {diffFile}, {criteriaFile}, {slug}, {targetRoot}. When null, the current agent model instance judges and submits the verdict via 'score submit'."
+        },
+        "judgeModel": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "description": "Judge model identifier passed to the judge command or the host agent."
+        },
+        "judgeProvider": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "description": "Judge provider identifier passed to the judge command or the host agent."
+        },
+        "judgeEffort": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "description": "Judge reasoning-effort hint passed to the judge command or the host agent."
+        },
+        "judgeApiEndpoint": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "description": "Judge API endpoint passed to the judge command or the host agent."
+        },
+        "judgeCriticity": {
+          "type": "string",
+          "enum": [
+            "permissive",
+            "strict",
+            "perfectionist"
+          ],
+          "default": "strict",
+          "description": "Judge strictness: permissive credits partial attempts, strict requires the demanded behaviour, perfectionist requires complete implementation with verification."
+        }
+      },
+      "additionalProperties": false
     },
     "scmCodeReviewEnabled": {
       "type": "boolean",
@@ -63,7 +122,11 @@
     },
     "scmProvider": {
       "type": "string",
-      "enum": ["none", "ado", "github"],
+      "enum": [
+        "none",
+        "ado",
+        "github"
+      ],
       "default": "none",
       "description": "Configured SCM provider for issues, work items, and pull requests. Allowed: none, ado, github."
     },
@@ -73,14 +136,20 @@
       "properties": {
         "mode": {
           "type": "string",
-          "enum": ["handoff", "command"],
-          "default": "handoff",
-          "description": "Implementation execution mode: handoff (interactive agent/human) or command (automated process execution)."
+          "enum": [
+            "subagent",
+            "command"
+          ],
+          "default": "subagent",
+          "description": "Implementation execution mode: subagent (sequential host-dispatched workers, one task at a time) or command (automated subprocess per task)."
         },
         "command": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "default": null,
-          "description": "Command to execute when implementation.mode is command. Supports {promptFile}, {taskId}, {cwd}, {slug}, {evidenceFile}."
+          "description": "Command to execute when implementation.mode is command."
         },
         "timeoutMs": {
           "type": "integer",
@@ -89,9 +158,19 @@
         },
         "envAllowlist": {
           "type": "array",
-          "items": { "type": "string" },
-          "default": ["PATH", "HOME", "USERPROFILE", "TEMP", "TMP", "LANG", "LC_ALL"],
-          "description": "List of allowed environment variable names passed to implementation command."
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "PATH",
+            "HOME",
+            "USERPROFILE",
+            "TEMP",
+            "TMP",
+            "LANG",
+            "LC_ALL"
+          ],
+          "description": "List of allowed environment variable names."
         }
       },
       "additionalProperties": false
@@ -101,19 +180,25 @@
       "description": "Configuration for build and test gates in Step 4.",
       "properties": {
         "buildCommand": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "default": "npm run build",
-          "description": "Command executed for build verification gate when requiredBuild is true."
+          "description": "Command executed for build verification gate."
         },
         "testCommand": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "default": "npm test",
-          "description": "Command executed for test verification gate when runAllTests is true."
+          "description": "Command executed for test verification gate."
         },
         "timeoutMs": {
           "type": "integer",
           "default": 600000,
-          "description": "Execution timeout in milliseconds for build and test verification commands."
+          "description": "Execution timeout in milliseconds."
         }
       },
       "additionalProperties": false

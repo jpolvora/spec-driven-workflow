@@ -11,6 +11,9 @@ const secChecks = require('../skills/sdw-security-checks/scripts/sdw_security_ch
 const sdwConfig = require('../skills/sdw-config/scripts/sdw_config.cjs');
 const sdwOrch = require('../skills/sdw-orch/scripts/sdw_orch.cjs');
 
+// Spec 027: wire the deterministic judge stub for unattended runs past Step 4.
+require('./fixtures/judge_env.cjs').installJudgeEnv();
+
 test('sdw-security-checks - AC1 & AC2: Tier 1 SKILL.md layout and announcement banner', () => {
   const skillPath = path.resolve(__dirname, '../skills/sdw-security-checks/SKILL.md');
   assert.strictEqual(fs.existsSync(skillPath), true, 'SKILL.md must exist');

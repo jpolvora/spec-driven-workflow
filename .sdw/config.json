@@ -2,6 +2,14 @@
   "$schema": "./config.schema.json",
   "specsDir": "{projectRoot}/.sdw/specs",
   "scoreMin": 8,
+  "scoring": {
+    "judgeCommand": null,
+    "judgeModel": null,
+    "judgeProvider": null,
+    "judgeEffort": null,
+    "judgeApiEndpoint": null,
+    "judgeCriticity": "strict"
+  },
   "scmCodeReviewEnabled": true,
   "pushDelivery": true,
   "stateDir": "{projectRoot}/.sdw/state",
@@ -12,7 +20,7 @@
   "useFeatureBranches": false,
   "scmProvider": "github",
   "implementation": {
-    "mode": "handoff",
+    "mode": "subagent",
     "command": null,
     "timeoutMs": 1800000,
     "envAllowlist": [

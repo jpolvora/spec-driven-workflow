@@ -12,6 +12,9 @@ const sdwOrch = require('../skills/sdw-orch/scripts/sdw_orch.cjs');
 const stateManager = require('../skills/sdw-orch/scripts/state_manager.cjs');
 const artifactWriter = require('../skills/sdw-orch/scripts/artifact_writer.cjs');
 
+// Spec 027: wire the deterministic judge stub for unattended runs past Step 4.
+require('./fixtures/judge_env.cjs').installJudgeEnv();
+
 function setupTestRepo() {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-art-test-'));
   execSync('git init', { cwd: tmpDir, stdio: 'ignore' });

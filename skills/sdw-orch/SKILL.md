@@ -19,7 +19,10 @@ Orchestrates spec execution from input requirement to delivery commit, automated
 ## Subcommands
 
 - `run <specPath...>`: Executes the full 8-step workflow pipeline for single specification or unattended multi-spec batch queue.
-- `task finish --run-id <runId> --task <taskId> --evidence <evidencePath>`: Validates task evidence and records task completion (integrating worktree changes if applicable).
+- `task next [--run-id <runId>] [--json]`: Dispatches the next ready DAG task and emits its dispatch envelope (subagent mode).
+- `task finish --run-id <runId> --task <taskId> --evidence <evidencePath>`: Validates the dispatched task's evidence and accepts it.
+- `task abandon --run-id <runId> --task <taskId> --reason <text>`: Returns the dispatched task to the queue after a lost or failed worker.
+- `score submit --run-id <runId> --verdict <path>`: Submits the Step 5 judge verdict and applies the conformance score.
 - `resume`: Resumes an interrupted or paused run from its last recorded step in `.sdw/state/{runId}.state.json`.
 - `resume-batch [batchId]`: Resumes an interrupted or halted batch queue from the first non-completed specification.
 - `status`: Displays current execution progress, conformance score, and step status.
@@ -30,7 +33,7 @@ When executing multiple specifications (`run <spec1> <spec2> ...` or batch queue
 - **Continuous Unattended Execution:** Run uninterrupted through every specification from first to last without halting between specs for conversational check-ins or user confirmation.
 - **Autonomous Gap Resolution:** Grilling decision gaps auto-resolve with recommended defaults (`autoResolveGaps`).
 - **Continuous Queue Progression:** For each spec, complete DAG implementation, test verification (`npm test`), conformance scoring (≥ threshold), delivery commit, and code review, then immediately advance to the next queued spec.
-- **Terminal Consolidation Only:** Halt only on unrecoverable failure (if `--continue-on-error` is omitted) or handoff pause (code 4). Present the consolidated batch summary report after completion.
+- **Terminal Consolidation Only:** Halt only on unrecoverable failure (if `--continue-on-error` is omitted) or dispatch pause (code 4). Present the consolidated batch summary report after completion.
 
 ## Steps
 
@@ -47,13 +50,16 @@ When executing multiple specifications (`run <spec1> <spec2> ...` or batch queue
    Analyze complexity and emit DAG execution units with context prompts and dependency graphs.
    - Done when: DAG tasks generated, and DAG artifact `{slug}-step-3.md` persisted.
 
-4. **Implementation Execution & Verification Gates**
-   In handoff mode (default), write prompt files under `.sdw/state/` enforcing `sdw-rules` simplicity, mark Step 4 `awaiting_implementation`, and pause with exit code 4. In command mode, execute configured subprocess in topological DAG order. When `useWorktrees: true`, create sequential worktrees, commit in worktree, cherry-pick to primary, and clean up. Once all tasks are accepted, execute build and test verification gates.
-   - Done when: All DAG tasks have accepted evidence, changes corroborated, and build/test gates passed.
+4. **Implementation Execution (Sequential Subagent Dispatch)**
+   In `subagent` mode (default), dispatch exactly one ready DAG task and pause with exit code 4. Each brief carries the `sdw-rules` simplicity constraints (minimum code, surgical scope, no unrequested features). For each envelope: spawn one subagent that reads the prompt file and executes it as written, wait for its report, then submit `task finish`. If the worker reports a non-`success` status or never returns, run `task abandon --reason` and dispatch again. In `command` mode, execute the configured subprocess in topological DAG order. Worktrees are command-mode only; subagent mode uses the primary tree with dispatch-timestamp corroboration. Once every task is accepted, run build and test verification gates.
+   - Run: `node skills/sdw-orch/scripts/sdw_orch.cjs task next --run-id <runId>`
+   - Done when: Every DAG task has accepted evidence, corroborated after its dispatch timestamp, and build/test gates pass.
+   - Exit codes: `4` dispatch pause (normal), `1` failure.
 
-5. **Evaluate Conformance Score**
-   Compute evidence-based conformance score (`round(verifiedAcs / totalAcs * 10)`). Criteria are verified only when referenced by accepted task evidence confirming existing changed files. Fails closed with 0/10 if 0 ACs exist. If score < threshold (default 8/10), trigger re-implementation loop (code 2).
-   - Done when: Conformance score meets threshold and scoring artifact `{slug}-step-5.md` persisted.
+5. **Evaluate Conformance Score (LLM judge)**
+   Score conformance with an LLM judge fenced to the acceptance criteria plus the generated diff — never transcripts. Per-criterion verdicts drive the score (`round(verified / total * 10)`); `scoring.judgeCriticity` sets strictness. When `scoring.judgeCommand` is unset, the current agent model judges: Step 5 writes `step-5-judge.prompt.md`, pauses with exit code 5, and accepts a verdict through `score submit`. Zero criteria, an unavailable judge, or a malformed verdict fails closed at 0/10. Below `scoreMin` (default 8/10) triggers the re-implementation loop (exit code 2).
+   - Run: `node skills/sdw-orch/scripts/sdw_orch.cjs score submit --run-id <runId> --verdict <path>`
+   - Done when: The judge verdict covers every criterion and the derived score meets the threshold, with the scoring artifact `{slug}-step-5.md` persisted.
 
 6. **Delivery Commit & Security Gate**
    Refuse delivery commit if Step 4 is incomplete, any task unaccepted, or any gate failed. Run pre-commit secret leak scan (`sdw-security-checks`) when enabled. Stage and commit only tracked spec files (accepted evidence `filesChanged` + `index.specs.md`); unrelated worktree changes are never staged.
