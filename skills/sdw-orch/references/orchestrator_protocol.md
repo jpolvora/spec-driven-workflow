@@ -267,4 +267,24 @@ Step 7 delegates all working-tree review execution to the standalone `sdw-code-r
 - **Fix Iteration:** While blocking findings remain and fixable findings exist (up to 3 iterations): run with `--fix`, gate via `sdw-security-checks`, commit only fixer-touched files (`fix(<slug>): apply automated review fixes (iteration N)`), re-verify without `--fix`.
 - **Outcome:** `passed` advances to Step 8; residual blocking records `review_failed` and halts; artifact path recorded in `state.steps[7].artifact`.
 
+## 10. Dry Run & Sandbox Isolation (Spec 029)
+
+`--dry-run` and `--sandbox` answer two different questions and are mutually exclusive.
+
+### Plan-Only Dry Run (`--dry-run`)
+- `run <specPath> --dry-run` validates the specification in authoring mode and prints the plan: spec path and slug, target root, scoring/delivery/branch settings, the eight step names, and `No steps executed (--dry-run).`
+- It creates no run state, no artifacts, no branches, no worktrees, and no clones. Exit code `0` when the spec validates, `1` when it does not.
+- Batch `--dry-run` keeps the same contract (spec 005 AC9): validate every queued spec and print the plan.
+
+### Sandbox Execution (`--sandbox`)
+- **Layout:** `{sandboxDir}/{runId}/repo` (clone), `sandbox.json` (metadata), `report.md` (report). `sandboxDir` comes from `.sdw/config.json` (default `{projectRoot}/.sdw/sandbox`, tokens `{projectRoot}`, `{skillsRoot}`, `{temp}`); a custom value must resolve outside the project root and is validated by `sdw-config check`. The clone contains `.sdw/sandbox/.sandbox-marker.json` pointing back to the source root.
+- **Creation:** `git clone --no-local --depth 1 --single-branch --branch <sourceBranch> <sourceRoot> <clone>` from committed `HEAD`, `git switch -c sdw-sandbox/{runId}`, `git remote remove origin`, then an optional `node_modules` junction and a copy of the target specification when it is not committed (`specCopied: true`). `--no-local` is required because git ignores `--depth` for local clones; a shallow single-branch clone is enough because the sandbox only walks forward from `HEAD`. Detached `HEAD` clones without `--branch`, and a mismatch falls back to a full local clone checked out at the exact commit (`clone.fallback: true`).
+- **Execution:** every step runs with the clone as project root. Run state and artifacts live in the clone, so the source `.sdw/state` is untouched and `status`/`resume` on the source never see sandbox runs.
+- **Delivery isolation:** `pushDelivery` and `scmProvider` are forced off in memory, Step 8 invokes `sdw-ship-pr --dry-run` without `--push`, and the removed `origin` blocks accidental pushes. Real verification comes from the Step 4 gates; `sdw-ship-pr` simulates its own pre-PR command/build/test gates under `--dry-run`.
+- **Dirty source:** the clone is cut from the commit, so uncommitted work is excluded; the CLI warns and records `baselineDirty: true`.
+- **Paths:** dispatch envelopes and task prompts print absolute sandbox paths, the working directory is the clone root, and `task finish` / `resume` commands carry `--root <clonePath>`.
+- **Lifecycle:** `sandbox list`, `sandbox report --run-id`, `sandbox clean --run-id`. The report is refreshed after `run`, `resume`, and `task finish`; cleanup is always proposed, never automatic, and keeps `sandbox.json` plus `report.md`. Creation halts when the resolved target directory already exists, naming the `sandbox clean --run-id` command; `sandbox clean` also removes an orphaned target left by an interrupted creation (no metadata).
+- **Limits:** a clone is a filesystem and git boundary, not a security sandbox. Worker commands still run with the host credentials and network.
+
+
 

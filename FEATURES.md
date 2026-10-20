@@ -69,6 +69,7 @@
 - **Run State Isolation & Resumption:** Persists active run state in `.sdw/state/{runId}.state.json`, enabling seamless pauses, status inspections, and one-click resumption from interrupted steps.
 - **Configurable Feature Branches & Task Worktrees:** Opt-in branch and worktree isolation (`useFeatureBranches: false`, `useWorktrees: false`). Derives feature branches from spec slugs (`feature/{slug}`), refuses activation on dirty trees, reuses existing branches safely, dispatches multi-task DAGs into isolated git worktrees (`.sdw/worktrees/{runId}/{taskId}`), integrates worktree changes via linear cherry-pick, safely cleans worktrees, and supports runtime CLI overrides (`--no-worktrees`, `--no-feature-branch`).
 - **Multi-Specification Batch Queue Execution:** Enqueue and sequentially execute multiple specifications (`sdw-orch run spec1 spec2 ...`) with strict context fencing, batch manifest tracking (`.sdw/state/batch-{id}.json`), failure policies (`--continue-on-error`), dry-run pre-flight validation (`--dry-run`), automated resumption (`resume-batch`), batch queue pause on dispatch (exit code 4), and **enforced unattended execution** that runs continuously through all queued specifications without intermediate conversational interruption.
+- **Plan-Only Dry Run & Sandboxed Execution:** `--dry-run` validates the specification and prints the plan without creating state, artifacts, branches, or clones. `--sandbox` executes the entire 8-step pipeline against an isolated shallow single-branch `git clone` of `HEAD` (`{sandboxDir}/{runId}/repo`, branch `sdw-sandbox/{runId}`, `origin` removed). `sandboxDir` is configurable in `.sdw/config.json` (default `{projectRoot}/.sdw/sandbox`, tokens `{projectRoot}`, `{skillsRoot}`, `{temp}`); a custom value must resolve outside the project root. It forces push and SCM delivery off, prints absolute sandbox paths for subagents, and refreshes a step/task/gate/commit report (`sandbox report`). Creation halts when the resolved target already exists (run `sandbox clean --run-id` first), and `sandbox clean` also removes orphaned targets left by an interrupted creation. Cleanup is explicit via `sandbox clean`, which deletes the clone and keeps the report.
 
 ---
 
@@ -154,7 +155,7 @@
 *Engineering rigor backed by 100% native automated tests.*
 
 - **Native Node.js Test Runner:** Built with `node:test` and `node:assert/strict` — zero third-party testing frameworks required.
-- **166 Comprehensive Test Scenarios:**
+- **236 Comprehensive Test Scenarios:**
   - `sdw_code_review.test.cjs`: Standalone execution, base auto-detection, report generation, surgical auto-fix, dry-run simulation, orchestrator delegation, router registration, and fail-closed negatives.
   - `sdw_config.test.cjs`: Configuration parsing, schema validation, token expansion, and initialization gates.
   - `sdw_spec.test.cjs`: Index bootstrapping, EARS validation, synthesis, SCM provider contract, state synchronization, and archival quality gates.
@@ -167,7 +168,8 @@
   - `sdw_router.test.cjs`: Minimal context budget enforcement (SKILL.md ≤ 120 lines), explicit invocations, keyword classification, tied-confidence disambiguation, missing directory resolution, and pass-through non-interference.
   - `sdw_rules.test.cjs`: Three-tier progressive disclosure, announcement banners, Karpathy simplicity principles, doctor compliance verification, scope creep audits, and trap logging.
   - `sdw_security_checks.test.cjs`: Secrets scanning, staged diff inspection, redaction hygiene, pragma suppression, fail-closed gate handling, and orchestrator bypass verification.
-- **Sub-Second Execution:** Entire test suite runs in ~5 seconds with 100% pass rate.
+  - `sdw_sandbox.test.cjs`: Plan-only dry-run purity, sandbox clone creation, origin removal, spec copying, node_modules linking, report rendering, cleanup, conflicting flags, nested rejection, and absolute dispatch paths.
+- **Fast Execution:** Entire test suite runs in ~20 seconds with 100% pass rate.
 
 ---
 

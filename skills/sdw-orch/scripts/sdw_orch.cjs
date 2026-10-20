@@ -14,6 +14,7 @@ const batchRunner = require('./batch_runner.cjs');
 const artifactWriter = require('./artifact_writer.cjs');
 const implementationRunner = require('./implementation_runner.cjs');
 const evidenceValidator = require('./evidence_validator.cjs');
+const sandbox = require('./sandbox.cjs');
 
 function resolveSkillScript(targetRoot, skillName, scriptRelPath, options = {}) {
   try {
@@ -95,6 +96,7 @@ function parseArgs(args) {
     latest: false,
     unattended: false,
     skipSecurity: false,
+    sandbox: false,
     noWorktrees: false,
     worktrees: false,
     noFeatureBranch: false,
@@ -129,6 +131,7 @@ function parseArgs(args) {
     else if (arg === '--latest') result.latest = true;
     else if (arg === '--continue-on-error') result.continueOnError = true;
     else if (arg === '--dry-run') result.dryRun = true;
+    else if (arg === '--sandbox') result.sandbox = true;
     else if (arg === '--no-sync') result.noSync = true;
     else if (arg === '--batch-id') result.batchId = args[++i];
     else if (arg.startsWith('--batch-id=')) result.batchId = arg.slice(11);
@@ -232,8 +235,20 @@ function normalizeRel(p) {
   return String(p || '').replace(/\\/g, '/').replace(/^\.\//, '');
 }
 
+function normalizePath(p) {
+  return String(p || '').replace(/\\/g, '/');
+}
+
 // Emitted commands must work under any install topology (spec 026 AC10): resolve
 // this CLI from its own location instead of assuming {projectRoot}/skills exists.
+function followUpRootFlag(root) {
+  try {
+    return sandbox.readMarker(root) ? ` --root "${normalizePath(root)}"` : '';
+  } catch (e) {
+    return '';
+  }
+}
+
 function orchCommandPath() {
   return __filename.replace(/\\/g, '/');
 }
@@ -242,6 +257,7 @@ function isScopedExcluded(rel) {
   const n = normalizeRel(rel);
   return n.startsWith('.sdw/state/') || n === '.sdw/state'
     || n.startsWith('.sdw/worktrees/') || n === '.sdw/worktrees'
+    || n.startsWith('.sdw/sandbox/') || n === '.sdw/sandbox'
     || n.startsWith('.git/');
 }
 
@@ -603,15 +619,116 @@ function resolveSpecPath(specInput, targetRoot, config) {
   return directPath;
 }
 
+function resolveSandboxDir(config, root) {
+  const value = config && typeof config.sandboxDir === 'string' ? config.sandboxDir : '';
+  return sandbox.sandboxParent(root, value);
+}
+
+function applySandboxIsolation(config, options, meta) {
+  options._sandbox = meta;
+  options.push = false;
+  config.pushDelivery = false;
+  config.scmProvider = 'none';
+  config.scmCodeReviewEnabled = false;
+  config.useFeatureBranches = false;
+  config.useWorktrees = false;
+  return config;
+}
+
+function printRunDryRunPlan(context) {
+  const { targetRoot, resolvedSpec, specSlug, config, options } = context;
+  let validation = null;
+  try {
+    const validatorPath = resolveSkillScript(targetRoot, 'sdw-spec', path.join('scripts', 'validate_spec.cjs'), options);
+    const validator = validatorPath ? require(validatorPath) : require('../../sdw-spec/scripts/validate_spec.cjs');
+    validation = validator.validateFile(resolvedSpec, { mode: 'authoring' });
+  } catch (e) {
+    validation = null;
+  }
+
+  const valid = !validation || validation.ok;
+  const steps = [
+    '1 derivation',
+    '2 refinement',
+    '3 dag_generation',
+    '4 implementation',
+    '5 scoring',
+    '6 delivery_commit',
+    '7 code_review',
+    '8 pr_preparation'
+  ];
+  const settings = {
+    scoreMin: config.scoreMin !== undefined ? config.scoreMin : 8,
+    pushDelivery: Boolean(config.pushDelivery),
+    scmProvider: config.scmProvider || 'none',
+    useFeatureBranches: Boolean(config.useFeatureBranches),
+    useWorktrees: Boolean(config.useWorktrees)
+  };
+
+  if (options.json) {
+    console.log(JSON.stringify({
+      mode: 'dry-run',
+      executed: false,
+      valid,
+      specSlug,
+      specPath: normalizePath(path.relative(targetRoot, resolvedSpec)),
+      root: normalizePath(targetRoot),
+      settings,
+      steps,
+      errors: validation ? validation.errors : []
+    }, null, 2));
+    return valid ? 0 : 1;
+  }
+
+  if (!valid) {
+    console.error(`[sdw-orch dry-run] Specification validation failed: ${normalizePath(path.relative(targetRoot, resolvedSpec))}`);
+    for (const error of (validation.errors || [])) {
+      console.error(`  ${error.ac ? `${error.ac}: ` : ''}${error.message}`);
+    }
+    return 1;
+  }
+
+  console.log(`[sdw-orch dry-run] Specification: ${normalizePath(path.relative(targetRoot, resolvedSpec))} (${specSlug})`);
+  console.log(`[sdw-orch dry-run] Target root: ${normalizePath(targetRoot)}`);
+  console.log(`[sdw-orch dry-run] Settings: scoreMin=${settings.scoreMin}, pushDelivery=${settings.pushDelivery}, scmProvider=${settings.scmProvider}, useFeatureBranches=${settings.useFeatureBranches}, useWorktrees=${settings.useWorktrees}`);
+  console.log(`[sdw-orch dry-run] Steps: ${steps.join(' -> ')}`);
+  console.log('[sdw-orch dry-run] No steps executed (--dry-run).');
+  return 0;
+}
+
 function cmdRun(options) {
-  const targetRoot = options.root ? path.resolve(options.root) : process.cwd();
+  let targetRoot = options.root ? path.resolve(options.root) : process.cwd();
+  const sourceRoot = targetRoot;
+  let sandboxMeta = null;
+
+  if (options.dryRun && options.sandbox) {
+    console.error('[sdw-orch] Error: --dry-run and --sandbox are mutually exclusive: --dry-run prints a plan only, --sandbox executes the pipeline in an isolated clone.');
+    options._runResult = { error: '--dry-run and --sandbox are mutually exclusive' };
+    return 1;
+  }
+  if (options.sandbox && options.push) {
+    console.error('[sdw-orch] Error: --sandbox and --push are mutually exclusive: a sandbox run never pushes.');
+    options._runResult = { error: '--sandbox and --push are mutually exclusive' };
+    return 1;
+  }
 
   let sdwConfig = null;
   try {
     const sdwConfigScript = resolveSkillScript(targetRoot, 'sdw-config', path.join('scripts', 'sdw_config.cjs'), options);
     sdwConfig = sdwConfigScript ? require(sdwConfigScript) : require('../../sdw-config/scripts/sdw_config.cjs');
   } catch (e) {}
-  const config = loadProjectConfig(targetRoot, options);
+  let config = loadProjectConfig(targetRoot, options);
+  // A command executed inside a sandbox clone inherits its isolation.
+  const existingSandboxMarker = sandbox.readMarker(targetRoot);
+  if (existingSandboxMarker) {
+    applySandboxIsolation(config, options, {
+      runId: existingSandboxMarker.runId,
+      root: targetRoot,
+      branch: existingSandboxMarker.branch,
+      sourceRoot: existingSandboxMarker.sourceRoot
+    });
+    options._effectiveRoot = targetRoot;
+  }
   // AC9/AC10: fail closed, but resolve configuration first so a configured
   // skillsRoot (or {skillsRoot} token) is honored instead of only CLI options.
   const detectedSkillsRoot = config && config.skillsMode && config.skillsMode !== 'unknown'
@@ -650,6 +767,52 @@ function cmdRun(options) {
     console.error(`[sdw-orch] ${slugErr.message}`);
     options._runResult = { error: slugErr.message };
     return 1;
+  }
+
+  // Plan-only dry run: validate the specification and print the plan without
+  // touching run state, artifacts, branches, worktrees, or clones (spec 029 AC1-AC3).
+  if (options.dryRun) {
+    return printRunDryRunPlan({ targetRoot, resolvedSpec, specSlug, config, options });
+  }
+
+  // Sandbox execution: run the whole pipeline against an isolated local clone
+  // of the committed HEAD (spec 029 AC6-AC18).
+  if (options.sandbox) {
+    const runId = options.runId || stateManager.generateRunId(specSlug);
+    let requestedSandboxDir;
+    try {
+      requestedSandboxDir = resolveSandboxDir(config, sourceRoot);
+    } catch (dirErr) {
+      console.error(`[sdw-orch] ${dirErr.message}`);
+      options._runResult = { error: dirErr.message };
+      return 1;
+    }
+    try {
+      sandboxMeta = sandbox.createSandbox({
+        sourceRoot,
+        runId,
+        slug: specSlug,
+        specPath: resolvedSpec,
+        sandboxDir: requestedSandboxDir
+      });
+    } catch (sandboxErr) {
+      console.error(`[sdw-orch] Sandbox creation failed: ${sandboxErr.message}`);
+      options._runResult = { error: sandboxErr.message };
+      return 1;
+    }
+    targetRoot = sandboxMeta.absoluteRoot;
+    options.runId = runId;
+    options._effectiveRoot = targetRoot;
+    config = loadProjectConfig(targetRoot, options);
+    applySandboxIsolation(config, options, sandboxMeta);
+    options._config = config;
+    console.log(`[sandbox] Clone created at ${sandboxMeta.root} (branch ${sandboxMeta.branch}, origin removed).`);
+    if (sandboxMeta.baselineDirty) {
+      console.warn('[sandbox] Warning: working tree is dirty; uncommitted changes are not part of the sandbox baseline.');
+    }
+    if (sandboxMeta.specCopied) {
+      console.log('[sandbox] Specification file was copied into the clone because it is not committed.');
+    }
   }
 
   // Quality check: inspect index.specs.md status if available
@@ -790,6 +953,17 @@ function cmdRun(options) {
       runtimeOverrides,
       scm: scmState
     });
+  }
+
+  if (sandboxMeta) {
+    state.sandbox = {
+      enabled: true,
+      sourceRoot: normalizePath(sourceRoot),
+      dir: sandboxMeta.sandboxDir,
+      path: sandboxMeta.root,
+      branch: sandboxMeta.branch
+    };
+    state = stateManager.saveRunState(targetRoot, state);
   }
 
   console.log(`[sdw-orch] Run "${state.runId}" active at step ${startStep}/8.`);
@@ -1828,7 +2002,7 @@ function cmdRun(options) {
           '--root', targetRoot,
           ...(options.push || config.pushDelivery ? ['--push'] : []),
           ...(pollPr ? ['--poll-pr'] : []),
-          ...(options.dryRun ? ['--dry-run'] : []),
+          ...(options.dryRun || options.sandbox || options._sandbox ? ['--dry-run'] : []),
           '--json'
         ];
 
@@ -2004,7 +2178,7 @@ function dispatchNextTask(context) {
       ok: false,
       exhausted: true,
       state,
-      reason: `All ${dagTasks.length} DAG task(s) are completed. Continue with: node "${orchCommandPath()}" resume --run-id ${state.runId}`
+      reason: `All ${dagTasks.length} DAG task(s) are completed. Continue with: node "${orchCommandPath()}" resume --run-id ${state.runId}${followUpRootFlag(targetRoot)}`
     };
   }
 
@@ -2018,6 +2192,7 @@ function dispatchNextTask(context) {
     };
   }
 
+  const sandboxed = Boolean(options && options._sandbox);
   const rendered = implementationRunner.renderTaskPrompt({
     targetRoot,
     specSlug,
@@ -2030,8 +2205,15 @@ function dispatchNextTask(context) {
     taskWorktreeRel: null,
     dagTasks,
     taskStates: tasks,
-    abandonments: dispatch.abandonments
+    abandonments: dispatch.abandonments,
+    absolutePaths: sandboxed
   });
+
+  const displayPrompt = sandboxed ? normalizePath(rendered.promptFileAbs) : rendered.promptFileRel;
+  const displayEvidence = sandboxed ? normalizePath(rendered.evidenceFileAbs) : rendered.evidenceFileRel;
+  const displayWorkingDir = sandboxed ? normalizePath(targetRoot) : rendered.workingDirRel;
+  const evidenceArg = sandboxed ? `"${displayEvidence}"` : displayEvidence;
+  const rootFlag = sandboxed ? ` --root "${normalizePath(targetRoot)}"` : '';
 
   const previous = tasks[ready.id] || {};
   dispatch.activeTaskId = ready.id;
@@ -2044,9 +2226,9 @@ function dispatchNextTask(context) {
     id: ready.id,
     title: ready.title,
     status: 'dispatched',
-    promptPath: rendered.promptFileRel,
-    evidencePath: rendered.evidenceFileRel,
-    workingDir: rendered.workingDirRel,
+    promptPath: displayPrompt,
+    evidencePath: displayEvidence,
+    workingDir: displayWorkingDir,
     coveredAcs: ready.coveredAcs || [],
     dependencies: ready.dependencies || [],
     sequence: dispatch.sequence,
@@ -2060,15 +2242,15 @@ function dispatchNextTask(context) {
     title: ready.title,
     status: 'dispatched',
     sequence: dispatch.sequence,
-    promptFile: rendered.promptFileRel,
+    promptFile: displayPrompt,
     promptBytes: rendered.promptBytes,
-    evidenceFile: rendered.evidenceFileRel,
+    evidenceFile: displayEvidence,
     specPath: specPath || state.specPath,
-    workingDir: rendered.workingDirRel,
+    workingDir: displayWorkingDir,
     acIds: ready.coveredAcs || [],
     dependencies: ready.dependencies || [],
-    subagentBrief: `Spawn one subagent for this task only. Give it: read ${rendered.promptFileRel} and execute it exactly as written, then report back per its report contract.`,
-    finishCommand: `node "${orchCommandPath()}" task finish --run-id ${state.runId} --task ${ready.id} --evidence ${rendered.evidenceFileRel}`
+    subagentBrief: `Spawn one subagent for this task only. Give it: read ${sandboxed ? `"${displayPrompt}"` : displayPrompt} and execute it exactly as written, then report back per its report contract.${sandboxed ? ` Run every command with cwd "${displayWorkingDir}".` : ''}`,
+    finishCommand: `node "${orchCommandPath()}" task finish --run-id ${state.runId} --task ${ready.id} --evidence ${evidenceArg}${rootFlag}`
   };
 
   return { ok: true, state, envelope, sequence: dispatch.sequence };
@@ -2200,7 +2382,7 @@ function cmdTaskAbandon(options) {
 
   console.log(`[sdw-orch task abandon] ${taskId} returned to pending (reason: ${String(reason).trim()}).`);
   console.log(`Dispatch it again with:`);
-  console.log(`  node "${orchCommandPath()}" task next --run-id ${state.runId}`);
+  console.log(`  node "${orchCommandPath()}" task next --run-id ${state.runId}${followUpRootFlag(targetRoot)}`);
   return 0;
 }
 
@@ -2260,7 +2442,7 @@ function cmdTaskFinish(options) {
   if (dispatch.activeTaskId !== taskId) {
     console.error(dispatch.activeTaskId
       ? `Error: Task "${taskId}" is not the dispatched task. Active task: "${dispatch.activeTaskId}". Finish or abandon "${dispatch.activeTaskId}" first.`
-      : `Error: No task is currently dispatched. Dispatch one with: node "${orchCommandPath()}" task next --run-id ${state.runId}`);
+      : `Error: No task is currently dispatched. Dispatch one with: node "${orchCommandPath()}" task next --run-id ${state.runId}${followUpRootFlag(targetRoot)}`);
     return 1;
   }
 
@@ -2396,7 +2578,7 @@ function cmdTaskFinish(options) {
     console.log(`\nRemaining tasks to dispatch (${remainingTasks.length}):`);
     remainingTasks.forEach(t => console.log(`  - [${t.id}] ${t.title}`));
     console.log(`\nDispatch the next task with:`);
-    console.log(`  node "${orchCommandPath()}" task next --run-id ${state.runId}`);
+    console.log(`  node "${orchCommandPath()}" task next --run-id ${state.runId}${followUpRootFlag(targetRoot)}`);
   } else {
     console.log(`\nAll ${dagTasks.length} DAG tasks have completed!`);
     // Run verification gates (AC17, AC18, AC19)
@@ -2418,7 +2600,7 @@ function cmdTaskFinish(options) {
       gates: state.steps[4].gates
     });
     console.log(`Step 4 completed successfully! Proceed to Step 5 by running:`);
-    console.log(`  node "${orchCommandPath()}" resume --run-id ${state.runId}`);
+    console.log(`  node "${orchCommandPath()}" resume --run-id ${state.runId}${followUpRootFlag(targetRoot)}`);
   }
 
   options._finishResult = { runId: state.runId, taskId, status: 'completed' };
@@ -2510,11 +2692,11 @@ function cmdResume(options) {
             acIds: activeRecord.coveredAcs || activeTask.coveredAcs || [],
             dependencies: activeRecord.dependencies || activeTask.dependencies || [],
             subagentBrief: `Spawn one subagent for this task only. Give it: read ${activeRecord.promptPath} and execute it exactly as written, then report back per its report contract.`,
-            finishCommand: `node "${orchCommandPath()}" task finish --run-id ${state.runId} --task ${dispatch.activeTaskId} --evidence ${activeRecord.evidencePath}`
+            finishCommand: `node "${orchCommandPath()}" task finish --run-id ${state.runId} --task ${dispatch.activeTaskId} --evidence ${sandbox.readMarker(targetRoot) ? `"${activeRecord.evidencePath}"` : activeRecord.evidencePath}${sandbox.readMarker(targetRoot) ? ` --root "${normalizePath(targetRoot)}"` : ''}`
           };
           printDispatchEnvelope(envelope, state, options);
           console.log(`\n[sdw-orch resume] Task "${dispatch.activeTaskId}" is still in flight. If that worker is gone, release it with:`);
-          console.log(`  node "${orchCommandPath()}" task abandon --run-id ${state.runId} --task ${dispatch.activeTaskId} --reason "<why>"`);
+          console.log(`  node "${orchCommandPath()}" task abandon --run-id ${state.runId} --task ${dispatch.activeTaskId} --reason "<why>"${followUpRootFlag(targetRoot)}`);
           return 4;
         }
 
@@ -2525,7 +2707,7 @@ function cmdResume(options) {
           console.log(`  [${isDone ? 'COMPLETED' : 'PENDING'}] ${t.id}: ${t.title}`);
         });
         console.error(`\nDispatch the next task with:`);
-        console.error(`  node "${orchCommandPath()}" task next --run-id ${state.runId}`);
+        console.error(`  node "${orchCommandPath()}" task next --run-id ${state.runId}${followUpRootFlag(targetRoot)}`);
         return 4;
       }
 
@@ -2644,6 +2826,10 @@ function cmdStatus(options) {
 }
 
 function cmdBatchRun(options) {
+  if (options.sandbox) {
+    console.error('[sdw-orch] Error: --sandbox is not supported for batch execution. Run one specification per sandbox.');
+    return 1;
+  }
   const specs = options.specPaths && options.specPaths.length > 0
     ? options.specPaths
     : (options.specPath ? [options.specPath] : []);
@@ -2763,12 +2949,79 @@ function cmdScoreSubmit(options) {
 
   if (report.passed) {
     console.log(`\nContinue the workflow with:`);
-    console.log(`  node "${orchCommandPath()}" resume --run-id ${state.runId}`);
+    console.log(`  node "${orchCommandPath()}" resume --run-id ${state.runId}${followUpRootFlag(targetRoot)}`);
     return 0;
   }
 
   console.error(`[sdw-orch score submit] Conformance below threshold. Address the failing criteria, then re-run or re-judge.`);
   return 2;
+}
+
+function cmdSandbox(options) {
+  const sourceRoot = options.root ? path.resolve(options.root) : process.cwd();
+  const action = String((options.specPaths && options.specPaths[0]) || options.target || 'list').trim().split(/\s+/)[0] || 'list';
+  let sandboxDir = null;
+  try {
+    sandboxDir = resolveSandboxDir(loadProjectConfig(sourceRoot, options), sourceRoot);
+  } catch (err) {
+    console.error(`[sandbox] ${err.message}`);
+    return 1;
+  }
+
+  if (action === 'list') {
+    const items = sandbox.listSandboxes(sourceRoot, sandboxDir);
+    if (options.json) {
+      console.log(JSON.stringify({ sandboxes: items }, null, 2));
+      return 0;
+    }
+    if (items.length === 0) {
+      console.log('[sandbox] No sandboxes found.');
+      return 0;
+    }
+    console.log(`[sandbox] ${items.length} sandbox(es):`);
+    for (const item of items) {
+      const ageMinutes = Math.round((item.ageMs || 0) / 60000);
+      console.log(`  ${item.runId} | ${item.status} | ${item.branch} | ${ageMinutes}m | ${item.root}`);
+    }
+    return 0;
+  }
+
+  if (action === 'report') {
+    if (!options.runId) {
+      console.error('Error: --run-id is required for "sandbox report".');
+      return 1;
+    }
+    try {
+      const result = sandbox.writeReport(sourceRoot, options.runId, sandboxDir);
+      console.log(result.report);
+      return 0;
+    } catch (err) {
+      console.error(`[sandbox] ${err.message}`);
+      return 1;
+    }
+  }
+
+  if (action === 'clean') {
+    if (!options.runId) {
+      console.error('Error: --run-id is required for "sandbox clean".');
+      return 1;
+    }
+    try {
+      const cleanResult = sandbox.cleanSandbox(sourceRoot, options.runId, sandboxDir);
+      if (cleanResult && cleanResult.orphan) {
+        console.log(`[sandbox] Removed orphaned sandbox directory for run "${options.runId}" (no metadata was found).`);
+      } else {
+        console.log(`[sandbox] Removed clone for run "${options.runId}". Report kept at ${sandbox.normalizePath(path.relative(sourceRoot, sandbox.getReportPath(sourceRoot, options.runId, sandboxDir)))}.`);
+      }
+      return 0;
+    } catch (err) {
+      console.error(`[sandbox] ${err.message}`);
+      return 1;
+    }
+  }
+
+  console.error(`Unknown sandbox action "${action}". Use: sandbox list | sandbox report --run-id <id> | sandbox clean --run-id <id>`);
+  return 1;
 }
 
 function showHelp() {
@@ -2783,6 +3036,9 @@ Subcommands:
   task abandon           Return the dispatched DAG task to the queue
   score submit           Submit a judge verdict for Step 5 conformance scoring
   status                 Check status of current or specified run state
+  sandbox list           List isolated sandboxes created by --sandbox
+  sandbox report         Regenerate and print the report for a sandbox (--run-id)
+  sandbox clean          Delete a sandbox clone, keeping its report (--run-id)
   help                   Display this help documentation
 
 Options:
@@ -2794,7 +3050,8 @@ Options:
   --mode <mode>          Implementation mode (subagent | command)
   --batch-id <id>        Explicit batch identifier for resume-batch
   --continue-on-error    Continue queue execution when a batch item fails
-  --dry-run              Validate specs and display batch execution plan without executing
+  --dry-run              Print the execution plan and validate the spec; execute nothing
+  --sandbox              Execute the whole pipeline in an isolated local clone; never pushes
   --no-sync              Skip automatic sdw-spec sync between batch queue items
   --unattended           Execute without interruption, auto-resolving grilling gaps (default in batch)
   --interactive          Require manual confirmation at decision gates
@@ -2859,11 +3116,19 @@ function main() {
     case 'status':
       code = cmdStatus(options);
       break;
+    case 'sandbox':
+      code = cmdSandbox(options);
+      break;
     default:
       console.error(`Unknown subcommand: "${options.subcommand}". Run with --help for usage.`);
       code = 1;
       break;
   }
+
+  try {
+    const refreshRoot = options._effectiveRoot || (options.root ? path.resolve(options.root) : process.cwd());
+    sandbox.refreshReportForRoot(refreshRoot);
+  } catch (e) {}
 
   process.exit(code);
 }
@@ -2882,6 +3147,8 @@ module.exports = {
   cmdTaskAbandon,
   cmdTaskFinish,
   cmdScoreSubmit,
+  cmdSandbox,
+  printRunDryRunPlan,
   showHelp,
   loadProjectConfig,
   resolveSpecPath,

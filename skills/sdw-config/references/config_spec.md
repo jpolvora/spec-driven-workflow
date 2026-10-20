@@ -68,6 +68,11 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
       "description": "Path to the directory storing run session state files. Supports tokens {projectRoot} and {skillsRoot}.",
       "default": "{projectRoot}/.sdw/state"
     },
+    "sandboxDir": {
+      "type": "string",
+      "description": "Path to the directory that holds sandbox clones created by sdw-orch --sandbox. Defaults to {projectRoot}/.sdw/sandbox; any other value must resolve outside the project root. Supports tokens {projectRoot}, {skillsRoot}, and {temp}.",
+      "default": "{projectRoot}/.sdw/sandbox"
+    },
     "skillsRoot": {
       "type": "string",
       "description": "Path to the active skills directory. Supports tokens {projectRoot} and {skillsRoot}."
@@ -163,6 +168,7 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
 | `scmCodeReviewEnabled` | `boolean` | `false` | Whether remote PR comment polling and automated fix resolution loop is active |
 | `pushDelivery` | `boolean` | `false` | Whether to automatically push delivery commits to remote origin |
 | `stateDir` | `string` | `"{projectRoot}/.sdw/state"` | Path to isolated execution run state directory (supports `{projectRoot}` and `{skillsRoot}`) |
+| `sandboxDir` | `string` | `"{projectRoot}/.sdw/sandbox"` | Root directory for `sdw-orch --sandbox` clones; each run creates `{sandboxDir}/{runId}/repo`. Supports `{projectRoot}`, `{skillsRoot}`, and `{temp}` (OS temp directory). A custom value must resolve **outside** the project root; only the default may live inside it |
 | `skillsRoot` | `string` | — | Path to the active skills directory (supports `{projectRoot}` and `{skillsRoot}`) |
 | `autoResolveGaps` | `boolean` | `true` | Whether to auto-apply recommended grilling defaults when non-interactive |
 | `securityChecksEnabled` | `boolean` | `false` | Enable pre-commit secrets and credentials leak scanning |
@@ -193,6 +199,7 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
   "scmCodeReviewEnabled": false,
   "pushDelivery": false,
   "stateDir": "{projectRoot}/.sdw/state",
+  "sandboxDir": "{projectRoot}/.sdw/sandbox",
   "autoResolveGaps": true,
   "securityChecksEnabled": false,
   "useWorktrees": false,

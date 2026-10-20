@@ -317,6 +317,15 @@ node skills/sdw-orch/scripts/sdw_orch.cjs run .sdw/specs/<spec-name>.md [--push]
 # Execute a multi-specification sequential batch queue
 node skills/sdw-orch/scripts/sdw_orch.cjs run <spec1.md> <spec2.md> ... [--continue-on-error] [--dry-run]
 
+# Validate a spec and print the execution plan without executing anything
+node skills/sdw-orch/scripts/sdw_orch.cjs run .sdw/specs/<spec-name>.md --dry-run
+
+# Execute the whole pipeline in an isolated local clone (no push, no PR)
+node skills/sdw-orch/scripts/sdw_orch.cjs run .sdw/specs/<spec-name>.md --sandbox
+node skills/sdw-orch/scripts/sdw_orch.cjs sandbox list
+node skills/sdw-orch/scripts/sdw_orch.cjs sandbox report --run-id <runId>
+node skills/sdw-orch/scripts/sdw_orch.cjs sandbox clean --run-id <runId>
+
 # Resume an interrupted single-spec run
 node skills/sdw-orch/scripts/sdw_orch.cjs resume [--run-id <runId>]
 

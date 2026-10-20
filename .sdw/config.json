@@ -13,6 +13,7 @@
   "scmCodeReviewEnabled": true,
   "pushDelivery": true,
   "stateDir": "{projectRoot}/.sdw/state",
+  "sandboxDir": "{projectRoot}/.sdw/sandbox",
   "skillsRoot": "{projectRoot}/skills",
   "autoResolveGaps": true,
   "securityChecksEnabled": true,

@@ -17,6 +17,7 @@ yarn-error.log*
 .tmp-agentic-code-reviewers/
 !.sdw/state/.gitkeep
 .sdw/worktrees/
+.sdw/sandbox/
 
 
 # Testing & Coverage
