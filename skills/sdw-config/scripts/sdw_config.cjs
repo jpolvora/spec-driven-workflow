@@ -10,6 +10,38 @@ function normalizePath(p) {
   return p.replace(/\\/g, '/');
 }
 
+function isPathInside(childPath, parentPath) {
+  const child = path.resolve(childPath);
+  const parent = path.resolve(parentPath);
+  const relative = path.relative(parent, child);
+  return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
+}
+
+// Resolves sandboxDir with {projectRoot}, {skillsRoot}, and {temp} tokens and
+// enforces the placement rule: the default location lives inside the project,
+// every custom location must live outside it.
+function resolveSandboxPath(root, rawValue, skillsRoot) {
+  const projectRoot = path.resolve(root);
+  const normalizedRoot = normalizePath(projectRoot);
+  const normalizedSkills = skillsRoot ? normalizePath(path.resolve(skillsRoot)) : normalizedRoot;
+  const value = typeof rawValue === 'string' && rawValue.trim() ? rawValue.trim() : '{projectRoot}/.sdw/sandbox';
+  const expanded = value
+    .replace(/\{projectRoot\}/g, normalizedRoot)
+    .replace(/\{skillsRoot\}/g, normalizedSkills)
+    .replace(/\{temp\}/g, normalizePath(os.tmpdir()));
+  const resolved = path.isAbsolute(expanded) ? path.normalize(expanded) : path.resolve(projectRoot, expanded);
+  const defaultPath = path.resolve(projectRoot, '.sdw', 'sandbox');
+  const normalizeCompare = (value) => (process.platform === 'win32'
+    ? path.resolve(value).toLowerCase()
+    : path.resolve(value));
+  const samePath = normalizeCompare(resolved) === normalizeCompare(defaultPath);
+  const sameAsRoot = normalizeCompare(resolved) === normalizeCompare(projectRoot);
+  if (!samePath && (sameAsRoot || isPathInside(resolved, projectRoot))) {
+    throw new Error(`sandboxDir must resolve outside the project root unless it is the default "{projectRoot}/.sdw/sandbox" (resolved: ${normalizePath(resolved)}). Use "{temp}/sdw-sandbox" or an absolute path outside the repository.`);
+  }
+  return resolved;
+}
+
 function findProjectRoot(startDir) {
   let curr = path.resolve(startDir || process.cwd());
   while (true) {
@@ -201,6 +233,7 @@ const DEFAULT_CONFIG = {
   scmCodeReviewEnabled: false,
   pushDelivery: false,
   stateDir: '{projectRoot}/.sdw/state',
+  sandboxDir: '{projectRoot}/.sdw/sandbox',
   autoResolveGaps: true,
   securityChecksEnabled: false,
   useWorktrees: false,
@@ -303,6 +336,11 @@ const DEFAULT_SCHEMA = {
       "type": "string",
       "description": "Path to the directory storing run session state files. Supports tokens {projectRoot} and {skillsRoot}.",
       "default": "{projectRoot}/.sdw/state"
+    },
+    "sandboxDir": {
+      "type": "string",
+      "description": "Path to the directory that holds sandbox clones created by sdw-orch --sandbox. Defaults to {projectRoot}/.sdw/sandbox; any other value must resolve outside the project root. Supports tokens {projectRoot}, {skillsRoot}, and {temp}.",
+      "default": "{projectRoot}/.sdw/sandbox"
     },
     "skillsRoot": {
       "type": "string",
@@ -510,6 +548,13 @@ function validateConfigSchema(config) {
   if ('stateDir' in config) {
     if (typeof config.stateDir !== 'string' || config.stateDir.trim().length === 0) {
       errors.push('Property "stateDir" must be a string.');
+    }
+  }
+
+  // sandboxDir
+  if ('sandboxDir' in config) {
+    if (typeof config.sandboxDir !== 'string' || config.sandboxDir.trim().length === 0) {
+      errors.push('Property "sandboxDir" must be a string.');
     }
   }
 
@@ -732,7 +777,8 @@ function loadConfig(targetRoot, options = {}) {
     if (typeof value === 'string') {
       resolved[key] = value
         .replace(/\{projectRoot\}/g, normalizedRoot)
-        .replace(/\{skillsRoot\}/g, resolvedSkillsRoot);
+        .replace(/\{skillsRoot\}/g, resolvedSkillsRoot)
+        .replace(/\{temp\}/g, normalizePath(os.tmpdir()));
     } else {
       resolved[key] = value;
     }
@@ -961,6 +1007,28 @@ function cmdCheck(options) {
       }
     }
 
+    // 4.4 Validate sandboxDir placement: custom roots must live outside the project.
+    if (typeof parsedConfig.sandboxDir === 'string' && parsedConfig.sandboxDir.trim()) {
+      try {
+        const resolvedSandbox = resolveSandboxPath(targetRoot, parsedConfig.sandboxDir, skillsInfo ? skillsInfo.skillsRoot : undefined);
+        checks.push({
+          name: 'sandbox_dir_location',
+          target: normalizePath(resolvedSandbox),
+          passed: true,
+          detail: isPathInside(resolvedSandbox, targetRoot) ? 'default in-project location' : 'outside project root'
+        });
+      } catch (sandboxErr) {
+        valid = false;
+        errors.push(sandboxErr.message);
+        checks.push({
+          name: 'sandbox_dir_location',
+          target: parsedConfig.sandboxDir,
+          passed: false,
+          detail: sandboxErr.message
+        });
+      }
+    }
+
     // 4.5 Validate scmProvider CLI presence and authentication status (AC16)
     const provider = parsedConfig.scmProvider || 'none';
     const executor = typeof options.executor === 'function'
@@ -1131,7 +1199,8 @@ function cmdParse(options) {
     if (typeof value === 'string') {
       resolved[key] = value
         .replace(/\{projectRoot\}/g, normalizedRoot)
-        .replace(/\{skillsRoot\}/g, resolvedSkillsRoot);
+        .replace(/\{skillsRoot\}/g, resolvedSkillsRoot)
+        .replace(/\{temp\}/g, normalizePath(os.tmpdir()));
     } else {
       resolved[key] = value;
     }
@@ -1250,5 +1319,7 @@ module.exports = {
   DEFAULT_SCHEMA,
   findProjectRoot,
   normalizePath,
+  isPathInside,
+  resolveSandboxPath,
   showHelp
 };

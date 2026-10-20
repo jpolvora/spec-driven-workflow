@@ -1,7 +1,7 @@
 ---
 name: sdw-orch
 description: End-to-end workflow orchestrator that coordinates spec execution, subagent dispatch, review loops, and delivery.
-version: 0.1.0
+version: 0.2.0
 invocation_names:
   - sdw-orch
   - sdw-orch run
@@ -19,6 +19,11 @@ Orchestrates spec execution from input requirement to delivery commit, automated
 ## Subcommands
 
 - `run <specPath...>`: Executes the full 8-step workflow pipeline for single specification or unattended multi-spec batch queue.
+- `run <specPath> --dry-run`: Validates the specification and prints the execution plan; executes nothing and writes no state.
+- `run <specPath> --sandbox`: Executes the whole pipeline against an isolated local clone of `HEAD`; never pushes or opens a pull request.
+- `sandbox list`: Lists isolated sandboxes with status, branch, and age.
+- `sandbox report --run-id <runId>`: Regenerates and prints the sandbox report.
+- `sandbox clean --run-id <runId>`: Deletes the sandbox clone and keeps its metadata and report.
 - `task next [--run-id <runId>] [--json]`: Dispatches the next ready DAG task and emits its dispatch envelope (subagent mode).
 - `task finish --run-id <runId> --task <taskId> --evidence <evidencePath>`: Validates the dispatched task's evidence and accepts it.
 - `task abandon --run-id <runId> --task <taskId> --reason <text>`: Returns the dispatched task to the queue after a lost or failed worker.
@@ -34,6 +39,13 @@ When executing multiple specifications (`run <spec1> <spec2> ...` or batch queue
 - **Autonomous Gap Resolution:** Grilling decision gaps auto-resolve with recommended defaults (`autoResolveGaps`).
 - **Continuous Queue Progression:** For each spec, complete DAG implementation, test verification (`npm test`), conformance scoring (≥ threshold), delivery commit, and code review, then immediately advance to the next queued spec.
 - **Terminal Consolidation Only:** Halt only on unrecoverable failure (if `--continue-on-error` is omitted) or dispatch pause (code 4). Present the consolidated batch summary report after completion.
+
+## Dry Run vs Sandbox
+
+- `--dry-run` is plan-only on `run` (same contract as the batch queue): validate the spec, print the plan, create nothing. Mutually exclusive with `--sandbox`.
+- `--sandbox` clones the committed `HEAD` to `{sandboxDir}/{runId}/repo` (default `.sdw/sandbox`) on branch `sdw-sandbox/{runId}` using a shallow single-branch clone (`--depth 1 --single-branch`), removes the clone's `origin`, and runs every step against that clone. Uncommitted changes are excluded and recorded (`baselineDirty`).
+- Sandbox delivery is forced off: no push, `scmProvider: none`, and `sdw-ship-pr --dry-run`. The source checkout and `.sdw/state` are never touched.
+- Follow-up commands print absolute sandbox paths and `--root <clonePath>`. After every invocation the report at `.sdw/sandbox/{runId}/report.md` is refreshed and the `sandbox clean` command is proposed; nothing is deleted automatically.
 
 ## Steps
 

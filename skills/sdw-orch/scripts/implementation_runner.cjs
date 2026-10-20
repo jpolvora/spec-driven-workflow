@@ -21,7 +21,7 @@ function normalizePath(p) {
 function renderTaskPrompt(options) {
   const {
     targetRoot, specSlug, specPath, runId, stateDir, task, specAcs, useWorktrees, taskWorktreeRel,
-    dagTasks, taskStates, abandonments
+    dagTasks, taskStates, abandonments, absolutePaths
   } = options;
   const root = targetRoot ? path.resolve(targetRoot) : process.cwd();
   const absStateDir = stateDir ? (path.isAbsolute(stateDir) ? stateDir : path.resolve(root, stateDir)) : path.join(root, '.sdw', 'state');
@@ -38,6 +38,8 @@ function renderTaskPrompt(options) {
   const evidenceFileRel = normalizePath(path.relative(root, evidenceFileAbs));
 
   const workingDirRel = (useWorktrees && taskWorktreeRel) ? normalizePath(taskWorktreeRel) : '.';
+  const workingDirDisplay = absolutePaths ? normalizePath(root) : workingDirRel;
+  const evidenceDisplay = absolutePaths ? normalizePath(evidenceFileAbs) : evidenceFileRel;
 
   const coveredAcs = Array.isArray(task.coveredAcs) ? task.coveredAcs : [];
   const normalizedAcs = Array.isArray(specAcs)
@@ -58,8 +60,8 @@ function renderTaskPrompt(options) {
   prompt += `- **Specification:** ${specPath ? normalizePath(specPath) : '(not recorded)'}\n`;
   prompt += `- **Specification Slug:** ${specSlug}\n`;
   prompt += `- **Run ID:** ${runId}\n`;
-  prompt += `- **Working Directory:** \`${workingDirRel}\`\n`;
-  prompt += `- **Evidence File Destination:** \`${evidenceFileRel}\`\n\n`;
+  prompt += `- **Working Directory:** \`${workingDirDisplay}\`\n`;
+  prompt += `- **Evidence File Destination:** \`${evidenceDisplay}\`\n\n`;
 
   prompt += `## Description\n`;
   prompt += `${task.description || 'Implement the assigned requirements in accordance with the specification.'}\n\n`;
@@ -148,7 +150,7 @@ function renderTaskPrompt(options) {
   prompt += `- Do not record a test you did not execute.\n`;
   prompt += `- Do not report \`status: "success"\` while any assigned criterion is unmet.\n\n`;
 
-  prompt += `## Evidence Schema (\`${evidenceFileRel}\`)\n`;
+  prompt += `## Evidence Schema (\`${evidenceDisplay}\`)\n`;
   prompt += `Write this file when the work is done. Fill every field honestly; no field is pre-filled:\n`;
   prompt += `\`\`\`json\n`;
   prompt += JSON.stringify({
@@ -178,7 +180,7 @@ function renderTaskPrompt(options) {
   prompt += `## Finish Command\n`;
   prompt += `Run this once the evidence file exists:\n`;
   prompt += `\`\`\`bash\n`;
-  prompt += `node "${normalizePath(path.join(__dirname, 'sdw_orch.cjs'))}" task finish --run-id ${runId} --task ${task.id} --evidence ${evidenceFileRel}\n`;
+  prompt += `node "${normalizePath(path.join(__dirname, 'sdw_orch.cjs'))}" task finish --run-id ${runId} --task ${task.id} --evidence ${absolutePaths ? `"${evidenceDisplay}"` : evidenceFileRel}${absolutePaths ? ` --root "${normalizePath(root)}"` : ''}\n`;
   prompt += `\`\`\`\n`;
 
   fs.writeFileSync(promptFileAbs, prompt, 'utf8');
