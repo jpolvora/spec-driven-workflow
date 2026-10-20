@@ -27,7 +27,7 @@ This specification replaces the primary-agent execution path with an explicit se
 
 1. **`implementation.mode: subagent` (default).** `handoff` is removed, not aliased. The CLI becomes the sequencer: `task next` yields exactly one dispatch envelope and marks that task `dispatched`; `task finish` accepts only the dispatched task; `task abandon` releases it back to the queue. Two concurrent or out-of-order workers are rejected deterministically.
 2. **Well-instructed envelope.** Each dispatch renders a fresh prompt containing the verbatim assigned criteria, the ids of the remaining criteria, target files, a scope fence, dependency context from accepted tasks, explicit prohibitions, an honest evidence schema, a report contract, and the finish command. A `subagentBrief` tells the host agent to spawn exactly one worker for that envelope.
-3. **Honest evidence and corroboration.** Evidence carries a required `status` field; `task finish` accepts only `success`, and only when at least one `filesChanged` path was modified after the dispatch moment, so a task cannot ride on a previous task's uncommitted edits.
+3. **Honest evidence and corroboration.** Evidence carries a required `status` field; `task finish` accepts only `success`, and only when at least one `filesChanged` path differs from the baseline captured at dispatch, so a task cannot ride on a previous task's uncommitted edits.
 4. **Explicit recovery.** `task abandon --reason` returns an owned task to `pending` and records why, and a re-dispatch prompt carries the partial progress already in the tree, so a lost worker costs one command instead of state surgery.
 5. **Harness-agnostic dispatch.** The CLI never spawns subagents. It emits the envelope and the brief; the host agent performs the spawning using whatever the harness offers. Harnesses without subagent support execute the same envelope in a fresh context and keep the one-at-a-time contract.
 
@@ -69,7 +69,7 @@ The value of Step 4 is not that prompts exist; it is that implementation work is
 - AC24: When a task is re-dispatched after abandonment, the system shall include the partial progress already present in the working tree in the new prompt.
 - AC25: The system shall require a `status` field in every task evidence file with the value `success`, `partial`, `failed`, or `blocked`.
 - AC26: If the evidence `status` is not `success`, then the system shall reject the completion with a non-zero exit code quoting the reported status.
-- AC27: If no file in `filesChanged` was modified after the dispatch timestamp, then the system shall reject the completion with a non-zero exit code.
+- AC27: If no file in `filesChanged` differs from the dispatch baseline, then the system shall reject the completion with a non-zero exit code.
 - AC28: While the workspace is not a git repository, the system shall corroborate changes by file existence only.
 - AC29: When Step 4 starts in `subagent` mode, the system shall dispatch the first ready task and exit with code 4.
 - AC30: While Step 4 status is `awaiting_implementation`, the system shall keep the run status `paused`.
@@ -87,7 +87,7 @@ The value of Step 4 is not that prompts exist; it is that implementation work is
 ## Notes
 
 - Authoring standard: Node.js 22 CommonJS helpers, standard library only, zero runtime npm dependencies; 3-Tier skill layout respected; breaking changes applied without compatibility shims.
-- Supersedes the `handoff` mode of spec 015. The verification gates, exit codes, worktree integration for `command` mode, and security rules of spec 015 remain in force. Two deltas apply: evidence gains a required `status` field (AC25), and primary-tree corroboration is anchored to the dispatch timestamp (AC27).
+- Supersedes the `handoff` mode of spec 015. The verification gates, exit codes, worktree integration for `command` mode, and security rules of spec 015 remain in force. Two deltas apply: evidence gains a required `status` field (AC25), and primary-tree corroboration is anchored to a hash baseline captured at dispatch (AC27).
 - No new configuration keys. `implementation` keeps `mode`, `command`, `timeoutMs`, and `envAllowlist`; only the `mode` enum changes.
 - Implementation surfaces:
   - `skills/sdw-orch/scripts/sdw_orch.cjs`: replace the `handoff` branch of Step 4 with the dispatch sequencer; add `task next` and `task abandon`; rewire `task finish`, `resume`, `status`, the `--mode` option, and the usage block.
@@ -148,8 +148,8 @@ The value of Step 4 is not that prompts exist; it is that implementation work is
 - Prompt file sections, in order: `## Task Context`, `## Description`, `## Assigned Acceptance Criteria`, `## Remaining Acceptance Criteria (do not regress)`, `## Target Files`, `## Scope Fence`, `## Dependency Context`, `## Prior Partial Progress`, `## Prohibited Actions`, `## Evidence Schema`, `## Report Contract`, `## Finish Command`. `## Dependency Context` and `## Prior Partial Progress` are omitted when empty. Dependency summaries are one line per accepted task, so prompt size grows with the DAG, not with the run.
 - Prohibited actions wording includes: no `git commit`, `git push`, `git branch`, `git checkout`, `git worktree`, or `git tag`; no subagent spawning or delegation; no edits outside the scope fence; no edits to the run state, prompt files, or the specification; no test entries for commands that were not executed; no `status: "success"` while any assigned criterion is unmet.
 - Evidence schema: `taskId`, required `status` (`success`, `partial`, `failed`, `blocked`), non-empty `acIds` subset of the specification, non-empty `filesChanged` of project-relative existing paths, optional `tests` entries with `name` and `status`, non-empty `summary`, and optional `blockers` string array. Only `success` is accepted. The prompt shows a template with `"status": "success"`, empty `filesChanged` and `acIds`, `tests: []`, and an empty `summary` to be filled — never a passing example. A `partial`, `failed`, or `blocked` report is a valid worker outcome that the host agent turns into `task abandon`, not a malformed file.
-- Change corroboration: at `task finish`, a `filesChanged` path corroborates the task only when it exists and its modification time is later than the recorded dispatch timestamp. This replaces hash-based baselines with the timestamp the dispatch record already carries, and still rejects edits inherited from an earlier task. When the workspace is not a git repository, corroboration is existence-only.
-- Partial progress: an abandoned dispatch leaves its working-tree edits in place. The re-dispatch prompt lists the paths currently modified relative to `HEAD` and instructs the worker to inspect them first and preserve existing progress instead of rebuilding or reverting it. Their modification times predate the new dispatch, so inherited edits never satisfy the corroboration check on their own.
+- Change corroboration: dispatch captures a baseline of the paths already dirty, with a SHA-256 of each. At `task finish`, a `filesChanged` path corroborates the task only when it is dirty now and either it was clean at dispatch or its content differs from the baseline hash. Content comparison is used instead of modification times because filesystem timestamp granularity is unreliable across hosts. When the workspace is not a git repository, corroboration is existence-only.
+- Partial progress: an abandoned dispatch leaves its working-tree edits in place. The re-dispatch prompt lists the paths currently modified relative to `HEAD` and instructs the worker to inspect them first and preserve existing progress instead of rebuilding or reverting it. Their content matches the new dispatch baseline, so inherited edits never satisfy the corroboration check on their own.
 - Exit codes are unchanged: `0` success, `1` operational failure, `2` conformance score below threshold, `3` user gate or cancellation, `4` awaiting implementation (dispatch pause). `task next`, `task finish`, and `task abandon` use `0` and `1` only.
 - Harness without subagent support: the host agent executes the same envelope inline in a fresh context. The CLI contract does not change, and the one-task-at-a-time invariant is preserved by the single active dispatch.
 - Deliberately out of scope for this iteration, per the reference study: prompt byte budgets and manifests, prompt SHA-256 audit chains with revisions, append-only telemetry streams, liveness markers and windowed verdicts, provenance flags, and pre-dispatch artifact gates. Each is recoverable later without changing the dispatch contract, and none is required for correctness at SDW's DAG sizes.
@@ -169,7 +169,7 @@ The value of Step 4 is not that prompts exist; it is that implementation work is
 | Feature | Reason |
 |---------|--------|
 | Parallel DAG task execution and multiple concurrent subagents | Explicitly deferred; this version is strictly sequential, one worker at a time |
-| Per-task worktree isolation in subagent mode | `command` mode keeps worktrees; subagent mode uses the primary tree with a dispatch-timestamp check instead |
+| Per-task worktree isolation in subagent mode | `command` mode keeps worktrees; subagent mode uses the primary tree with a dispatch-baseline check instead |
 | Harness-hosted subagent APIs, vendor SDKs, or plugin hooks | Would violate agent and harness agnosticism |
 | Prompt budgets, audit chains, telemetry streams, and liveness verdicts | Studied in `workflow-skills` and rejected as heavier than this step needs |
 | Automatic retry or re-spawn policy for failed workers | Recovery is explicit through `task abandon --reason`; retry policy is a separate concern |
@@ -188,14 +188,14 @@ The value of Step 4 is not that prompts exist; it is that implementation work is
 | Default mode | `subagent` | Matches the original design intent and stays usable in every harness without vendor coupling | y |
 | Dispatch granularity | One dispatched task at a time | Sequential execution was requested; it also bounds blast radius and worker context | y |
 | Sequentiality enforcement | CLI rejects a second dispatch and out-of-order completion | Prose-only sequencing demonstrably failed to keep the pipeline honest | y |
-| Working directory in subagent mode | Primary tree with a dispatch-timestamp check | Avoids worktree lifecycle in the default path while still detecting stale evidence | y |
+| Working directory in subagent mode | Primary tree with a dispatch-baseline check | Avoids worktree lifecycle in the default path while still detecting stale evidence | y |
 | Subagent spawning authority | Host agent spawns; the CLI never does | Keeps the contract harness-agnostic and testable with plain Node | y |
 | Reference framework scope | Inspiration only, no feature parity | SDW prioritizes simplicity and speed over capability breadth | y |
 | Harness without subagent support | Host executes the envelope inline in a fresh context | Keeps the workflow usable everywhere while preserving one-task-at-a-time semantics | n |
 | Dispatch state location | `steps['4'].dispatch` in run state | Step-scoped, resumable, and does not pollute shared configuration | n |
 | `awaiting_implementation` status name | Retained | Batch manifests and the exit-code mapping already depend on it; renaming adds churn without behavior change | n |
 | Evidence `status` field | Required, only `success` accepted | Makes partial or blocked work an explicit signal instead of a silently withheld completion | n |
-| Corroboration signal | File modification time later than the dispatch timestamp | Uses state the dispatch record already holds instead of introducing a hash baseline | n |
+| Corroboration signal | SHA-256 baseline of the paths already dirty at dispatch | Content comparison is deterministic; modification times proved unreliable under coarse filesystem clocks in CI | n |
 | Abandoned task handling | Return to `pending` with a recorded reason | Allows re-dispatch after a lost worker without corrupting run state | n |
 | Runtime dependencies | Node.js 22 standard library only | Repository policy forbids runtime npm dependencies in packaged skills | y |
 
@@ -233,7 +233,7 @@ The value of Step 4 is not that prompts exist; it is that implementation work is
 - Out-of-order completion: `task finish --task task-1` while `task-2` is dispatched fails with exit code 1 and names the active task, even when `task-1` has no dependencies.
 - Blocked queue: `task next` on a run whose only pending task depends on a dispatched task fails with exit code 1 and names the blocking dependency.
 - Nothing dispatched: `task abandon` with no active dispatch fails with exit code 1.
-- Stale evidence: evidence listing only a file modified before the dispatch timestamp is rejected and the task stays `dispatched`.
+- Stale evidence: evidence listing only a file whose content is unchanged from the dispatch baseline is rejected and the task stays `dispatched`.
 - Unmodified evidence: evidence listing a clean file that the worker never touched is rejected.
 - Non-success evidence: `status: "partial"` is rejected with the reported status quoted, and the task stays `dispatched`.
 - Missing evidence status: an evidence file without `status` is rejected by validation.

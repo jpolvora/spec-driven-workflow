@@ -61,7 +61,7 @@ flowchart TD
 4. **Sequential Subagent Dispatch & Evidence Gate**
    - Dispatches exactly one DAG task at a time: `task next` emits a self-sufficient brief (verbatim criteria, scope fence, prohibitions, dependency context, honest evidence template, report contract) and the host agent runs one worker per envelope. `command` mode instead runs a configured subprocess per task with token substitution and environment sanitization.
    - Enforces single-flight ordering — a second dispatch, or a `task finish` for any task but the dispatched one, is rejected — and releases a lost worker's task with `task abandon --reason`.
-   - Corroborates each task against its own dispatch timestamp, so edits inherited from an earlier task never satisfy the evidence gate. `command` mode still isolates multi-task plans in sequential git worktrees branching from primary `HEAD`.
+   - Corroborates each task against a baseline captured at dispatch (dirty paths plus content hashes), so edits inherited from an earlier task never satisfy the evidence gate. `command` mode still isolates multi-task plans in sequential git worktrees branching from primary `HEAD`.
    - Requires task completion via `sdw-orch task finish` with schema-validated evidence, including a required `status` where only `success` is accepted.
    - Executes build and test verification gates (`verification.buildCommand`, `verification.testCommand`) once all tasks are accepted.
 

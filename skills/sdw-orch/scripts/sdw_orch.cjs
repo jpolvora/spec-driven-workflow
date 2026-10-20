@@ -1027,6 +1027,7 @@ function cmdRun(options) {
         });
 
         // Execute command
+        const commandBaseline = implementationRunner.captureDispatchBaseline(targetRoot);
         const cmdResult = implementationRunner.executeTaskCommand({
           config: {
             ...config,
@@ -1068,7 +1069,8 @@ function cmdRun(options) {
           targetRoot,
           wtInfo ? wtInfo.worktreeAbs : null,
           useWorktrees,
-          evidenceData.filesChanged
+          evidenceData.filesChanged,
+          useWorktrees ? {} : { baseline: commandBaseline }
         );
 
         if (!hasChanges) {
@@ -2035,6 +2037,7 @@ function dispatchNextTask(context) {
   dispatch.activeTaskId = ready.id;
   dispatch.sequence = (dispatch.sequence || 0) + 1;
   dispatch.dispatchedAt = new Date().toISOString();
+  dispatch.baseline = implementationRunner.captureDispatchBaseline(targetRoot);
 
   tasks[ready.id] = {
     ...previous,
@@ -2315,20 +2318,19 @@ function cmdTaskFinish(options) {
 
   const worktreeExists = useWorktrees && fs.existsSync(taskWorktreeAbs);
   const effectiveUseWorktrees = useWorktrees && worktreeExists;
-  const dispatchedAtMs = dispatch.dispatchedAt ? Date.parse(dispatch.dispatchedAt) : null;
 
   const hasChanges = implementationRunner.checkTaskChanges(
     targetRoot,
     effectiveUseWorktrees ? taskWorktreeAbs : null,
     effectiveUseWorktrees,
     evidenceData.filesChanged,
-    effectiveUseWorktrees ? {} : { dispatchedAtMs }
+    effectiveUseWorktrees ? {} : { baseline: dispatch.baseline }
   );
 
   if (!hasChanges) {
     const errMsg = effectiveUseWorktrees
       ? `Task working tree for ${taskId} contains no changes.`
-      : `None of the files listed in filesChanged were modified after this task was dispatched.`;
+      : `None of the files listed in filesChanged changed since this task was dispatched.`;
     console.error(`Error: ${errMsg}`);
     return 1;
   }

@@ -32,7 +32,7 @@ Each execution session is completely isolated within a dedicated JSON state file
       "name": "implementation",
       "status": "completed",
       "output": {},
-      "dispatch": { "activeTaskId": null, "sequence": 2, "dispatchedAt": null, "abandonments": [] },
+      "dispatch": { "activeTaskId": null, "sequence": 2, "dispatchedAt": null, "baseline": { "dirty": [], "hashes": {} }, "abandonments": [] },
       "tasks": {
         "task-1": { "status": "completed", "filesChanged": ["src/a.ts"], "acIds": ["AC1"], "summary": "..." }
       },
@@ -194,7 +194,7 @@ Step 4 turns each DAG task into a dispatched worker. Exactly one task is in flig
   - `filesChanged`: Non-empty array of project-relative paths (no absolute paths, no `..` traversal, no `.git/`), files must exist on disk or be git-tracked deletions.
   - `tests`: Optional or empty array `[]` for non-testable tasks (e.g. docs, configs).
   - `summary`: Non-empty string.
-- **Change Corroboration:** In the primary tree, at least one `filesChanged` path must be modified *after* the dispatch timestamp, so edits inherited from an earlier task never corroborate. Non-git workspaces fall back to existence. Empty worktrees in worktree mode are rejected with code 1.
+- **Change Corroboration:** Dispatch records a baseline of the already-dirty paths with a SHA-256 of each. In the primary tree, at least one `filesChanged` path must be dirty now and either clean at dispatch or with different content, so edits inherited from an earlier task never corroborate. Non-git workspaces fall back to existence. Empty worktrees in worktree mode are rejected with code 1.
 - **DAG Dependency Gate:** Rejects completion if upstream DAG dependencies are not yet completed.
 
 ### Dispatch Prompt Contract

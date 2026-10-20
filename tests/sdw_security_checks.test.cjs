@@ -257,7 +257,7 @@ None
     cfg.securityChecksEnabled = true;
     cfg.implementation = {
       mode: 'command',
-      command: 'node -e "const fs = require(\'fs\'); fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({ taskId: process.env.SDW_TASK_ID, acIds: [\'AC1\'], filesChanged: [\'leak.js\'], summary: \'leak\' }));"'
+      command: 'node -e "const fs = require(\'fs\'); fs.appendFileSync(\'leak.js\', \'// touched by the task\\n\'); fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({ taskId: process.env.SDW_TASK_ID, status: \'success\', acIds: [\'AC1\'], filesChanged: [\'leak.js\'], summary: \'leak\' }));"'
     };
     fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2), 'utf8');
 

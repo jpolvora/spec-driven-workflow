@@ -51,9 +51,9 @@ When executing multiple specifications (`run <spec1> <spec2> ...` or batch queue
    - Done when: DAG tasks generated, and DAG artifact `{slug}-step-3.md` persisted.
 
 4. **Implementation Execution (Sequential Subagent Dispatch)**
-   In `subagent` mode (default), dispatch exactly one ready DAG task and pause with exit code 4. Each brief carries the `sdw-rules` simplicity constraints (minimum code, surgical scope, no unrequested features). For each envelope: spawn one subagent that reads the prompt file and executes it as written, wait for its report, then submit `task finish`. If the worker reports a non-`success` status or never returns, run `task abandon --reason` and dispatch again. In `command` mode, execute the configured subprocess in topological DAG order. Worktrees are command-mode only; subagent mode uses the primary tree with dispatch-timestamp corroboration. Once every task is accepted, run build and test verification gates.
+   In `subagent` mode (default), dispatch exactly one ready DAG task and pause with exit code 4. Each brief carries the `sdw-rules` simplicity constraints (minimum code, surgical scope, no unrequested features). For each envelope: spawn one subagent that reads the prompt file and executes it as written, wait for its report, then submit `task finish`. If the worker reports a non-`success` status or never returns, run `task abandon --reason` and dispatch again. In `command` mode, execute the configured subprocess in topological DAG order. Worktrees are command-mode only; subagent mode uses the primary tree with dispatch-baseline corroboration. Once every task is accepted, run build and test verification gates.
    - Run: `node skills/sdw-orch/scripts/sdw_orch.cjs task next --run-id <runId>`
-   - Done when: Every DAG task has accepted evidence, corroborated after its dispatch timestamp, and build/test gates pass.
+   - Done when: Every DAG task has accepted evidence, corroborated against its dispatch baseline, and build/test gates pass.
    - Exit codes: `4` dispatch pause (normal), `1` failure.
 
 5. **Evaluate Conformance Score (LLM judge)**

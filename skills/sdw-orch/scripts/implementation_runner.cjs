@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { spawnSync, execSync } = require('child_process');
 const stateManager = require('./state_manager.cjs');
 
@@ -268,24 +269,59 @@ function createTaskWorktree(targetRoot, runId, taskId) {
 }
 
 /**
+ * Captures the working-tree state at dispatch time (Spec 028 AC24, AC27).
+ *
+ * Records the paths already dirty before the task started, with a content hash
+ * for each, so a task can be corroborated by comparing content instead of
+ * trusting filesystem timestamps (which have coarse granularity on some hosts).
+ */
+function captureDispatchBaseline(root) {
+  const cwd = root ? path.resolve(root) : process.cwd();
+  const dirty = collectModifiedPaths(cwd);
+  const hashes = {};
+  for (const relPath of dirty) {
+    try {
+      const absPath = path.resolve(cwd, relPath);
+      if (fs.existsSync(absPath) && fs.statSync(absPath).isFile()) {
+        hashes[relPath] = crypto.createHash('sha256').update(fs.readFileSync(absPath)).digest('hex');
+      }
+    } catch (e) {
+      // Unreadable at dispatch: treat as changed, never as inherited dirt.
+    }
+  }
+  return { dirty, hashes };
+}
+
+function hashFile(root, relPath) {
+  try {
+    const absPath = path.resolve(root, relPath);
+    if (!fs.existsSync(absPath) || !fs.statSync(absPath).isFile()) return null;
+    return crypto.createHash('sha256').update(fs.readFileSync(absPath)).digest('hex');
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
  * Checks whether a task produced real changes (Spec 015 AC14/AC15, Spec 028 AC27).
  *
  * In primary-tree mode a listed file corroborates the task only when it is
- * modified now and its modification time is later than the dispatch timestamp,
- * so edits inherited from an earlier task never satisfy the check. Non-git
- * workspaces fall back to existence only (Spec 028 AC28).
+ * modified now and either it was clean at dispatch or its content differs from
+ * the hash captured then, so edits inherited from an earlier task never
+ * satisfy the check. Non-git workspaces fall back to existence only (AC28).
  */
 function checkTaskChanges(targetRoot, taskWorktreeAbs, useWorktrees, filesChanged = [], options = {}) {
   const root = targetRoot ? path.resolve(targetRoot) : process.cwd();
-  const dispatchedAtMs = Number.isFinite(options.dispatchedAtMs) ? options.dispatchedAtMs : null;
+  const baseline = options.baseline && typeof options.baseline === 'object' ? options.baseline : null;
+  const baselineDirty = new Set(Array.isArray(baseline && baseline.dirty) ? baseline.dirty.map(normalizePath) : []);
+  const baselineHashes = (baseline && baseline.hashes && typeof baseline.hashes === 'object') ? baseline.hashes : {};
 
-  const modifiedAfterDispatch = (relPath) => {
-    if (dispatchedAtMs === null) return true;
-    try {
-      return fs.statSync(path.resolve(root, relPath)).mtimeMs > dispatchedAtMs;
-    } catch (e) {
-      return false;
-    }
+  const isInheritedDirt = (relPath) => {
+    if (!baselineDirty.has(normalizePath(relPath))) return false;
+    const priorHash = baselineHashes[normalizePath(relPath)];
+    if (!priorHash) return false;
+    const currentHash = hashFile(root, relPath);
+    return currentHash === priorHash;
   };
 
   if (useWorktrees && taskWorktreeAbs && fs.existsSync(taskWorktreeAbs)) {
@@ -338,7 +374,7 @@ function checkTaskChanges(targetRoot, taskWorktreeAbs, useWorktrees, filesChange
 
     for (const f of filesChanged) {
       const normF = normalizePath(f).replace(/^\.\//, '');
-      if (changed.has(normF) && modifiedAfterDispatch(normF)) {
+      if (changed.has(normF) && !isInheritedDirt(normF)) {
         return true;
       }
     }
@@ -513,6 +549,8 @@ function executeTaskCommand(options) {
 module.exports = {
   renderTaskPrompt,
   collectModifiedPaths,
+  captureDispatchBaseline,
+  hashFile,
   checkTaskDependencies,
   createTaskWorktree,
   checkTaskChanges,
