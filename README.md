@@ -4,6 +4,8 @@
 
 A streamlined, deterministic framework for spec-driven software development with AI coding agents.
 
+By default, an SDW agent **investigates and proposes a plan before changing anything**; unattended execution happens only through an explicitly invoked skill or command. The full interaction protocol lives in [GLOSSARY.md](GLOSSARY.md) and [`skills/sdw-rules/references/interaction_modes.md`](skills/sdw-rules/references/interaction_modes.md).
+
 ---
 
 ## 1. Overview & Motivation
@@ -18,6 +20,7 @@ A streamlined, deterministic framework for spec-driven software development with
 SDW standardizes how developers specify, refine, implement, review, and ship features across both local workspaces and remote trackers (GitHub, Azure DevOps).
 
 > 📖 **Feature Showcase:** For an in-depth, presentation-style breakdown of all implemented capabilities, subsystems, and the product roadmap, see [FEATURES.md](FEATURES.md).
+> 📚 **Vocabulary:** SDW is opinionated about words. Terms such as **spec**, **backlog**, **task**, **gate**, and **sandbox** are defined in [GLOSSARY.md](GLOSSARY.md) and take precedence over industry synonyms.
 
 ---
 
@@ -79,7 +82,7 @@ flowchart TD
 
 7. **Automated Code Review Loop (Delegated to `sdw-code-review`)**
    - Dispatches `sdw-code-review` to inspect working-tree and branch diffs against an auto-detected base branch.
-   - Evaluates Karpathy Guidelines, `sdw-rules` simplicity, surgical diff hygiene, and syntax invariants.
+   - Evaluates `sdw-rules` simplicity, surgical diff hygiene, and syntax invariants.
    - Generates an actionable Markdown fix plan (`{slug}-step-7.md`) and applies surgical fixes in an iterative loop.
 
 8. **PR Preparation, Delivery & Review Convergence (Delegated to `sdw-ship-pr`)**
@@ -160,7 +163,7 @@ Verify what is available before installing:
 npx skills add jpolvora/spec-driven-workflow --list
 ```
 
-Expected: `10` discoverable skills — the 8 `sdw-*` skills plus `karpathy-guidelines` and `ws-memo`:
+Expected: `9` discoverable skills — the 8 `sdw-*` skills plus `ws-memo`:
 
 | Skill | Purpose |
 |---|---|
@@ -179,7 +182,7 @@ Expected: `10` discoverable skills — the 8 `sdw-*` skills plus `karpathy-guide
 npx skills add jpolvora/spec-driven-workflow --skill sdw-router --skill sdw-config --skill sdw-spec --skill sdw-orch --skill sdw-rules --skill sdw-security-checks --skill sdw-code-review --skill sdw-ship-pr -y
 ```
 
-One-liner alternative (installs everything discoverable, including `karpathy-guidelines` and `ws-memo`):
+One-liner alternative (installs everything discoverable, including `ws-memo`):
 
 ```bash
 npx skills add jpolvora/spec-driven-workflow --all

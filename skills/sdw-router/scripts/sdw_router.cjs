@@ -156,7 +156,7 @@ const INTENT_RULES = {
     recommendedOption: 'Orchestrate end-to-end implementation and delivery using sdw-orch'
   },
   'sdw-rules': {
-    primaryKeywords: ['sdw-rules', 'shared rules', 'karpathy', 'simplicity first', 'scope enclosure', 'anti-overengineering'],
+    primaryKeywords: ['sdw-rules', 'shared rules', 'engineering principles', 'simplicity first', 'scope enclosure', 'anti-overengineering'],
     secondaryKeywords: ['guideline', 'guidelines', 'yagni', 'surgical diff', 'traps log', 'audit-spec', 'log-trap', 'traps.md'],
     recommendedOption: 'Review behavioral rules, anti-patterns, or log traps using sdw-rules'
   },

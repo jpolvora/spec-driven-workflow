@@ -18,6 +18,7 @@ This catalog details recurring pitfalls observed in LLM agent code and specifies
 - **Symptom:** Creating `AbstractBaseHandler`, `DefaultHandlerFactory`, `HandlerRegistry` when only a single function is called.
 - **Why it hurts:** Obscures data flow, burns tokens during context ingestion, complicates debugging.
 - **Directive:** Prefer plain functions and standard CommonJS modules. Introduce abstractions only upon the third distinct concrete use case (Rule of Three).
+- **Example:** a prefix transform implemented as a registry, an abstract base class, and one concrete transformer takes ~50 lines; the actual requirement is `function addPrefix(input, prefix = 'v1') { return \`${prefix}:${input}\`; }`. Write the two-line function.
 
 ## 4. Adjacent Code "Refactoring" / Formatting Drift
 - **Symptom:** Modifying whitespace, sorting imports, or "modernizing" syntax in unrelated functions in the same file.

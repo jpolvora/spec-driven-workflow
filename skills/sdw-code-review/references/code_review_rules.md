@@ -1,12 +1,12 @@
 # Code Review Rules, Hygiene Invariants & Report Schema
 
-Tier-2 reference for `sdw-code-review`. Grounds all findings in Karpathy
-Guidelines and `sdw-rules` simplicity first. No multi-stack matrices, no fraud
-frameworks, no debate tournaments.
+Tier-2 reference for `sdw-code-review`. Grounds all findings in `sdw-rules`
+simplicity first. No multi-stack matrices, no fraud frameworks, no debate
+tournaments.
 
 ## 1. Simplicity First (YAGNI & Anti-Overengineering)
 
-Derived from `sdw-rules` and `karpathy_rules.md`:
+Derived from `sdw-rules` simplicity and scope directives:
 
 - **YAGNI:** Flag speculative abstractions (single-use factories, registries,
   unrequested configurability). Prefer the 20-line solution over the 50-line one.

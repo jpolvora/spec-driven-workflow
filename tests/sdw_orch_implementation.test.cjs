@@ -151,6 +151,7 @@ test('Spec 028 AC1, AC2, AC4, AC5, AC14, AC15, AC29: subagent mode dispatches ex
     assert.ok(promptContent.includes('"status": ""'), 'The evidence status is not pre-filled (AC22, AC25)');
     assert.ok(promptContent.includes('`partial`') && promptContent.includes('`blocked`'), 'Allowed status values are documented (AC25)');
     assert.ok(promptContent.includes('task finish --run-id'), 'The finish command is included (AC23)');
+    assert.ok(promptContent.includes('sdw-rules'), 'The prompt requires the shared sdw-rules skill');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

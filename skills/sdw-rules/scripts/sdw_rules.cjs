@@ -136,15 +136,15 @@ function cmdDoctor(options) {
       });
     }
 
-    // 3. Cross-reference check for downstream core skills
-    if (skillName === 'sdw-spec' || skillName === 'sdw-orch') {
+    // 3. Every skill except sdw-rules must reference the shared rules skill.
+    if (skillName !== 'sdw-rules') {
       if (/sdw-rules/i.test(content)) {
         skillInfo.referencesRules = true;
       } else {
         violations.push({
           skill: skillName,
           rule: 'missing_rules_reference',
-          message: `Downstream skill "${skillName}" does not reference "sdw-rules"`
+          message: `Skill "${skillName}" does not reference "sdw-rules"`
         });
       }
     } else if (/sdw-rules/i.test(content)) {

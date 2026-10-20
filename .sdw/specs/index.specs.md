@@ -41,3 +41,4 @@ Central repository index tracking specification lifecycle states, metadata, and 
 | 027 | 027-llm-judge-conformance-scoring | LLM-Judge Conformance Scoring | completed | local | 2026-10-19 | PASS | - |
 | 028 | 028-sdw-orch-sequential-subagent-implementation | SDW Orchestrator Sequential Subagent Implementation Dispatch | completed | local | 2026-10-19 | PASS | - |
 | 029 | 029-sdw-orch-sandboxed-execution | SDW Orchestrator Sandboxed Execution and Plan-Only Dry Run | completed | local | 2026-10-19 | PASS | - |
+| 030 | 030-sdw-micro-task-dag-planning | SDW Micro-Task DAG Planning and Sequential Dispatch Preview | pending | local | 2026-10-20 | PASS | - |

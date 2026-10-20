@@ -18,6 +18,8 @@ invocation_names:
 
 Specification lifecycle, authoring, synchronization, and formatting manager integrated directly with the orchestrator.
 
+> **Rules:** apply [`sdw-rules`](../sdw-rules/SKILL.md); authoring, validating, registering, or archiving a spec never authorizes implementation.
+
 ## Subcommands
 
 - `init`: Bootstraps `{specsDir}/index.specs.md` with standard tables and status definitions.

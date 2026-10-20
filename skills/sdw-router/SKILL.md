@@ -33,6 +33,8 @@ Always-autoloaded entrypoint and traffic controller routing agent tasks across a
 | Deep working-tree code review, review fix planning, code-review | `sdw-code-review` | Standalone review, executable fix plans, and orch Step 7 delegation |
 | Unrecognized or general coding / conversation | *(Pass-through)* | Allows standard agent execution without intercepting |
 
+**Rules:** apply [`sdw-rules`](../sdw-rules/SKILL.md) — planning, authorization, and scope — before routing or dispatching anything.
+
 ## Steps
 
 1. **Scan Available Skills**
@@ -56,4 +58,4 @@ Always-autoloaded entrypoint and traffic controller routing agent tasks across a
 ## References
 
 - Detailed intent dispatch table and ambiguity handling: [`references/routing_table.md`](references/routing_table.md)
-- Consumer project `AGENTS.md` autoload configuration: [`references/consumer_agents_setup.md`](references/consumer_agents_setup.md)
+- Consumer autoload configuration (wiring the router into a repository's agent instructions): [`references/consumer_agents_setup.md`](references/consumer_agents_setup.md)
