@@ -85,6 +85,7 @@ flowchart TD
 8. **PR Preparation, Delivery & Review Convergence (Delegated to `sdw-ship-pr`)**
    - Delegates pre-PR verification gates (`requiredBuild`, `runAllTests`, `prePrCommand`, `prePrInstructions`) and delivery publishing to `sdw-ship-pr`.
    - Executes cooperative and proactive review convergence with push-before-resolve guarantees, posting structured resolution comments before closing threads.
+   - Optionally merges the converged pull request with `--merge` / `--allow-merge` (fire and forget: a merge failure is recorded but never fails the delivery).
    - Updates the specification index to `completed` and records PR metadata in the run state.
 
 ---

@@ -109,6 +109,7 @@
 - **Cooperative & Proactive Review Convergence:** Enforces a strict 8-step lifecycle (wait review/CI finish → check active threads → fetch all → cooperative defect class fix across sibling files → test verification → commit → push → close related threads).
 - **Push-Before-Resolve Mandate & Resolution Comment Contract:** Guarantees threads are never closed before the fix commit is pushed to the remote tracking branch. Posts a structured resolution reply comment citing the commit SHA, defect class, and fix summary.
 - **Zero-Mutation Dry-Run Simulation:** Simulates pre-PR checks, branch push, PR creation, and review polling without remote mutations when `--dry-run` is active.
+- **Opt-In Fire-and-Forget Merge:** `--merge` / `--allow-merge` issues one SCM merge command (`gh pr merge` / `az repos pr update --status completed`) after review converges. A merge failure is recorded in the report and run state but never fails the delivery, since permissions, approvals, and branch rules belong to the operator.
 
 ---
 

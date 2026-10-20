@@ -35,6 +35,7 @@ Parameters:
 - `--body <string>`: Custom PR description body.
 - `--push`: Force push active branch to remote origin before PR creation.
 - `--poll-pr`: Enable post-PR review polling and convergence loop.
+- `--merge` / `--allow-merge`: After review convergence, ask the SCM CLI to merge the pull request (`gh pr merge <n> --merge` or `az repos pr update --id <n> --status completed`). Fire and forget: the outcome is recorded but never fails the delivery, because permissions, pending approvals, and branch rules are outside this skill's contract. Default: off.
 - `--max-iterations <n>`: Review convergence ceiling (default `3`).
 - `--poll-interval <ms>`: Wait between convergence rounds (default `20000`).
 - `--max-preemptions <n>`: Concurrent-push adaptation budget (default `3`).
@@ -90,6 +91,12 @@ Detailed protocol: [`references/ship_protocol.md`](references/ship_protocol.md).
 2. If unresolved issues remain after maximum iterations, record review residual and report status. Never close a thread before pushing, and never close without an explanatory fix comment.
 3. **Concurrent-push adaptation:** Cancelled/superseded CI checks (`cancelled`, `cancel`) are waited out, never treated as failures; terminal states (`timed_out`, `startup_failure`) stay on the fixer/blocker path. When a newer run replaces the observed one, the loop resets its round window (up to `--max-preemptions` times) and follows the latest status instead of halting.
 - Done when: Active threads resolved with explanatory comments after push and CI checks green, or iteration ceiling reached with status recorded.
+
+### Step 5b: Optional Merge (opt-in, fire and forget)
+1. Apply only when `--merge` / `--allow-merge` is passed, the review converged, and a pull request exists.
+2. Call `provider.mergePullRequest({ prNumber })` once and record `merge: { requested, attempted, ok, reason, error, durationMs }` in the report and in `steps[8].output.merge` when a run state is used.
+3. Never throw, retry, or fail delivery on a merge error: missing permissions, pending approvals, or unmet branch rules are the operator's concern. Skip with a recorded reason when the merge cannot apply (dry-run, no PR, review did not converge, SCM provider disabled).
+- Done when: The merge was attempted at most once and its outcome or skip reason is recorded.
 
 ### Step 6: Delivery Outcome & State Persistence
 1. Record PR URL, PR number, ship status, and review convergence results.
