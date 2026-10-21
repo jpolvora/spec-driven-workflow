@@ -90,6 +90,16 @@
           "default": false,
           "description": "When true, sdw-orch runs sdw-retro for the completed run and records the outcome in state.retro. When false or absent, it prints the advisory retro command only."
         },
+        "followUp": {
+          "type": "string",
+          "enum": [
+            "queue",
+            "record",
+            "none"
+          ],
+          "default": "queue",
+          "description": "sdw-batch policy for the retrospective candidates of a completed item: queue (create draft specs for critical/high candidates and append them to the batch queue), record (write .sdw/state/batch-{batchId}.followups.md and create nothing), or none (read no report). Follow-up items (followUpDepth 1) still record their candidate summary but never queue more specifications."
+        },
         "transcripts": {
           "type": "array",
           "items": {

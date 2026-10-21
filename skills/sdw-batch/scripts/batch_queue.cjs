@@ -15,6 +15,14 @@ const PAUSE_STATUS = {
   5: 'awaiting_judgment'
 };
 
+// Spec 00046: a completed run records its retrospective candidates in
+// state.retro. The batch consumes them under one explicit policy: only
+// critical/high candidates become draft specifications, and a follow-up item
+// is never allowed to queue more follow-ups.
+const FOLLOW_UP_POLICIES = ['queue', 'record', 'none'];
+const DEFAULT_FOLLOW_UP_POLICY = 'queue';
+const QUEUED_SEVERITIES = ['critical', 'high'];
+
 function normalizePath(value) {
   return String(value || '').replace(/\\/g, '/');
 }
@@ -47,7 +55,8 @@ function loadConfig(targetRoot) {
   return {
     root,
     specsDir: expand(raw.specsDir, path.join(root, '.sdw', 'specs')),
-    stateDir: expand(raw.stateDir, path.join(root, '.sdw', 'state'))
+    stateDir: expand(raw.stateDir, path.join(root, '.sdw', 'state')),
+    retro: raw.retro && typeof raw.retro === 'object' && !Array.isArray(raw.retro) ? raw.retro : {}
   };
 }
 
@@ -185,6 +194,276 @@ function readRunState(config, runId) {
   }
 }
 
+function retroFollowUpPolicy(config) {
+  const followUp = config && config.retro ? config.retro.followUp : null;
+  const value = typeof followUp === 'string' ? followUp.trim().toLowerCase() : '';
+  return FOLLOW_UP_POLICIES.includes(value) ? value : DEFAULT_FOLLOW_UP_POLICY;
+}
+
+// One shape for every outcome: a status with no candidates still carries the
+// fields the manifest and the summary read.
+function followUpRecord(status, extras = {}) {
+  return {
+    status,
+    candidates: 0,
+    bySeverity: {},
+    reportPath: null,
+    queued: [],
+    failures: [],
+    processed: [],
+    ...extras
+  };
+}
+
+function describeCandidateValue(value) {
+  if (value === null || value === undefined) return 'not recorded';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'object' && typeof value.artifact === 'string' && typeof value.ref === 'string') {
+    return `${value.artifact}${value.ref}`;
+  }
+  if (typeof value === 'object' && typeof value.target === 'string') {
+    const rest = { ...value };
+    delete rest.target;
+    return Object.keys(rest).length > 0 ? `${value.target} (${JSON.stringify(rest)})` : value.target;
+  }
+  return JSON.stringify(value);
+}
+
+function candidateSpecText(candidate) {
+  const heading = candidate.id
+    ? `Retro follow-up ${candidate.id}: ${candidate.title || 'untitled candidate'}`
+    : `Retro follow-up: ${candidate.title || 'untitled candidate'}`;
+  return [
+    heading,
+    '',
+    `Proposed change: ${describeCandidateValue(candidate.proposedChange)}`,
+    `Evidence: ${describeCandidateValue(candidate.evidence)}`
+  ].join('\n');
+}
+
+function specScript() {
+  return path.resolve(__dirname, '..', '..', 'sdw-spec', 'scripts', 'sdw_spec.cjs');
+}
+
+// Default seam: the sdw-spec CLI owns drafting, numbering, and index
+// registration, so the batch never writes a specification itself.
+function createSpecWithCli({ config, candidate }) {
+  if (!config || !config.root) throw new Error('a resolved batch config is required to create a specification');
+  const title = String(candidate.title || candidate.id || 'Retro follow-up').trim();
+  const result = spawnSync(process.execPath, [
+    specScript(),
+    'new',
+    candidateSpecText(candidate),
+    '--title', title,
+    '--root', config.root,
+    '--json'
+  ], { cwd: config.root, encoding: 'utf8' });
+  if (result.error) throw result.error;
+  let payload = null;
+  try {
+    payload = String(result.stdout || '').trim() ? JSON.parse(String(result.stdout).trim()) : null;
+  } catch (e) {
+    payload = null;
+  }
+  if (result.status !== 0 || !payload || payload.status === 'error') {
+    const detail = (payload && payload.error) || String(result.stderr || '').trim();
+    throw new Error(detail || `sdw-spec new exited with code ${result.status}`);
+  }
+  if (typeof payload.filePath !== 'string' || !payload.filePath.trim()) {
+    throw new Error('sdw-spec new did not return the created specification path');
+  }
+  return payload;
+}
+
+function appendFollowUpQueueEntry(manifest, item, candidate, created, config) {
+  if (!manifest || !Array.isArray(manifest.queue)) throw new Error('batch manifest has no queue');
+  const filePath = created && (created.filePath || created.file);
+  if (typeof filePath !== 'string' || !filePath.trim()) {
+    throw new Error('sdw-spec new did not return the created specification path');
+  }
+  const absolute = path.isAbsolute(filePath) ? filePath : path.resolve(config.root, filePath);
+  const nextIndex = manifest.queue.reduce(
+    (max, entry) => (Number.isInteger(entry.index) && entry.index > max ? entry.index : max),
+    -1
+  ) + 1;
+  const entry = {
+    index: nextIndex,
+    spec: normalizePath(path.relative(config.root, absolute)),
+    slug: created.slug || inferSlug(absolute),
+    status: 'pending',
+    followUpDepth: 1,
+    origin: { candidateId: candidate.id || null, runId: item.runId || null }
+  };
+  manifest.queue.push(entry);
+  manifest.total = manifest.queue.length;
+  return entry;
+}
+
+function followUpReportPath(config, manifest) {
+  return path.join(runStateDir(config), `${manifest.batchId}.followups.md`);
+}
+
+function renderFollowUpSection(item, followUp, candidates) {
+  const lines = [
+    `## [${item.index + 1}] ${item.slug || item.spec || 'item'}`,
+    '',
+    `- **Run:** ${item.runId || 'unknown'}`,
+    `- **Report:** \`${followUp.reportPath}\``,
+    `- **Candidates:** ${candidates.length}`,
+    ''
+  ];
+  if (candidates.length === 0) lines.push('No candidates recorded.', '');
+  for (const candidate of candidates) {
+    lines.push(`### ${candidate.id || 'candidate'}: ${candidate.title || 'untitled'}`);
+    lines.push('');
+    lines.push(`- **Severity:** ${candidate.severity || 'unknown'}`);
+    lines.push(`- **Category:** ${candidate.category || 'unknown'}`);
+    lines.push(`- **Evidence:** ${describeCandidateValue(candidate.evidence)}`);
+    lines.push(`- **Proposed change:** ${describeCandidateValue(candidate.proposedChange)}`);
+    lines.push('');
+  }
+  return lines.join('\n');
+}
+
+function writeFollowUpReport(config, manifest, item, followUp, candidates) {
+  const file = followUpReportPath(config, manifest);
+  const section = renderFollowUpSection(item, followUp, candidates);
+  fs.mkdirSync(runStateDir(config), { recursive: true });
+  if (fs.existsSync(file)) {
+    fs.appendFileSync(file, section, 'utf8');
+  } else {
+    const header = [
+      `# Batch Retro Follow-Ups: ${manifest.batchId}`,
+      '',
+      '- **Policy:** record',
+      `- **Generated at:** ${new Date().toISOString()}`,
+      ''
+    ].join('\n');
+    fs.writeFileSync(file, `${header}${section}`, 'utf8');
+  }
+  return file;
+}
+
+// Consumes the retrospective record of a completed item. It never throws: a
+// missing report, a failed retro, malformed JSON, or a failed spec creation is
+// recorded on the manifest and the queue keeps advancing.
+function applyRetroFollowUp({ config, manifest, item, options, deps } = {}) {
+  const record = followUp => {
+    if (item) item.retroFollowUp = followUp;
+    return followUp;
+  };
+  try {
+    if (!item) return undefined;
+    const policy = retroFollowUpPolicy(config);
+    if (policy === 'none') return record({ status: 'skipped' });
+
+    const state = readRunState(config, item.runId);
+    const retro = state && state.retro;
+    if (!retro) return record(followUpRecord('unavailable'));
+    if (retro.status !== 'passed') {
+      const failedPath = retro.reportJson ? normalizePath(retro.reportJson) : null;
+      return record(followUpRecord('failed', { reportPath: failedPath }));
+    }
+    if (!retro.reportJson) return record(followUpRecord('unavailable'));
+    const reportPath = normalizePath(retro.reportJson);
+
+    let report;
+    try {
+      report = JSON.parse(fs.readFileSync(path.resolve(config.root, reportPath), 'utf8'));
+    } catch (err) {
+      const status = err && err.code === 'ENOENT' ? 'unavailable' : 'invalid';
+      return record(followUpRecord(status, { reportPath }));
+    }
+    if (!report || typeof report !== 'object' || !Array.isArray(report.candidates)) {
+      return record(followUpRecord('invalid', { reportPath }));
+    }
+    const candidates = report.candidates.filter(
+      candidate => candidate && typeof candidate === 'object' && !Array.isArray(candidate)
+    );
+    const bySeverity = {};
+    for (const candidate of candidates) {
+      const severity = typeof candidate.severity === 'string' && candidate.severity ? candidate.severity : 'unknown';
+      bySeverity[severity] = (bySeverity[severity] || 0) + 1;
+    }
+    const followUp = followUpRecord(policy === 'record' ? 'recorded' : 'queued', {
+      candidates: candidates.length,
+      bySeverity,
+      reportPath
+    });
+    // Carry the checkpoint and the history across a resume: processed ids stop
+    // duplicate specs, queued and failed entries stay visible in the summary.
+    const previous = item.retroFollowUp && typeof item.retroFollowUp === 'object' ? item.retroFollowUp : {};
+    if (Array.isArray(previous.queued)) followUp.queued = [...previous.queued];
+    if (Array.isArray(previous.failures)) followUp.failures = [...previous.failures];
+    if (Array.isArray(previous.processed)) followUp.processed = [...previous.processed];
+
+    if (policy === 'record') {
+      writeFollowUpReport(config, manifest, item, followUp, candidates);
+      return record(followUp);
+    }
+
+    // A follow-up item still records what its own retrospective found; the depth
+    // bound suppresses new specifications, not the candidate summary.
+    if (item.followUpDepth >= 1) return record({ ...followUp, status: 'depth-exceeded' });
+
+    const createSpec = deps && typeof deps.createSpec === 'function' ? deps.createSpec : createSpecWithCli;
+    const processed = new Set(Array.isArray(followUp.processed) ? followUp.processed : []);
+    for (const candidate of candidates) {
+      if (!QUEUED_SEVERITIES.includes(candidate.severity)) continue;
+      const candidateId = candidate.id || null;
+      if (candidateId && processed.has(candidateId)) continue;
+      try {
+        const created = createSpec({ config, manifest, item, candidate });
+        const entry = appendFollowUpQueueEntry(manifest, item, candidate, created, config);
+        followUp.queued.push({ candidateId, spec: entry.spec, slug: entry.slug });
+      } catch (err) {
+        followUp.failures.push({
+          candidateId,
+          error: err && err.message ? err.message : String(err)
+        });
+      }
+      // Checkpoint by candidate id and persist the entry together with the
+      // manifest: a resumed batch must neither re-create a queued spec nor
+      // drop the candidates that were still pending when it stopped.
+      if (candidateId) {
+        processed.add(candidateId);
+        followUp.processed = [...processed];
+      }
+      saveManifest(config, manifest);
+    }
+    return record(followUp);
+  } catch (err) {
+    return record({
+      ...followUpRecord('failed'),
+      failures: [{ candidateId: null, error: err && err.message ? err.message : String(err) }]
+    });
+  }
+}
+
+// A resumed batch re-enters the follow-up stage for completed items whose
+// candidate loop was interrupted. Processed candidate ids make the re-entry
+// idempotent, and the remaining critical/high candidates are queued now instead
+// of being silently lost because the item already counts as completed.
+function recoverFollowUps(manifest, config, options = {}, deps) {
+  if (!manifest || !Array.isArray(manifest.queue)) return 0;
+  if (retroFollowUpPolicy(config) !== 'queue') return 0;
+  let recovered = 0;
+  for (const item of manifest.queue) {
+    if (!item || item.status !== 'completed') continue;
+    if (item.followUpDepth >= 1) continue;
+    const followUp = item.retroFollowUp;
+    if (!followUp || followUp.status === 'skipped' || followUp.status === 'unavailable') continue;
+    const before = Array.isArray(followUp.queued) ? followUp.queued.length : 0;
+    applyRetroFollowUp({ config, manifest, item, options, deps });
+    const after = item.retroFollowUp && Array.isArray(item.retroFollowUp.queued)
+      ? item.retroFollowUp.queued.length
+      : 0;
+    if (after > before) recovered += after - before;
+  }
+  if (recovered > 0) saveManifest(config, manifest);
+  return recovered;
+}
+
 function triggerSpecSync(config) {
   try {
     const specSync = require('../../sdw-spec/scripts/spec_sync.cjs');
@@ -243,6 +522,30 @@ function printSummary(manifest, options = {}) {
     const commit = item.deliveryCommit ? String(item.deliveryCommit).slice(0, 12) : '-';
     console.log(`${index}| ${slug} | ${status} | ${duration} | ${commit}`);
   });
+  // Follow-up outcomes stay visible: queued specs and creation failures are
+  // the operator's only signal that the retrospective changed the queue.
+  const followUps = manifest.queue.filter(item => {
+    const followUp = item.retroFollowUp;
+    if (!followUp) return false;
+    return followUp.status === 'queued'
+      || followUp.status === 'recorded'
+      || (Array.isArray(followUp.failures) && followUp.failures.length > 0);
+  });
+  if (followUps.length > 0) {
+    console.log('------------------------------------------------------------');
+    console.log('Retro Follow-Ups');
+    followUps.forEach(item => {
+      const followUp = item.retroFollowUp;
+      const breakdown = Object.entries(followUp.bySeverity || {})
+        .map(([severity, count]) => `${severity}: ${count}`)
+        .join(', ');
+      const candidateLabel = `candidates: ${followUp.candidates || 0}${breakdown ? ` (${breakdown})` : ''}`;
+      const queuedCount = Array.isArray(followUp.queued) ? followUp.queued.length : 0;
+      console.log(`${String(item.slug || item.spec).padEnd(30).slice(0, 30)} | ${String(followUp.status).padEnd(10)} | ${candidateLabel}, queued: ${queuedCount}`);
+      (followUp.queued || []).forEach(entry => console.log(`  + ${entry.spec}`));
+      (followUp.failures || []).forEach(failure => console.log(`  ! ${failure.candidateId || 'candidate'}: ${failure.error}`));
+    });
+  }
   console.log('============================================================\n');
 }
 
@@ -331,6 +634,16 @@ function executeQueue(manifest, config, options) {
       applyRunState(item, finalState);
       item.status = 'completed';
       item.error = null;
+      applyRetroFollowUp({ config, manifest, item, options, deps: options._retroDeps });
+      const followUp = item.retroFollowUp || {};
+      const queued = Array.isArray(followUp.queued) ? followUp.queued.length : 0;
+      const failures = Array.isArray(followUp.failures) ? followUp.failures.length : 0;
+      if (queued > 0) {
+        say(options, `[sdw-batch] Queued ${queued} retro follow-up specification(s) after the remaining items.`);
+      }
+      if (failures > 0) {
+        say(options, `[sdw-batch] ${failures} retro follow-up specification(s) failed; see the summary.`);
+      }
       say(options, `[sdw-batch] "${item.slug}" completed in ${(item.durationMs / 1000).toFixed(1)}s.`);
       saveManifest(config, manifest);
       if (syncIndex) triggerSpecSync(config);
@@ -416,6 +729,10 @@ function resumeBatch(batchId, options = {}) {
   }
   manifest.status = 'in_progress';
   saveManifest(config, manifest);
+  const recovered = recoverFollowUps(manifest, config, options, options._retroDeps);
+  if (recovered > 0) {
+    say(options, `[sdw-batch] Recovered ${recovered} interrupted retro follow-up specification(s).`);
+  }
   say(options, `[sdw-batch] Resuming "${manifest.batchId}" (${manifest.currentIndex + 1}/${manifest.total})...`);
   return executeQueue(manifest, config, options);
 }
@@ -435,6 +752,7 @@ function formatStatus(manifest) {
 }
 
 module.exports = {
+  applyRetroFollowUp,
   createManifest,
   executeQueue,
   formatStatus,
@@ -446,6 +764,7 @@ module.exports = {
   manifestFilePath,
   printSummary,
   readRunState,
+  recoverFollowUps,
   resolveSpec,
   resumeBatch,
   runBatch,

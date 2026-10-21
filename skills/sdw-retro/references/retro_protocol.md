@@ -156,6 +156,16 @@ for a smooth run. Candidates are operator- or agent-supplied judgments; the
 shape and allowed values are defined in
 [`candidate_contract.md`](candidate_contract.md).
 
+`sdw-batch` consumes this report: after a delegated item completes and
+`retro.followUp` is not `none`, the batch reads `state.retro.reportJson` and
+applies the policy (`queue`, `record`, or `none`) from `.sdw/config.json`.
+`queue` creates drafts through `sdw-spec` only for `critical` and `high`
+candidates, `record` writes a follow-up report, and `none` reads no report. A
+follow-up item (`followUpDepth: 1`) still records its candidate summary but
+never queues further specifications. The retro itself never creates a
+specification. See
+[`../../sdw-batch/references/batch_protocol.md`](../../sdw-batch/references/batch_protocol.md).
+
 Validate candidates before they enter a report:
 
 ```bash

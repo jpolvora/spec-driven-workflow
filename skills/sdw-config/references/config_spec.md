@@ -62,6 +62,16 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
           "default": false,
           "description": "When true, sdw-orch runs sdw-retro for the completed run and records the outcome in state.retro. When false or absent, it prints the advisory retro command only."
         },
+        "followUp": {
+          "type": "string",
+          "enum": [
+            "queue",
+            "record",
+            "none"
+          ],
+          "default": "queue",
+          "description": "sdw-batch policy for the retrospective candidates of a completed item: queue (create draft specs for critical/high candidates and append them to the batch queue), record (write .sdw/state/batch-{batchId}.followups.md and create nothing), or none (read no report). Follow-up items (followUpDepth 1) still record their candidate summary but never queue more specifications."
+        },
         "transcripts": {
           "type": "array",
           "items": {
@@ -265,6 +275,7 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
 | `scoring.judgeApiEndpoint` | `string \| null` | `null` | Judge API endpoint passed to the judge command or host agent |
 | `scoring.judgeCriticity` | `string` | `"strict"` | Judge strictness: `permissive`, `strict`, or `perfectionist` |
 | `retro.enabled` | `boolean` | `false` | Run `sdw-retro` automatically when a run reaches `completed` and record the outcome in `state.retro` (status, report paths, error). When `false` or absent, sdw-orch prints the advisory retro command only. This repository enables it. |
+| `retro.followUp` | `string` | `"queue"` | `sdw-batch` policy for a completed item's retrospective candidates: `queue` creates one draft specification per `critical`/`high` candidate and appends it after the remaining queue items; `record` writes `.sdw/state/batch-{batchId}.followups.md` and creates no specification; `none` reads no report. Follow-up items record `followUpDepth: 1`; their candidates are summarized but never queued. |
 | `retro.transcripts` | `string[]` | `[]` | Explicit transcript files the retrospective scans line by line for `sdw-orch run` and `resume` signatures; each is listed under report inputs with its line count. Supports `{projectRoot}`; empty by default, so transcripts are never discovered. A missing path produces a `transcript_unreadable` signal and the retro still exits `0`. |
 | `implementation.mode` | `string` | `"subagent"` | Step 4 mode: `subagent` (sequential host-dispatched workers) or `command` (automated subprocess per task). `handoff` was replaced by `subagent` |
 | `implementation.command` | `string \| null` | `null` | Required when `implementation.mode` is `command`; supports `{taskId}`, `{promptFile}`, `{evidenceFile}`, `{workingDir}`, `{targetRoot}`, `{slug}` |
