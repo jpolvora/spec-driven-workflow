@@ -729,7 +729,7 @@ test('sdw-ship-pr - active PR reuse complements PR description with amending del
       config,
       head: 'develop',
       base: 'master',
-      specSlug: '026-ensure-hybrid-mode'
+      specSlug: '00026-ensure-hybrid-mode'
     }, fakeExecutor);
 
     assert.strictEqual(report.success, true);
@@ -739,7 +739,7 @@ test('sdw-ship-pr - active PR reuse complements PR description with amending del
     assert.strictEqual(report.pullRequest.number, '77');
     assert.ok(updatedBody, 'PR description must be updated');
     assert.match(updatedBody, /Initial PR Body/);
-    assert.match(updatedBody, /### Amending Delivery: 026-ensure-hybrid-mode/);
+    assert.match(updatedBody, /### Amending Delivery: 00026-ensure-hybrid-mode/);
     assert.match(updatedBody, /Commit: `abc1234`/);
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });

@@ -143,8 +143,8 @@ Configurable feature branch activation and per-task isolated git worktrees:
 Intermediate outputs of human-auditable steps (2, 3, 5) are persisted as human-readable Markdown files:
 
 ### Directory Layout & Filename Convention
-- **Directory:** `{stateDir}/{slug}/{runId}/` (e.g. `.sdw/state/014-sdw-orch-step-artifacts-persistence/run-1792400000000-014-sdw-orch-step-artifacts-pe/`)
-- **Naming:** `{slug}-step-{N}.md` (e.g. `014-sdw-orch-step-artifacts-persistence-step-2.md`, `...-step-3.md`, `...-step-5.md`)
+- **Directory:** `{stateDir}/{slug}/{runId}/` (e.g. `.sdw/state/00014-sdw-orch-step-artifacts-persistence/run-1792400000000-00014-sdw-orch-step-artifacts-pe/`)
+- **Naming:** `{slug}-step-{N}.md` (e.g. `00014-sdw-orch-step-artifacts-persistence-step-2.md`, `...-step-3.md`, `...-step-5.md`)
 - **State Linkage:** Run state records `state.artifactsDir` and `state.steps[N].artifact` with forward slashes relative to project root.
 
 ### Scope & In-Scope Steps
@@ -198,7 +198,9 @@ Step 4 turns each DAG task into a dispatched worker. Exactly one task is in flig
 - **DAG Dependency Gate:** Rejects completion if upstream DAG dependencies are not yet completed.
 
 ### Dispatch Prompt Contract
-Sections in order: `## Task Context`, `## Description`, `## Assigned Acceptance Criteria`, `## Remaining Acceptance Criteria (do not regress)`, `## Target Files`, `## Scope Fence`, `## Dependency Context`, `## Prior Partial Progress`, `## Prohibited Actions`, `## Evidence Schema`, `## Report Contract`, `## Finish Command`. Dependency context and prior progress are omitted when empty.
+Sections in order: `## Task Context`, `## Description`, `## Assigned Acceptance Criteria`, `## Remaining Acceptance Criteria (do not regress)`, `## Target Files`, `## Scope Fence`, `## Dependency Context`, `## Prior Partial Progress`, `## Implementation Rules (sdw-rules)`, `## Prohibited Actions`, `## Evidence Schema`, `## Report Contract`, `## Finish Command`. Dependency context and prior progress are omitted when empty.
+
+Every prompt opens its rules section by requiring the worker to load the shared `sdw-rules` skill (installed under `.agents/skills/sdw-rules/` or `skills/sdw-rules/`); the bullets that follow are a summary, never a replacement.
 
 Prohibitions carried by every prompt: no `git commit`/`push`/`branch`/`checkout`/`worktree`/`tag`; no subagent spawning; no edits outside the scope fence; no edits to run state, prompt files, or the specification; no unexecuted test claims; no `status: "success"` while a criterion is unmet.
 

@@ -43,9 +43,12 @@
 *From back-of-the-napkin ideas to crystal-clear, machine-executable specifications.*
 
 - **EARS Acceptance Criteria Standard:** Enforces Easy Approach to Requirements Syntax (EARS) patterns (*Ubiquitous, Event-driven, State-driven, Optional-feature, Unwanted-behavior*) for bulletproof criteria.
-- **Free-Text Spec Synthesis (`new`):** Transforms conversational human requirements into canonical, structured specifications with automatic 3-digit numbering (`NNN-{slug}.md`).
+- **Free-Text Spec Synthesis (`new`):** Transforms conversational human requirements into canonical, structured specifications with automatic 5-digit numbering (`NNNNN-{slug}.md`).
 - **Unified SCM Tracker Importer (`import`):** Directly pulls issues and work items from GitHub Issues and Azure DevOps Boards via an agnostic SCM provider contract.
 - **Central PRD Registry (`index.specs.md`):** Maintains a synchronized ledger of all project specifications, tracking lifecycle status (`pending`, `completed`, `archived`) and validation health.
+- **Spec Header Status:** Every spec carries an authoring status (`draft`, `awaiting-approval`, `ready-to-implement`, `implemented`, `abandoned`) enforced by the validator and moved through `status` with a transition map.
+- **Round-Based Grilling (`grilling.md`):** Optional interview that asks the whole frontier of questions whose prerequisites are settled, never ahead of them, and stops when no assumption is left unstated.
+- **Focus & Split Rule:** One feature per spec by default; multi-domain drafts prompt a split by feature before behaviour criteria are written.
 - **Automated Validation Gates (`validate`):** Authoring-mode validator enforces YAML frontmatter, strict section hierarchy, and negative failure scenario requirements.
 - **Live State Reconciliation (`sync`):** Automatically reconciles `index.specs.md` with active on-disk specifications and orchestrator run states.
 - **Lifecycle Archiving (`archive`):** Safely retires completed specifications while guarding against unauthorized execution of legacy features.
@@ -88,12 +91,15 @@
 
 *Canonical engineering discipline codifying simplicity first, surgical scope enclosure, and anti-regression traps.*
 
-- **Ultra-Lean Context Budget:** Compact Tier 1 `SKILL.md` (≤ 80 lines) codifies the 4 core pillars with an announcement banner and zero prompt bloat.
+- **Ultra-Lean Context Budget:** Compact Tier 1 `SKILL.md` (≤ 80 lines) codifies the core directives with an announcement banner and zero prompt bloat.
 - **Think & Ask Before Acting:** Prohibits silent scope expansion. When architectural opportunities arise, halts and presents an interactive clarification gate (`ask_question`), defaulting to minimal scope.
+- **Plan-Before-Change Protocol:** In free-form chat, analysis, opinions, and ambiguous requests default to read-only investigation → a short plan with options, tradeoffs, and a recommendation → explicit confirmation before any file change. Read-only questions need no permission; destructive actions require confirmation unless explicitly ordered.
+- **Unattended Execution Mode:** Explicitly invoked skills and commands (orchestrator runs, shipping, reviews) execute their own contract without per-step confirmation, while uncovered destructive steps still stop for approval.
+- **Explicit Authorization:** A specification is a document, not an order. Registration, approval, or existence never authorizes implementation; only an explicit user instruction does.
 - **Simplicity First (YAGNI):** Enforces writing minimum code required to satisfy ACs. Explicitly rejects speculative abstractions, complex class registries, and unused helper modules.
 - **Surgical Diff Hygiene:** Restricts modifications strictly to files and lines required by the current task, prohibiting adjacent reformatting or unnecessary refactoring.
 - **Empirical Goal-Driven Verification:** Directs multi-step tasks to define clear, verifiable success criteria and tests before declaring completion.
-- **Deterministic Compliance Doctor (`doctor`):** Audits installed skills for context line budgets (≤ 120 lines) and cross-references from downstream core skills (`sdw-spec`, `sdw-orch`).
+- **Deterministic Compliance Doctor (`doctor`):** Audits installed skills for context line budgets (≤ 120 lines) and requires every skill except `sdw-rules` to reference it.
 - **Specification Scope Auditor (`audit-spec`):** Scans specifications for speculative scope creep markers, composite ACs, or missing Out of Scope boundaries.
 - **Anti-Regression Trap Log (`log-trap`):** Appends verified friction and overengineering lessons to `.sdw/traps.md` at project scope to prevent repeating mistakes.
 
@@ -155,7 +161,7 @@
 *Engineering rigor backed by 100% native automated tests.*
 
 - **Native Node.js Test Runner:** Built with `node:test` and `node:assert/strict` — zero third-party testing frameworks required.
-- **238 Comprehensive Test Scenarios:**
+- **242 Comprehensive Test Scenarios:**
   - `sdw_code_review.test.cjs`: Standalone execution, base auto-detection, report generation, surgical auto-fix, dry-run simulation, orchestrator delegation, router registration, and fail-closed negatives.
   - `sdw_config.test.cjs`: Configuration parsing, schema validation, token expansion, and initialization gates.
   - `sdw_spec.test.cjs`: Index bootstrapping, EARS validation, synthesis, SCM provider contract, state synchronization, and archival quality gates.
@@ -166,7 +172,7 @@
   - `sdw_branch_worktree.test.cjs`: Feature branch lifecycle, dirty tree refusal, branch reuse, worktree creation/cleanup, cherry-pick integration, and runtime overrides.
   - `sdw_scm_provider.test.cjs`: SCM provider resolution, capability checks, safe disable modes, strict CLI isolation (`gh` vs `az`), and orchestrator polling integration.
   - `sdw_router.test.cjs`: Minimal context budget enforcement (SKILL.md ≤ 120 lines), explicit invocations, keyword classification, tied-confidence disambiguation, missing directory resolution, and pass-through non-interference.
-  - `sdw_rules.test.cjs`: Three-tier progressive disclosure, announcement banners, Karpathy simplicity principles, doctor compliance verification, scope creep audits, and trap logging.
+  - `sdw_rules.test.cjs`: Three-tier progressive disclosure, announcement banners, engineering simplicity principles, plan-before-change and authorization layering, product guarantees, doctor compliance verification, scope creep audits, and trap logging.
   - `sdw_security_checks.test.cjs`: Secrets scanning, staged diff inspection, redaction hygiene, pragma suppression, fail-closed gate handling, and orchestrator bypass verification.
   - `sdw_sandbox.test.cjs`: Plan-only dry-run purity, sandbox clone creation, origin removal, spec copying, node_modules linking, report rendering, cleanup, conflicting flags, nested rejection, and absolute dispatch paths.
 - **Fast Execution:** Entire test suite runs in ~20 seconds with 100% pass rate.
@@ -192,10 +198,22 @@
 
 - **Standalone & User-Invocable:** Directly runnable at any time (`node skills/sdw-code-review/scripts/sdw_code_review.cjs run|fix|doctor` / `/sdw-code-review`), or dispatched as a subagent/CLI runner under `sdw-orch` Step 7.
 - **Auto-Detected Base & Full-Tree Scope:** Resolves the comparison target via explicit `--base`, config `baseBranch`, tracking remotes (`origin/main|master`), local branches, merge-base, or initial commit; inspects committed (`base..HEAD`) plus uncommitted (staged, unstaged, untracked) diffs.
-- **Karpathy-Grounded Rules:** Enforces simplicity first (YAGNI, surgical scope, no speculative generality) and syntax hygiene (active `debugger`, unresolved TODOs, committed secrets, sensitive filenames) with Fowler-baseline smells (oversized diffs).
+- **Principle-Grounded Rules:** Enforces simplicity first (YAGNI, surgical scope, no speculative generality) and syntax hygiene (active `debugger`, unresolved TODOs, committed secrets, sensitive filenames) with Fowler-baseline smells (oversized diffs).
 - **Executable Report Contract:** Emits a Markdown fix plan (header, findings table, detailed hunks, ordered checklist) plus structured JSON (`passed`, `errorCount`, `warningCount`, `suggestionCount`, `findings` with stable `CR-001` IDs, severity, `file:line`, rule, and fix prescription).
 - **Surgical Auto-Fix & Dry-Run:** Applies minimal fixes (debugger removal) up to the iteration ceiling (default 3); `--dry-run` reports planned fixes without touching disk; blocking residuals exit non-zero.
 - **Orchestrator Delegation:** `sdw-orch` Step 7 holds no duplicated review logic — it dispatches the CLI, parses JSON, gates fix commits through `sdw-security-checks`, and persists `{slug}-step-7.md`.
+
+### 13. 🩺 `sdw-doctor` — Installation & Workspace Health Checker
+
+*Read-only doctor that proves an installation is complete before any other skill runs.*
+
+- **Four Installation Modes:** Detects `upstream` (canonical `skills/` plus the `.sdw/` template), `consumer-local` (`.agents/skills`), `consumer-global`, and `hybrid` (global skills with a local `.sdw/`), and reports the resolved roots.
+- **Full Structural Audit:** Every expected skill folder, `SKILL.md` frontmatter, load announcement, line budget, `sdw-rules` pointer, relative links, `node --check` syntax, and zero external requires.
+- **Workspace Validation:** `.sdw/config.json` against the schema, `.sdw/config.schema.json`, `.sdw/directory-structure.md`, registry rows versus spec files, and authoring-mode validation of every specification.
+- **Global Quick Check:** In hybrid and global modes, verifies the global installation exposes every core skill with a readable manifest.
+- **Remediate and Stop:** Installation errors print `npx skills add ...` / `npx skills update`; config errors print `sdw-config init` / `check`; spec errors print `sdw-spec sync` / `validate`; any error halts with exit `1`. Upstream mode never suggests `npx`.
+- **Sandbox Smoke Test (`test`):** Generates a throwaway project with a one-AC fake specification, commits it, and runs `sdw-orch run --sandbox` end to end. Passes only when all eight steps resolve and the run state completes; failures capture structured errors, print suggested fixes, and can open an upstream GitHub issue with `--open-issue`.
+- **Structured Output:** `--json` emits mode, roots, present and expected skills, findings with stable codes, and the remediation array for CI.
 
 ---
 

@@ -354,9 +354,9 @@ test('Review finding fix: hasSdwSkills rejects directories containing only non-S
     const localSkills = path.join(tmpProject, '.agents', 'skills');
     const globalSkills = path.join(tmpGlobal, '.agents', 'skills');
 
-    // Create non-SDW skill locally (e.g. ws-memo, karpathy-guidelines)
+    // Create non-SDW skills locally (e.g. ws-memo, a third-party skill)
     createDummySkill(localSkills, 'ws-memo');
-    createDummySkill(localSkills, 'karpathy-guidelines');
+    createDummySkill(localSkills, 'third-party-skill');
 
     // Create real SDW skill globally
     createDummySkill(globalSkills, 'sdw-spec');

@@ -13,6 +13,8 @@ invocation_names:
 
 Deterministic pre-commit secrets, credentials, and PII scanner for Spec-Driven Workflow. Zero external runtime dependencies; uses Node.js 22 standard library regex scanning over git inventories.
 
+> **Rules:** apply [`sdw-rules`](../sdw-rules/SKILL.md) before scanning, committing, or bypassing a gate.
+
 ## Workflow & Gate Protocol
 
 ### Step 1: Configuration & Scope Resolution

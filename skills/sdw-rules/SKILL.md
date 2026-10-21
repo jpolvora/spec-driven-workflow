@@ -1,7 +1,7 @@
 ---
 name: sdw-rules
-description: Shared behavioral rules and engineering guidelines enforcing simplicity, scope enclosure, and anti-overengineering.
-version: 0.1.0
+description: Non-negotiable product rules — plan before change, explicit authorization, simplicity, surgical scope, empirical verification, and product guarantees.
+version: 0.2.0
 invocation_names:
   - sdw-rules
   - sdw-rules doctor
@@ -12,41 +12,57 @@ invocation_names:
 
 > When this skill is loaded, output "sdw-rules loaded."
 
-Shared behavioral rules and engineering discipline enforcing simplicity first, surgical scope enclosure, and anti-overengineering across all SDW workflows.
+## 🛑 NON-NEGOTIABLE PRODUCT RULES
+
+These rules override convenience. Apply them in every mode, on every harness and model. Detailed protocols are mandatory reading when the situation matches:
+
+- Free-form chat, ambiguity, analysis, or opinions → [`references/interaction_modes.md`](references/interaction_modes.md)
+- Changing skills, skills packaging, or tooling → [`references/product_guarantees.md`](references/product_guarantees.md)
 
 ## Subcommands
 
 - `doctor`: Audits installed skills for line budgets and `sdw-rules` cross-references.
-- `audit-spec <specFile>`: Scans a specification for potential scope creep or speculative abstractions.
+- `audit-spec <specFile>`: Scans a specification for scope creep or speculative abstractions.
 - `log-trap --slug <slug> --title <title> --avoid <avoid> --action <action>`: Records a verified trap in `.sdw/traps.md`.
 
 ## Core Directives
 
-1. **Think & Ask Before Acting:** Never assume or expand scope silently. When architectural opportunities or unrequested enhancements arise, halt and present them to the user via interactive clarification (`ask_question`), defaulting to the minimal requested scope.
-2. **Simplicity First (YAGNI):** Write the minimum code required to satisfy acceptance criteria. Prohibit speculative abstractions, single-use helper modules, and unnecessary configuration options. If a solution takes 50 lines but could be done in 20, choose 20.
-3. **Surgical Scope Enclosure:** Touch only what the task requires. Avoid modifying adjacent code, reformatting working files, or refactoring functional logic.
-4. **Empirical Goal-Driven Verification:** Transform every requirement into a verifiable check, test, or empirical pass/fail signal.
-5. **Explicit Authorization Before Acting:** Never start implementing, editing files, or running state-changing commands on the basis of a topic statement, observation, or implied direction. Act only on an explicit user command or an approved plan. In case of any ambiguity about what was asked, stop and ask for clarification before inferring intent or deciding on the user's behalf.
+1. **Plan Before Unsolicited Change.** For analysis, opinion, exploration, or any ambiguous request: state assumptions, investigate read-only, then present a short plan with options, tradeoffs, and a recommendation, and wait for explicit confirmation. If multiple interpretations exist, present them instead of choosing silently. Never write files while investigating.
+2. **Explicit Authorization & Modes.** Read-only investigation needs no permission. Execute clear, explicit, non-destructive instructions directly. Confirm destructive or irreversible actions unless explicitly ordered. Invoked skills/commands with clear contracts run unattended; stop if a step is destructive and the skill does not cover it.
+3. **Think & Ask Before Acting.** Never assume or expand scope silently. When an architectural opportunity or unrequested enhancement appears, halt and present it via `ask_question` (or numbered options in chat), defaulting to the minimal requested scope.
+4. **Simplicity First (YAGNI).** Write the minimum code that satisfies the acceptance criteria. No speculative abstractions, single-use helper modules, or unrequested configuration. If 200 lines could be 50, rewrite; ask whether a senior engineer would call it overcomplicated.
+5. **Surgical Scope Enclosure.** Touch only what the task requires; match existing style. No adjacent refactors, reformatting, renames, or drive-by fixes. Remove only orphans your change created; mention unrelated dead code instead of deleting it.
+6. **Empirical Goal-Driven Verification.** Turn every requirement into a verifiable check, test, or empirical pass/fail signal. State a short plan with a verification step per action and loop until the check passes before declaring completion.
+7. **Product Guarantees.** Preserve zero runtime npm dependencies, Node.js 22 standard library, deterministic CLI anchors, harness/agent agnosticism, portable paths, and file-based contracts.
+
+## Mode Cheat Sheet
+
+- Read-only question → answer; no confirmation.
+- Explicit, clear, non-destructive order → execute.
+- Destructive or irreversible → confirm unless explicitly ordered.
+- Analysis, opinion, or ambiguous → investigate → plan → confirm.
+- Invoked skill/command → follow its contract unattended; stop only on uncovered destructive steps or decision gaps.
 
 ## Steps
 
 1. **Audit Rules Compliance**
-   Validate that skills adhere to line budgets (≤ 120 lines) and reference shared rules.
+   Validate skill line budgets (≤ 120 lines; `sdw-rules` ≤ 80) and downstream references.
    - Run: `node skills/sdw-rules/scripts/sdw_rules.cjs doctor [--json]`
-   - Done when: All skills pass compliance check with exit code `0`.
+   - Done when: All skills pass with exit code `0`.
 
 2. **Audit Specification for Scope Creep**
-   Scan specifications for speculative features or unrequested scope expansions.
+   Scan a specification for speculative features or unrequested scope expansion.
    - Run: `node skills/sdw-rules/scripts/sdw_rules.cjs audit-spec <specPath> [--json]`
-   - Done when: Specification audit report confirms minimal scope enclosure.
+   - Done when: The audit report confirms minimal scope enclosure.
 
 3. **Log Anti-Regression Trap**
    Record friction or an overengineering defect in the project trap log.
    - Run: `node skills/sdw-rules/scripts/sdw_rules.cjs log-trap --slug <slug> --title <title> --avoid <avoid> --action <action>`
-   - Done when: New trap entry is appended to `{projectRoot}/.sdw/traps.md`.
+   - Done when: The trap entry is appended to `{projectRoot}/.sdw/traps.md`.
 
 ## References
 
-- In-depth Karpathy principles & code comparisons: [`references/karpathy_rules.md`](references/karpathy_rules.md)
-- Catalog of LLM anti-patterns & traps: [`references/anti_patterns.md`](references/anti_patterns.md)
-- Anti-regression traps log template: [`references/traps_log.md`](references/traps_log.md)
+- Interaction modes & planning protocol: [`references/interaction_modes.md`](references/interaction_modes.md)
+- Product guarantees & verification: [`references/product_guarantees.md`](references/product_guarantees.md)
+- LLM anti-patterns & traps catalog: [`references/anti_patterns.md`](references/anti_patterns.md)
+- Trap log template: [`references/traps_log.md`](references/traps_log.md)

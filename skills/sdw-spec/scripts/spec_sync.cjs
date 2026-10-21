@@ -140,7 +140,7 @@ function syncIndex(options = {}) {
   for (const [diskSlug, diskInfo] of onDiskSpecs.entries()) {
     if (!trackedSlugs.has(diskSlug)) {
       const content = fs.readFileSync(diskInfo.fullPath, 'utf8');
-      const prefixMatch = diskInfo.file.match(/^(\d{3})-/);
+      const prefixMatch = diskInfo.file.match(/^(\d{5})-/);
       const prefix = prefixMatch ? prefixMatch[1] : '';
       const titleMatch = content.match(/^#+\s+(?:Specification\s*[-—]\s*)?(.+)$/m);
       const title = titleMatch ? titleMatch[1].trim() : diskSlug;

@@ -20,7 +20,7 @@ function createRepo(options = {}) {
   fs.writeFileSync(path.join(dir, 'README.md'), '# fixture\n');
   fs.mkdirSync(path.join(dir, '.sdw', 'specs'), { recursive: true });
   if (options.spec !== false) {
-    fs.writeFileSync(path.join(dir, '.sdw', 'specs', '001-demo.md'), '# Specification — Demo\n');
+    fs.writeFileSync(path.join(dir, '.sdw', 'specs', '00001-demo.md'), '# Specification — Demo\n');
   }
   execSync('git add -A', { cwd: dir });
   execSync('git commit -qm "init"', { cwd: dir });
@@ -189,10 +189,10 @@ test('AC9: dirty source is warned and recorded in metadata', () => {
 test('AC33: an uncommitted specification is copied into the clone', () => {
   const dir = createRepo();
   try {
-    fs.writeFileSync(path.join(dir, '.sdw', 'specs', '002-untracked.md'), '# Specification — Untracked\n');
-    const meta = sandbox.createSandbox({ sourceRoot: dir, runId: 'run-spec', specPath: '.sdw/specs/002-untracked.md' });
+    fs.writeFileSync(path.join(dir, '.sdw', 'specs', '00002-untracked.md'), '# Specification — Untracked\n');
+    const meta = sandbox.createSandbox({ sourceRoot: dir, runId: 'run-spec', specPath: '.sdw/specs/00002-untracked.md' });
     assert.equal(meta.specCopied, true);
-    assert.ok(fs.existsSync(path.join(meta.absoluteRoot, '.sdw', 'specs', '002-untracked.md')), 'spec copied into clone');
+    assert.ok(fs.existsSync(path.join(meta.absoluteRoot, '.sdw', 'specs', '00002-untracked.md')), 'spec copied into clone');
   } finally {
     removeRepo(dir);
   }
@@ -313,11 +313,11 @@ test('AC31: batch execution rejects --sandbox', () => {
 
 test('AC1-AC3: plan-only dry run prints the plan and returns 0', () => {
   const root = path.resolve(__dirname, '..');
-  const spec = path.join(root, '.sdw', 'specs', '029-sdw-orch-sandboxed-execution.md');
+  const spec = path.join(root, '.sdw', 'specs', '00029-sdw-orch-sandboxed-execution.md');
   const code = sdwOrch.printRunDryRunPlan({
     targetRoot: root,
     resolvedSpec: spec,
-    specSlug: '029-sdw-orch-sandboxed-execution',
+    specSlug: '00029-sdw-orch-sandboxed-execution',
     config: { scoreMin: 8, pushDelivery: true, scmProvider: 'github' },
     options: {}
   });
@@ -340,6 +340,17 @@ test('AC42: dry run fails closed when the validator cannot run', () => {
   } finally {
     removeRepo(dir);
   }
+});
+
+test('AC43: sandbox report suggests fixes for failed runs', () => {
+  const completed = sandbox.suggestSandboxFixes({ status: 'completed', errors: [], steps: {} });
+  assert.deepEqual(completed, []);
+  const failed = sandbox.suggestSandboxFixes({
+    status: 'failed',
+    errors: [{ step: 4, error: 'Evidence validation failed for task-1' }],
+    steps: { 4: { status: 'failed' } }
+  });
+  assert.ok(failed.some(line => line.includes('evidence contract')));
 });
 
 test('AC44: any config load inside a sandbox clone inherits isolation', () => {

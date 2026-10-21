@@ -21,7 +21,8 @@ test('AC1 & AC2: Three-Tier Progressive Disclosure Standard & Announcement Banne
 
   // Verify Tier 2 references exist
   const refDir = path.join(repoRoot, 'skills', 'sdw-rules', 'references');
-  assert.ok(fs.existsSync(path.join(refDir, 'karpathy_rules.md')), 'karpathy_rules.md must exist');
+  assert.ok(fs.existsSync(path.join(refDir, 'interaction_modes.md')), 'interaction_modes.md must exist');
+  assert.ok(fs.existsSync(path.join(refDir, 'product_guarantees.md')), 'product_guarantees.md must exist');
   assert.ok(fs.existsSync(path.join(refDir, 'anti_patterns.md')), 'anti_patterns.md must exist');
   assert.ok(fs.existsSync(path.join(refDir, 'traps_log.md')), 'traps_log.md must exist');
 
@@ -45,21 +46,38 @@ test('AC3, AC4 & AC5: Codify Core Directives, Clarification Gates, and Simplicit
 test('AC6: Reference Documentation Details Anti-Patterns and Overengineering Traps', (t) => {
   const repoRoot = path.resolve(__dirname, '..');
   const antiPatterns = fs.readFileSync(path.join(repoRoot, 'skills', 'sdw-rules', 'references', 'anti_patterns.md'), 'utf8');
-  const karpathyRules = fs.readFileSync(path.join(repoRoot, 'skills', 'sdw-rules', 'references', 'karpathy_rules.md'), 'utf8');
 
   assert.match(antiPatterns, /Speculative Configurability/i, 'Documents speculative configurability');
   assert.match(antiPatterns, /Class Hierarchies for Single-Use Logic/i, 'Documents single-use class hierarchies');
-  assert.match(karpathyRules, /Overengineered Solution/i, 'Includes overengineered vs minimal code comparison');
-  assert.match(karpathyRules, /Minimal Viable Solution/i, 'Includes minimal viable code comparison');
+  assert.match(antiPatterns, /Rule of Three/i, 'Documents the Rule of Three abstraction threshold');
+  assert.match(antiPatterns, /addPrefix/i, 'Includes the minimal implementation example');
 });
 
-test('AC7: Downstream Skills sdw-spec and sdw-orch Integrate sdw-rules References', (t) => {
+test('AC7: Every skill except sdw-rules references the shared rules skill', (t) => {
   const repoRoot = path.resolve(__dirname, '..');
-  const specSkill = fs.readFileSync(path.join(repoRoot, 'skills', 'sdw-spec', 'SKILL.md'), 'utf8');
-  const orchSkill = fs.readFileSync(path.join(repoRoot, 'skills', 'sdw-orch', 'SKILL.md'), 'utf8');
+  const skillsDir = path.join(repoRoot, 'skills');
+  const names = fs.readdirSync(skillsDir, { withFileTypes: true })
+    .filter(entry => entry.isDirectory())
+    .map(entry => entry.name)
+    .filter(name => name !== 'sdw-rules');
 
-  assert.match(specSkill, /sdw-rules/i, 'sdw-spec must reference sdw-rules');
-  assert.match(orchSkill, /sdw-rules/i, 'sdw-orch must reference sdw-rules');
+  for (const name of names) {
+    const content = fs.readFileSync(path.join(skillsDir, name, 'SKILL.md'), 'utf8');
+    assert.match(content, /sdw-rules/i, `${name} must reference sdw-rules`);
+  }
+});
+
+test('Product skills do not reference repository-root harness documents', (t) => {
+  const repoRoot = path.resolve(__dirname, '..');
+  const skillsDir = path.join(repoRoot, 'skills');
+  const names = fs.readdirSync(skillsDir, { withFileTypes: true })
+    .filter(entry => entry.isDirectory())
+    .map(entry => entry.name);
+
+  for (const name of names) {
+    const content = fs.readFileSync(path.join(skillsDir, name, 'SKILL.md'), 'utf8');
+    assert.doesNotMatch(content, /\b(AGENTS|README|GLOSSARY|FEATURES)\.md\b/i, `${name}/SKILL.md must not depend on root harness documents`);
+  }
 });
 
 test('AC8: Deterministic Command-Line Helper Script Subcommands (doctor, audit-spec, log-trap)', (t) => {
@@ -71,7 +89,7 @@ test('AC8: Deterministic Command-Line Helper Script Subcommands (doctor, audit-s
   assert.equal(docRes.violationsCount, 0, 'doctor must report 0 violations');
 
   // Test audit-spec on valid spec
-  const auditRes = sdwRules.cmdAuditSpec('.sdw/specs/008-sdw-rules-skill.md', { root: repoRoot });
+  const auditRes = sdwRules.cmdAuditSpec('.sdw/specs/00008-sdw-rules-skill.md', { root: repoRoot });
   assert.equal(auditRes.passed, true, 'audit-spec must pass on 008 spec');
 
   // Test CLI execution via child_process
@@ -192,4 +210,32 @@ No reference here.
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
+});
+
+test('Rules layering: AGENTS.md incorporates sdw-rules and its references', (t) => {
+  const repoRoot = path.resolve(__dirname, '..');
+  const agents = fs.readFileSync(path.join(repoRoot, 'AGENTS.md'), 'utf8');
+  assert.match(agents, /skills\/sdw-rules\/SKILL\.md/, 'References the product rules skill');
+  assert.match(agents, /incorporated by reference/i, 'Declares incorporation by reference');
+  assert.match(agents, /interaction_modes\.md/, 'References the interaction protocol');
+  assert.match(agents, /product_guarantees\.md/, 'References the product guarantees');
+  assert.doesNotMatch(agents, /No External Runtime Dependencies/i, 'Must not restate product rules');
+});
+
+test('Planning protocol: interaction modes define plan, confirmation, read-only, and unattended behavior', (t) => {
+  const repoRoot = path.resolve(__dirname, '..');
+  const modes = fs.readFileSync(path.join(repoRoot, 'skills', 'sdw-rules', 'references', 'interaction_modes.md'), 'utf8');
+  assert.match(modes, /Planning loop/i);
+  assert.match(modes, /explicit confirmation/i);
+  assert.match(modes, /Read-only actions \(no confirmation\)/i);
+  assert.match(modes, /Unattended workflows/i);
+  assert.match(modes, /Destructive actions \(confirm unless explicitly ordered\)/i);
+});
+
+test('Product guarantees: zero dependencies, Node.js 22, and harness agnosticism are documented', (t) => {
+  const repoRoot = path.resolve(__dirname, '..');
+  const guarantees = fs.readFileSync(path.join(repoRoot, 'skills', 'sdw-rules', 'references', 'product_guarantees.md'), 'utf8');
+  assert.match(guarantees, /Zero runtime dependencies/i);
+  assert.match(guarantees, /Node\.js 22/i);
+  assert.match(guarantees, /Harness & agent agnostic/i);
 });

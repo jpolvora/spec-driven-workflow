@@ -6,6 +6,8 @@ const path = require('path');
 
 const PLACEHOLDER = /^(?:tbd|todo|placeholder|\?+|[-–—.]{1,3}|\.{3}|n\/?a)$/i;
 
+const SPEC_STATUSES = ['draft', 'awaiting-approval', 'ready-to-implement', 'implemented', 'abandoned'];
+
 const EARS_PATTERNS = [
   { name: 'ubiquitous', re: /^the\s+.+\s+shall\s+.+/i },
   { name: 'event-driven', re: /^when\s+.+,\s*the\s+.+\s+shall\s+.+/i },
@@ -289,10 +291,13 @@ function validate(text, options) {
   if (!fm) {
     errors.push({ code: 'frontmatter-missing', message: 'Required YAML frontmatter is missing.' });
   } else {
-    for (const key of ['id', 'slug', 'title', 'source', 'specDate']) {
+    for (const key of ['id', 'slug', 'title', 'source', 'status', 'specDate']) {
       if (!(key in fm) || fm[key] === '') {
         errors.push({ code: 'frontmatter-key', message: `Frontmatter key is required: ${key}` });
       }
+    }
+    if (fm.status && !SPEC_STATUSES.includes(fm.status)) {
+      errors.push({ code: 'status', message: `status must be one of: ${SPEC_STATUSES.join(', ')}.` });
     }
     if (!['local', 'github', 'azure-devops'].includes(fm.source)) {
       errors.push({ code: 'source', message: 'source must be local, github, or azure-devops.' });
@@ -403,6 +408,7 @@ if (require.main === module) {
 
 module.exports = {
   EARS_PATTERNS,
+  SPEC_STATUSES,
   earsViolation,
   validate,
   validateFile,

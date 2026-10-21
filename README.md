@@ -4,6 +4,8 @@
 
 A streamlined, deterministic framework for spec-driven software development with AI coding agents.
 
+By default, an SDW agent **investigates and proposes a plan before changing anything**; unattended execution happens only through an explicitly invoked skill or command. The full interaction protocol lives in [GLOSSARY.md](GLOSSARY.md) and [`skills/sdw-rules/references/interaction_modes.md`](skills/sdw-rules/references/interaction_modes.md).
+
 ---
 
 ## 1. Overview & Motivation
@@ -18,6 +20,7 @@ A streamlined, deterministic framework for spec-driven software development with
 SDW standardizes how developers specify, refine, implement, review, and ship features across both local workspaces and remote trackers (GitHub, Azure DevOps).
 
 > 📖 **Feature Showcase:** For an in-depth, presentation-style breakdown of all implemented capabilities, subsystems, and the product roadmap, see [FEATURES.md](FEATURES.md).
+> 📚 **Vocabulary:** SDW is opinionated about words. Terms such as **spec**, **backlog**, **task**, **gate**, and **sandbox** are defined in [GLOSSARY.md](GLOSSARY.md) and take precedence over industry synonyms.
 
 ---
 
@@ -79,7 +82,7 @@ flowchart TD
 
 7. **Automated Code Review Loop (Delegated to `sdw-code-review`)**
    - Dispatches `sdw-code-review` to inspect working-tree and branch diffs against an auto-detected base branch.
-   - Evaluates Karpathy Guidelines, `sdw-rules` simplicity, surgical diff hygiene, and syntax invariants.
+   - Evaluates `sdw-rules` simplicity, surgical diff hygiene, and syntax invariants.
    - Generates an actionable Markdown fix plan (`{slug}-step-7.md`) and applies surgical fixes in an iterative loop.
 
 8. **PR Preparation, Delivery & Review Convergence (Delegated to `sdw-ship-pr`)**
@@ -116,6 +119,7 @@ spec-driven-workflow/
 ├── skills/                       # Canonical source of truth for all skills
 │   ├── sdw-code-review/          # Standalone deep working-tree review & fix planning
 │   ├── sdw-config/               # Project configuration & verification skill
+│   ├── sdw-doctor/               # Installation & workspace health checker
 │   ├── sdw-orch/                 # End-to-end workflow orchestrator skill
 │   ├── sdw-router/               # Always-autoloaded entrypoint and skill router
 │   ├── sdw-rules/                # Shared behavioral rules, simplicity & anti-overengineering
@@ -160,13 +164,14 @@ Verify what is available before installing:
 npx skills add jpolvora/spec-driven-workflow --list
 ```
 
-Expected: `10` discoverable skills — the 8 `sdw-*` skills plus `karpathy-guidelines` and `ws-memo`:
+Expected: `10` discoverable skills — the 9 `sdw-*` skills plus `ws-memo`:
 
 | Skill | Purpose |
 |---|---|
 | `sdw-router` | Always-autoloaded router, dispatches prompts to the right SDW skill |
 | `sdw-config` | Initializes and verifies the `.sdw/` workspace (`init`, `check`, `parse`) |
-| `sdw-spec` | Spec authoring, EARS validation, index sync |
+| `sdw-doctor` | Installation and workspace health checker (upstream, local, global, hybrid) |
+| `sdw-spec` | Spec authoring, grilling, EARS validation, index sync |
 | `sdw-orch` | End-to-end 8-step delivery workflow (spec → DAG → implement → review → PR) |
 | `sdw-rules` | Shared simplicity / anti-overengineering rules |
 | `sdw-security-checks` | Pre-commit secrets and credentials leak gate |
@@ -176,10 +181,10 @@ Expected: `10` discoverable skills — the 8 `sdw-*` skills plus `karpathy-guide
 ### Copy-paste: install all SDW skills (recommended)
 
 ```bash
-npx skills add jpolvora/spec-driven-workflow --skill sdw-router --skill sdw-config --skill sdw-spec --skill sdw-orch --skill sdw-rules --skill sdw-security-checks --skill sdw-code-review --skill sdw-ship-pr -y
+npx skills add jpolvora/spec-driven-workflow --skill sdw-router --skill sdw-config --skill sdw-doctor --skill sdw-spec --skill sdw-orch --skill sdw-rules --skill sdw-security-checks --skill sdw-code-review --skill sdw-ship-pr -y
 ```
 
-One-liner alternative (installs everything discoverable, including `karpathy-guidelines` and `ws-memo`):
+One-liner alternative (installs everything discoverable, including `ws-memo`):
 
 ```bash
 npx skills add jpolvora/spec-driven-workflow --all
@@ -196,7 +201,7 @@ npx skills add jpolvora/spec-driven-workflow
 ```bash
 # Project scope (default): installs to ./.agents/skills/, commit with your project
 # Global scope: available across all projects on the machine
-npx skills add jpolvora/spec-driven-workflow --skill sdw-router --skill sdw-config --skill sdw-spec --skill sdw-orch --skill sdw-rules --skill sdw-security-checks --skill sdw-code-review --skill sdw-ship-pr -g -y
+npx skills add jpolvora/spec-driven-workflow --skill sdw-router --skill sdw-config --skill sdw-doctor --skill sdw-spec --skill sdw-orch --skill sdw-rules --skill sdw-security-checks --skill sdw-code-review --skill sdw-ship-pr -g -y
 
 # Target specific agents (default is auto-detected agents; use '*' for all agents)
 npx skills add jpolvora/spec-driven-workflow --skill sdw-orch -a opencode -y
@@ -250,6 +255,7 @@ node .agents/skills/sdw-config/scripts/sdw_config.cjs init
 # Verify installation and workspace health
 node .agents/skills/sdw-config/scripts/sdw_config.cjs check
 node .agents/skills/sdw-router/scripts/sdw_router.cjs scan
+node .agents/skills/sdw-doctor/scripts/sdw_doctor.cjs check
 ```
 
 > Note: contributor docs in this repo use canonical paths (`node skills/<name>/scripts/*.cjs`). Consumers installed via `npx skills` use the same script names under `node .agents/skills/<name>/scripts/*.cjs`.
@@ -288,16 +294,36 @@ node skills/sdw-config/scripts/sdw_config.cjs check [--root <path>] [--json]
 node skills/sdw-config/scripts/sdw_config.cjs parse [--root <path>] [--json]
 ```
 
-### Using `sdw-spec` (Specification Management)
+### Using `sdw-doctor` (Installation Health)
 
-The `sdw-spec` skill manages specification authoring, formatting, validation, and lifecycle:
+The `sdw-doctor` skill audits installed skills and the consuming workspace across four modes: `upstream` (this repository), `consumer-local`, `consumer-global`, and `hybrid` (global skills plus a local `.sdw/`):
 
 ```bash
-# Synthesize a new specification from free-text requirements
+# Audit skills, references, scripts, config keys, registry rows, and specs
+node skills/sdw-doctor/scripts/sdw_doctor.cjs check
+
+# Structured output for CI
+node skills/sdw-doctor/scripts/sdw_doctor.cjs check --json
+
+# End-to-end sandbox smoke test of the installed pipeline
+node skills/sdw-doctor/scripts/sdw_doctor.cjs test
+```
+
+On any error it prints the matching remediation and stops: `npx skills add ...` / `npx skills update` for a broken or missing installation, `sdw-config init` / `sdw-config check` for configuration gaps, and `sdw-spec sync` / `validate` for specification drift. Upstream mode never suggests `npx`; it points at `node scripts/verify_skills.cjs verify` instead.
+
+### Using `sdw-spec` (Specification Management)
+
+The `sdw-spec` skill manages specification authoring, formatting, grilling, validation, status, and lifecycle:
+
+```bash
+# Synthesize a new specification from free-text requirements (header status: draft)
 node skills/sdw-spec/scripts/sdw_spec.cjs new "<requirements>"
 
 # Validate specification formatting and EARS syntax readiness
 node skills/sdw-spec/scripts/validate_spec.cjs --mode=authoring .sdw/specs/<spec-name>.md
+
+# Move the header status through the defined transitions
+node skills/sdw-spec/scripts/sdw_spec.cjs status <slug> awaiting-approval
 
 # Reconcile index.specs.md with active on-disk specifications and run states
 node skills/sdw-spec/scripts/sdw_spec.cjs sync
@@ -305,6 +331,8 @@ node skills/sdw-spec/scripts/sdw_spec.cjs sync
 # List all specifications and their validation health
 node skills/sdw-spec/scripts/sdw_spec.cjs list
 ```
+
+Grilling is the optional round-based interview that closes spec gaps before implementation; when a draft spans several domains, `sdw-spec` recommends splitting it by feature first. Protocol: `skills/sdw-spec/references/grilling.md`.
 
 ### Using `sdw-orch` (Workflow Orchestrator)
 

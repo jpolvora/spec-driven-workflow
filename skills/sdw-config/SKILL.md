@@ -14,6 +14,8 @@ invocation_names:
 
 Manages `.sdw/` workspace configuration and directory structure for consumer projects.
 
+> **Rules:** apply [`sdw-rules`](../sdw-rules/SKILL.md) before changing configuration or files.
+
 ## Subcommands
 
 - `init`: Scaffolds `.sdw/`, `.sdw/specs/`, `config.json`, and `directory-structure.md`.

@@ -38,11 +38,13 @@ test('AC1, AC3 & AC4: Index Bootstrapping & Preservation Gate', () => {
   const { tmpDir, specsDir } = setupTestWorkspace();
   try {
     // Populate dummy spec 001
-    fs.writeFileSync(path.join(specsDir, '001-feature-alpha.md'), `---
+    fs.writeFileSync(path.join(specsDir, '00001-feature-alpha.md'), `---
 id: null
-slug: 001-feature-alpha
+slug: 00001-feature-alpha
 title: "Feature Alpha"
 source: local
+
+status: draft
 specDate: 2026-10-19
 ---
 # Specification — Feature Alpha
@@ -76,8 +78,8 @@ None.
     // AC3: initIndex bootstraps index.specs.md
     const entries = initIndex({ root: tmpDir });
     assert.equal(entries.length, 1);
-    assert.equal(entries[0].prefix, '001');
-    assert.equal(entries[0].slug, '001-feature-alpha');
+    assert.equal(entries[0].prefix, '00001');
+    assert.equal(entries[0].slug, '00001-feature-alpha');
     assert.equal(entries[0].status, 'pending');
     assert.equal(entries[0].validation, 'PASS');
 
@@ -101,16 +103,16 @@ test('AC2: Autoincrement Numerical Prefix Calculation', () => {
   const { tmpDir, specsDir } = setupTestWorkspace();
   try {
     // Empty directory starts at 001
-    assert.equal(getNextPrefix(specsDir), '001');
+    assert.equal(getNextPrefix(specsDir), '00001');
 
     // Add 001 and 002
-    fs.writeFileSync(path.join(specsDir, '001-first.md'), '# First');
-    fs.writeFileSync(path.join(specsDir, '002-second.md'), '# Second');
-    assert.equal(getNextPrefix(specsDir), '003');
+    fs.writeFileSync(path.join(specsDir, '00001-first.md'), '# First');
+    fs.writeFileSync(path.join(specsDir, '00002-second.md'), '# Second');
+    assert.equal(getNextPrefix(specsDir), '00003');
 
     // Add 009 -> next is 010
-    fs.writeFileSync(path.join(specsDir, '009-ninth.md'), '# Ninth');
-    assert.equal(getNextPrefix(specsDir), '010');
+    fs.writeFileSync(path.join(specsDir, '00009-ninth.md'), '# Ninth');
+    assert.equal(getNextPrefix(specsDir), '00010');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
@@ -120,9 +122,9 @@ test('AC5 & AC6: Specification Listing & Status Filtering', () => {
   const { tmpDir } = setupTestWorkspace();
   try {
     const dummyEntries = [
-      { prefix: '001', slug: '001-feat-a', title: 'Feat A', status: 'pending', source: 'local', specDate: '2026-10-19', validation: 'PASS' },
-      { prefix: '002', slug: '002-feat-b', title: 'Feat B', status: 'completed', source: 'local', specDate: '2026-10-19', validation: 'PASS' },
-      { prefix: '003', slug: '003-feat-c', title: 'Feat C', status: 'archived', source: 'local', specDate: '2026-10-19', validation: 'PASS' }
+      { prefix: '00001', slug: '00001-feat-a', title: 'Feat A', status: 'pending', source: 'local', specDate: '2026-10-19', validation: 'PASS' },
+      { prefix: '00002', slug: '00002-feat-b', title: 'Feat B', status: 'completed', source: 'local', specDate: '2026-10-19', validation: 'PASS' },
+      { prefix: '00003', slug: '00003-feat-c', title: 'Feat C', status: 'archived', source: 'local', specDate: '2026-10-19', validation: 'PASS' }
     ];
     writeIndex(dummyEntries, { root: tmpDir });
 
@@ -133,15 +135,15 @@ test('AC5 & AC6: Specification Listing & Status Filtering', () => {
     // AC6: Filter by status
     const pendingOnly = listIndex({ root: tmpDir, status: 'pending' });
     assert.equal(pendingOnly.length, 1);
-    assert.equal(pendingOnly[0].slug, '001-feat-a');
+    assert.equal(pendingOnly[0].slug, '00001-feat-a');
 
     const completedOnly = listIndex({ root: tmpDir, status: 'completed' });
     assert.equal(completedOnly.length, 1);
-    assert.equal(completedOnly[0].slug, '002-feat-b');
+    assert.equal(completedOnly[0].slug, '00002-feat-b');
 
     const archivedOnly = listIndex({ root: tmpDir, status: 'archived' });
     assert.equal(archivedOnly.length, 1);
-    assert.equal(archivedOnly[0].slug, '003-feat-c');
+    assert.equal(archivedOnly[0].slug, '00003-feat-c');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
@@ -151,23 +153,23 @@ test('AC7 & AC8: Specification Archiving & Uncompleted Rejection Gate', () => {
   const { tmpDir } = setupTestWorkspace();
   try {
     const dummyEntries = [
-      { prefix: '001', slug: '001-active', title: 'Active', status: 'pending', source: 'local', specDate: '2026-10-19', validation: 'PASS' },
-      { prefix: '002', slug: '002-done', title: 'Done', status: 'completed', source: 'local', specDate: '2026-10-19', validation: 'PASS' }
+      { prefix: '00001', slug: '00001-active', title: 'Active', status: 'pending', source: 'local', specDate: '2026-10-19', validation: 'PASS' },
+      { prefix: '00002', slug: '00002-done', title: 'Done', status: 'completed', source: 'local', specDate: '2026-10-19', validation: 'PASS' }
     ];
     writeIndex(dummyEntries, { root: tmpDir });
 
     // AC8: Rejects archiving uncompleted spec without --force
     assert.throws(() => {
-      archiveSpec('001-active', { root: tmpDir, force: false });
-    }, /Cannot archive specification "001-active" with status "pending"/);
+      archiveSpec('00001-active', { root: tmpDir, force: false });
+    }, /Cannot archive specification "00001-active" with status "pending"/);
 
     // AC7: Archiving completed spec succeeds and records timestamp
-    const archived = archiveSpec('002-done', { root: tmpDir });
+    const archived = archiveSpec('00002-done', { root: tmpDir });
     assert.equal(archived.status, 'archived');
     assert.ok(archived.archivalDate, 'Records archival timestamp');
 
     // Archive uncompleted spec with --force succeeds
-    const forceArchived = archiveSpec('001-active', { root: tmpDir, force: true });
+    const forceArchived = archiveSpec('00001-active', { root: tmpDir, force: true });
     assert.equal(forceArchived.status, 'archived');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -178,9 +180,11 @@ test('AC9 & AC10: Authoring-Mode Validation & EARS Syntax Rejection', () => {
   // Valid spec with all 5 EARS patterns
   const validSpec = `---
 id: null
-slug: 001-ears-test
+slug: 00001-ears-test
 title: "EARS Validation"
 source: local
+
+status: draft
 specDate: 2026-10-19
 ---
 # Specification — EARS Validation
@@ -240,8 +244,8 @@ test('AC11 & AC12: Free-Text Specification Synthesis (new)', () => {
 `;
 
     const created = createNewSpec(rawRequirements, { root: tmpDir, title: 'Session Management' });
-    assert.equal(created.prefix, '001');
-    assert.equal(created.slug, '001-session-management');
+    assert.equal(created.prefix, '00001');
+    assert.equal(created.slug, '00001-session-management');
     assert.ok(fs.existsSync(created.filePath), 'Spec file created on disk');
 
     // Verify it passes validation
@@ -251,7 +255,7 @@ test('AC11 & AC12: Free-Text Specification Synthesis (new)', () => {
     // AC12: Registered in index.specs.md with status pending
     const indexData = readIndex({ root: tmpDir });
     assert.equal(indexData.entries.length, 1);
-    assert.equal(indexData.entries[0].slug, '001-session-management');
+    assert.equal(indexData.entries[0].slug, '00001-session-management');
     assert.equal(indexData.entries[0].status, 'pending');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -294,7 +298,7 @@ test('AC13, AC14, AC15, AC16 & AC17: Unified SCM Provider Contract & Remote Impo
       scmProvider: mockProvider
     });
 
-    assert.equal(imported.prefix, '001');
+    assert.equal(imported.prefix, '00001');
     assert.ok(imported.slug.includes('1234'));
     assert.ok(fs.existsSync(imported.filePath));
 
@@ -341,11 +345,13 @@ test('AC18, AC19, AC20, AC21 & AC22: Synchronization & Reconciliation', () => {
   const { tmpDir, specsDir, stateDir } = setupTestWorkspace();
   try {
     // 1. Create a spec on disk
-    fs.writeFileSync(path.join(specsDir, '001-feature-x.md'), `---
+    fs.writeFileSync(path.join(specsDir, '00001-feature-x.md'), `---
 id: null
-slug: 001-feature-x
+slug: 00001-feature-x
 title: "Feature X"
 source: local
+
+status: draft
 specDate: 2026-10-19
 ---
 # Specification — Feature X
@@ -383,7 +389,7 @@ None.
     // AC19: Completed run state in stateDir transitions status to completed
     const runState = {
       runId: 'run-test-001',
-      specSlug: '001-feature-x',
+      specSlug: '00001-feature-x',
       status: 'completed',
       deliveryCommit: 'abc1234'
     };
@@ -418,11 +424,13 @@ None.
     assert.equal(readIndex({ root: tmpDir }).entries[0].status, 'completed');
 
     // AC20: Untracked spec discovery
-    fs.writeFileSync(path.join(specsDir, '002-discovered.md'), `---
+    fs.writeFileSync(path.join(specsDir, '00002-discovered.md'), `---
 id: null
-slug: 002-discovered
+slug: 00002-discovered
 title: "Discovered Spec"
 source: local
+
+status: draft
 specDate: 2026-10-19
 ---
 # Specification — Discovered Spec
@@ -456,13 +464,13 @@ None.
     syncIndex({ root: tmpDir });
     const afterDiscovery = readIndex({ root: tmpDir });
     assert.equal(afterDiscovery.entries.length, 2);
-    assert.ok(afterDiscovery.entries.some(e => e.slug === '002-discovered' && e.status === 'pending'));
+    assert.ok(afterDiscovery.entries.some(e => e.slug === '00002-discovered' && e.status === 'pending'));
 
     // AC22: Missing spec flagged as MISSING without deleting historical row
-    fs.unlinkSync(path.join(specsDir, '002-discovered.md'));
+    fs.unlinkSync(path.join(specsDir, '00002-discovered.md'));
     syncIndex({ root: tmpDir });
     const afterMissing = readIndex({ root: tmpDir });
-    const missingEntry = afterMissing.entries.find(e => e.slug === '002-discovered');
+    const missingEntry = afterMissing.entries.find(e => e.slug === '00002-discovered');
     assert.ok(missingEntry, 'Missing spec row retained in index');
     assert.equal(missingEntry.validation, 'MISSING');
   } finally {
@@ -473,12 +481,14 @@ None.
 test('AC23, AC24 & AC25: Orchestrator Integration & Quality Gates', () => {
   const { tmpDir, specsDir } = setupTestWorkspace();
   try {
-    const specPath = path.join(specsDir, '001-archived-test.md');
+    const specPath = path.join(specsDir, '00001-archived-test.md');
     fs.writeFileSync(specPath, `---
 id: null
-slug: 001-archived-test
+slug: 00001-archived-test
 title: "Archived Gate Test"
 source: local
+
+status: draft
 specDate: 2026-10-19
 ---
 # Specification — Archived Gate Test
@@ -511,13 +521,13 @@ None.
 
     initIndex({ root: tmpDir });
     // Transition to completed then archived
-    updateSpecStatus('001-archived-test', 'completed', { root: tmpDir });
-    archiveSpec('001-archived-test', { root: tmpDir });
+    updateSpecStatus('00001-archived-test', 'completed', { root: tmpDir });
+    archiveSpec('00001-archived-test', { root: tmpDir });
 
     // AC25: sdw-orch rejects execution on archived spec without override flag
     const exitCodeBlocked = sdwOrch.cmdRun({
       root: tmpDir,
-      specPath: '001-archived-test.md',
+      specPath: '00001-archived-test.md',
       force: false,
       allowArchived: false
     });
@@ -526,18 +536,93 @@ None.
     // Unarchive / allow archived execution with --allow-archived flag
     const exitCodeAllowed = sdwOrch.cmdRun({
       root: tmpDir,
-      specPath: '001-archived-test.md',
+      specPath: '00001-archived-test.md',
       allowArchived: true,
       minScore: 0,
       skipReview: true,
       skipPr: true,
       implementation: {
         mode: 'command',
-        command: 'node -e "const fs = require(\'fs\'); fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({ taskId: process.env.SDW_TASK_ID, acIds: [\'AC1\'], filesChanged: [\'.sdw/specs/001-archived-test.md\'], summary: \'done\' }));"'
+        command: 'node -e "const fs = require(\'fs\'); fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({ taskId: process.env.SDW_TASK_ID, acIds: [\'AC1\'], filesChanged: [\'.sdw/specs/00001-archived-test.md\'], summary: \'done\' }));"'
       }
     });
     assert.equal(exitCodeAllowed, 0, 'Allows execution on archived spec with --allow-archived');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
+});
+
+test('Spec status: header key is required and enum-validated', () => {
+  const body = (statusLine) => `---
+id: null
+slug: 00001-status-test
+title: "Status Test"
+source: local
+${statusLine}specDate: 2026-10-21
+---
+# Specification — Status Test
+## Description
+Desc.
+### Design Intent
+Intent.
+## Acceptance Criteria
+- AC1: The system shall demonstrate status validation.
+## Notes
+None.
+## Out of Scope
+| Feature | Reason |
+|---|---|
+| Out | Scope |
+## Assumptions & Open Questions
+| Assumption | Chosen default | Rationale | Confirmed |
+|---|---|---|---|
+| A | B | C | y |
+## Definition of Ready (DoR)
+| Readiness Item | Requirement | Verification Method |
+|---|---|---|
+| R | V | M |
+## Validation & Observation Notes
+### Telemetry & Observable Signals
+- Signals
+### Negative & Failing Test Scenarios
+- Rejection of invalid status
+`;
+
+  const missing = validate(body(''), { mode: 'authoring' });
+  assert.equal(missing.ok, false);
+  assert.ok(missing.errors.some(e => e.code === 'frontmatter-key' && e.message.includes('status')));
+
+  const invalid = validate(body('status: shipped\n'), { mode: 'authoring' });
+  assert.ok(invalid.errors.some(e => e.code === 'status'), 'Unknown status is rejected');
+
+  const valid = validate(body('status: draft\n'), { mode: 'authoring' });
+  assert.equal(valid.ok, true, `Draft status validates: ${JSON.stringify(valid.errors)}`);
+});
+
+test('Spec status subcommand: transition gate and header rewrite', () => {
+  const { tmpDir } = setupTestWorkspace();
+  try {
+    const { cmdStatus } = require('../skills/sdw-spec/scripts/sdw_spec.cjs');
+    const created = createNewSpec('Status transition demo', { root: tmpDir });
+    const read = () => fs.readFileSync(created.filePath, 'utf8');
+
+    assert.match(read(), /^status: draft$/m, 'New specs start as draft');
+    assert.equal(cmdStatus({ target: `${created.slug} implemented`, root: tmpDir }), 1, 'Skips undefined transition');
+    assert.match(read(), /^status: draft$/m, 'Refused transition leaves the header unchanged');
+    assert.equal(cmdStatus({ target: `${created.slug} awaiting-approval`, root: tmpDir }), 0);
+    assert.match(read(), /^status: awaiting-approval$/m);
+    assert.equal(cmdStatus({ target: `${created.slug} implemented`, root: tmpDir, force: true }), 0);
+    assert.match(read(), /^status: implemented$/m, '--force overrides the transition map');
+    assert.equal(cmdStatus({ target: `${created.slug} not-a-status`, root: tmpDir }), 1);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('Spec grilling reference is present and linked', () => {
+  const root = path.join(__dirname, '..');
+  const skill = fs.readFileSync(path.join(root, 'skills', 'sdw-spec', 'SKILL.md'), 'utf8');
+  assert.ok(skill.includes('references/grilling.md'), 'SKILL.md links the grilling reference');
+  assert.ok(skill.includes('awaiting-approval'), 'SKILL.md documents the status transition');
+  assert.ok(fs.existsSync(path.join(root, 'skills', 'sdw-spec', 'references', 'grilling.md')));
 });

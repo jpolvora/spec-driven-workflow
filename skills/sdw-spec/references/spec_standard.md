@@ -4,25 +4,28 @@ Canonical specification format and schema rules for Spec-Driven Workflow (SDW).
 
 ## 1. YAML Frontmatter
 
-Every specification must begin with YAML frontmatter containing exactly these 5 keys:
+Every specification must begin with YAML frontmatter containing exactly these 6 keys:
 
 ```yaml
 ---
 id: null                  # Remote tracker issue/work item ID (string or null)
-slug: 001-feature-name    # Format: NNN-<kebab-case-name>
+slug: 00001-feature-name  # Format: NNNNN-<kebab-case-name>
 title: "Feature Title"    # Quoted human-readable title
 source: local             # One of: 'local' | 'github' | 'azure-devops'
+status: draft             # One of the 5 spec statuses (see section 5)
 specDate: 2026-10-19      # ISO date (YYYY-MM-DD)
 ---
 ```
 
+`status` is the authoring state, not an implementation order. A missing key or an unknown value fails validation.
+
 ## 2. Autoincrement Prefix Convention
 
-All specifications are prefixed with a 3-digit zero-padded integer (`001`, `002`, ..., `00N`):
-- Scans `{specsDir}` for existing files matching `/^(\d{3})-.*\.md$/`.
+All specifications are prefixed with a 5-digit zero-padded integer (`00001`, `00002`, ..., `000NN`):
+- Scans `{specsDir}` for existing files matching `/^(\d{5})-.*\.md$/`.
 - Resolves the highest existing integer and increments by 1.
-- Initial prefix defaults to `001` if no numbered files exist.
-- Both the file name (`{specsDir}/NNN-{slug}.md`) and frontmatter `slug` incorporate the prefix.
+- Initial prefix defaults to `00001` if no numbered files exist.
+- Both the file name (`{specsDir}/NNNNN-{slug}.md`) and frontmatter `slug` incorporate the prefix.
 
 ## 3. Required Section Hierarchy
 
@@ -62,3 +65,29 @@ Acceptance criteria must strictly match one of the 5 Easy Approach to Requiremen
 | **State-driven** | `While <state>, the <system> shall <response>` | `While a specification is marked archived, the system shall prevent execution.` |
 | **Optional-feature** | `Where <feature>, the <system> shall <response>` | `Where a status filter is passed via --status, the system shall restrict output.` |
 | **Unwanted-behavior** | `If <trigger>, then the <system> shall <response>` | `If the index file already exists, then the system shall preserve existing records.` |
+
+## 5. Spec Status
+
+The header `status:` records where the specification is in its authoring life. It never authorizes implementation.
+
+| Status | Meaning | Registry row |
+|---|---|---|
+| `draft` | Needs refinement or grilling. | `pending` |
+| `awaiting-approval` | Grilled and coherent; waiting for the maintainer's sign-off. | `pending` |
+| `ready-to-implement` | Approved; implementation may be ordered explicitly. | `pending` |
+| `implemented` | Delivered and verified. | `completed` |
+| `abandoned` | Dropped but kept for the record. | `archived` |
+
+Allowed transitions: `draft` -> `awaiting-approval` -> `ready-to-implement` -> `implemented`; `abandoned` is reachable from any state and may be revived to `draft`. `sdw-spec status` refuses undefined transitions unless `--force` is passed.
+
+The registry `Status` column stays the lifecycle value (`pending`, `completed`, `archived`). `sync` reconciles the registry only; it never rewrites the header.
+
+## 6. Focus, Splitting & Grilling
+
+- Default unit: **one feature per spec**.
+- If the draft spans multiple domains, areas, or groups of modifications, split it **by feature** before writing behaviour ACs. One spec per independently deliverable area.
+- A spec that needs more than roughly 15 ACs is a split signal.
+- Grilling is optional. When used, it follows the round-based frontier rule: ask the whole set of questions whose prerequisites are settled, never ahead of them, and stop when the frontier is empty.
+- Grilling records answers in `## Assumptions & Open Questions` (`Confirmed: Yes`) and in the ACs; it writes no implementation files.
+- After grilling, move the header to `awaiting-approval`. Only maintainer sign-off moves it to `ready-to-implement`.
+- Full protocol: [`grilling.md`](grilling.md).

@@ -138,6 +138,7 @@ function renderTaskPrompt(options) {
   }
 
   prompt += `## Implementation Rules (sdw-rules)\n`;
+  prompt += `Load and follow the shared \`sdw-rules\` skill before acting (installed under \`.agents/skills/sdw-rules/\` or \`skills/sdw-rules/\`). It is the canonical source for the rules below.\n`;
   prompt += `- **Simplicity first:** write the minimum code that satisfies the assigned criteria; no speculative abstraction, layering, or configurability.\n`;
   prompt += `- **Surgical changes:** touch only the scope fence; no drive-by refactors, renames, or formatting churn.\n`;
   prompt += `- **No unrequested features:** implement exactly what the assigned criteria require.\n\n`;

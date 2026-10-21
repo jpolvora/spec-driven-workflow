@@ -16,6 +16,8 @@ invocation_names:
 
 Orchestrates spec execution from input requirement to delivery commit, automated code review, and pull request.
 
+> **Rules:** apply [`sdw-rules`](../sdw-rules/SKILL.md) before running. A specification is a document, not an implementation order.
+
 ## Subcommands
 
 - `run <specPath...>`: Executes the full 8-step workflow pipeline for single specification or unattended multi-spec batch queue.

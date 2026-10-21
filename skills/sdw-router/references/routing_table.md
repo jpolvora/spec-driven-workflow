@@ -43,16 +43,31 @@ When evaluating a user turn, the router applies four strict precedence tiers:
   - "Initialize SDW in this repository"
   - "Parse config.json to resolve directory tokens"
 
+### Skill: `sdw-doctor`
+- **Domain**: Installation and workspace health: skill folders, references, scripts, config keys, registry rows, and specs across upstream, local, global, and hybrid modes.
+- **Explicit Invocations**: `/sdw-doctor`, `@sdw-doctor`, `sdw-doctor`
+- **Trigger Keywords**:
+  - `installation health`, `install check`, `workspace health`, `doctor`
+  - `missing skill`, `skill not found`, `hybrid install`, `global install check`
+  - `npx reinstall`, `broken install`, `check skills`
+- **Typical Prompts**:
+  - "Check whether the SDW installation is complete"
+  - "Why is sdw-orch missing from my global install?"
+  - "Verify the workspace configuration and specs before running"
+
 ### Skill: `sdw-spec`
-- **Domain**: Specification lifecycle, authoring, EARS validation, index synchronization, and archiving.
+- **Domain**: Specification lifecycle, authoring, round-based grilling, EARS validation, header status, index synchronization, and archiving.
 - **Explicit Invocations**: `/sdw-spec`, `@sdw-spec`, `sdw-spec`
 - **Trigger Keywords**:
   - `spec`, `specification`, `author spec`, `new spec`, `format spec`
   - `ears syntax`, `validate spec`, `list specs`, `sync specs`, `import spec`
   - `archive spec`, `index.specs.md`, `prd index`, `spec lifecycle`
+  - `grill spec`, `grill me`, `refine spec`, `spec status`, `awaiting-approval`
 - **Typical Prompts**:
   - "Draft a new feature specification for user authentication"
   - "Validate our specs against the EARS acceptance criteria format"
+  - "Grill this spec until no assumption is left unstated"
+  - "Move spec 031 to awaiting-approval"
   - "Sync index.specs.md with active on-disk specifications"
   - "Archive completed specification 001"
 
@@ -64,7 +79,7 @@ When evaluating a user turn, the router applies four strict precedence tiers:
   - `resume run`, `orch status`, `dag tasks`, `conformance score`, `delivery commit`
   - `automated code review`, `review loop`, `remote push`, `pr preparation`
 - **Typical Prompts**:
-  - "Start workflow to implement spec 003-sdw-router-skill"
+  - "Start workflow to implement spec 00003-sdw-router-skill"
   - "Resume interrupted run run-1792396125490"
   - "Check status of the current orchestrator execution"
 

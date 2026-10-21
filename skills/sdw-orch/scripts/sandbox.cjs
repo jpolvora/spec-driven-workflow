@@ -297,6 +297,36 @@ function clonePathFromMetadata(sourceRoot, metadata) {
   return path.resolve(sourceRoot, metadata.root || '');
 }
 
+function suggestSandboxFixes(state) {
+  if (!state || state.status === 'completed') return [];
+  const errors = Array.isArray(state.errors) ? state.errors.map(err => err.error || '').join('\n') : '';
+  const stepStatuses = Object.values(state.steps || {}).map(step => (step && step.status) || '').join(' ');
+  const text = `${errors}\n${stepStatuses}`;
+  const fixes = [];
+  if (/No valid skills directory|Cannot find module/i.test(text)) {
+    fixes.push('Run `sdw-doctor check`; reinstall with `npx skills add jpolvora/spec-driven-workflow -y`.');
+  }
+  if (/Specification file not found/i.test(text)) {
+    fixes.push('Verify the specification path and `specsDir`, then run `sdw-spec sync`.');
+  }
+  if (/Evidence validation failed|None of the files listed/i.test(text)) {
+    fixes.push('Inspect the worker evidence contract and the task scope fence.');
+  }
+  if (/Verification Gate|Tests failed|Test verification failed/i.test(text)) {
+    fixes.push('Run the configured verification command manually, then re-run the gate.');
+  }
+  if (/Conformance score below|reimplementation_needed/i.test(text)) {
+    fixes.push('Read the Step 5 artifact and address the failing acceptance criteria.');
+  }
+  if (/Judge command failed|judge/i.test(text) && fixes.length === 0) {
+    fixes.push('Check `scoring.judgeCommand` and its stdin/stdout contract.');
+  }
+  if (fixes.length === 0) {
+    fixes.push('Inspect `.sdw/state/{runId}.state.json`, then re-run `sdw-doctor test`.');
+  }
+  return fixes;
+}
+
 function renderReport(sourceRoot, metadata) {
   const cloneRoot = clonePathFromMetadata(sourceRoot, metadata);
   const state = readRunState(cloneRoot, metadata.runId);
@@ -373,6 +403,14 @@ function renderReport(sourceRoot, metadata) {
       for (const err of state.errors.slice(-20)) {
         lines.push(`- [step ${err.step || '?'}] ${err.error}`);
       }
+      lines.push('');
+    }
+
+    const fixes = suggestSandboxFixes(state);
+    if (fixes.length > 0) {
+      lines.push('## Suggested Fixes');
+      lines.push('');
+      for (const fix of fixes) lines.push(`- ${fix}`);
       lines.push('');
     }
   } else {
@@ -473,6 +511,7 @@ module.exports = {
   createSandbox,
   listSandboxes,
   renderReport,
+  suggestSandboxFixes,
   writeReport,
   refreshReportForRoot,
   cleanSandbox
