@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const { execSync, spawnSync } = require('child_process');
 
 // Import SCM provider contract from sdw-spec
@@ -145,6 +146,47 @@ function buildPrBody({ explicit, specSlug, specTitle, head, base, commits, files
   if (config.runAllTests) lines.push(`- Tests: \`${config.testCommand || 'npm test'}\``);
   lines.push(`- Security checks: ${config.securityChecksEnabled ? 'enabled' : 'disabled'}`);
   return lines.join('\n');
+}
+
+/**
+ * Builds the default sdw-fixer CLI command from active review threads.
+ * Used when reviewFixCommand is unset (AC13): writes thread-derived findings
+ * to a temp file and returns a `sdw_fixer.cjs run` invocation the caller
+ * executes through the executor, reusing the existing verify/stage/commit
+ * gates. Returns null when the fixer script is absent or threads are empty.
+ */
+function buildDefaultFixerCommand(projectRoot, activeList) {
+  const fixerScript = path.join(projectRoot, 'skills', 'sdw-fixer', 'scripts', 'sdw_fixer.cjs');
+  if (!fs.existsSync(fixerScript)) return null;
+  const threads = (activeList || []).filter(t => t && !t.isResolved);
+  if (threads.length === 0) return null;
+  const findings = threads.map(t => {
+    const rawPath = typeof t.path === 'string' ? t.path.trim().replace(/\\/g, '/') : '';
+    const safe = rawPath && !path.isAbsolute(rawPath) && !/^[A-Za-z]:[\\/]/.test(rawPath) && !rawPath.split('/').includes('..');
+    const firstComment = t.comments && t.comments[0] ? String(t.comments[0].body || '') : '';
+    const evidence = (firstComment.trim() || 'Review feedback').slice(0, 500) || 'Review feedback';
+    return {
+      file: safe ? rawPath : 'REVIEW_THREADS.md',
+      line: Number.isInteger(t.line) && t.line > 0 ? t.line : 1,
+      rule: 'review_thread_feedback',
+      evidence,
+      severityHint: 'medium'
+    };
+  });
+  let dir;
+  try {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-fixer-'));
+  } catch (e) {
+    return null;
+  }
+  const findingsPath = path.join(dir, 'findings.json');
+  const reportPath = path.join(dir, 'result.json');
+  try {
+    fs.writeFileSync(findingsPath, JSON.stringify({ batchId: `ship-pr-fix-${Date.now()}`, findings }, null, 2), 'utf8');
+  } catch (e) {
+    return null;
+  }
+  return { command: `node "${fixerScript}" run --findings "${findingsPath}" --report "${reportPath}"`, findingsPath, reportPath };
 }
 
 function resolveStateDir(projectRoot, config = {}) {
@@ -791,6 +833,11 @@ async function runShipPr(options = {}, customExecutor = null) {
             let fixSummary = 'Applied and verified the requested review fix.';
             let canResolve = false;
             let fixResult = null;
+            const defaultFixer = reviewFixCommand ? null : buildDefaultFixerCommand(projectRoot, activeList);
+            const effectiveFixCommand = reviewFixCommand || (defaultFixer && defaultFixer.command) || null;
+            if (defaultFixer) {
+              log(`[sdw-ship-pr] reviewFixCommand unset; delegating to sdw-fixer: ${defaultFixer.command}`);
+            }
             if (typeof options.threadFixer === 'function') {
               // The caller owns applying, testing, committing, and pushing the fix.
               fixResult = await options.threadFixer({
@@ -808,10 +855,10 @@ async function runShipPr(options = {}, customExecutor = null) {
               fixSummary = fixResult.summary || fixSummary;
               runReviewSecurityGate();
               canResolve = true;
-            } else if (reviewFixCommand) {
-              log(`[sdw-ship-pr] Applying review fixes via reviewFixCommand: ${reviewFixCommand}`);
+            } else if (effectiveFixCommand) {
+              log(`[sdw-ship-pr] Applying review fixes via review fix command: ${effectiveFixCommand}`);
               const beforeReviewFix = listChangedPaths(executor);
-              executor(reviewFixCommand);
+              executor(effectiveFixCommand);
 
               if (config.runAllTests) {
                 log(`[sdw-ship-pr] Verifying review fixes with test command: ${testCommand}`);
@@ -1181,5 +1228,6 @@ module.exports = {
   listBranchFiles,
   getSpecTitle,
   buildPrTitle,
-  buildPrBody
+  buildPrBody,
+  buildDefaultFixerCommand
 };

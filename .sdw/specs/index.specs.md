@@ -43,4 +43,4 @@ Central repository index tracking specification lifecycle states, metadata, and 
 | 00029 | 00029-sdw-orch-sandboxed-execution | SDW Orchestrator Sandboxed Execution and Plan-Only Dry Run | completed | local | 2026-10-19 | PASS | - |
 | 00030 | 00030-sdw-micro-task-dag-planning | SDW Micro-Task DAG Planning and Sequential Dispatch Preview | pending | local | 2026-10-20 | PASS | - |
 | 00031 | 00031-sdw-delivery-records-retro-learning-lifecycle | SDW Delivery Records, Retrospective, Learning Loop, and Prompt-Task Lifecycle | pending | local | 2026-10-21 | PASS | - |
-| 00032 | 00032-sdw-fixer-skill | SDW Fixer Skill — Shared Findings Intake, Context-Aware Remediation, and Result Reporting | pending | local | 2026-10-21 | PASS | - |
+| 00032 | 00032-sdw-fixer-skill | SDW Fixer Skill — Shared Findings Intake, Context-Aware Remediation, and Result Reporting | completed | local | 2026-10-21 | PASS | - |

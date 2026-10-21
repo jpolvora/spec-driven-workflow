@@ -1,0 +1,19 @@
+{
+  "batchId": "fix-example-001",
+  "findings": [
+    {
+      "file": "skills/sdw-fixer/scripts/sdw_fixer.cjs",
+      "line": 1,
+      "rule": "no_debugger_statements",
+      "evidence": "Example intake entry: sweep the fixer helper itself for stray debugger statements.",
+      "severityHint": "low"
+    },
+    {
+      "file": ".sdw/traps.md",
+      "line": 7,
+      "rule": "surgical-diff-hygiene",
+      "evidence": "Example intake entry: non-trivial defect class routed to agent reasoning.",
+      "severityHint": "medium"
+    }
+  ]
+}

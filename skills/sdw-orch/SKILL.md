@@ -86,6 +86,7 @@ When executing multiple specifications (`run <spec1> <spec2> ...` or batch queue
    Dispatch subagent or CLI runner for `sdw-code-review`; inspect generated report to advance to Step 8 or trigger fix iteration.
    - Run: `node skills/sdw-code-review/scripts/sdw_code_review.cjs run --target <root> [--base <ref>] --report <artifact> [--fix] [--json]`
    - `sdw-code-review` is the sole code review authority; no duplicated internal review instructions.
+   - When remediation is required, delegate the findings batch to `sdw-fixer` through a subagent brief carrying the findings file and report path (`node skills/sdw-fixer/scripts/sdw_fixer.cjs run --findings <path> --report <path>`); reviewer and fixer stay separate, never self-approve.
    - Done when: Report shows 0 blocking findings (`critical`/`warning`) or fix ceiling reached with residual recorded.
 
 8. **PR Preparation, Delivery & Review Convergence**
