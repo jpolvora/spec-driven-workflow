@@ -115,7 +115,7 @@ Signals are read from the state object, never invented from prose.
 | `unresolvedThreads` | `steps.8.output.reviewConvergence` | Active, resolved, and pending threads with locators. |
 | `missingArtifacts` | declared artifact paths | Present only when a declared path is absent. |
 | `leftover_run` | sibling `*.state.json` files with the same `specSlug` | Sibling runs that never reached `completed` or `failed`, with run id, status, and age. |
-| `repeated_run_invocation` | configured transcripts | Two `sdw-orch ... run` invocations for the same `--spec` in one transcript with no `resume` between them. Cites the file and both line numbers; never copies line bodies. |
+| `repeated_run_invocation` | configured transcripts | Two `sdw-orch ... run` invocations for the same `--spec` in one transcript with no `resume` between them. Adjacent lines carrying the same command excerpt count once. Cites the file and both line numbers; never copies line bodies. |
 | `transcript_unreadable` | named transcripts | A named transcript path that does not exist, cannot be read, or is not decodable text, with `not-found`, `read-error`, or `not-text`. The command still exits `0`. |
 
 The state stores only the latest gate record, so a repaired gate can appear as
@@ -124,10 +124,32 @@ it does not infer unrecorded repairs.
 
 Transcript scanning is line-based and format-agnostic: plain text and JSONL
 lines match the same command signature. A line counts as an orchestrator
-invocation when it mentions `sdw-orch` (or `sdw_orch.cjs`) and the `run` or
-`resume` command word. The specification is the basename of the `--spec` value;
-the rest of the line is ignored. Nothing is parsed from harness-specific JSON
+invocation only when the executable (`sdw-orch` or the `sdw_orch.cjs` script)
+is immediately followed by the `run` or `resume` command word. An optional
+closing quote, preceded by any run of JSON escape backslashes, may sit between
+them, so a tool-call line such as
+`"command":"node \".../sdw_orch.cjs\" run --spec ..."` matches. A line that
+names the executable and uses the word `run` in a separate clause is prose and
+is not an invocation. Only a `--spec` that follows the command word is read;
+the specification is its basename with the `.md` suffix removed. Surrounding
+quotes, backticks, JSON escape backslashes, and trailing punctuation are
+stripped from that value before the basename is derived, so a value captured as
+`.sdw/specs/00000-x.md` followed by a backtick normalizes to `00000-x`. The
+rest of the line is ignored. Nothing is parsed from harness-specific JSON
 structure.
+
+A call is often recorded twice: once in the message that issued it and once in
+the tool record that echoed it. The two lines differ in their host envelope
+while the command is the same, so the scanner compares a normalized command
+excerpt, not the whole line: the command word `run` plus `--spec <value>` when
+a value follows, using the value that `--spec` normalization produced. The
+excerpt therefore contains no envelope text and no quote, backtick, escape, or
+trailing-punctuation noise; whitespace between the tokens on the line does not
+change it. When two `run` invocations for the same specification have
+equal excerpts and their line numbers differ by one, they are one invocation
+and produce no signal. Any other line between them, or a different excerpt,
+keeps them apart, and the second invocation produces
+`repeated_run_invocation` with both line numbers.
 
 ## Artifacts And Missing Content
 

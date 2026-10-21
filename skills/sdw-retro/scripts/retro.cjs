@@ -258,40 +258,76 @@ function decodeTranscriptContent(buffer) {
   }
 }
 
-// Spec 00045 AC7: format-agnostic command signatures. A line is an
-// orchestrator invocation when it mentions sdw-orch (or its script) and a
-// `run` or `resume` command word. Only the `--spec` value identifies the
-// specification; the rest of the line is never parsed or copied.
+// Spec 00045 AC7, 00048 AC1/AC2: format-agnostic command signatures. A line is
+// an orchestrator invocation only when the executable is immediately followed
+// by the `run` or `resume` command word, allowing a closing quote (and the
+// backslashes that escape it inside JSON) between them. A line that mentions
+// the executable and the word `run` in separate clauses is prose.
+const ORCHESTRATOR_INVOCATION = /(?:sdw-orch\b|sdw_orch\.cjs)\\*["']?\s+(resume|run)\b/i;
+
+// Spec 00048 AC3: the `--spec` value may be wrapped in quotes or backticks,
+// escaped as a JSON string, and followed by punctuation. Strip the wrappers
+// before the file stem is derived.
+function normalizeSpecValue(raw) {
+  return String(raw || '')
+    .trim()
+    .replace(/^[\\`"']+/, '')
+    .replace(/[\\`"'.,;:!?)\]}>]+$/, '');
+}
+
+// Spec 00048 AC4: one invocation is often recorded twice, once in the message
+// that issued it and once in the tool record that echoed it, so the two lines
+// differ in their host envelope. Compare a normalized command excerpt instead:
+// the command word `run` plus the normalized `--spec` value when present, which
+// ignores envelope text, whitespace runs, quoting, and escape noise.
 function orchestratorInvocation(line) {
-  if (!/\bsdw-orch\b|\bsdw_orch\.cjs\b/i.test(line)) return null;
-  if (/(^|\s)resume(\s|$)/.test(line)) return { verb: 'resume', specification: null };
-  if (!/(^|\s)run(\s|$)/.test(line)) return null;
-  const match = line.match(/--spec(?:=|\s+)(?:"([^"]+)"|'([^']+)'|(\S+))/i);
-  const value = match ? (match[1] || match[2] || match[3]) : '';
+  const invocation = line.match(ORCHESTRATOR_INVOCATION);
+  if (!invocation) return null;
+  if (invocation[1].toLowerCase() === 'resume') {
+    return { verb: 'resume', specification: null, excerpt: null };
+  }
+  const rest = line.slice(invocation.index + invocation[0].length);
+  const match = rest.match(/--spec(?:=|\s+)(?:"([^"]+)"|'([^']+)'|(\S+))/i);
+  const value = match ? normalizeSpecValue(match[1] || match[2] || match[3]) : '';
   const specification = value
     ? path.posix.basename(normalizePath(value).replace(/^\.\//, '')).replace(/\.md$/i, '')
     : null;
-  return { verb: 'run', specification: specification || null };
+  return {
+    verb: 'run',
+    specification: specification || null,
+    excerpt: value ? `run --spec ${value}` : 'run'
+  };
 }
 
 function scanTranscriptLines(reportedPath, content) {
   const findings = [];
   const pending = new Map();
+  let previous = null;
   const lines = content.split(/\r?\n/);
   for (let index = 0; index < lines.length; index += 1) {
     const invocation = orchestratorInvocation(lines[index]);
     if (!invocation) continue;
     if (invocation.verb === 'resume') {
       pending.clear();
+      previous = null;
       continue;
     }
     if (!invocation.specification) continue;
-    const previous = pending.get(invocation.specification);
-    if (previous !== undefined) {
+    // Spec 00048 AC4: the same command excerpt on the immediately preceding
+    // line is the call echoed by its result, not a second invocation.
+    if (previous
+      && index - previous.index === 1
+      && previous.excerpt === invocation.excerpt
+      && previous.specification === invocation.specification) {
+      continue;
+    }
+    previous = { index, excerpt: invocation.excerpt, specification: invocation.specification };
+    const prior = pending.get(invocation.specification);
+    if (prior !== undefined) {
       findings.push({
         path: reportedPath,
         specification: invocation.specification,
-        lines: [previous, index + 1]
+        lines: [prior, index + 1]
       });
     }
     pending.set(invocation.specification, index + 1);
