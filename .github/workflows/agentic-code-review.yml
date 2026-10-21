@@ -17,7 +17,8 @@ name: Agentic Code Review
 #   - pull-requests: write
 #
 # Branch Protection Expectations:
-#   - Add 'Agentic Code Review / review' and 'CI / test' to required status checks before merging.
+#   - develop: require the 'test' and 'review' status checks plus one approving review.
+#   - master: require the same checks plus 'promotion-guard' from production-promotion.yml.
 
 on:
   pull_request:

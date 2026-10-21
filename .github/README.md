@@ -8,9 +8,10 @@ This directory defines the automated GitHub Actions workflows, agentic code revi
 
 | Workflow File | Trigger Events | Primary Responsibilities | Minimal Permissions |
 |---|---|---|---|
-| [`.github/workflows/ci.yml`](workflows/ci.yml) | `pull_request` (`opened`, `synchronize`, `reopened`) on `main`/`develop`<br>`push` on `main`/`develop` | • Validates all specifications in `.sdw/specs/` in authoring mode<br>• Runs the unit test suite (`npm test`)<br>• Executes skill packaging verification when present (`scripts/verify_skills.cjs`) | `contents: read` |
-| [`.github/workflows/agentic-code-review.yml`](workflows/agentic-code-review.yml) | `pull_request` (`opened`, `synchronize`, `reopened`, `ready_for_review`) on `main`/`develop`<br>`workflow_dispatch` with `pr_number` | • Runs `agentic-code-reviewers` over the PR diff<br>• Evaluates SDW conformance using [`.github/agentic-code-reviewers-prompt.md`](agentic-code-reviewers-prompt.md)<br>• Skips gracefully on missing credentials (fork-safe)<br>• Blocks merge if unresolved review threads remain | `contents: read`<br>`pull-requests: write` |
+| [`.github/workflows/ci.yml`](workflows/ci.yml) | `pull_request` (`opened`, `synchronize`, `reopened`) on `main`/`master`/`develop`<br>`push` on `main`/`master`/`develop` | • Validates all specifications in `.sdw/specs/` in authoring mode<br>• Runs the unit test suite (`npm test`)<br>• Executes skill packaging verification when present (`scripts/verify_skills.cjs`) | `contents: read` |
+| [`.github/workflows/agentic-code-review.yml`](workflows/agentic-code-review.yml) | `pull_request` (`opened`, `synchronize`, `reopened`, `ready_for_review`) on `main`/`master`/`develop`<br>`workflow_dispatch` with `pr_number` | • Runs `agentic-code-reviewers` over the PR diff<br>• Evaluates SDW conformance using [`.github/agentic-code-reviewers-prompt.md`](agentic-code-reviewers-prompt.md)<br>• Skips gracefully on missing credentials (fork-safe)<br>• Blocks merge if unresolved review threads remain | `contents: read`<br>`pull-requests: write` |
 | [`.github/workflows/release.yml`](workflows/release.yml) | `push` on tags matching `v*.*.*`<br>`workflow_dispatch` with `verify_only` option | • Runs authoring spec validation, unit tests, and packaging checks<br>• Publishes GitHub Release on tag push without build artifacts<br>• Keeps skills consumable directly via `npx skills` | `contents: write` |
+| [`.github/workflows/production-promotion.yml`](workflows/production-promotion.yml) | `pull_request` targeting `master` (`opened`, `synchronize`, `reopened`, `edited`, `ready_for_review`) | • Allows only `develop`, `release/*`, or `hotfix/*` to merge into `master`<br>• Fails feature-branch promotions before review starts | `contents: read` |
 
 ---
 
@@ -41,16 +42,34 @@ When a pull request originates from a fork or runs in an environment where neith
 
 ---
 
-## 4. Branch Protection Recommendations
+## 4. Branching Model & Branch Protection
 
-For repository maintainers, the following branch protection rules are recommended on `main` and `develop`:
+The repository follows a gitflow lane model:
 
-1. **Require status checks to pass before merging**:
-   - `CI / test` (from `ci.yml`)
-   - `Agentic Code Review / review` (from `agentic-code-review.yml`)
-2. **Require review thread resolution**:
-   - The unresolved thread check in `agentic-code-review.yml` queries active GraphQL review threads and blocks merge until all reviewer comments have been addressed or resolved.
-3. **Require linear history** or squash merges to keep the commit history clean and atomic.
+- `feature/*` integrates into `develop` through pull requests.
+- `develop` is the protected integration lane.
+- `master` is production and receives promotions from `develop` only; `release/*` and `hotfix/*` are the explicit exceptions.
+
+### Required rules
+
+| Rule | `develop` | `master` |
+|---|---|---|
+| Pull request required | yes | yes |
+| Approving reviews | 1 | 1 |
+| Dismiss stale reviews on push | yes | yes |
+| Required check `test` (`ci.yml`) | yes | yes |
+| Required check `review` (`agentic-code-review.yml`) | yes | yes |
+| Required check `promotion-guard` (`production-promotion.yml`) | no | yes |
+| Conversation resolution | yes | yes |
+| Force pushes and deletions | blocked | blocked |
+
+Apply them with the GitHub CLI:
+
+```bash
+gh api -X PUT repos/{owner}/{repo}/branches/develop/protection --input develop-protection.json
+```
+
+The unresolved-thread check in `agentic-code-review.yml` blocks merge until every reviewer comment is addressed or resolved, so conversation resolution must stay enabled.
 
 ---
 
