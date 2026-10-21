@@ -50,24 +50,28 @@ The repository follows a gitflow lane model:
 - `develop` is the protected integration lane.
 - `master` is production and receives promotions from `develop` only; `release/*` and `hotfix/*` are the explicit exceptions.
 
-### Required rules
+### Rulesets as code
 
-| Rule | `develop` | `master` |
+Branch protection is declared as JSON rulesets in [`.github/rulesets/`](rulesets/) and applied by [`.github/workflows/sync-rulesets.yml`](workflows/sync-rulesets.yml):
+
+| Rule | `develop.json` | `master.json` |
 |---|---|---|
 | Pull request required | yes | yes |
-| Approving reviews | 1 | 1 |
+| Approving reviews | 1 | 0 |
 | Dismiss stale reviews on push | yes | yes |
 | Required check `test` (`ci.yml`) | yes | yes |
 | Required check `review` (`agentic-code-review.yml`) | yes | yes |
-| Required check `promotion-guard` (`production-promotion.yml`) | no | yes |
+| Required check `promotion-guard` (`production-promotion.yml`) | no | add after it lands on `master` |
 | Conversation resolution | yes | yes |
 | Force pushes and deletions | blocked | blocked |
 
-Apply them with the GitHub CLI:
+Apply them with:
 
 ```bash
-gh api -X PUT repos/{owner}/{repo}/branches/develop/protection --input develop-protection.json
+gh workflow run sync-rulesets.yml -f ruleset=all
 ```
+
+The workflow needs a repository secret `RULESET_SYNC_TOKEN` with administration write access; the default `GITHUB_TOKEN` cannot manage rulesets. Rulesets and classic branch protection coexist, so after the rulesets are active, delete the classic rules (`gh api -X DELETE repos/{owner}/{repo}/branches/develop/protection`) to keep one source of truth.
 
 The unresolved-thread check in `agentic-code-review.yml` blocks merge until every reviewer comment is addressed or resolved, so conversation resolution must stay enabled.
 
