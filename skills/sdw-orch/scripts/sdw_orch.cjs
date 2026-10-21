@@ -1669,12 +1669,20 @@ function cmdRun(options) {
           }
           } // baseline guard, preserve legacy scoped-only behavior otherwise
         } catch (e) {
-          console.error(`[Step 6: Delivery Commit] Unclaimed capture failed: ${e.message}`);
-          throw e;
+          const captureErr = new Error(`Unclaimed capture failed: ${e.message}`);
+          captureErr.captureFailure = true;
+          throw captureErr;
         }
       }
     } catch (err) {
       console.error(`[Step 6: Delivery Commit] Git error: ${err.message}`);
+      if (err && err.captureFailure) {
+        state = stateManager.updateStepState(targetRoot, state.runId, 6, 'capture_failed', { error: err.message });
+        state.status = 'failed';
+        stateManager.saveRunState(targetRoot, state);
+        options._runResult = { runId: state.runId, status: 'failed', error: `Step 6 gate-fix capture failed: ${err.message}` };
+        return 1;
+      }
       commitSha = getBaseCommit(targetRoot);
     }
     state.deliveryCommit = commitSha;

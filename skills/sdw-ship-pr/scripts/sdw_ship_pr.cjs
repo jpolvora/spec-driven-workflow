@@ -866,6 +866,17 @@ async function runShipPr(options = {}, customExecutor = null) {
               runReviewSecurityGate();
 
               const changed = stageChangedSince(executor, beforeReviewFix, projectRoot);
+              // Surface a fixer no-op explicitly: a delegated batch that changed
+              // nothing is not remediation — threads stay open for agent handling.
+              try {
+                const fixerReportPath = defaultFixer && defaultFixer.reportPath;
+                if (fixerReportPath && fs.existsSync(fixerReportPath)) {
+                  const fixerReport = JSON.parse(fs.readFileSync(fixerReportPath, 'utf8'));
+                  if (fixerReport && fixerReport.status === 'no-op') {
+                    warn('[sdw-ship-pr] sdw-fixer reported no-op: no deterministic fix applies to these threads; manual agent remediation required (see cooperative protocol above).');
+                  }
+                }
+              } catch (e) {}
               if (changed.length === 0) {
                 warn('[sdw-ship-pr] reviewFixCommand produced no changes; refusing to resolve review threads.');
                 report.reviewConvergence.pendingThreads = pendingThreads;
