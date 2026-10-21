@@ -137,6 +137,7 @@
 *Consolidated technical planning and ironclad repository-level quality gates before PR publication.*
 
 - **Refinement Phase (Grilling + Technical Planning):** Step 2 merges adversarial decision gap analysis with constructive technical planning, producing a structured technical blueprint (`targetFiles`, `architecturalApproach`, `testPlan`) directly ingested by Step 3 DAG generation.
+- **Second Pass Refinement (`--second-pass`):** A delivered specification can be re-run to audit each acceptance criterion against the delivered code, tests, configuration, and documentation, implement what is missing or drifted, then simplify inside the same scope. It always writes `{slug}-refine.md`, commits as `refine({slug}): second pass refinement` only when files changed, and reaches Step 8 only when that commit exists.
 - **Configurable Pre-PR Quality Gates (`requiredBuild`, `runAllTests`):** Opt-in build verification (`buildCommand`, default `npm run build`) and full test execution pass (`testCommand`, default `npm test`) executed as mandatory prerequisites in Step 8 before remote push or PR creation.
 - **Automated Surgical Fix Loop:** Autonomous remediation loop (up to 3 iterations) resolving build or test regressions with mandatory pre-commit secret leak checks before each fix commit.
 - **Project Pre-PR Lifecycle Hook:** Support for project-specific instructions (`prePrInstructions`) and automation commands (`prePrCommand`) for semantic version bumping, changelog updates, and documentation synchronization.

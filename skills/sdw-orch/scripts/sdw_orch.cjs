@@ -1111,7 +1111,7 @@ function cmdRun(options) {
       tasks: [{
         id: 'task-refine',
         title: `Second pass: ${specSlug}`,
-        description: 'Review how this specification is already implemented and apply only clear simplification or quality improvements. Changing nothing is an acceptable outcome when the implementation is already good.',
+        description: 'Audit the delivered implementation against the specification, implement acceptance criteria that are missing or drifted, then apply clear simplification or quality improvements. Changing nothing is acceptable only when every criterion already holds and no drift remains.',
         coveredAcs: refineAcIds,
         dependencies: [],
         targetFiles: []

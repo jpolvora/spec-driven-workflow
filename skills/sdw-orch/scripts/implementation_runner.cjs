@@ -65,12 +65,13 @@ function renderTaskPrompt(options) {
 
   if (refineMode) {
     prompt += `## Second Pass (Refinement) Mode\n`;
-    prompt += `This specification is already implemented and delivered. Do not re-implement it from scratch and do not add scope.\n`;
-    prompt += `1. Read how every acceptance criterion is currently implemented, including call sites and tests.\n`;
-    prompt += `2. Look for concrete simplification and quality opportunities: duplicated or dead logic, needless abstraction, missing validation, unclear code you are already touching, redundant tests.\n`;
-    prompt += `3. Apply only changes that are clearly better and keep every acceptance criterion satisfied. No behavior changes, no renames for taste, no unrelated refactors.\n`;
-    prompt += `4. Changing nothing is a valid, honest outcome when the implementation is already good.\n`;
-    prompt += `5. Your \`summary\` must list each opportunity you considered and whether you applied or skipped it, with the reason.\n\n`;
+    prompt += `This specification is already delivered. Your first job is to close the distance between the specification and the code; simplification comes second.\n`;
+    prompt += `1. Audit every acceptance criterion against the current implementation, including call sites, tests, configuration, and documentation.\n`;
+    prompt += `2. Fill what is missing or drifted: when the specification states behavior that is absent, partial, or implemented differently, implement it now. Drift also covers stale documentation, configuration, schema entries, and tests that no longer match the delivered behavior. This gap closure is inside the specification's scope and is expected.\n`;
+    prompt += `3. Then look for concrete simplification and quality opportunities in the files you are already touching: duplicated or dead logic, needless abstraction, missing validation, redundant tests.\n`;
+    prompt += `4. Do not add features the specification does not require, do not rename for taste, and do not refactor unrelated code. No behavior changes beyond the gaps and drift the specification requires.\n`;
+    prompt += `5. Report each criterion as already satisfied, gap filled, or drift repaired. \`filesChanged: []\` is honest only when every criterion already holds and no drift remains.\n`;
+    prompt += `6. Your \`summary\` must list each gap, drift, and opportunity you considered and whether you applied or skipped it, with the reason.\n\n`;
   }
 
   prompt += `## Description\n`;

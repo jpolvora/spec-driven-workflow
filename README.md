@@ -356,7 +356,7 @@ node skills/sdw-batch/scripts/sdw_batch.cjs run <spec1.md> <spec2.md> ... [--con
 # Validate a spec and print the execution plan without executing anything
 node skills/sdw-orch/scripts/sdw_orch.cjs run .sdw/specs/<spec-name>.md --dry-run
 
-# Refine an already delivered spec: simplify/raise quality, report, commit only on change
+# Refine an already delivered spec: fill gaps/drift, simplify, report, commit only on change
 node skills/sdw-orch/scripts/sdw_orch.cjs run .sdw/specs/<spec-name>.md --second-pass
 
 # Execute the whole pipeline in an isolated local clone (no push, no PR)
@@ -391,7 +391,7 @@ node skills/sdw-batch/scripts/sdw_batch.cjs status [batchId]
 
 Queue state lives in `.sdw/state/batch-{batchId}.json`. Dispatch (`4`) and judgment (`5`) pauses stop the loop; the host agent drives the paused run and then resumes the queue. Specifications already recorded as `completed` or `archived` in `index.specs.md` are skipped, so a queue never re-implements delivered work.
 
-A batch never refines a delivered specification. Refinement is an explicit single-spec call: `sdw-orch run <spec> --second-pass` (alias `--refine`) reviews what was delivered, applies only clear simplifications, always writes a `{slug}-refine.md` report, commits only when the pass changed code, and reaches `sdw-ship-pr` only when that commit exists.
+A batch never refines a delivered specification. Refinement is an explicit single-spec call: `sdw-orch run <spec> --second-pass` (alias `--refine`) audits what was delivered, fills acceptance criteria that are missing or drifted from the spec, applies clear simplifications, always writes a `{slug}-refine.md` report, commits only when the pass changed code, and reaches `sdw-ship-pr` only when that commit exists.
 
 ### Using `sdw-security-checks` (Secrets & Credentials Gate)
 
