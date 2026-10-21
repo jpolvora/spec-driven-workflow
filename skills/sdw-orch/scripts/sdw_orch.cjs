@@ -95,6 +95,7 @@ function parseArgs(args) {
     sandbox: false,
     noWorktrees: false,
     worktrees: false,
+    noTaskCheckpoint: false,
     noFeatureBranch: false,
     featureBranch: false,
     taskId: null,
@@ -116,6 +117,7 @@ function parseArgs(args) {
     else if (arg === '--skip-security') result.skipSecurity = true;
     else if (arg === '--no-worktrees') result.noWorktrees = true;
     else if (arg === '--worktrees') result.worktrees = true;
+    else if (arg === '--no-task-checkpoint') result.noTaskCheckpoint = true;
     else if (arg === '--no-feature-branch') result.noFeatureBranch = true;
     else if (arg === '--feature-branch') result.featureBranch = true;
     else if (arg === '--skip-review') result.skipReview = true;
@@ -445,6 +447,29 @@ function stageAndCommitOnly(targetRoot, files, message) {
   }
   git(targetRoot, ['commit', '-m', message], { stdio: 'ignore' });
   return { committed: true, commitSha: getBaseCommit(targetRoot), files: stageable };
+}
+
+// Spec 00044 AC3: an accepted task is checkpointed immediately, not only at the
+// Step 6 delivery commit. One scoped commit plus one tag per task keeps the work
+// recoverable across a crash between tasks; the Step 6 exclusions apply.
+function checkpointRefName(runId, taskId) {
+  const part = value => String(value || '')
+    .replace(/[^A-Za-z0-9._-]+/g, '-')
+    .replace(/\.{2,}/g, '.')
+    .replace(/^[-.]+|[-.]+$/g, '') || 'task';
+  return `sdw-checkpoint-${part(runId)}-${part(taskId)}`;
+}
+
+function checkpointTask(targetRoot, { specSlug, runId, taskId, files = [], commitSha = null }) {
+  let sha = commitSha;
+  if (!sha) {
+    const res = stageAndCommitOnly(targetRoot, files, `task(${specSlug}): ${taskId}`);
+    if (!res.committed) return { commitSha: res.commitSha, tag: null };
+    sha = res.commitSha;
+  }
+  const tag = checkpointRefName(runId, taskId);
+  git(targetRoot, ['tag', '-f', tag, sha], { stdio: 'ignore' });
+  return { commitSha: sha, tag };
 }
 
 function collectDeliveryFiles(targetRoot, specSlug, state) {
@@ -3010,6 +3035,7 @@ function cmdTaskFinish(options) {
   }
 
   // Integrate worktree if used (AC10, AC11)
+  let checkpointTag = null;
   if (effectiveUseWorktrees) {
     try {
       const intRes = implementationRunner.integrateTaskWorktree({
@@ -3033,7 +3059,29 @@ function cmdTaskFinish(options) {
       console.error(`Error: Worktree integration failed for ${taskId}: ${cpErr.message}`);
       return 1;
     }
-  } else {
+  }
+
+  // Spec 00044 AC3: save every accepted task in the primary tree so a crash or
+  // reset between tasks cannot lose corroborated work. Step 6 stays the delivery
+  // commit and aggregates whatever this checkpoint did not already commit.
+  // Second-pass runs are excluded: their explicit `refine(...)` Step 6 commit is
+  // the save, and `deliveryCommitCreated` must still describe it.
+  if (!options.noTaskCheckpoint && !state.refineMode) {
+    try {
+      const checkpoint = checkpointTask(targetRoot, {
+        specSlug: state.specSlug,
+        runId: state.runId,
+        taskId,
+        files: evidenceData.filesChanged,
+        commitSha: effectiveUseWorktrees ? commitSha : null
+      });
+      commitSha = checkpoint.commitSha || commitSha;
+      checkpointTag = checkpoint.tag;
+    } catch (cpErr) {
+      console.error(`Error: Failed to checkpoint task "${taskId}": ${cpErr.message}`);
+      return 1;
+    }
+  } else if (!effectiveUseWorktrees) {
     commitSha = getBaseCommit(targetRoot);
   }
 
@@ -3047,6 +3095,7 @@ function cmdTaskFinish(options) {
     status: 'completed',
     evidencePath: path.isAbsolute(evidencePath) ? path.relative(targetRoot, evidenceFileAbs).replace(/\\/g, '/') : evidencePath.replace(/\\/g, '/'),
     commitSha,
+    checkpointTag,
     filesChanged: evidenceData.filesChanged,
     acIds: evidenceData.acIds,
     summary: evidenceData.summary,
@@ -3062,6 +3111,9 @@ function cmdTaskFinish(options) {
   console.log(`  Files Changed: ${evidenceData.filesChanged.join(', ')}`);
   if (commitSha) {
     console.log(`  Commit SHA:    ${commitSha}`);
+  }
+  if (checkpointTag) {
+    console.log(`  Checkpoint:    ${checkpointTag}`);
   }
 
   // Check if all DAG tasks are completed
@@ -3532,6 +3584,7 @@ Options:
   --skip-security        Bypass pre-commit security checks gate (audit logged)
   --no-worktrees         Disable git worktrees even if configured
   --worktrees            Force git worktrees on multi-task plans
+  --no-task-checkpoint   Do not commit and tag each accepted task (Step 6 remains the only save)
   --no-feature-branch    Disable feature branch creation even if configured
   --feature-branch       Force feature branch creation
   --skip-review          Skip code review step

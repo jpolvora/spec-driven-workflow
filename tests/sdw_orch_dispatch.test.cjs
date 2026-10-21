@@ -55,6 +55,10 @@ function pauseAtDispatch(root) {
   });
 }
 
+function gitOut(root, args) {
+  return execSync(`git ${args}`, { cwd: root, encoding: 'utf8' }).trim();
+}
+
 // Writes evidence for a task and touches a declared file so corroboration passes.
 function submitEvidence(root, taskId, options = {}) {
   const state = stateManager.findLatestRunState(root);
@@ -109,6 +113,78 @@ test('AC4-AC8: task next dispatches one ready task, refuses a concurrent dispatc
     assert.equal(exhausted, 0, 'Exhaustion is not an error');
     const finished = stateManager.loadRunState(root, state.runId);
     assert.equal(finished.steps[4].status, 'completed', 'Accepting the final task completes Step 4');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC3: each accepted task is saved by one scoped commit plus one checkpoint tag, and the tag recovers lost content', () => {
+  const root = setupRepo();
+  try {
+    assert.equal(pauseAtDispatch(root), 4);
+    const state = stateManager.findLatestRunState(root);
+    const baseline = gitOut(root, 'rev-parse HEAD');
+    const firstTask = state.steps[4].dispatch.activeTaskId;
+
+    const firstEvidence = submitEvidence(root, firstTask);
+    assert.equal(sdwOrch.cmdTaskFinish({ root, runId: state.runId, taskId: firstTask, evidencePath: firstEvidence.evidencePath }), 0);
+
+    const afterFirst = stateManager.loadRunState(root, state.runId);
+    const firstCommit = afterFirst.steps[4].tasks[firstTask].commitSha;
+    const firstTag = `sdw-checkpoint-${state.runId}-${firstTask}`;
+    assert.equal(gitOut(root, `rev-parse ${firstTag}`), firstCommit, 'the checkpoint tag points at the accepted commit');
+    assert.equal(gitOut(root, 'log -1 --format=%s'), `task(dispatch-demo): ${firstTask}`, 'the checkpoint commit uses the task message');
+    assert.match(gitOut(root, `show ${firstTag}:app.cjs`), new RegExp(`// ${firstTask} work`), 'the tag holds the accepted file content');
+
+    // Kill between tasks: a later process resumes from disk state and dispenses the next task.
+    assert.equal(sdwOrch.cmdResume({ root, runId: state.runId, skipReview: true, skipPr: true }), 4, 'resume re-enters Step 4 between tasks');
+    assert.equal(sdwOrch.cmdTaskNext({ root, runId: state.runId }), 0, 'the next task dispatches after the checkpoint');
+    const secondTask = stateManager.loadRunState(root, state.runId).steps[4].dispatch.activeTaskId;
+
+    // A reset loses the working tree content; the checkpoint tag restores it.
+    execSync(`git reset --hard ${baseline}`, { cwd: root, stdio: 'ignore' });
+    assert.ok(!fs.readFileSync(path.join(root, 'app.cjs'), 'utf8').includes(`// ${firstTask} work`), 'the reset lost the file content');
+    execSync(`git reset --hard ${firstTag}`, { cwd: root, stdio: 'ignore' });
+    assert.match(fs.readFileSync(path.join(root, 'app.cjs'), 'utf8'), new RegExp(`// ${firstTask} work`), 'the tag recovers the file content');
+
+    const secondEvidence = submitEvidence(root, secondTask);
+    assert.equal(sdwOrch.cmdTaskFinish({ root, runId: state.runId, taskId: secondTask, evidencePath: secondEvidence.evidencePath }), 0);
+
+    const afterSecond = stateManager.loadRunState(root, state.runId);
+    assert.equal(gitOut(root, `rev-parse sdw-checkpoint-${state.runId}-${secondTask}`), afterSecond.steps[4].tasks[secondTask].commitSha);
+    assert.equal(gitOut(root, `rev-list --count ${baseline}..HEAD`), '2', 'one commit per accepted task');
+    assert.deepEqual(
+      gitOut(root, `log --format=%s ${baseline}..HEAD`).split(/\r?\n/).sort(),
+      [`task(dispatch-demo): ${firstTask}`, `task(dispatch-demo): ${secondTask}`].sort()
+    );
+
+    // Final delivery state stays authoritative: Step 6 records the accepted history.
+    assert.equal(sdwOrch.cmdResume({ root, runId: state.runId, skipReview: true, skipPr: true }), 0, 'the run completes after the last checkpoint');
+    const completed = stateManager.loadRunState(root, state.runId);
+    assert.equal(completed.status, 'completed');
+    assert.equal(completed.steps[6].status, 'completed', 'Step 6 remains the delivery state');
+    assert.equal(completed.deliveryCommit, afterSecond.steps[4].tasks[secondTask].commitSha, 'the delivery state points at the accepted commit when no scoped files remain');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC3: --no-task-checkpoint leaves the accepted task uncommitted and untagged', () => {
+  const root = setupRepo();
+  try {
+    assert.equal(pauseAtDispatch(root), 4);
+    const state = stateManager.findLatestRunState(root);
+    const taskId = state.steps[4].dispatch.activeTaskId;
+    const head = gitOut(root, 'rev-parse HEAD');
+
+    const { evidencePath } = submitEvidence(root, taskId);
+    assert.equal(sdwOrch.cmdTaskFinish({ root, runId: state.runId, taskId, evidencePath, noTaskCheckpoint: true }), 0);
+
+    const after = stateManager.loadRunState(root, state.runId);
+    assert.equal(after.steps[4].tasks[taskId].commitSha, head, 'no checkpoint commit is created');
+    assert.equal(gitOut(root, 'rev-parse HEAD'), head);
+    assert.equal(gitOut(root, 'tag --list'), '', 'no checkpoint tag is created');
+    assert.ok(fs.readFileSync(path.join(root, 'app.cjs'), 'utf8').includes(`// ${taskId} work`), 'the work stays in the working tree for Step 6');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
