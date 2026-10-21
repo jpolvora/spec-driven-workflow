@@ -237,6 +237,56 @@ test('AC2: a queued entry is on disk before the next specification is created', 
   }
 });
 
+test('AC2: resume re-enters the follow-up stage for candidates a crash left behind', () => {
+  const root = makeRoot('queue');
+  try {
+    writeRun(root, 'run-1', [
+      candidate('RETRO-001', 'critical'),
+      candidate('RETRO-003', 'high')
+    ]);
+    const config = queue.loadConfig(root);
+    const manifest = makeManifest();
+    const item = manifest.queue[0];
+    item.retroFollowUp = {
+      status: 'queued',
+      candidates: 2,
+      bySeverity: { critical: 1, high: 1 },
+      reportPath: '.sdw/state/run-1.retro.json',
+      queued: [{ candidateId: 'RETRO-001', spec: '.sdw/specs/00100-retro-001.md', slug: '00100-retro-001' }],
+      failures: [],
+      processed: ['RETRO-001']
+    };
+    manifest.queue.push({
+      index: 2,
+      spec: '.sdw/specs/00100-retro-001.md',
+      slug: '00100-retro-001',
+      status: 'pending',
+      runId: null,
+      followUpDepth: 1
+    });
+    const created = [];
+    const deps = {
+      createSpec: ({ candidate: entry }) => {
+        created.push(entry.id);
+        return {
+          filePath: path.join(root, '.sdw', 'specs', `00100-${entry.id.toLowerCase()}.md`),
+          slug: `00100-${entry.id.toLowerCase()}`
+        };
+      }
+    };
+
+    const recovered = queue.recoverFollowUps(manifest, config, {}, deps);
+    assert.equal(recovered, 1, 'only the interrupted candidate is recovered');
+    assert.deepEqual(created, ['RETRO-003'], 'the checkpointed candidate is never re-created');
+
+    const again = queue.recoverFollowUps(manifest, config, {}, deps);
+    assert.equal(again, 0, 'a second resume is idempotent');
+    assert.deepEqual(created, ['RETRO-003'], 'no duplicate specification on the second pass');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('AC2: the default seam creates the draft specification through the sdw-spec CLI', () => {
   const root = makeRoot('queue');
   try {

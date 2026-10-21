@@ -210,6 +210,7 @@ function followUpRecord(status, extras = {}) {
     reportPath: null,
     queued: [],
     failures: [],
+    processed: [],
     ...extras
   };
 }
@@ -389,6 +390,12 @@ function applyRetroFollowUp({ config, manifest, item, options, deps } = {}) {
       bySeverity,
       reportPath
     });
+    // Carry the checkpoint and the history across a resume: processed ids stop
+    // duplicate specs, queued and failed entries stay visible in the summary.
+    const previous = item.retroFollowUp && typeof item.retroFollowUp === 'object' ? item.retroFollowUp : {};
+    if (Array.isArray(previous.queued)) followUp.queued = [...previous.queued];
+    if (Array.isArray(previous.failures)) followUp.failures = [...previous.failures];
+    if (Array.isArray(previous.processed)) followUp.processed = [...previous.processed];
 
     if (policy === 'record') {
       writeFollowUpReport(config, manifest, item, followUp, candidates);
@@ -400,21 +407,28 @@ function applyRetroFollowUp({ config, manifest, item, options, deps } = {}) {
     if (item.followUpDepth >= 1) return record({ ...followUp, status: 'depth-exceeded' });
 
     const createSpec = deps && typeof deps.createSpec === 'function' ? deps.createSpec : createSpecWithCli;
+    const processed = new Set(Array.isArray(followUp.processed) ? followUp.processed : []);
     for (const candidate of candidates) {
       if (!QUEUED_SEVERITIES.includes(candidate.severity)) continue;
+      const candidateId = candidate.id || null;
+      if (candidateId && processed.has(candidateId)) continue;
       try {
         const created = createSpec({ config, manifest, item, candidate });
         const entry = appendFollowUpQueueEntry(manifest, item, candidate, created, config);
-        followUp.queued.push({ candidateId: candidate.id || null, spec: entry.spec, slug: entry.slug });
+        followUp.queued.push({ candidateId, spec: entry.spec, slug: entry.slug });
       } catch (err) {
         followUp.failures.push({
-          candidateId: candidate.id || null,
+          candidateId,
           error: err && err.message ? err.message : String(err)
         });
       }
-      // Persist each queued entry before the next candidate: a specification
-      // that exists on disk must already have its queue entry, otherwise an
-      // interrupted batch leaves an orphan spec the queue never delivers.
+      // Checkpoint by candidate id and persist the entry together with the
+      // manifest: a resumed batch must neither re-create a queued spec nor
+      // drop the candidates that were still pending when it stopped.
+      if (candidateId) {
+        processed.add(candidateId);
+        followUp.processed = [...processed];
+      }
       saveManifest(config, manifest);
     }
     return record(followUp);
@@ -424,6 +438,30 @@ function applyRetroFollowUp({ config, manifest, item, options, deps } = {}) {
       failures: [{ candidateId: null, error: err && err.message ? err.message : String(err) }]
     });
   }
+}
+
+// A resumed batch re-enters the follow-up stage for completed items whose
+// candidate loop was interrupted. Processed candidate ids make the re-entry
+// idempotent, and the remaining critical/high candidates are queued now instead
+// of being silently lost because the item already counts as completed.
+function recoverFollowUps(manifest, config, options = {}, deps) {
+  if (!manifest || !Array.isArray(manifest.queue)) return 0;
+  if (retroFollowUpPolicy(config) !== 'queue') return 0;
+  let recovered = 0;
+  for (const item of manifest.queue) {
+    if (!item || item.status !== 'completed') continue;
+    if (item.followUpDepth >= 1) continue;
+    const followUp = item.retroFollowUp;
+    if (!followUp || followUp.status === 'skipped' || followUp.status === 'unavailable') continue;
+    const before = Array.isArray(followUp.queued) ? followUp.queued.length : 0;
+    applyRetroFollowUp({ config, manifest, item, options, deps });
+    const after = item.retroFollowUp && Array.isArray(item.retroFollowUp.queued)
+      ? item.retroFollowUp.queued.length
+      : 0;
+    if (after > before) recovered += after - before;
+  }
+  if (recovered > 0) saveManifest(config, manifest);
+  return recovered;
 }
 
 function triggerSpecSync(config) {
@@ -691,6 +729,10 @@ function resumeBatch(batchId, options = {}) {
   }
   manifest.status = 'in_progress';
   saveManifest(config, manifest);
+  const recovered = recoverFollowUps(manifest, config, options, options._retroDeps);
+  if (recovered > 0) {
+    say(options, `[sdw-batch] Recovered ${recovered} interrupted retro follow-up specification(s).`);
+  }
   say(options, `[sdw-batch] Resuming "${manifest.batchId}" (${manifest.currentIndex + 1}/${manifest.total})...`);
   return executeQueue(manifest, config, options);
 }
@@ -722,6 +764,7 @@ module.exports = {
   manifestFilePath,
   printSummary,
   readRunState,
+  recoverFollowUps,
   resolveSpec,
   resumeBatch,
   runBatch,
