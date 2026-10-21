@@ -234,6 +234,7 @@ test('sdw-branch-sync - AC12/AC14: sdw-ship-pr records the sync outcome in run s
       if (cmd.includes('gh pr list')) {
         return JSON.stringify([{ number: 42, url: 'https://example.test/pull/42', headRefName: 'feature/sync', baseRefName: 'develop' }]);
       }
+      if (cmd.includes('gh pr view') && cmd.includes('--json state')) return 'MERGED';
       if (cmd.includes('gh pr view')) return JSON.stringify({ body: '' });
       if (cmd.includes('pr checks')) return JSON.stringify([{ name: 'ci/build', state: 'pass', bucket: 'pass' }]);
       if (cmd.includes('--input')) {
