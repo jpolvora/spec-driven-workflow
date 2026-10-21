@@ -90,6 +90,8 @@ function createRunState(options) {
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     baseCommit: options.baseCommit || null,
+    refineMode: Boolean(options.refineMode),
+    deliveryCommitCreated: null,
     branch: options.branch || null,
     baseBranch: options.baseBranch || null,
     branchReused: Boolean(options.branchReused),

@@ -247,9 +247,43 @@ function writeStep5Artifact(options) {
   }
 }
 
+// Second-pass refinement report: written for both outcomes, including "no change".
+function writeRefineReport(options) {
+  const {
+    targetRoot, specSlug, runId, artifactsDir, specPath,
+    baseCommit, outcome, deliveryCommit, score, summary, acIds
+  } = options;
+  try {
+    const absDir = ensureArtifactDir(targetRoot, specSlug, runId, artifactsDir);
+    const filePath = path.join(absDir, `${specSlug}-refine.md`);
+    const changed = outcome === 'changed';
+    let md = `# Second Pass Refinement Report — ${specSlug}\n\n`;
+    md += `- **Run ID:** ${runId}\n`;
+    md += `- **Specification:** ${specPath ? normalizePath(specPath) : '(not recorded)'}\n`;
+    md += `- **Mode:** second pass (refinement)\n`;
+    md += `- **Base commit:** ${baseCommit || '(not recorded)'}\n`;
+    md += `- **Outcome:** ${changed ? 'changed' : 'no change'}\n`;
+    md += `- **Delivery commit:** ${deliveryCommit || '(none)'}\n`;
+    md += `- **Conformance score:** ${score === null || score === undefined ? '(not re-scored)' : `${score}/10`}\n\n`;
+    md += `## Files Changed\n`;
+    const files = Array.isArray(options.filesChanged) ? options.filesChanged : [];
+    md += files.length > 0 ? files.map(f => `- \`${normalizePath(f)}\`\n`).join('') : '- (none)\n';
+    md += `\n## Refinement Summary\n`;
+    md += `${summary ? String(summary).trim() : '(no worker summary recorded)'}\n\n`;
+    md += `## Acceptance Criteria (must keep holding)\n`;
+    const criteria = Array.isArray(acIds) ? acIds : [];
+    md += criteria.length > 0 ? criteria.map(id => `- ${id}\n`).join('') : '- (none recorded)\n';
+    return writeArtifactSafely(targetRoot, runId, 6, filePath, md);
+  } catch (err) {
+    console.warn(`[sdw-orch] Warning: Failed to persist refinement report: ${err.message}`);
+    return null;
+  }
+}
+
 module.exports = {
   ensureArtifactDir,
   writeStep2Artifact,
   writeStep3Artifact,
-  writeStep5Artifact
+  writeStep5Artifact,
+  writeRefineReport
 };

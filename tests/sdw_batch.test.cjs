@@ -42,6 +42,20 @@ function setup() {
   return { root, specs: [alpha, beta] };
 }
 
+function writeRegistry(root, rows) {
+  const specsDir = path.join(root, '.sdw', 'specs');
+  fs.mkdirSync(specsDir, { recursive: true });
+  const lines = [
+    '# Specification Index',
+    '',
+    '| Prefix | Slug | Title | Status | Source | Spec Date | Validation | Archival Date |',
+    '|---|---|---|---|---|---|---|---|',
+    ...rows.map(row => `| ${row.prefix} | ${row.slug} | ${row.title || row.slug} | ${row.status} | local | 2026-10-21 | PASS | - |`),
+    ''
+  ];
+  fs.writeFileSync(path.join(specsDir, 'index.specs.md'), lines.join('\n'), 'utf8');
+}
+
 function captureLogs(fn) {
   const logs = [];
   const original = console.log;
@@ -468,6 +482,120 @@ test('review: a malformed .sdw/config.json exits 1 with a clear error', () => {
     const result = spawnSync(process.execPath, [CLI, 'status', '--root', root], { encoding: 'utf8' });
     assert.equal(result.status, 1);
     assert.match(result.stderr, /invalid \.sdw\/config\.json/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('skip: an implemented specification is never delegated again', () => {
+  const { root, specs } = setup();
+  try {
+    writeRegistry(root, [
+      { prefix: '00001', slug: '00001-alpha', status: 'completed' },
+      { prefix: '00002', slug: '00002-beta', status: 'pending' }
+    ]);
+    const calls = [];
+    const { result } = captureLogs(() => queue.runBatch(specs, {
+      root,
+      noSync: true,
+      _invoke: ({ runId, specPath }) => {
+        calls.push(specPath);
+        writeState(root, runId, 'completed', { deliveryCommit: 'beta-done' });
+        return 0;
+      }
+    }));
+
+    assert.equal(result, 0);
+    assert.equal(calls.length, 1, 'only the pending specification is delegated');
+    const manifest = queue.loadManifest(queue.loadConfig(root));
+    assert.deepEqual(manifest.queue.map(item => item.status), ['already_implemented', 'completed']);
+    assert.match(manifest.queue[0].skipReason, /already implemented/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('skip: a fully implemented queue completes with zero delegations', () => {
+  const { root, specs } = setup();
+  try {
+    writeRegistry(root, [
+      { prefix: '00001', slug: '00001-alpha', status: 'completed' },
+      { prefix: '00002', slug: '00002-beta', status: 'archived' }
+    ]);
+    const { result } = captureLogs(() => queue.runBatch(specs, {
+      root,
+      noSync: true,
+      _invoke: () => { throw new Error('a skipped specification must not delegate'); }
+    }));
+
+    assert.equal(result, 0, 'an all-skipped batch is a success');
+    const manifest = queue.loadManifest(queue.loadConfig(root));
+    assert.deepEqual(manifest.queue.map(item => item.status), ['already_implemented', 'already_implemented']);
+    assert.equal(manifest.status, 'completed');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('skip: the registry wins over stale spec frontmatter', () => {
+  const { root, specs } = setup();
+  try {
+    fs.writeFileSync(
+      specs[0],
+      '---\nslug: 00001-alpha\nstatus: completed\n---\n# 00001-alpha\n\n## Acceptance Criteria\n\n- AC1: The system shall exist.\n',
+      'utf8'
+    );
+    writeRegistry(root, [
+      { prefix: '00001', slug: '00001-alpha', status: 'pending' },
+      { prefix: '00002', slug: '00002-beta', status: 'pending' }
+    ]);
+    const calls = [];
+    const { result } = captureLogs(() => queue.runBatch(specs, {
+      root,
+      noSync: true,
+      _invoke: ({ runId, specPath }) => {
+        calls.push(specPath);
+        writeState(root, runId, 'completed', { deliveryCommit: 'done' });
+        return 0;
+      }
+    }));
+
+    assert.equal(result, 0);
+    assert.equal(calls.length, 2, 'frontmatter status does not skip a registry-pending spec');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('skip: resume re-checks the registry before delegating a pending item', () => {
+  const { root, specs } = setup();
+  try {
+    const { result: paused } = captureLogs(() => queue.runBatch(specs, {
+      root,
+      noSync: true,
+      _invoke: ({ runId }) => { writeState(root, runId, 'paused'); return 4; }
+    }));
+    assert.equal(paused, 4);
+
+    writeRegistry(root, [
+      { prefix: '00001', slug: '00001-alpha', status: 'completed' },
+      { prefix: '00002', slug: '00002-beta', status: 'pending' }
+    ]);
+    const calls = [];
+    const { result: resumed } = captureLogs(() => queue.resumeBatch(undefined, {
+      root,
+      noSync: true,
+      _invoke: ({ runId, specPath }) => {
+        calls.push(specPath);
+        writeState(root, runId, 'completed', { deliveryCommit: 'beta-done' });
+        return 0;
+      }
+    }));
+
+    assert.equal(resumed, 0);
+    assert.equal(calls.length, 1, 'the item implemented during the pause is skipped');
+    const manifest = queue.loadManifest(queue.loadConfig(root));
+    assert.equal(manifest.queue[0].status, 'already_implemented');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

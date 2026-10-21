@@ -85,6 +85,25 @@ function manifestFilePath(config, batchId) {
   return path.join(runStateDir(config), `${batchId}.json`);
 }
 
+// A specification is already implemented when the registry records it as
+// completed or archived; the queue must not re-run it from scratch.
+function implementedStatuses(config) {
+  try {
+    const specIndex = require('../../sdw-spec/scripts/spec_index.cjs');
+    const { entries } = specIndex.readIndex({ root: config.root });
+    const statuses = new Map();
+    for (const entry of entries || []) {
+      if (entry.status === 'completed' || entry.status === 'archived') {
+        statuses.set(entry.slug, entry.status);
+      }
+    }
+    return statuses;
+  } catch (e) {
+    console.warn(`[sdw-batch] WARNING: could not read the specification index: ${e.message}`);
+    return new Map();
+  }
+}
+
 function createManifest({ specs, options, config }) {
   // Discovery without an explicit id only scans `batch-*.json`, so every batch
   // id is normalized to that prefix; a custom id stays resumable by itself.
@@ -95,13 +114,17 @@ function createManifest({ specs, options, config }) {
     throw new Error(`batch "${batchId}" already exists at ${normalizePath(path.relative(config.root, manifestFile))}; pass a different --batch-id`);
   }
   const now = new Date().toISOString();
+  const implemented = implementedStatuses(config);
   const queue = specs.map((specInput, index) => {
     const resolved = resolveSpec(specInput, config);
+    const slug = inferSlug(resolved);
+    const registryStatus = implemented.get(slug) || null;
     return {
       index,
       spec: normalizePath(path.relative(config.root, resolved)) || specInput,
-      slug: inferSlug(resolved),
-      status: 'pending',
+      slug,
+      status: registryStatus ? 'already_implemented' : 'pending',
+      skipReason: registryStatus ? `already implemented (index.specs.md status: ${registryStatus})` : null,
       runId: null,
       deliveryCommit: null,
       branch: null,
@@ -208,7 +231,7 @@ function printSummary(manifest, options = {}) {
   console.log('SDW Batch Execution Summary');
   console.log(`Batch ID: ${manifest.batchId}`);
   console.log(`Status:   ${manifest.status}`);
-  console.log(`Total:    ${manifest.total} (Completed: ${count('completed')}, Failed: ${count('failed')}, Paused: ${manifest.queue.filter(item => item.status.startsWith('awaiting_')).length})`);
+  console.log(`Total:    ${manifest.total} (Completed: ${count('completed')}, Skipped: ${count('already_implemented')}, Failed: ${count('failed')}, Paused: ${manifest.queue.filter(item => item.status.startsWith('awaiting_')).length})`);
   console.log('------------------------------------------------------------');
   console.log('# | Slug                           | Status      | Duration | Delivery Commit');
   console.log('--|--------------------------------|-------------|----------|----------------');
@@ -247,11 +270,23 @@ function executeQueue(manifest, config, options) {
   const syncIndex = options.noSync !== undefined
     ? !options.noSync
     : manifest.policy.syncIndex !== false;
+  const implemented = implementedStatuses(config);
 
   for (let i = manifest.currentIndex; i < manifest.queue.length; i += 1) {
     const item = manifest.queue[i];
     if (item.status === 'completed') {
       say(options, `[sdw-batch] Skipping completed specification [${item.index + 1}/${manifest.total}]: ${item.slug}`);
+      continue;
+    }
+    // Re-check the registry per item so a spec completed since the manifest was
+    // created is never implemented twice, including on resume.
+    if (item.status !== 'already_implemented' && implemented.has(item.slug)) {
+      item.status = 'already_implemented';
+      item.skipReason = `already implemented (index.specs.md status: ${implemented.get(item.slug)})`;
+      saveManifest(config, manifest);
+    }
+    if (item.status === 'already_implemented') {
+      say(options, `[sdw-batch] Skipping already-implemented specification [${item.index + 1}/${manifest.total}]: ${item.slug} (${item.skipReason})`);
       continue;
     }
 
@@ -349,9 +384,13 @@ function runBatch(specs, options = {}) {
     return 1;
   }
   if (options.dryRun) {
+    const implemented = implementedStatuses(config);
     console.log(`\n[sdw-batch] Dry-run plan (${validation.resolved.length} specification(s)):`);
     validation.resolved.forEach((specPath, index) => {
-      console.log(`  ${index + 1}. ${inferSlug(specPath)} (${normalizePath(specPath)})`);
+      const slug = inferSlug(specPath);
+      const registryStatus = implemented.get(slug);
+      const note = registryStatus ? ` - skipped: already implemented (${registryStatus})` : '';
+      console.log(`  ${index + 1}. ${slug} (${normalizePath(specPath)})${note}`);
     });
     console.log('No specification executed (--dry-run).\n');
     return 0;

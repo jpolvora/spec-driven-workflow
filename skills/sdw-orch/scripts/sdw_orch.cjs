@@ -102,7 +102,8 @@ function parseArgs(args) {
     verdictPath: null,
     reason: null,
     skillsRoot: null,
-    implementationMode: null
+    implementationMode: null,
+    refineMode: false
   };
 
   const positional = [];
@@ -124,6 +125,7 @@ function parseArgs(args) {
     else if (arg === '--simulate-failure') result.simulateFailure = true;
     else if (arg === '--force') result.force = true;
     else if (arg === '--allow-archived') result.allowArchived = true;
+    else if (arg === '--second-pass' || arg === '--refine') result.refineMode = true;
     else if (arg === '--latest') result.latest = true;
     else if (arg === '--dry-run') result.dryRun = true;
     else if (arg === '--sandbox') result.sandbox = true;
@@ -187,6 +189,37 @@ function parseArgs(args) {
 function getBaseCommit(projectRoot) {
   try {
     return execSync('git rev-parse HEAD', { cwd: projectRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch (e) {
+    return null;
+  }
+}
+
+// Latest delivery commit recorded for a completed run of this specification.
+// A second pass uses it as the base so scoring and review see the delivered
+// implementation, not only the refinement delta.
+function findPriorDeliveryCommit(targetRoot, specSlug) {
+  try {
+    const root = path.resolve(targetRoot);
+    let stateDir = path.join(root, '.sdw', 'state');
+    try {
+      const raw = JSON.parse(fs.readFileSync(path.join(root, '.sdw', 'config.json'), 'utf8'));
+      if (raw && typeof raw.stateDir === 'string' && raw.stateDir.trim()) {
+        stateDir = path.resolve(raw.stateDir.replace(/\{projectRoot\}/g, root));
+      }
+    } catch (e) {}
+    if (!fs.existsSync(stateDir)) return null;
+    const runs = fs.readdirSync(stateDir)
+      .filter(name => name.endsWith('.state.json'))
+      .map(name => {
+        try {
+          return JSON.parse(fs.readFileSync(path.join(stateDir, name), 'utf8'));
+        } catch (e) {
+          return null;
+        }
+      })
+      .filter(run => run && run.specSlug === specSlug && run.status === 'completed' && run.deliveryCommit)
+      .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+    return runs.length > 0 ? runs[0].deliveryCommit : null;
   } catch (e) {
     return null;
   }
@@ -815,12 +848,14 @@ function cmdRun(options) {
 
   // Quality check: inspect index.specs.md status if available
   const specIndex = getSpecIndexHelper(targetRoot, resolveOptions);
+  let registryStatus = null;
   if (specIndex) {
     try {
       const idxData = specIndex.readIndex({ root: targetRoot });
       if (idxData && idxData.exists) {
         const entry = idxData.entries.find(e => e.slug === specSlug || (specSlug && e.slug && e.slug.includes(specSlug)));
         if (entry) {
+          registryStatus = entry.status;
           // AC25: While a specification is marked archived, prevent execution unless override flag
           if (entry.status === 'archived' && !options.force && !options.allowArchived) {
             console.error(`[sdw-orch] Blocked: Specification "${specSlug}" is marked "archived" in index.specs.md. Execution prohibited unless --force or --allow-archived is provided.`);
@@ -834,6 +869,20 @@ function cmdRun(options) {
         }
       }
     } catch (err) {}
+  }
+
+  // Second pass (refinement): only an already-delivered specification qualifies.
+  let refineBaseCommit = null;
+  if (options.refineMode) {
+    const priorDelivery = findPriorDeliveryCommit(targetRoot, specSlug);
+    const implemented = registryStatus === 'completed' || registryStatus === 'archived' || Boolean(priorDelivery);
+    if (!implemented) {
+      console.error(`[sdw-orch] Blocked: --second-pass refines an already implemented specification, but "${specSlug}" is not recorded as completed in index.specs.md and has no completed run.`);
+      options._runResult = { error: `Specification "${specSlug}" is not implemented yet; run it without --second-pass first` };
+      return 1;
+    }
+    refineBaseCommit = priorDelivery || null;
+    console.log(`[sdw-orch] Second pass mode: refining the delivered implementation${refineBaseCommit ? ` (base ${refineBaseCommit})` : ''}.`);
   }
 
   // Resolve feature branches and worktrees settings (AC1, AC2, AC21)
@@ -914,7 +963,9 @@ function cmdRun(options) {
     }
   }
 
-  const baseCommit = options.baseCommit || getBaseCommit(targetRoot);
+  const baseCommit = options.refineMode && refineBaseCommit
+    ? refineBaseCommit
+    : (options.baseCommit || getBaseCommit(targetRoot));
   const startStep = options.startStep || (options.step ? options.step : 1);
 
   const scmProvider = config.scmProvider || 'none';
@@ -949,8 +1000,16 @@ function cmdRun(options) {
       baseBranch,
       branchReused,
       runtimeOverrides,
-      scm: scmState
+      scm: scmState,
+      refineMode: Boolean(options.refineMode)
     });
+  }
+
+  // Persist and restore the mode so `resume` continues as a second pass.
+  const refineMode = Boolean(options.refineMode || state.refineMode);
+  if (refineMode && !state.refineMode) {
+    state.refineMode = true;
+    state = stateManager.saveRunState(targetRoot, state);
   }
 
   if (sandboxMeta) {
@@ -984,7 +1043,10 @@ function cmdRun(options) {
   }
 
   // Step 2: Refinement (Grilling + Technical Planning) (AC1, AC2)
-  if (startStep <= 2 && state.steps[2].status !== 'completed') {
+  if (refineMode && startStep <= 2 && state.steps[2].status !== 'completed' && state.steps[2].status !== 'skipped') {
+    console.log('[Step 2: Refinement] Second pass: skipping decision-gap grilling; the implementation already exists.');
+    state = stateManager.updateStepState(targetRoot, state.runId, 2, 'skipped', { mode: 'refine', reason: 'second pass reviews the delivered implementation' });
+  } else if (startStep <= 2 && state.steps[2].status !== 'completed' && state.steps[2].status !== 'skipped') {
     state = stateManager.updateStepState(targetRoot, state.runId, 2, 'in_progress');
     const grillingResult = specGrilling.analyzeSpecificationGaps(effectiveSpecContent, { slug: specSlug });
 
@@ -1039,7 +1101,29 @@ function cmdRun(options) {
   // Step 3: Complexity Analysis & DAG Task Decomposition (AC3, AC7)
   let dagPlan = null;
   const blueprint = (state.steps[2] && state.steps[2].output && state.steps[2].output.blueprint) || null;
-  if (startStep <= 3 && state.steps[3].status !== 'completed') {
+  if (refineMode && startStep <= 3 && state.steps[3].status !== 'completed' && state.steps[3].status !== 'skipped') {
+    state = stateManager.updateStepState(targetRoot, state.runId, 3, 'in_progress');
+    const refineAcIds = dagPlanner.parseAcceptanceCriteria(effectiveSpecContent)
+      .map(ac => (typeof ac === 'string' ? ac : ac.id));
+    dagPlan = {
+      complexity: { level: 'refinement', score: 0 },
+      totalTasks: 1,
+      tasks: [{
+        id: 'task-refine',
+        title: `Second pass: ${specSlug}`,
+        description: 'Review how this specification is already implemented and apply only clear simplification or quality improvements. Changing nothing is an acceptable outcome when the implementation is already good.',
+        coveredAcs: refineAcIds,
+        dependencies: [],
+        targetFiles: []
+      }]
+    };
+    state.dagTasks = dagPlan.tasks;
+    state = stateManager.saveRunState(targetRoot, state);
+    console.log('[Step 3: DAG Generation] Second pass: one refinement task.');
+    state = stateManager.updateStepState(targetRoot, state.runId, 3, 'completed', dagPlan);
+  } else if (refineMode && state.steps[3].output) {
+    dagPlan = state.steps[3].output;
+  } else if (startStep <= 3 && state.steps[3].status !== 'completed') {
     state = stateManager.updateStepState(targetRoot, state.runId, 3, 'in_progress');
     dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint });
     console.log(`[Step 3: DAG Generation] Complexity: ${dagPlan.complexity.level}. Generated ${dagPlan.totalTasks} task(s).`);
@@ -1314,6 +1398,42 @@ function cmdRun(options) {
         tasks: state.steps[4].tasks,
         gates: state.steps[4].gates
       });
+    }
+  }
+
+  // Second pass with no accepted file changes: report and stop before scoring.
+  if (refineMode && startStep <= 5 && state.status !== 'completed' && state.steps[5].status !== 'completed') {
+    const acceptedRefineTasks = Object.values(state.steps[4].tasks || {}).filter(t => t.status === 'completed');
+    const refineFiles = acceptedRefineTasks.flatMap(t => (Array.isArray(t.filesChanged) ? t.filesChanged : []));
+    if (acceptedRefineTasks.length > 0 && refineFiles.length === 0) {
+      const refineSummary = acceptedRefineTasks.map(t => t.summary).filter(Boolean).join(' ');
+      const refineReport = artifactWriter.writeRefineReport({
+        targetRoot,
+        specSlug,
+        runId: state.runId,
+        artifactsDir: state.artifactsDir,
+        specPath: state.specPath,
+        baseCommit: state.baseCommit,
+        outcome: 'no-change',
+        deliveryCommit: null,
+        score: null,
+        summary: refineSummary,
+        acIds: (state.dagTasks || []).flatMap(t => t.coveredAcs || []),
+        filesChanged: []
+      });
+      state = stateManager.updateStepState(targetRoot, state.runId, 5, 'skipped', { reason: 'second pass produced no code change' });
+      state = stateManager.updateStepState(targetRoot, state.runId, 6, 'skipped', { reason: 'second pass produced no code change', deliveryCommit: null });
+      state = stateManager.updateStepState(targetRoot, state.runId, 7, 'skipped', { reason: 'second pass produced no code change' });
+      state = stateManager.updateStepState(targetRoot, state.runId, 8, 'skipped', { reason: 'second pass produced no code change; nothing to ship' });
+      // Set the outcome fields after the step updates: each update reloads state.
+      state.refineReport = refineReport;
+      state.deliveryCommitCreated = false;
+      state.status = 'completed';
+      state.currentStep = 8;
+      state = stateManager.saveRunState(targetRoot, state);
+      console.log(`[sdw-orch] Second pass finished with no code change. Report: ${refineReport || '(not written)'}`);
+      options._runResult = { runId: state.runId, status: 'completed', refineOutcome: 'no-change', report: refineReport };
+      return 0;
     }
   }
 
@@ -1618,9 +1738,12 @@ function cmdRun(options) {
 
     state = stateManager.updateStepState(targetRoot, state.runId, 6, 'in_progress');
     let commitSha = null;
+    let deliveryCommitCreated = false;
     try {
-      // Mark spec as completed in index.specs.md prior to staging delivery commit (AC24)
-      if (specIndex) {
+      // Mark spec as completed in index.specs.md prior to staging delivery commit (AC24).
+      // A second pass never rewrites the index: the spec is already completed there, and
+      // rewriting it would manufacture a diff that turns a no-change pass into a commit.
+      if (specIndex && !refineMode) {
         try {
           specIndex.updateSpecStatus(specSlug, 'completed', { root: targetRoot });
         } catch (e) {}
@@ -1635,8 +1758,12 @@ function cmdRun(options) {
         const deliveryFiles = collectDeliveryFiles(targetRoot, specSlug, state);
         if (deliveryFiles.length > 0) {
           console.log(`[Step 6: Delivery Commit] Staging scoped delivery files (${deliveryFiles.length}): ${deliveryFiles.join(', ')}`);
-          const res = stageAndCommitOnly(targetRoot, deliveryFiles, `feat(${specSlug}): implement ${specSlug}`);
+          const commitMessage = refineMode
+            ? `refine(${specSlug}): second pass refinement`
+            : `feat(${specSlug}): implement ${specSlug}`;
+          const res = stageAndCommitOnly(targetRoot, deliveryFiles, commitMessage);
           commitSha = res.commitSha;
+          deliveryCommitCreated = Boolean(res.committed);
           if (res.committed) {
             console.log(`[Step 6: Delivery Commit] Created delivery commit ${commitSha}`);
           } else {
@@ -1663,6 +1790,7 @@ function cmdRun(options) {
             const gateRes = stageAndCommitOnly(targetRoot, unclaimed, `chore(${specSlug}): include verification gate fixes`);
             if (gateRes.committed) {
               commitSha = gateRes.commitSha;
+              deliveryCommitCreated = true;
               console.log(`[Step 6: Delivery Commit] Created gate-fix commit ${commitSha}`);
             }
           }
@@ -1685,8 +1813,29 @@ function cmdRun(options) {
       commitSha = getBaseCommit(targetRoot);
     }
     state.deliveryCommit = commitSha;
+    state.deliveryCommitCreated = deliveryCommitCreated;
     state = stateManager.saveRunState(targetRoot, state);
-    state = stateManager.updateStepState(targetRoot, state.runId, 6, 'completed', { deliveryCommit: commitSha });
+    state = stateManager.updateStepState(targetRoot, state.runId, 6, 'completed', { deliveryCommit: commitSha, deliveryCommitCreated });
+    if (refineMode && deliveryCommitCreated) {
+      const refineTasks = Object.values(state.steps[4].tasks || {}).filter(t => t.status === 'completed');
+      const refineReport = artifactWriter.writeRefineReport({
+        targetRoot,
+        specSlug,
+        runId: state.runId,
+        artifactsDir: state.artifactsDir,
+        specPath: state.specPath,
+        baseCommit: state.baseCommit,
+        outcome: 'changed',
+        deliveryCommit: commitSha,
+        score: state.score,
+        summary: refineTasks.map(t => t.summary).filter(Boolean).join(' '),
+        acIds: (state.dagTasks || []).flatMap(t => t.coveredAcs || []),
+        filesChanged: refineTasks.flatMap(t => (Array.isArray(t.filesChanged) ? t.filesChanged : []))
+      });
+      state.refineReport = refineReport;
+      state = stateManager.saveRunState(targetRoot, state);
+      console.log(`[sdw-orch] Second pass produced commit ${commitSha}. Report: ${refineReport || '(not written)'}`);
+    }
   }
 
   // Step 7: Delegated Code Review via sdw-code-review (Spec 025)
@@ -1830,7 +1979,11 @@ function cmdRun(options) {
   const shipPrScript = resolvedShipPrScript || path.resolve(__dirname, '../../sdw-ship-pr/scripts/sdw_ship_pr.cjs');
   const hasShipPr = fs.existsSync(shipPrScript);
 
-  if (startStep <= 8 && state.steps[8].status !== 'completed' && !options.skipPr) {
+  const refineSkipShip = refineMode && state.deliveryCommitCreated === false;
+  if (refineSkipShip && state.steps[8].status !== 'completed' && state.steps[8].status !== 'skipped') {
+    console.log('[Step 8: PR Preparation] Second pass produced no new commit; nothing to ship.');
+    state = stateManager.updateStepState(targetRoot, state.runId, 8, 'skipped', { reason: 'second pass produced no code to ship' });
+  } else if (startStep <= 8 && state.steps[8].status !== 'completed' && !options.skipPr) {
     state = stateManager.updateStepState(targetRoot, state.runId, 8, 'in_progress');
 
     // If sdw-ship-pr is available and no unit-test fixer hooks are passed, delegate pre-PR gates to sdw-ship-pr as single owner
@@ -2119,7 +2272,8 @@ function cmdRun(options) {
 
   // Remote Push / Branch Publishing (--push or config.pushDelivery) fallback
   const shouldPush = options.push !== undefined ? options.push : (config && config.pushDelivery);
-  if (shouldPush && !state.pushedBranch) {
+  const refineNothingToPush = refineMode && state.deliveryCommitCreated === false;
+  if (shouldPush && !state.pushedBranch && !refineNothingToPush) {
     if (!isGitRepo(targetRoot)) {
       console.log(`[sdw-orch] Remote push skipped: not a git repository.`);
     } else {
@@ -2247,7 +2401,8 @@ function dispatchNextTask(context) {
     dagTasks,
     taskStates: tasks,
     abandonments: dispatch.abandonments,
-    absolutePaths: sandboxed
+    absolutePaths: sandboxed,
+    refineMode: Boolean(state.refineMode)
   });
 
   const displayPrompt = sandboxed ? normalizePath(rendered.promptFileAbs) : rendered.promptFileRel;
@@ -2517,7 +2672,8 @@ function cmdTaskFinish(options) {
   const evValidation = evidenceValidator.validateEvidenceFile(evidenceFileAbs, {
     expectedTaskId: taskId,
     specAcs,
-    projectRoot: targetRoot
+    projectRoot: targetRoot,
+    allowEmptyFilesChanged: Boolean(state.refineMode)
   });
 
   if (!evValidation.valid) {
@@ -2542,7 +2698,13 @@ function cmdTaskFinish(options) {
   const worktreeExists = useWorktrees && fs.existsSync(taskWorktreeAbs);
   const effectiveUseWorktrees = useWorktrees && worktreeExists;
 
-  const hasChanges = implementationRunner.checkTaskChanges(
+  // A second-pass refinement may honestly change nothing: empty filesChanged is
+  // accepted in that mode instead of requiring corroborated edits.
+  const refineNoChange = Boolean(state.refineMode)
+    && Array.isArray(evidenceData.filesChanged)
+    && evidenceData.filesChanged.length === 0;
+
+  const hasChanges = refineNoChange || implementationRunner.checkTaskChanges(
     targetRoot,
     effectiveUseWorktrees ? taskWorktreeAbs : null,
     effectiveUseWorktrees,
@@ -2788,7 +2950,9 @@ function cmdResume(options) {
     ...options,
     specPath: state.specPath,
     runId: state.runId,
-    startStep: resumptionStep
+    startStep: resumptionStep,
+    // A second pass keeps its mode and scoring base across resumes.
+    ...(state.refineMode ? { refineMode: true, baseCommit: options.baseCommit || state.baseCommit } : {})
   });
 }
 
@@ -3084,6 +3248,9 @@ Options:
   --skip-pr              Skip pull request preparation step
   --force                Override quality gates or allow execution on archived specs
   --allow-archived       Permit execution of specs marked archived in index.specs.md
+  --second-pass          Refine an already implemented spec (alias: --refine):
+                         review what was delivered, simplify, report, commit only
+                         on a real change, and ship only when a commit was created
   --json                 Output response in JSON format
   -h, --help             Show help message
 `);

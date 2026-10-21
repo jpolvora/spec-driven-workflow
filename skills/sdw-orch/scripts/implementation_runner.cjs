@@ -21,7 +21,7 @@ function normalizePath(p) {
 function renderTaskPrompt(options) {
   const {
     targetRoot, specSlug, specPath, runId, stateDir, task, specAcs, useWorktrees, taskWorktreeRel,
-    dagTasks, taskStates, abandonments, absolutePaths
+    dagTasks, taskStates, abandonments, absolutePaths, refineMode
   } = options;
   const root = targetRoot ? path.resolve(targetRoot) : process.cwd();
   const absStateDir = stateDir ? (path.isAbsolute(stateDir) ? stateDir : path.resolve(root, stateDir)) : path.join(root, '.sdw', 'state');
@@ -62,6 +62,16 @@ function renderTaskPrompt(options) {
   prompt += `- **Run ID:** ${runId}\n`;
   prompt += `- **Working Directory:** \`${workingDirDisplay}\`\n`;
   prompt += `- **Evidence File Destination:** \`${evidenceDisplay}\`\n\n`;
+
+  if (refineMode) {
+    prompt += `## Second Pass (Refinement) Mode\n`;
+    prompt += `This specification is already implemented and delivered. Do not re-implement it from scratch and do not add scope.\n`;
+    prompt += `1. Read how every acceptance criterion is currently implemented, including call sites and tests.\n`;
+    prompt += `2. Look for concrete simplification and quality opportunities: duplicated or dead logic, needless abstraction, missing validation, unclear code you are already touching, redundant tests.\n`;
+    prompt += `3. Apply only changes that are clearly better and keep every acceptance criterion satisfied. No behavior changes, no renames for taste, no unrelated refactors.\n`;
+    prompt += `4. Changing nothing is a valid, honest outcome when the implementation is already good.\n`;
+    prompt += `5. Your \`summary\` must list each opportunity you considered and whether you applied or skipped it, with the reason.\n\n`;
+  }
 
   prompt += `## Description\n`;
   prompt += `${task.description || 'Implement the assigned requirements in accordance with the specification.'}\n\n`;
@@ -165,7 +175,7 @@ function renderTaskPrompt(options) {
   prompt += `\`\`\`\n`;
   prompt += `- \`status\`: \`success\` when every assigned criterion is met; otherwise \`partial\`, \`failed\`, or \`blocked\`.\n`;
   prompt += `- \`acIds\`: the assigned criteria this task satisfies.\n`;
-  prompt += `- \`filesChanged\`: project-relative paths you actually modified or created.\n`;
+  prompt += `- \`filesChanged\`: project-relative paths you actually modified or created${refineMode ? '; \`[]\` is required when the refinement changed nothing' : ''}.\n`;
   prompt += `- \`tests\`: only commands you actually ran, with their real result; \`[]\` when nothing is testable.\n`;
   prompt += `- \`summary\`: one or two sentences describing what changed.\n\n`;
 

@@ -34,7 +34,7 @@ function validateEvidence(evidence, options = {}) {
     return { valid: false, errors: ['Evidence must be a JSON object.'] };
   }
 
-  const { expectedTaskId, specAcs, projectRoot } = options;
+  const { expectedTaskId, specAcs, projectRoot, allowEmptyFilesChanged } = options;
   const root = projectRoot ? path.resolve(projectRoot) : process.cwd();
 
   // 1. taskId
@@ -68,9 +68,11 @@ function validateEvidence(evidence, options = {}) {
     }
   }
 
-  // 3. filesChanged
-  if (!Array.isArray(evidence.filesChanged) || evidence.filesChanged.length === 0) {
-    errors.push('"filesChanged" must be a non-empty array of project-relative file paths.');
+  // 3. filesChanged (a second-pass refinement may honestly change nothing)
+  if (!Array.isArray(evidence.filesChanged) || (evidence.filesChanged.length === 0 && !allowEmptyFilesChanged)) {
+    errors.push(allowEmptyFilesChanged
+      ? '"filesChanged" must be an array of project-relative file paths.'
+      : '"filesChanged" must be a non-empty array of project-relative file paths.');
   } else {
     for (const relPath of evidence.filesChanged) {
       if (typeof relPath !== 'string' || relPath.trim().length === 0) {
