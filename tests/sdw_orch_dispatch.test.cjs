@@ -199,7 +199,9 @@ test('AC3: the checkpoint refuses to save a task whose files fail the pre-commit
     const taskId = state.steps[4].dispatch.activeTaskId;
     const head = gitOut(root, 'rev-parse HEAD');
 
-    fs.appendFileSync(path.join(root, 'app.cjs'), 'const key = "AKIAJ7X4QZX2LMNOPQRS";\n');
+    // Assembled at runtime so the repository's own leak scan does not flag the fixture.
+    const fakeKey = 'AKIA' + 'J7X4QZX2LMNOPQRS';
+    fs.appendFileSync(path.join(root, 'app.cjs'), `const key = "${fakeKey}";\n`);
     const evidence = {
       taskId,
       status: 'success',
