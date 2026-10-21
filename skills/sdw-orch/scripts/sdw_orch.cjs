@@ -3034,6 +3034,28 @@ function cmdTaskFinish(options) {
     return 1;
   }
 
+  // PR #34 review finding: the checkpoint must not bypass the Step 6 pre-commit
+  // secret scan. It runs before integration and before the checkpoint commit, over
+  // the tree that holds the task's change, so a leak is rejected before any commit
+  // or cherry-pick exists. The task stays dispatched for a clean retry.
+  if (!options.noTaskCheckpoint && !state.refineMode && config.securityChecksEnabled && !options.skipSecurity) {
+    const scanRoot = effectiveUseWorktrees ? taskWorktreeAbs : targetRoot;
+    const scanResult = runSecurityGate(scanRoot, { staged: false });
+    if (scanResult.exitCode !== 0) {
+      console.error(`Error: Task "${taskId}" blocked by pre-commit security checks (exit code ${scanResult.exitCode}). No commit, cherry-pick, or tag was created.`);
+      state.steps[4].securityGate = {
+        bypassed: false,
+        taskId,
+        scanRoot: effectiveUseWorktrees ? taskWorktreeRel : '.',
+        exitCode: scanResult.exitCode,
+        severityCounts: scanResult.severityCounts,
+        findings: scanResult.findings
+      };
+      stateManager.saveRunState(targetRoot, state);
+      return scanResult.exitCode;
+    }
+  }
+
   // Integrate worktree if used (AC10, AC11)
   let checkpointTag = null;
   if (effectiveUseWorktrees) {
@@ -3067,24 +3089,6 @@ function cmdTaskFinish(options) {
   // Second-pass runs are excluded: their explicit `refine(...)` Step 6 commit is
   // the save, and `deliveryCommitCreated` must still describe it.
   if (!options.noTaskCheckpoint && !state.refineMode) {
-    // PR #34 review finding: the checkpoint must not bypass the Step 6 pre-commit
-    // secret scan. Scan before committing, fail closed, and leave the task
-    // dispatched so the worker can remove the secret before a retry.
-    if (config.securityChecksEnabled && !options.skipSecurity) {
-      const scanResult = runSecurityGate(targetRoot, { staged: false });
-      if (scanResult.exitCode !== 0) {
-        console.error(`Error: Task "${taskId}" blocked by pre-commit security checks (exit code ${scanResult.exitCode}). No checkpoint commit or tag was created.`);
-        state.steps[4].securityGate = {
-          bypassed: false,
-          taskId,
-          exitCode: scanResult.exitCode,
-          severityCounts: scanResult.severityCounts,
-          findings: scanResult.findings
-        };
-        stateManager.saveRunState(targetRoot, state);
-        return scanResult.exitCode;
-      }
-    }
     try {
       const checkpoint = checkpointTask(targetRoot, {
         specSlug: state.specSlug,

@@ -226,6 +226,43 @@ test('AC3: the checkpoint refuses to save a task whose files fail the pre-commit
   }
 });
 
+test('AC3: worktree mode rejects a leaking task before the cherry-pick reaches HEAD', () => {
+  const root = setupRepo();
+  try {
+    fs.writeFileSync(path.join(root, '.sdw', 'config.json'), JSON.stringify({ useWorktrees: true, securityChecksEnabled: true }, null, 2), 'utf8');
+    assert.equal(pauseAtDispatch(root), 4);
+    const state = stateManager.findLatestRunState(root);
+    const taskId = state.steps[4].dispatch.activeTaskId;
+    const wtRel = `.sdw/worktrees/${state.runId}/${taskId}`;
+    execSync(`git worktree add -q "${wtRel}" -b "sdw-${state.runId}-${taskId}" HEAD`, { cwd: root, stdio: 'ignore' });
+
+    const fakeKey = 'AKIA' + 'W7C3R9T5Y2N8Q4LP';
+    fs.appendFileSync(path.join(root, wtRel, 'app.cjs'), `const key = "${fakeKey}";\n`, 'utf8');
+    const head = gitOut(root, 'rev-parse HEAD');
+
+    const evidence = {
+      taskId,
+      status: 'success',
+      acIds: [state.dagTasks[0].coveredAcs[0]],
+      filesChanged: ['app.cjs'],
+      tests: [],
+      summary: 'wrote a credential in the task worktree'
+    };
+    const evidencePath = path.join(root, 'leak.evidence.json');
+    fs.writeFileSync(evidencePath, JSON.stringify(evidence, null, 2), 'utf8');
+
+    assert.notEqual(sdwOrch.cmdTaskFinish({ root, runId: state.runId, taskId, evidencePath }), 0, 'The gate rejects the task');
+    assert.equal(gitOut(root, 'rev-parse HEAD'), head, 'Nothing is cherry-picked into the primary tree');
+    assert.equal(gitOut(root, 'log --format=%s -1'), 'baseline', 'HEAD is still the baseline commit');
+
+    const after = stateManager.loadRunState(root, state.runId);
+    assert.equal(after.steps[4].dispatch.activeTaskId, taskId, 'The task stays dispatched for retry');
+    assert.equal((after.steps[4].securityGate || {}).scanRoot, wtRel, 'The scan covered the task worktree');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('AC9-AC10: task finish rejects a non-dispatched task and names the active one', () => {
   const root = setupRepo();
   try {
