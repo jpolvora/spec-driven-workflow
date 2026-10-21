@@ -35,6 +35,14 @@ These rules override convenience. Apply them in every mode, on every harness and
 6. **Empirical Goal-Driven Verification.** Turn every requirement into a verifiable check, test, or empirical pass/fail signal. State a short plan with a verification step per action and loop until the check passes before declaring completion.
 7. **Product Guarantees.** Preserve zero runtime npm dependencies, Node.js 22 standard library, deterministic CLI anchors, harness/agent agnosticism, portable paths, and file-based contracts.
 
+## 🧠 MEMORY-FIRST — MANDATORY FOR EVERY SKILL
+
+Before implementing, fixing, reviewing, or orchestrating: query `sdw-memory`
+for related traps/gaps/patterns/errors and apply returned hints.
+After any verified fix or newly discovered trap/gap/pattern/error: record it
+via `sdw-memory`. Never bypass with direct `traps.md` edits or raw `memo`
+calls; `sdw-memory` is the single wrapper over all store backends.
+
 ## Mode Cheat Sheet
 
 - Read-only question → answer; no confirmation.
@@ -64,5 +72,6 @@ These rules override convenience. Apply them in every mode, on every harness and
 
 - Interaction modes & planning protocol: [`references/interaction_modes.md`](references/interaction_modes.md)
 - Product guarantees & verification: [`references/product_guarantees.md`](references/product_guarantees.md)
+- Shared memory authority (traps/gaps/patterns/errors): [`sdw-memory`](../sdw-memory/SKILL.md)
 - LLM anti-patterns & traps catalog: [`references/anti_patterns.md`](references/anti_patterns.md)
 - Trap log template: [`references/traps_log.md`](references/traps_log.md)

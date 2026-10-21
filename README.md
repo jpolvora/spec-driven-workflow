@@ -88,6 +88,7 @@ flowchart TD
 8. **PR Preparation, Delivery & Review Convergence (Delegated to `sdw-ship-pr`)**
    - Delegates pre-PR verification gates (`requiredBuild`, `runAllTests`, `prePrCommand`, `prePrInstructions`) and delivery publishing to `sdw-ship-pr`.
    - Executes cooperative and proactive review convergence with push-before-resolve guarantees, posting structured resolution comments before closing threads.
+   - Delegates active review findings to `sdw-fixer` when `reviewFixCommand` is unset, and reports `review_pending` when the fixer returns no applied fix.
    - Optionally merges the converged pull request with `--merge` / `--allow-merge` (fire and forget: a merge failure is recorded but never fails the delivery).
    - Updates the specification index to `completed` and records PR metadata in the run state.
 
@@ -120,6 +121,7 @@ spec-driven-workflow/
 │   ├── sdw-code-review/          # Standalone deep working-tree review & fix planning
 │   ├── sdw-config/               # Project configuration & verification skill
 │   ├── sdw-doctor/               # Installation & workspace health checker
+│   ├── sdw-fixer/                # Shared findings intake, scoring & surgical remediation
 │   ├── sdw-orch/                 # End-to-end workflow orchestrator skill
 │   ├── sdw-router/               # Always-autoloaded entrypoint and skill router
 │   ├── sdw-rules/                # Shared behavioral rules, simplicity & anti-overengineering
@@ -164,7 +166,7 @@ Verify what is available before installing:
 npx skills add jpolvora/spec-driven-workflow --list
 ```
 
-Expected: `10` discoverable skills — the 9 `sdw-*` skills plus `ws-memo`:
+Expected: `11` discoverable skills — the 10 `sdw-*` skills plus `ws-memo`:
 
 | Skill | Purpose |
 |---|---|
@@ -176,12 +178,13 @@ Expected: `10` discoverable skills — the 9 `sdw-*` skills plus `ws-memo`:
 | `sdw-rules` | Shared simplicity / anti-overengineering rules |
 | `sdw-security-checks` | Pre-commit secrets and credentials leak gate |
 | `sdw-code-review` | Standalone working-tree review and fix planning (also Step 7 delegation) |
+| `sdw-fixer` | Shared findings intake, deterministic scoring, surgical remediation (review and ship loops) |
 | `sdw-ship-pr` | Pre-PR checks, branch push, PR creation, review convergence |
 
 ### Copy-paste: install all SDW skills (recommended)
 
 ```bash
-npx skills add jpolvora/spec-driven-workflow --skill sdw-router --skill sdw-config --skill sdw-doctor --skill sdw-spec --skill sdw-orch --skill sdw-rules --skill sdw-security-checks --skill sdw-code-review --skill sdw-ship-pr -y
+npx skills add jpolvora/spec-driven-workflow --skill sdw-router --skill sdw-config --skill sdw-doctor --skill sdw-spec --skill sdw-orch --skill sdw-rules --skill sdw-security-checks --skill sdw-code-review --skill sdw-fixer --skill sdw-ship-pr -y
 ```
 
 One-liner alternative (installs everything discoverable, including `ws-memo`):
@@ -201,7 +204,7 @@ npx skills add jpolvora/spec-driven-workflow
 ```bash
 # Project scope (default): installs to ./.agents/skills/, commit with your project
 # Global scope: available across all projects on the machine
-npx skills add jpolvora/spec-driven-workflow --skill sdw-router --skill sdw-config --skill sdw-doctor --skill sdw-spec --skill sdw-orch --skill sdw-rules --skill sdw-security-checks --skill sdw-code-review --skill sdw-ship-pr -g -y
+npx skills add jpolvora/spec-driven-workflow --skill sdw-router --skill sdw-config --skill sdw-doctor --skill sdw-spec --skill sdw-orch --skill sdw-rules --skill sdw-security-checks --skill sdw-code-review --skill sdw-fixer --skill sdw-ship-pr -g -y
 
 # Target specific agents (default is auto-detected agents; use '*' for all agents)
 npx skills add jpolvora/spec-driven-workflow --skill sdw-orch -a opencode -y
@@ -364,6 +367,8 @@ node skills/sdw-orch/scripts/sdw_orch.cjs resume-batch [batchId]
 node skills/sdw-orch/scripts/sdw_orch.cjs status
 ```
 
+Skill-level aliases `sdw-orch implement`, `orch run`, and `orch implement` resolve to the same pipeline through `sdw-router`; `run` stays the canonical CLI subcommand.
+
 ### Using `sdw-security-checks` (Secrets & Credentials Gate)
 
 The `sdw-security-checks` skill guards against committing sensitive tokens and credentials:
@@ -408,6 +413,23 @@ node skills/sdw-code-review/scripts/sdw_code_review.cjs fix --json
 # Simulate fixes without modifying files
 node skills/sdw-code-review/scripts/sdw_code_review.cjs run --fix --dry-run --json
 ```
+
+### Using `sdw-fixer` (Shared Findings Remediation)
+
+The `sdw-fixer` skill is the single remediation authority for review, verification, and ship loops. It validates one findings batch, scores it deterministically, consults traps for the defect class, applies surgical edits, and reports what it fixed, skipped, and learned:
+
+```bash
+# Validate, score, and apply a findings batch; write the structured report
+node skills/sdw-fixer/scripts/sdw_fixer.cjs run --findings findings.json --report result.json
+
+# Plan the same batch without touching files
+node skills/sdw-fixer/scripts/sdw_fixer.cjs run --findings findings.json --report result.json --dry-run --json
+
+# Validate skill layout, references, and the zero-dependency guarantee
+node skills/sdw-fixer/scripts/sdw_fixer.cjs doctor --json
+```
+
+Findings use `{ file, line, rule, evidence, severityHint }` with project-relative paths. `sdw-ship-pr` builds this batch from active review threads and delegates automatically when `reviewFixCommand` is unset; `--no-learn` skips trap registration, and `SDW_FIXER_NO_MEMO=1` skips vault queries. Contract: `skills/sdw-fixer/references/fixer_protocol.md`.
 
 ### Local Agentic Code Review Dry Run
 

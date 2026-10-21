@@ -180,6 +180,11 @@ const INTENT_RULES = {
     secondaryKeywords: ['fix batch', 'fix findings', 'remediation batch', 'defect siblings', 'surgical fix', 'fixing review findings'],
     recommendedOption: 'Apply surgical remediation to review findings using sdw-fixer'
   },
+  'sdw-memory': {
+    primaryKeywords: ['sdw-memory', 'memory skill', 'traps', 'knowledge base', 'project memory'],
+    secondaryKeywords: ['trap', 'gap', 'pattern', 'shareable knowledge', 'record trap', 'query memory', 'consolidate memory', 'classify'],
+    recommendedOption: 'Query, record, or consolidate product knowledge using sdw-memory'
+  },
   'sdw-code-review': {
     primaryKeywords: ['code-review', 'code review', 'review code', 'sdw-code-review', 'deep review'],
     secondaryKeywords: ['review findings', 'fix review', 'review fix plan', 'run review', 'review working tree', 'blocking findings', 'code review report'],
