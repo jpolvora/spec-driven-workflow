@@ -181,7 +181,8 @@ function grepSiblings(root, rule) {
     }
   }
   hits.sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : a.line - b.line));
-  return { hits, scanned };
+  const truncated = hits.length >= MAX_HITS || scanned >= MAX_SCANNED_FILES;
+  return { hits, scanned, truncated };
 }
 
 function readMemoryHints(root, rule) {
@@ -282,7 +283,10 @@ function cmdRun(options) {
 
   for (const { finding, score } of scored) {
     const file = finding.file.trim();
-    const { hits, scanned } = grepSiblings(root, finding.rule.trim());
+    const { hits, scanned, truncated } = grepSiblings(root, finding.rule.trim());
+    if (truncated) {
+      skipped.push({ file, reason: `sibling sweep truncated at ${MAX_HITS} hits; remaining occurrences unverified` });
+    }
     const mem = readMemoryHints(root, finding.rule.trim());
     console.log(`[sdw-fixer] Memory hints for ${finding.rule.trim()}: ${mem.hints.length} hit(s)`);
     const sourcesConsulted = [
@@ -310,6 +314,7 @@ function cmdRun(options) {
 
   const verification = runVerification(root, options.verify);
   const status = verification.status === 'failed' ? 'verify-failed'
+    : (fixed.length === 0 && skipped.length > 0) ? 'no-op'
     : loaded.list.length === 0 ? 'no-op' : 'completed';
   const report = {
     batchId: loaded.batchId,

@@ -39,25 +39,19 @@ function safeGit(executor, cmd) {
 }
 
 function listBranchCommits(executor, base, head) {
-  const cmds = [
-    `git log ${base}..${head} --pretty=format:%H%x1f%h%x1f%s%x1f%an%x1f%ad --date=short`,
-    `git log --pretty=format:%H%x1f%h%x1f%s%x1f%an%x1f%ad --date=short -n 30 ${head}`
-  ];
-  for (const cmd of cmds) {
-    const out = safeGit(executor, cmd).trim();
-    if (!out) continue;
-    const commits = out.split(/\r?\n/).map((line) => {
-      const parts = line.split('\x1f');
-      return {
-        hash: (parts[0] || '').trim(),
-        short: (parts[1] || '').trim(),
-        subject: (parts[2] || '').trim(),
-        author: (parts[3] || '').trim(),
-        date: (parts[4] || '').trim()
-      };
-    }).filter((c) => c.hash && c.subject);
-    if (commits.length > 0) return commits.slice(0, 50);
-  }
+  const out = safeGit(executor, `git log ${base}..${head} --pretty=format:%H%x1f%h%x1f%s%x1f%an%x1f%ad --date=short`).trim();
+  if (!out) return [];
+  const commits = out.split(/\r?\n/).map((line) => {
+    const parts = line.split('\x1f');
+    return {
+      hash: (parts[0] || '').trim(),
+      short: (parts[1] || '').trim(),
+      subject: (parts[2] || '').trim(),
+      author: (parts[3] || '').trim(),
+      date: (parts[4] || '').trim()
+    };
+  }).filter((c) => c.hash && c.subject);
+  if (commits.length > 0) return commits.slice(0, 50);
   return [];
 }
 
@@ -73,7 +67,8 @@ function getSpecTitle(projectRoot, specSlug) {
     if (!specSlug) return null;
     const dir = path.join(projectRoot, '.sdw', 'specs');
     if (!fs.existsSync(dir)) return null;
-    const files = fs.readdirSync(dir).filter((f) => f.includes(specSlug));
+    const normSlug = String(specSlug).replace(/^\d+-/, '');
+    const files = fs.readdirSync(dir).filter((f) => f === `${specSlug}.md` || f.replace(/^\d+-/, '').replace(/\.md$/, '') === normSlug);
     for (const f of files) {
       const content = fs.readFileSync(path.join(dir, f), 'utf8').split(/\r?\n/).slice(0, 25).join('\n');
       const m = content.match(/^title:\s*["']?(.+?)["']?\s*$/m);
@@ -833,11 +828,10 @@ async function runShipPr(options = {}, customExecutor = null) {
             let fixSummary = 'Applied and verified the requested review fix.';
             let canResolve = false;
             let fixResult = null;
-            const defaultFixer = reviewFixCommand ? null : buildDefaultFixerCommand(projectRoot, activeList);
-            const effectiveFixCommand = reviewFixCommand || (defaultFixer && defaultFixer.command) || null;
-            if (defaultFixer) {
-              log(`[sdw-ship-pr] reviewFixCommand unset; delegating to sdw-fixer: ${defaultFixer.command}`);
-            }
+            // Thread feedback has no deterministic patch in the sdw-fixer catalog, so delegating
+            // would only produce a skipped, status=no-op result. Fall through to the cooperative protocol.
+            const defaultFixer = null;
+            const effectiveFixCommand = reviewFixCommand || null;
             if (typeof options.threadFixer === 'function') {
               // The caller owns applying, testing, committing, and pushing the fix.
               fixResult = await options.threadFixer({

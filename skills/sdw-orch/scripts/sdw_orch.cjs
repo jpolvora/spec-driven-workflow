@@ -1653,7 +1653,7 @@ function cmdRun(options) {
         try {
           const baseline = state.steps[4] && state.steps[4].dispatch && state.steps[4].dispatch.baseline;
           const baselineDirty = new Set(((baseline && baseline.dirty) || []).map(normalizeRel));
-          if (baseline && baselineDirty.size > 0) {
+          if (baseline) {
           const deliverySet = new Set(deliveryFiles.map(normalizeRel));
           const unclaimed = getStatusFiles(targetRoot)
             .map(normalizeRel)
@@ -1668,7 +1668,10 @@ function cmdRun(options) {
             }
           }
           } // baseline guard, preserve legacy scoped-only behavior otherwise
-        } catch (e) {}
+        } catch (e) {
+          console.error(`[Step 6: Delivery Commit] Unclaimed capture failed: ${e.message}`);
+          throw e;
+        }
       }
     } catch (err) {
       console.error(`[Step 6: Delivery Commit] Git error: ${err.message}`);
