@@ -533,7 +533,7 @@ test('AC15: dry run prints the resolved branch plan without executing git', () =
     console.log = origLog;
   }
   assert.equal(code, 0);
-  assert.match(sameLaneOutput, /Start lane: develop \(checked out\) \(update: yes\)/);
+  assert.match(sameLaneOutput, /Start lane: develop \(update: yes\)/);
   assert.match(sameLaneOutput, /After merge: fetch origin and fast-forward develop to origin\/develop/);
 });
 

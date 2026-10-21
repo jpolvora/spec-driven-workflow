@@ -683,9 +683,7 @@ function buildBranchPlan(branching, specSlug) {
   // the checked-out branch and needs no pre-start update.
   const workLaneSet = Boolean(workBranch);
   const distinctWorkLane = workLaneSet && workBranch !== branching.integrationBranch;
-  const startLane = distinctWorkLane
-    ? workBranch
-    : (workLaneSet ? `${workBranch} (checked out)` : 'current branch');
+  const startLane = workLaneSet ? workBranch : 'current branch';
   const afterMerge = branching.syncWorkBranchAfterMerge
     ? (distinctWorkLane
       ? `fast-forward ${workBranch} to ${integrationBranch}${branching.pushSyncedWorkBranch ? `, then push ${workBranch} to origin` : ''}`
@@ -1043,7 +1041,10 @@ function cmdRun(options) {
         // AC7 still applies to the same-lane case (gitflow): the checked-out work
         // lane is updated in place before the feature branch is created.
         const workBranchSet = typeof workBranch === 'string' && workBranch.trim().length > 0;
-        const fromWorkLane = workBranchSet && workBranch !== branching.integrationBranch;
+        // A configured work lane is always the start point, including gitflow
+        // where it equals the integration lane. Trunk behavior (checked-out
+        // branch) applies only when no work lane is configured.
+        const fromWorkLane = workBranchSet;
         const workLaneCheckedOut = workBranchSet && currentBranch === workBranch;
         const treeIsDirty = () => {
           try {

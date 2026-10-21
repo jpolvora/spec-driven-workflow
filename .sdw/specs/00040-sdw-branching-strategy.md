@@ -34,7 +34,7 @@ Presets name common relationships (`trunk`, `github`, `develop`, `gitflow`, `git
 - AC7: While `updateWorkBranch` is `true`, the system shall fetch the work branch from `origin` and fast-forward it before creating the feature branch.
 - AC8: If updating the work branch fails, then the system shall exit `1` before creating the feature branch and leave the working tree unchanged.
 - AC9: The system shall name the feature branch `{branching.featurePrefix}{specSlug}`.
-- AC10: Where `workBranch` is absent or equals `integrationBranch`, the system shall create the feature branch from the checked-out branch, preserving the current trunk behavior.
+- AC10: Where `workBranch` is absent, the system shall create the feature branch from the checked-out branch, preserving the trunk behavior.
 - AC11: The system shall resolve the `sdw-ship-pr` pull request base branch and the `sdw-code-review` review base from `branching.integrationBranch`.
 - AC12: When the pull request reaches `MERGED` and `branching.syncWorkBranchAfterMerge` is `true`, the system shall switch to the work branch, fast-forward it to the integration branch, and push it when `branching.pushSyncedWorkBranch` is `true`.
 - AC13: If the post-merge fast-forward is not possible or the working tree is dirty, then the system shall leave every local branch untouched and record `branchingSync.status` as `blocked` with the reason in run state without failing the completed delivery.
