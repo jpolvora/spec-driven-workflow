@@ -1570,7 +1570,9 @@ function cmdRun(options) {
       return 1;
     }
 
-    const gates = (state.steps[4] && state.steps[4].gates) || {};
+    const topGates = (state.steps[4] && state.steps[4].gates) || {};
+    const outGates = (state.steps[4] && state.steps[4].output && state.steps[4].output.gates) || {};
+    const gates = Object.keys(topGates).length > 0 ? topGates : outGates;
     const failedGates = Object.keys(gates).filter(g => gates[g].status !== 'passed');
     if (failedGates.length > 0) {
       console.error(`[Step 6: Delivery Commit] Blocked: required verification gate(s) failed (${failedGates.join(', ')}).`);
@@ -1645,9 +1647,42 @@ function cmdRun(options) {
           commitSha = getBaseCommit(targetRoot) || baseCommit;
           console.log(`[Step 6: Delivery Commit] No tracked spec files to commit; using commit ${commitSha}`);
         }
+        // Unclaimed run-modification capture: files dirtied during the run
+        // but owned by no task (e.g. parent-level verification gate fixes).
+        // Pre-existing WIP from the dispatch baseline is left alone. When no baseline exists, preserve legacy scoped-only behavior.
+        try {
+          const baseline = state.steps[4] && state.steps[4].dispatch && state.steps[4].dispatch.baseline;
+          const baselineDirty = new Set(((baseline && baseline.dirty) || []).map(normalizeRel));
+          if (baseline) {
+          const deliverySet = new Set(deliveryFiles.map(normalizeRel));
+          const unclaimed = getStatusFiles(targetRoot)
+            .map(normalizeRel)
+            .filter((f) => !deliverySet.has(f) && !baselineDirty.has(f))
+            .filter((f) => isGitTracked(targetRoot, f));
+          if (unclaimed.length > 0) {
+            console.log(`[Step 6: Delivery Commit] Staging unclaimed run modifications (${unclaimed.length}): ${unclaimed.join(', ')}`);
+            const gateRes = stageAndCommitOnly(targetRoot, unclaimed, `chore(${specSlug}): include verification gate fixes`);
+            if (gateRes.committed) {
+              commitSha = gateRes.commitSha;
+              console.log(`[Step 6: Delivery Commit] Created gate-fix commit ${commitSha}`);
+            }
+          }
+          } // baseline guard, preserve legacy scoped-only behavior otherwise
+        } catch (e) {
+          const captureErr = new Error(`Unclaimed capture failed: ${e.message}`);
+          captureErr.captureFailure = true;
+          throw captureErr;
+        }
       }
     } catch (err) {
       console.error(`[Step 6: Delivery Commit] Git error: ${err.message}`);
+      if (err && err.captureFailure) {
+        state = stateManager.updateStepState(targetRoot, state.runId, 6, 'capture_failed', { error: err.message });
+        state.status = 'failed';
+        stateManager.saveRunState(targetRoot, state);
+        options._runResult = { runId: state.runId, status: 'failed', error: `Step 6 gate-fix capture failed: ${err.message}` };
+        return 1;
+      }
       commitSha = getBaseCommit(targetRoot);
     }
     state.deliveryCommit = commitSha;

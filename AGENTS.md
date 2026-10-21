@@ -65,6 +65,8 @@ When authoring or modifying skills under `skills/<skill-name>/`, adhere to the 3
 | Product rules, planning-before-change, authorization modes, simplicity, verification, guarantees | [`skills/sdw-rules/SKILL.md`](skills/sdw-rules/SKILL.md) + [`references/interaction_modes.md`](skills/sdw-rules/references/interaction_modes.md) + [`references/product_guarantees.md`](skills/sdw-rules/references/product_guarantees.md) |
 | Specification schema, EARS patterns, required sections | [`skills/sdw-spec/references/spec_standard.md`](skills/sdw-spec/references/spec_standard.md); validate with `node skills/sdw-spec/scripts/validate_spec.cjs --mode=authoring <specFile>` |
 | Run state, 8-step state machine, context fencing, dispatch, worktrees, sandbox | [`skills/sdw-orch/references/orchestrator_protocol.md`](skills/sdw-orch/references/orchestrator_protocol.md) |
+| Findings intake schema, scoring rubric, remediation scope, fixer report | [`skills/sdw-fixer/references/fixer_protocol.md`](skills/sdw-fixer/references/fixer_protocol.md) |
+| Memory entry kinds, backend routing (ws-memo vault by default; select per user via `memory.backends`), consolidation, write safety | [`skills/sdw-memory/references/memory_protocol.md`](skills/sdw-memory/references/memory_protocol.md) |
 | Vocabulary and redefined terms | [`GLOSSARY.md`](GLOSSARY.md) |
 
 **Rule:** when one of these changes, edit the authoritative file — never create a second copy in this document or in another skill.

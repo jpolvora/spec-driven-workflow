@@ -248,6 +248,35 @@
       "minimum": 0,
       "description": "Maximum concurrent-push adaptation budget for post-PR review convergence before draining rounds.",
       "default": 3
+    },
+    "memory": {
+      "type": "object",
+      "description": "Product memory backend selection for sdw-memory (central knowledge wrapper). The ws-memo vault is the default integration; local traps file and memory files are fallbacks.",
+      "properties": {
+        "backends": {
+          "type": "object",
+          "description": "Enable or disable each memory store backend. Missing keys default to enabled.",
+          "properties": {
+            "wsMemo": {
+              "type": "boolean",
+              "description": "Use the ws-memo vault (memo CLI) as the default knowledge store.",
+              "default": true
+            },
+            "traps": {
+              "type": "boolean",
+              "description": "Use the local .sdw/memory/traps.md table backend.",
+              "default": true
+            },
+            "files": {
+              "type": "boolean",
+              "description": "Search local MEMORY.md and memory/*.md files (read-only).",
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": true
     }
   },
   "additionalProperties": true

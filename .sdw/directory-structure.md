@@ -14,7 +14,8 @@ Baseline directory layout for consumer projects adopting Spec-Driven Workflow:
     │   └── {slug}/{runId}/      # Human-auditable step artifacts ({slug}-step-{N}.md), dispatch prompts
     │                            # (task-{taskId}.prompt.md), task evidence (task-{taskId}.evidence.json),
     │                            # and Step 5 judge files (step-5-judge.prompt.md, .verdict.json)
-    ├── traps.md                 # Central anti-regression trap log
+    ├── memory/                   # Product knowledge entries (versioned)
+    │   └── traps.md              # Central anti-regression trap log
     ├── worktrees/               # Ephemeral per-task git worktrees (command mode only)
     └── sandbox/                 # Ephemeral isolated clones for --sandbox runs (configurable via sandboxDir)
         └── {runId}/             # repo/ (clone), sandbox.json (metadata), report.md (execution report)
@@ -28,7 +29,7 @@ Baseline directory layout for consumer projects adopting Spec-Driven Workflow:
 - **`.sdw/specs/`**: Target directory for canonical specifications with EARS acceptance criteria and Definition of Ready.
 - **`.sdw/specs/index.specs.md`**: Centralized specification index registering slugs, titles, lifecycle statuses (`pending`, `completed`, `archived`), and validation health.
 - **`.sdw/state/`**: Dedicated directory for isolated execution run state files (`run-*.state.json`) and per-run step artifacts (`.sdw/state/{slug}/{runId}/{slug}-step-{N}.md`). Step 4 keeps one dispatch prompt and one evidence file per DAG task; Step 5 keeps the fenced judge prompt and its verdict.
-- **`.sdw/traps.md`**: Central anti-regression trap log capturing session friction, scope enclosure rules, and architectural traps.
+- **`.sdw/memory/traps.md`**: Central anti-regression trap log capturing session friction, scope enclosure rules, and architectural traps.
 - **`.sdw/worktrees/`**: Ephemeral per-task worktrees (`.sdw/worktrees/{runId}/{taskId}`) used only when `implementation.mode` is `command` and `useWorktrees: true`. Ignored by git.
 - **`.sdw/sandbox/`**: Ephemeral isolated local clones created by `sdw-orch run --sandbox` under the configured `sandboxDir` (default `{projectRoot}/.sdw/sandbox`; tokens `{projectRoot}`, `{skillsRoot}`, `{temp}`). A custom value must resolve outside the project root. Each `{runId}/` holds `repo/` (the clone), `sandbox.json` (branch, base commit, baseline-dirty flag, status), and `report.md` (step, task, gate, commit, and diff facts). Removed explicitly with `sdw-orch sandbox clean --run-id <runId>`. The default location is gitignored.
 

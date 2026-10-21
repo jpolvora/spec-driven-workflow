@@ -46,5 +46,10 @@
   "prePrCommand": "",
   "prePrInstructions": "",
   "reviewFixCommand": "",
-  "maxPreemptions": 10
+  "maxPreemptions": 10,
+  "memory": {
+    "backends": {
+      "wsMemo": true
+    }
+  }
 }

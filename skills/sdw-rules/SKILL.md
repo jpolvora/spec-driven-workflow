@@ -23,7 +23,7 @@ These rules override convenience. Apply them in every mode, on every harness and
 
 - `doctor`: Audits installed skills for line budgets and `sdw-rules` cross-references.
 - `audit-spec <specFile>`: Scans a specification for scope creep or speculative abstractions.
-- `log-trap --slug <slug> --title <title> --avoid <avoid> --action <action>`: Records a verified trap in `.sdw/traps.md`.
+- `log-trap --slug <slug> --title <title> --avoid <avoid> --action <action>`: Records a verified trap via `sdw-memory` (vault first, local traps table as fallback).
 
 ## Core Directives
 
@@ -34,6 +34,16 @@ These rules override convenience. Apply them in every mode, on every harness and
 5. **Surgical Scope Enclosure.** Touch only what the task requires; match existing style. No adjacent refactors, reformatting, renames, or drive-by fixes. Remove only orphans your change created; mention unrelated dead code instead of deleting it.
 6. **Empirical Goal-Driven Verification.** Turn every requirement into a verifiable check, test, or empirical pass/fail signal. State a short plan with a verification step per action and loop until the check passes before declaring completion.
 7. **Product Guarantees.** Preserve zero runtime npm dependencies, Node.js 22 standard library, deterministic CLI anchors, harness/agent agnosticism, portable paths, and file-based contracts.
+
+## 🧠 MEMORY-FIRST — MANDATORY FOR EVERY SKILL
+
+Before implementing, fixing, reviewing, or orchestrating: query `sdw-memory`
+for related traps/gaps/patterns/errors and apply returned hints.
+After any verified fix or newly discovered trap/gap/pattern/error: record it
+via `sdw-memory`. Never bypass with direct `traps.md` edits or raw `memo`
+calls; `sdw-memory` is the single wrapper over all store backends.
+Default backend is the `ws-memo` vault; select per user via
+`memory.backends` in `.sdw/config.json`.
 
 ## Mode Cheat Sheet
 
@@ -56,13 +66,14 @@ These rules override convenience. Apply them in every mode, on every harness and
    - Done when: The audit report confirms minimal scope enclosure.
 
 3. **Log Anti-Regression Trap**
-   Record friction or an overengineering defect in the project trap log.
+   Record friction or an overengineering defect via the central memory wrapper.
    - Run: `node skills/sdw-rules/scripts/sdw_rules.cjs log-trap --slug <slug> --title <title> --avoid <avoid> --action <action>`
-   - Done when: The trap entry is appended to `{projectRoot}/.sdw/traps.md`.
+   - Done when: The trap entry is stored through `sdw-memory` (vault first, local traps table as fallback).
 
 ## References
 
 - Interaction modes & planning protocol: [`references/interaction_modes.md`](references/interaction_modes.md)
 - Product guarantees & verification: [`references/product_guarantees.md`](references/product_guarantees.md)
+- Shared memory authority (traps/gaps/patterns/errors): [`sdw-memory`](../sdw-memory/SKILL.md)
 - LLM anti-patterns & traps catalog: [`references/anti_patterns.md`](references/anti_patterns.md)
 - Trap log template: [`references/traps_log.md`](references/traps_log.md)

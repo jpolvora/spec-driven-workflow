@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const { execSync, spawnSync } = require('child_process');
 
 // Import SCM provider contract from sdw-spec
@@ -27,6 +28,160 @@ function assertSafeRef(ref, label) {
   if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(String(ref)) || String(ref).includes('..')) {
     throw new Error(`Invalid ${label} branch name "${ref}".`);
   }
+}
+
+function safeGit(executor, cmd) {
+  try {
+    return String(executor(cmd) || '');
+  } catch (e) {
+    return '';
+  }
+}
+
+function listBranchCommits(executor, base, head) {
+  const out = safeGit(executor, `git log ${base}..${head} --pretty=format:%H%x1f%h%x1f%s%x1f%an%x1f%ad --date=short`).trim();
+  if (!out) return [];
+  const commits = out.split(/\r?\n/).map((line) => {
+    const parts = line.split('\x1f');
+    return {
+      hash: (parts[0] || '').trim(),
+      short: (parts[1] || '').trim(),
+      subject: (parts[2] || '').trim(),
+      author: (parts[3] || '').trim(),
+      date: (parts[4] || '').trim()
+    };
+  }).filter((c) => c.hash && c.subject);
+  if (commits.length > 0) return commits.slice(0, 50);
+  return [];
+}
+
+function listBranchFiles(executor, base, head) {
+  const out = safeGit(executor, `git diff --name-status ${base}...${head}`).trim()
+    || safeGit(executor, `git diff --name-only ${base}...${head}`).trim();
+  if (!out) return [];
+  return out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).slice(0, 100);
+}
+
+function getSpecTitle(projectRoot, specSlug) {
+  try {
+    if (!specSlug) return null;
+    const dir = path.join(projectRoot, '.sdw', 'specs');
+    if (!fs.existsSync(dir)) return null;
+    const normSlug = String(specSlug).replace(/^\d+-/, '');
+    const files = fs.readdirSync(dir).filter((f) => f === `${specSlug}.md` || f.replace(/^\d+-/, '').replace(/\.md$/, '') === normSlug);
+    for (const f of files) {
+      const content = fs.readFileSync(path.join(dir, f), 'utf8').split(/\r?\n/).slice(0, 25).join('\n');
+      const m = content.match(/^title:\s*["']?(.+?)["']?\s*$/m);
+      if (m && m[1].trim()) return m[1].trim();
+    }
+  } catch (e) {}
+  return null;
+}
+
+function buildPrTitle({ explicit, specSlug, specTitle, head, base, commits }) {
+  if (explicit) return explicit;
+  if (!commits || commits.length === 0) {
+    return specSlug ? `feat(${specSlug}): deliver ${specSlug}` : `feat: deliver changes from ${head}`;
+  }
+  const count = commits.length;
+  if (specSlug) {
+    const subject = specTitle || specSlug;
+    const suffix = count > 1 ? ` (${count} commits)` : '';
+    return `feat(${specSlug}): deliver ${subject}${suffix}`.slice(0, 120);
+  }
+  const first = String(commits[0].subject || '').slice(0, 80);
+  const suffix = count > 1 ? ` (+${count - 1} more, ${head}→${base})` : ` (${head}→${base})`;
+  return `feat(${head}): ${first}${suffix}`.slice(0, 120);
+}
+
+function buildPrBody({ explicit, specSlug, specTitle, head, base, commits, files, config }) {
+  if (explicit) return explicit;
+  if ((!commits || commits.length === 0) && (!files || files.length === 0)) {
+    return specSlug ? `Automated delivery for specification ${specSlug}.` : `Automated delivery pull request.`;
+  }
+  const lines = [];
+  lines.push('## Summary');
+  lines.push(`Automated delivery \`${head}\` → \`${base}\`.`);
+  if (specSlug) lines.push(`- Spec: \`${specSlug}\`${specTitle ? ` — ${specTitle}` : ''}`);
+  lines.push(`- Commits: ${commits.length}`);
+  lines.push(`- Files changed: ${files.length}`);
+  lines.push('');
+  if (commits.length > 0) {
+    lines.push('## Commits');
+    commits.slice(0, 30).forEach((c) => lines.push(`- \`${c.short}\` ${c.subject} (${c.author}, ${c.date})`));
+    if (commits.length > 30) lines.push(`- ... and ${commits.length - 30} more`);
+    lines.push('');
+    const feats = commits.filter((c) => /^feat(\(|:)/i.test(c.subject));
+    const fixes = commits.filter((c) => /^fix(\(|:)/i.test(c.subject));
+    const others = commits.filter((c) => !/^(feat|fix)(\(|:)/i.test(c.subject));
+    lines.push('## Features');
+    if (feats.length > 0) {
+      lines.push('### Features');
+      feats.slice(0, 20).forEach((c) => lines.push(`- \`${c.short}\` ${c.subject}`));
+    }
+    if (fixes.length > 0) {
+      lines.push('### Fixes');
+      fixes.slice(0, 20).forEach((c) => lines.push(`- \`${c.short}\` ${c.subject}`));
+    }
+    if (others.length > 0) {
+      lines.push('### Other');
+      others.slice(0, 20).forEach((c) => lines.push(`- \`${c.short}\` ${c.subject}`));
+    }
+    lines.push('');
+  }
+  if (files.length > 0) {
+    lines.push('## Files changed');
+    files.slice(0, 50).forEach((f) => lines.push(`- ${f}`));
+    if (files.length > 50) lines.push(`- ... and ${files.length - 50} more`);
+    lines.push('');
+  }
+  lines.push('## Verification');
+  if (config.prePrCommand) lines.push(`- prePrCommand: \`${config.prePrCommand}\``);
+  if (config.requiredBuild) lines.push(`- Build: \`${config.buildCommand || 'npm run build'}\``);
+  if (config.runAllTests) lines.push(`- Tests: \`${config.testCommand || 'npm test'}\``);
+  lines.push(`- Security checks: ${config.securityChecksEnabled ? 'enabled' : 'disabled'}`);
+  return lines.join('\n');
+}
+
+/**
+ * Builds the default sdw-fixer CLI command from active review threads.
+ * Used when reviewFixCommand is unset (AC13): writes thread-derived findings
+ * to a temp file and returns a `sdw_fixer.cjs run` invocation the caller
+ * executes through the executor, reusing the existing verify/stage/commit
+ * gates. Returns null when the fixer script is absent or threads are empty.
+ */
+function buildDefaultFixerCommand(projectRoot, activeList) {
+  const fixerScript = path.join(projectRoot, 'skills', 'sdw-fixer', 'scripts', 'sdw_fixer.cjs');
+  if (!fs.existsSync(fixerScript)) return null;
+  const threads = (activeList || []).filter(t => t && !t.isResolved);
+  if (threads.length === 0) return null;
+  const findings = threads.map(t => {
+    const rawPath = typeof t.path === 'string' ? t.path.trim().replace(/\\/g, '/') : '';
+    const safe = rawPath && !path.isAbsolute(rawPath) && !/^[A-Za-z]:[\\/]/.test(rawPath) && !rawPath.split('/').includes('..');
+    const firstComment = t.comments && t.comments[0] ? String(t.comments[0].body || '') : '';
+    const evidence = (firstComment.trim() || 'Review feedback').slice(0, 500) || 'Review feedback';
+    return {
+      file: safe ? rawPath : 'REVIEW_THREADS.md',
+      line: Number.isInteger(t.line) && t.line > 0 ? t.line : 1,
+      rule: 'review_thread_feedback',
+      evidence,
+      severityHint: 'medium'
+    };
+  });
+  let dir;
+  try {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-fixer-'));
+  } catch (e) {
+    return null;
+  }
+  const findingsPath = path.join(dir, 'findings.json');
+  const reportPath = path.join(dir, 'result.json');
+  try {
+    fs.writeFileSync(findingsPath, JSON.stringify({ batchId: `ship-pr-fix-${Date.now()}`, findings }, null, 2), 'utf8');
+  } catch (e) {
+    return null;
+  }
+  return { command: `node "${fixerScript}" run --findings "${findingsPath}" --report "${reportPath}"`, findingsPath, reportPath };
 }
 
 function resolveStateDir(projectRoot, config = {}) {
@@ -243,8 +398,14 @@ async function runShipPr(options = {}, customExecutor = null) {
   if (specSlug) assertSafeSlug(specSlug);
   assertSafeRef(head, 'head');
   assertSafeRef(base, 'base');
-  const title = options.title || (specSlug ? `feat(${specSlug}): deliver ${specSlug}` : `feat: deliver changes from ${head}`);
-  const body = options.body || (specSlug ? `Automated delivery for specification ${specSlug}.` : `Automated delivery pull request.`);
+  const specTitle = getSpecTitle(projectRoot, specSlug);
+  const branchCommits = listBranchCommits(executor, base, head);
+  const branchFiles = listBranchFiles(executor, base, head);
+  const title = buildPrTitle({ explicit: options.title, specSlug, specTitle, head, base, commits: branchCommits });
+  const body = buildPrBody({
+    explicit: options.body, specSlug, specTitle, head, base,
+    commits: branchCommits, files: branchFiles, config
+  });
 
   const pushDelivery = options.push || Boolean(config.pushDelivery);
   const scmProviderName = config.scmProvider || 'none';
@@ -462,17 +623,24 @@ async function runShipPr(options = {}, customExecutor = null) {
 
       // When an active PR is open/reused, complement the PR and update description if relevant
       if (prResult.reused && prResult.number && typeof provider.updatePullRequest === 'function') {
-        let headCommit = '';
-        try { headCommit = executor('git rev-parse --short HEAD').toString().trim(); } catch (e) {}
-        const amendmentNote = specSlug && specSlug !== 'unspecified'
-          ? `### Amending Delivery: ${specSlug}\n- Commit: \`${headCommit || 'HEAD'}\`\n- Timestamp: ${new Date().toISOString()}`
-          : null;
-        const newBodyContent = amendmentNote || body;
-        if (newBodyContent) {
+        const headCommit = safeGit(executor, 'git rev-parse --short HEAD').trim() || 'HEAD';
+        const latestList = branchCommits.slice(0, 5).map((c) => `- \`${c.short}\` ${c.subject}`).join('\n');
+        const amendmentNote = [
+          `### Amending Delivery${specSlug && specSlug !== 'unspecified' ? `: ${specSlug}` : ''}`,
+          `- Commit: \`${headCommit}\``,
+          `- HEAD: \`${headCommit}\``,
+          `- Timestamp: ${new Date().toISOString()}`,
+          `- Commits in range \`${base}..${head}\`: ${branchCommits.length}`,
+          `- Files changed: ${branchFiles.length}`,
+          latestList ? `#### Latest commits\n${latestList}` : null
+        ].filter(Boolean).join('\n');
+        const newBodyContent = options.body || amendmentNote || body;
+        if (newBodyContent || (!options.title && title)) {
           try {
             log(`[sdw-ship-pr] Notice: Amending an active pull request while review/approval is pending is not a recommended practice, but adapting as a non-blocking operation: complementing PR #${prResult.number} description with amending delivery...`);
             await provider.updatePullRequest({
               prNumber: prResult.number,
+              title: options.title ? undefined : title,
               body: newBodyContent,
               appendBody: true,
               dryRun
@@ -660,6 +828,14 @@ async function runShipPr(options = {}, customExecutor = null) {
             let fixSummary = 'Applied and verified the requested review fix.';
             let canResolve = false;
             let fixResult = null;
+            // Delegate to sdw-fixer when no explicit reviewFixCommand is set (AC13).
+            // Non-catalog rules record skipped entries with status no-op, so the
+            // delegation is observable and never misread as completed work.
+            const defaultFixer = reviewFixCommand ? null : buildDefaultFixerCommand(projectRoot, activeList);
+            const effectiveFixCommand = reviewFixCommand || (defaultFixer && defaultFixer.command) || null;
+            if (defaultFixer) {
+              log(`[sdw-ship-pr] reviewFixCommand unset; delegating to sdw-fixer: ${defaultFixer.command}`);
+            }
             if (typeof options.threadFixer === 'function') {
               // The caller owns applying, testing, committing, and pushing the fix.
               fixResult = await options.threadFixer({
@@ -677,10 +853,10 @@ async function runShipPr(options = {}, customExecutor = null) {
               fixSummary = fixResult.summary || fixSummary;
               runReviewSecurityGate();
               canResolve = true;
-            } else if (reviewFixCommand) {
-              log(`[sdw-ship-pr] Applying review fixes via reviewFixCommand: ${reviewFixCommand}`);
+            } else if (effectiveFixCommand) {
+              log(`[sdw-ship-pr] Applying review fixes via review fix command: ${effectiveFixCommand}`);
               const beforeReviewFix = listChangedPaths(executor);
-              executor(reviewFixCommand);
+              executor(effectiveFixCommand);
 
               if (config.runAllTests) {
                 log(`[sdw-ship-pr] Verifying review fixes with test command: ${testCommand}`);
@@ -690,6 +866,17 @@ async function runShipPr(options = {}, customExecutor = null) {
               runReviewSecurityGate();
 
               const changed = stageChangedSince(executor, beforeReviewFix, projectRoot);
+              // Surface a fixer no-op explicitly: a delegated batch that changed
+              // nothing is not remediation — threads stay open for agent handling.
+              try {
+                const fixerReportPath = defaultFixer && defaultFixer.reportPath;
+                if (fixerReportPath && fs.existsSync(fixerReportPath)) {
+                  const fixerReport = JSON.parse(fs.readFileSync(fixerReportPath, 'utf8'));
+                  if (fixerReport && fixerReport.status === 'no-op') {
+                    warn('[sdw-ship-pr] sdw-fixer reported no-op: no deterministic fix applies to these threads; manual agent remediation required (see cooperative protocol above).');
+                  }
+                }
+              } catch (e) {}
               if (changed.length === 0) {
                 warn('[sdw-ship-pr] reviewFixCommand produced no changes; refusing to resolve review threads.');
                 report.reviewConvergence.pendingThreads = pendingThreads;
@@ -1045,5 +1232,11 @@ module.exports = {
   locateStateFile,
   cmdListThreads,
   cmdResolveThread,
-  cmdCheckStatus
+  cmdCheckStatus,
+  listBranchCommits,
+  listBranchFiles,
+  getSpecTitle,
+  buildPrTitle,
+  buildPrBody,
+  buildDefaultFixerCommand
 };

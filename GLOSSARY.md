@@ -54,6 +54,8 @@ Spec-Driven Workflow is **opinionated**: the words below mean what this project 
 | **Delivery commit** | The Step 6 commit (`feat(<slug>): …`) containing only the accepted files plus the spec index update, after gates and the secret scan pass. | *Delivery*, *scoped commit*. Not a merge. |
 | **Ship / shipping** | The `sdw-ship-pr` skill: pre-PR gates, branch push, PR creation or reuse, review convergence, and optional merge. | *PR shipping*, *delivery*. Not the same as the delivery commit. |
 | **Review convergence** | Polling CI and review threads, fixing findings, pushing, and resolving threads with a comment that cites the fix commit. | *Review loop*, *thread resolution*. Not a re-review by the author. |
+| **Fixer (`sdw-fixer`)** | The shared remediation skill: validates a findings batch, scores it, consults defect-class knowledge through `sdw-memory`, applies surgical edits at finding and verified sibling lines, and reports fixed, skipped, and learned. | *Remediator*, *auto-fix*. Not the reviewer; it never self-approves. |
+| **Findings batch** | The JSON array passed to `sdw-fixer`: `file`, `line`, `rule`, `evidence`, optional `severityHint`. Built from review threads, review findings, or verification failures. | *Fix batch*, *findings file*. Not a report and not an evidence file. |
 | **Run state** | The JSON file recording step status, tasks, evidence, scores, delivery, and errors for one run. | *State file*, *run record*. Not the spec index. |
 | **Artifact** | A human-readable Markdown file persisted under the run's state directory for steps 2, 3, 5, 7, and dispatch prompts. | *Step artifact*, *report*. Not a build artifact. |
 
@@ -100,9 +102,10 @@ Spec-Driven Workflow is **opinionated**: the words below mean what this project 
 | **Confirmation gate** | The explicit approval step that closes a plan. Silence, an emoji, or an unrelated "ok" is not approval; approval covers only the plan shown. | *Approval*, *go-ahead*. Not a question the agent answers for itself. |
 | **Unattended mode** | Execution of an explicitly invoked skill or command whose own instructions are the approved plan; no per-step confirmation, but uncovered destructive steps still stop for approval. | *Autonomous execution*, *skill mode*. Not permission to widen scope. |
 | **User gate / clarification gate** | A deliberate stop that asks the user to choose between explicit options, with a recommended default. | *Question gate*, *approval gate*. Not a retry. |
-| **Trap** | A durable, searchable lesson about a mistake that must not repeat: scenario, what not to do, what to do instead. Stored in the memory vault (outside product git). | *Anti-regression trap*, *lesson*. Not an in-repo TODO. |
+| **Trap** | A durable, searchable lesson about a mistake that must not repeat: scenario, what not to do, what to do instead. Recorded through `sdw-memory`: the vault when reachable, `.sdw/memory/traps.md` as the offline fallback. | *Anti-regression trap*, *lesson*. Not an in-repo TODO. |
 | **Decision** | A durable architecture record: what was chosen, why, the rules that follow, and rejected alternatives. Stored in the memory vault. | *ADR*, *decision record*. Not a commit message. |
 | **Memory vault** | Out-of-repo working memory managed through `spec-memo` / `ws-memo` (`bootstrap`, `search`, `upsert`). | *Vault*, *memory*. Not `MEMORY.md`, not `.agents/plans/`. |
+| **Memory skill (`sdw-memory`)** | The single contract for product knowledge: `classify`, `query`, `record`, `consolidate`, `doctor` over pluggable backends, with the vault first and the local traps file as offline fallback. | *Knowledge wrapper*, *memory API*. Not the vault itself; it routes to it. |
 
 ---
 

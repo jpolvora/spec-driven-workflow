@@ -250,7 +250,8 @@ function cmdAuditSpec(specPath, options) {
 
 /**
  * Subcommand: log-trap
- * Appends a new verified trap entry to {projectRoot}/.sdw/traps.md
+ * Records a verified trap through the central sdw-memory wrapper
+ * (vault first, local `.sdw/memory/traps.md` table as fallback).
  */
 function cmdLogTrap(options) {
   const root = path.resolve(options.root || findProjectRoot());
@@ -263,43 +264,56 @@ function cmdLogTrap(options) {
     };
   }
 
-  const trapsFile = path.join(root, '.sdw', 'traps.md');
-  const today = new Date().toISOString().slice(0, 10);
   const trapSlug = slug || 'trap-' + Date.now();
   const trapTitle = title || trapSlug;
   const trapLayer = layer || 'general';
+  const today = new Date().toISOString().slice(0, 10);
 
-  // Sanitize fields for markdown table
-  const clean = str => String(str).replace(/\|/g, '\\|').replace(/\r?\n/g, ' ').trim();
-
-  const row = `| ${clean(trapSlug)} | ${clean(trapTitle)} | ${clean(trapLayer)} | ${clean(avoid)} | ${clean(action)} | ${today} |\n`;
-
-  // Ensure .sdw directory exists
-  const sdwDir = path.join(root, '.sdw');
-  if (!fs.existsSync(sdwDir)) {
-    fs.mkdirSync(sdwDir, { recursive: true });
-  }
-
-  if (!fs.existsSync(trapsFile)) {
-    const header = `# Anti-Regression Traps Log\n\nCentral repository log of behavioral and engineering traps to prevent repeating mistakes.\n\n| Slug | Title | Layer | Avoid | Action | Date |\n|---|---|---|---|---|---|\n`;
-    fs.writeFileSync(trapsFile, header + row, 'utf8');
-  } else {
-    fs.appendFileSync(trapsFile, row, 'utf8');
-  }
-
-  // Check if sdw-memory skill is installed and record to project memory if present
-  let memorySynced = false;
+  // All writes go through sdw-memory when the skill is installed; otherwise
+  // fall back to a direct local table append (same schema) so standalone
+  // checkouts and hermetic tests never depend on the vault.
+  let memoryModule = null;
   try {
     const memScriptPath = path.join(root, 'skills', 'sdw-memory', 'scripts', 'sdw_memory.cjs');
-    if (fs.existsSync(memScriptPath)) {
-      const memoryModule = require(memScriptPath);
-      if (memoryModule && typeof memoryModule.recordTrap === 'function') {
-        memoryModule.recordTrap({ slug: trapSlug, title: trapTitle, avoid, action, layer: trapLayer, root });
-        memorySynced = true;
-      }
-    }
+    if (fs.existsSync(memScriptPath)) memoryModule = require(memScriptPath);
   } catch (e) {
-    // optional integration
+    memoryModule = null;
+  }
+
+  const trapsFile = (memoryModule && typeof memoryModule.trapsPathFor === 'function')
+    ? memoryModule.trapsPathFor(root)
+    : path.join(root, '.sdw', 'memory', 'traps.md');
+
+  let memorySynced = false;
+  if (memoryModule && typeof memoryModule.recordTrap === 'function') {
+    let res;
+    try {
+      res = memoryModule.recordTrap({ slug: trapSlug, title: trapTitle, avoid, action, layer: trapLayer, root, backend: 'all' });
+    } catch (e) {
+      return { success: false, error: `sdw-memory record failed: ${e.message}` };
+    }
+    if (!res || !res.recorded) {
+      return { success: false, error: (res && res.reason) || 'sdw-memory refused the trap entry' };
+    }
+    memorySynced = res.backend === 'ws-memo';
+  } else {
+    // Sanitize fields for markdown table
+    const clean = str => String(str).replace(/\|/g, '\\|').replace(/\r?\n/g, ' ').trim();
+
+    const row = `| ${clean(trapSlug)} | ${clean(trapTitle)} | ${clean(trapLayer)} | ${clean(avoid)} | ${clean(action)} | ${today} |\n`;
+
+    // Ensure .sdw/memory directory exists
+    const memDir = path.join(root, '.sdw', 'memory');
+    if (!fs.existsSync(memDir)) {
+      fs.mkdirSync(memDir, { recursive: true });
+    }
+
+    if (!fs.existsSync(trapsFile)) {
+      const header = `# Anti-Regression Traps Log\n\nCentral repository log of behavioral and engineering traps to prevent repeating mistakes.\n\n| Slug | Title | Layer | Avoid | Action | Date |\n|---|---|---|---|---|---|\n`;
+      fs.writeFileSync(trapsFile, header + row, 'utf8');
+    } else {
+      fs.appendFileSync(trapsFile, row, 'utf8');
+    }
   }
 
   return {

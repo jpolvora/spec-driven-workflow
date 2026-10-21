@@ -13,6 +13,8 @@ const EXPECTED_SKILLS = [
   'sdw-code-review',
   'sdw-config',
   'sdw-doctor',
+  'sdw-fixer',
+  'sdw-memory',
   'sdw-orch',
   'sdw-router',
   'sdw-rules',

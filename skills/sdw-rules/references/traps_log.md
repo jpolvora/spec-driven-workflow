@@ -1,6 +1,8 @@
 # Anti-Regression Traps Log Template
 
-This document provides the canonical schema template and initial seed content for the anti-regression trap log. Live project entries are appended to `{projectRoot}/.sdw/traps.md`.
+This document provides the canonical schema template and initial seed content for the anti-regression trap log. Live project entries are appended to `{projectRoot}/.sdw/memory/traps.md`.
+
+> Writes go through `sdw-memory` (`record --kind trap ...`); never append to the table by hand outside that contract.
 
 ---
 

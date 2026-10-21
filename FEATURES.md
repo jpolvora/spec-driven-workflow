@@ -101,7 +101,7 @@
 - **Empirical Goal-Driven Verification:** Directs multi-step tasks to define clear, verifiable success criteria and tests before declaring completion.
 - **Deterministic Compliance Doctor (`doctor`):** Audits installed skills for context line budgets (≤ 120 lines) and requires every skill except `sdw-rules` to reference it.
 - **Specification Scope Auditor (`audit-spec`):** Scans specifications for speculative scope creep markers, composite ACs, or missing Out of Scope boundaries.
-- **Anti-Regression Trap Log (`log-trap`):** Appends verified friction and overengineering lessons to `.sdw/traps.md` at project scope to prevent repeating mistakes.
+- **Anti-Regression Trap Log (`log-trap`):** Records verified friction and overengineering lessons through `sdw-memory` (vault first, local trap table as fallback) at project scope to prevent repeating mistakes.
 
 ---
 
@@ -117,6 +117,7 @@
 - **Push-Before-Resolve Mandate & Resolution Comment Contract:** Guarantees threads are never closed before the fix commit is pushed to the remote tracking branch. Posts a structured resolution reply comment citing the commit SHA, defect class, and fix summary.
 - **Zero-Mutation Dry-Run Simulation:** Simulates pre-PR checks, branch push, PR creation, and review polling without remote mutations when `--dry-run` is active.
 - **Opt-In Fire-and-Forget Merge:** `--merge` / `--allow-merge` issues one SCM merge command (`gh pr merge` / `az repos pr update --status completed`) after review converges. A merge failure is recorded in the report and run state but never fails the delivery, since permissions, approvals, and branch rules belong to the operator.
+- **Default Fixer Delegation:** When `reviewFixCommand` is unset, active review threads are converted into one findings batch and delegated to `sdw-fixer`; an honest no-op keeps the round at `review_pending` instead of claiming a fix.
 
 ---
 
@@ -161,7 +162,7 @@
 *Engineering rigor backed by 100% native automated tests.*
 
 - **Native Node.js Test Runner:** Built with `node:test` and `node:assert/strict` — zero third-party testing frameworks required.
-- **242 Comprehensive Test Scenarios:**
+- **270 Comprehensive Test Scenarios:**
   - `sdw_code_review.test.cjs`: Standalone execution, base auto-detection, report generation, surgical auto-fix, dry-run simulation, orchestrator delegation, router registration, and fail-closed negatives.
   - `sdw_config.test.cjs`: Configuration parsing, schema validation, token expansion, and initialization gates.
   - `sdw_spec.test.cjs`: Index bootstrapping, EARS validation, synthesis, SCM provider contract, state synchronization, and archival quality gates.
@@ -174,8 +175,10 @@
   - `sdw_router.test.cjs`: Minimal context budget enforcement (SKILL.md ≤ 120 lines), explicit invocations, keyword classification, tied-confidence disambiguation, missing directory resolution, and pass-through non-interference.
   - `sdw_rules.test.cjs`: Three-tier progressive disclosure, announcement banners, engineering simplicity principles, plan-before-change and authorization layering, product guarantees, doctor compliance verification, scope creep audits, and trap logging.
   - `sdw_security_checks.test.cjs`: Secrets scanning, staged diff inspection, redaction hygiene, pragma suppression, fail-closed gate handling, and orchestrator bypass verification.
+  - `sdw_fixer.test.cjs`: Findings intake validation, deterministic severity scoring, defect-class sibling sweep, trap and vault hint injection, trivial patch application, dry-run purity, report fields, and learning deduplication.
+  - `sdw_memory.test.cjs`: Entry classification rubric, backend routing and offline fallback, duplicate-slug refusal, consolidation counts, and secret rejection.
   - `sdw_sandbox.test.cjs`: Plan-only dry-run purity, sandbox clone creation, origin removal, spec copying, node_modules linking, report rendering, cleanup, conflicting flags, nested rejection, and absolute dispatch paths.
-- **Fast Execution:** Entire test suite runs in ~20 seconds with 100% pass rate.
+- **Fast Execution:** Entire test suite runs in ~40 seconds with 100% pass rate.
 
 ---
 
@@ -217,10 +220,44 @@
 
 ---
 
+### 14. 🔧 `sdw-fixer` — Shared Findings Intake & Surgical Remediation
+
+*Single remediation authority shared by the review loop, verification fixes, and the ship convergence loop.*
+
+- **One Findings Contract:** Accepts a JSON batch of `{ file, line, rule, evidence, severityHint }`, rejects absolute or escaping paths, and halts with exit `1` and zero mutations on invalid intake.
+- **Deterministic Scoring:** Applies the severity rubric once per batch (`critical 100`, `high 75`, `medium 50`, `low 25`, missing `50`) and processes findings in descending score order.
+- **Context Before Edit:** Sweeps defect-class siblings (cap 50 hits), then consults defect-class knowledge through the central `sdw-memory` wrapper (traps table, memory files, ws-memo vault), recording `sourcesConsulted` per finding.
+- **Surgical Edits Only:** Deterministic trivial patches land at finding lines and verified sibling lines; everything else is reported as `skipped` with path and reason for agent reasoning. `--dry-run` mutates nothing.
+- **Structured Report & Learning:** Emits `{ batchId, fixed, skipped, learned, verification, reportPath }`, registers one deduplicated knowledge entry per fixed defect class via `sdw-memory`, and keeps reviewer and fixer separate (never self-approves).
+- **Wired Into Delivery:** `sdw-ship-pr` delegates active review threads to the fixer when `reviewFixCommand` is unset, and `sdw-orch` Step 7 keeps using `sdw-code-review` for detection.
+
+### 15. 🧠 `sdw-memory` — Central Knowledge Wrapper with Pluggable Backends
+
+*Single contract for traps, gaps, patterns, and errors, shared by fixing, review, and orchestration flows.*
+
+- **Unified Entry Model:** `trap|gap|pattern|error`, with free text classified by a deterministic keyword rubric before any write.
+- **Pluggable Backends:** the `ws-memo` vault when the `memo` CLI is reachable, local `.sdw/memory/traps.md` otherwise; `--backend auto|ws-memo|traps|all` and `SDW_MEMORY_NO_MEMO=1` opt-out.
+- **Query and Deduplicate:** merged hints capped at `--limit`; a record whose slug already exists is refused with an explicit reason instead of writing a second row.
+- **Consolidation Without Deletion:** merges duplicate local rows and reports vault duplicates, leaving vault lifecycle to `memo gc` / `forget`.
+- **Write Safety:** rejects secret-bearing payloads before any backend mutation; `doctor` validates layout, script syntax, and vault reachability.
+- **Shared Surface:** `sdw-rules log-trap` records through the wrapper, and `sdw-fixer` consults it for defect-class hints.
+
+---
+
 ## 🗺️ Product Roadmap & Upcoming Horizons
 
-The following specifications are scheduled for upcoming execution phases:
+The following specifications are pending in the registry (`.sdw/specs/index.specs.md`):
 
-- **006 — Packaging & Vercel Skills Compatibility:** Standalone npm packaging, one-command installer, and seamless distribution across `.agents/skills/`.
-- **007 — SDW Memory Skill:** Integrated anti-regression project memory and vault trap retrieval.
+- **016 — SCM Delivery Intents:** Named pull request and issue intents for GitHub and Azure DevOps wired into Step 8.
+- **017 — AC Ledger & Traceability:** Criterion-to-evidence ledger for every delivery.
+- **018 — Fresh-Context Verification & Adversarial Audit:** Independent re-verification of claimed work.
+- **019 — Checkpoint & Crash-Safe Resume:** Turn pause, checkpoint, and resume from interruption.
+- **020 — Configurable Branch & Ship-Ref Strategy:** Branch and ship-ref strategies beyond the current defaults.
+- **021 — Live Monitor & Append-Only Telemetry:** `telemetry.jsonl` plus the read-only `monitor` command.
+- **022 — Harness Diagnostics:** `doctor`, `check-workflows`, `check-harness`, and dispatch prompt budgets.
+- **023 — Delivery Reporting:** Activity, standup, and specification explanation reports.
+- **030 — Micro-Task DAG Planning:** Registered in the backlog and explicitly deferred.
+- **031 — Delivery Records, Retrospective & Learning:** Changelog, retro candidates, `sdw-learning` adapter, and prompt-task lifecycle.
+- **033 — Orchestrator Diagnostic Mode:** Draft; upstream issue detection and follow-up spec suggestion.
+
 

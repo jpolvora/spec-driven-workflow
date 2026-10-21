@@ -43,8 +43,8 @@ Before publishing branches or creating remote pull requests, `sdw-ship-pr` evalu
    - **Complementing Active PR:** Commits are pushed to the existing branch, and the PR description is updated with an amending delivery section (`### Amending Delivery: {specSlug}\n- Commit: \`{sha}\`\n- Timestamp: {iso}`).
    - **Non-blocking Adaptation:** While amending an active PR undergoing code review or awaiting approval is not a recommended practice, the system adapts as a non-blocking operation rather than halting or failing. If review convergence ends while checks or approvals are pending, it records `shipStatus: review_pending`, marks delivery completed in state, and exits 0 cleanly.
 3. **Creation Payload:**
-   - `title`: Extracted from specification title or `--title`.
-   - `body`: Markdown PR body describing delivered features, referenced issue number, and verification summary.
+   - `title`: Enriched by default from `git log {base}..{head}` and spec title (`feat({specSlug}): deliver {specTitle} ({n} commits)` or `feat({head}): {firstSubject} (+n more)`); explicit `--title` overrides.
+   - `body`: Markdown with `## Summary`, `## Commits` (sha/subject/author/date), `## Features` grouped (Features/Fixes/Other), `## Files changed` (`git diff --name-status`), and `## Verification` (gates from config). Explicit `--body` overrides; empty git context falls back to legacy one-liner.
 
 ---
 

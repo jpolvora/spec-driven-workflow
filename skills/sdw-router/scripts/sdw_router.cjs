@@ -156,8 +156,8 @@ const INTENT_RULES = {
     recommendedOption: 'Author, grill, validate, or synchronize specifications using sdw-spec'
   },
   'sdw-orch': {
-    primaryKeywords: ['orch', 'orchestrator', 'orchestration', 'implement spec', 'specification implementation', 'workflow execution'],
-    secondaryKeywords: ['workflow', 'implement', 'implementation', 'resumption', 'run spec', 'resume', 'status', 'dag', 'conformance', 'delivery commit', 'automated review', 'pull request', 'push', 'batch', 'resume-batch', 'multi-spec'],
+    primaryKeywords: ['orch', 'orchestrator', 'orchestration', 'implement spec', 'run spec', 'execute spec', 'specification implementation', 'workflow execution'],
+    secondaryKeywords: ['workflow', 'implement', 'implementation', 'execute', 'execution', 'resumption', 'resume', 'status', 'dag', 'conformance', 'delivery commit', 'automated review', 'pull request', 'push', 'batch', 'resume-batch', 'multi-spec'],
     recommendedOption: 'Orchestrate end-to-end implementation and delivery using sdw-orch'
   },
   'sdw-rules': {
@@ -174,6 +174,16 @@ const INTENT_RULES = {
     primaryKeywords: ['ship pr', 'ship-pr', 'create pr', 'open pr', 'submit pr', 'review convergence', 'pr review loop'],
     secondaryKeywords: ['ship', 'deliver pr', 'pre-pr', 'poll pr', 'resolve review', 'resolve thread', 'pull request review', 'converge'],
     recommendedOption: 'Ship pull request, check pre-PR requirements, and run review convergence using sdw-ship-pr'
+  },
+  'sdw-fixer': {
+    primaryKeywords: ['sdw-fixer', 'fixer', 'apply-fix', 'apply fix', 'remediate', 'remediation'],
+    secondaryKeywords: ['fix batch', 'fix findings', 'remediation batch', 'defect siblings', 'surgical fix', 'fixing review findings'],
+    recommendedOption: 'Apply surgical remediation to review findings using sdw-fixer'
+  },
+  'sdw-memory': {
+    primaryKeywords: ['sdw-memory', 'memory skill', 'traps', 'knowledge base', 'project memory'],
+    secondaryKeywords: ['trap', 'gap', 'pattern', 'shareable knowledge', 'record trap', 'query memory', 'consolidate memory', 'classify'],
+    recommendedOption: 'Query, record, or consolidate product knowledge using sdw-memory'
   },
   'sdw-code-review': {
     primaryKeywords: ['code-review', 'code review', 'review code', 'sdw-code-review', 'deep review'],
@@ -257,7 +267,7 @@ function routePrompt(prompt, options) {
     }
   }
 
-  const knownExplicitSkills = ['sdw-config', 'sdw-doctor', 'sdw-spec', 'sdw-orch', 'sdw-router', 'sdw-rules', 'sdw-security-checks', 'sdw-ship-pr', 'sdw-code-review'];
+  const knownExplicitSkills = ['sdw-config', 'sdw-doctor', 'sdw-spec', 'sdw-orch', 'sdw-router', 'sdw-rules', 'sdw-security-checks', 'sdw-ship-pr', 'sdw-code-review', 'sdw-fixer'];
   for (const s of knownExplicitSkills) {
     if (new RegExp(`(?:^|\\s)[/@]?${s}\\b`, 'i').test(lower)) {
       // It was explicitly requested but might be missing on disk

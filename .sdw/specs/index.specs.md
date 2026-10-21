@@ -18,7 +18,6 @@ Central repository index tracking specification lifecycle states, metadata, and 
 | 00004 | 00004-rename-sdw-implement-to-sdw-orch | Rename sdw-implement to sdw-orch (sdw-orchestrator) | completed | local | 2026-10-19 | PASS | - |
 | 00005 | 00005-sdw-orch-multi-spec-batch | SDW Orchestrator Multi-Spec Batch Execution | completed | local | 2026-10-19 | PASS | - |
 | 00006 | 00006-packaging-installer-updater | Packaging, Distribution, and Vercel Skills Compatibility | completed | local | 2026-10-19 | PASS | - |
-| 00007 | 00007-sdw-memory-skill | SDW Memory Skill & Anti-Regression Project Memory | pending | local | 2026-10-19 | PASS | - |
 | 00008 | 00008-sdw-rules-skill | SDW Rules Shared Skill — Simplicity, Scope Enclosure, and Anti-Overengineering | completed | local | 2026-10-19 | PASS | - |
 | 00009 | 00009-sdw-security-checks | SDW Security Checks Skill — Configurable Pre-Commit Secrets & Leak Gate | completed | local | 2026-10-19 | PASS | - |
 | 00010 | 00010-sdw-orch-branch-worktree-strategy | SDW Orchestrator Branch & Worktree Strategy — Configurable Feature Branches and Per-Task Worktrees | completed | local | 2026-10-19 | PASS | - |
@@ -43,3 +42,6 @@ Central repository index tracking specification lifecycle states, metadata, and 
 | 00029 | 00029-sdw-orch-sandboxed-execution | SDW Orchestrator Sandboxed Execution and Plan-Only Dry Run | completed | local | 2026-10-19 | PASS | - |
 | 00030 | 00030-sdw-micro-task-dag-planning | SDW Micro-Task DAG Planning and Sequential Dispatch Preview | pending | local | 2026-10-20 | PASS | - |
 | 00031 | 00031-sdw-delivery-records-retro-learning-lifecycle | SDW Delivery Records, Retrospective, Learning Loop, and Prompt-Task Lifecycle | pending | local | 2026-10-21 | PASS | - |
+| 00032 | 00032-sdw-fixer-skill | SDW Fixer Skill — Shared Findings Intake, Context-Aware Remediation, and Result Reporting | completed | local | 2026-10-21 | PASS | - |
+| 00033 | 00033-sdw-orch-diagnostic-mode | SDW Orchestrator Diagnostic Run Mode — Upstream Issue Detection and Follow-up Spec Suggestion | pending | local | 2026-10-21 | PASS | - |
+| 00034 | 00034-sdw-memory-skill | SDW Memory Skill — Central Knowledge Wrapper with Pluggable Store Backends | pending | local | 2026-10-21 | PASS | - |

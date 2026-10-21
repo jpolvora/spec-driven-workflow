@@ -75,7 +75,7 @@ When evaluating a user turn, the router applies four strict precedence tiers:
 - **Domain**: End-to-end specification implementation, subagent DAG orchestration, conformance scoring, code review, and delivery push.
 - **Explicit Invocations**: `/sdw-orch`, `@sdw-orch`, `sdw-orch`, `/orch`, `@orch`, `orch`
 - **Trigger Keywords**:
-  - `orchestrate`, `orchestrator`, `implement spec`, `run spec`, `workflow execution`
+  - `orchestrate`, `orchestrator`, `implement spec`, `run spec`, `execute spec`, `workflow execution`
   - `resume run`, `orch status`, `dag tasks`, `conformance score`, `delivery commit`
   - `automated code review`, `review loop`, `remote push`, `pr preparation`
 - **Typical Prompts**:
@@ -93,6 +93,17 @@ When evaluating a user turn, the router applies four strict precedence tiers:
   - "Check pre-PR requirements and ship a pull request for develop"
   - "Open a PR on GitHub and resolve reviewer comments"
   - "Run PR review convergence loop on PR #3"
+
+### Skill: `sdw-memory`
+- **Domain**: Central product knowledge — query, record, consolidate, and classify traps, gaps, patterns, and errors across pluggable store backends.
+- **Explicit Invocations**: `/sdw-memory`, `@sdw-memory`, `sdw-memory`
+- **Trigger Keywords**:
+  - `memory`, `trap`, `knowledge base`, `project memory`, `record trap`
+  - `query memory`, `consolidate memory`, `shareable knowledge`, `gap`, `pattern`
+- **Typical Prompts**:
+  - "Query memory for known traps before implementing"
+  - "Record this fix as a trap in sdw-memory"
+  - "Consolidate duplicate memory entries"
 
 ### Skill: `sdw-code-review`
 - **Domain**: Standalone deep working-tree code review, actionable fix planning, and orchestrator Step 7 delegation.

@@ -9,6 +9,10 @@ const { execSync } = require('child_process');
 const sdwRules = require('../skills/sdw-rules/scripts/sdw_rules.cjs');
 const reviewRunner = require('../skills/sdw-orch/scripts/review_runner.cjs');
 
+// Keep vault writes hermetic: log-trap tests must hit the local traps file,
+// never the real ws-memo vault.
+process.env.SDW_MEMORY_NO_MEMO = '1';
+
 test('AC1 & AC2: Three-Tier Progressive Disclosure Standard & Announcement Banner', (t) => {
   const repoRoot = path.resolve(__dirname, '..');
   const skillPath = path.join(repoRoot, 'skills', 'sdw-rules', 'SKILL.md');
@@ -131,7 +135,7 @@ test('AC9: Review Verification Flags Unrequested Features or Code Expansions', (
   }
 });
 
-test('AC10: Log Anti-Regression Trap Appends Entry to .sdw/traps.md', (t) => {
+test('AC10: Log Anti-Regression Trap Appends Entry to .sdw/memory/traps.md', (t) => {
   const tempDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'sdw-traps-test-'));
   try {
     const result = sdwRules.cmdLogTrap({
@@ -144,7 +148,7 @@ test('AC10: Log Anti-Regression Trap Appends Entry to .sdw/traps.md', (t) => {
     });
 
     assert.equal(result.success, true);
-    const trapsFile = path.join(tempDir, '.sdw', 'traps.md');
+    const trapsFile = path.join(tempDir, '.sdw', 'memory', 'traps.md');
     assert.ok(fs.existsSync(trapsFile), 'traps.md must be created');
 
     const content = fs.readFileSync(trapsFile, 'utf8');

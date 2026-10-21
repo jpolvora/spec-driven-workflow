@@ -143,6 +143,35 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
       "minimum": 0,
       "description": "Maximum concurrent-push adaptation budget for post-PR review convergence before draining rounds.",
       "default": 3
+    },
+    "memory": {
+      "type": "object",
+      "description": "Product memory backend selection for sdw-memory (central knowledge wrapper). The ws-memo vault is the default integration; local traps file and memory files are fallbacks.",
+      "properties": {
+        "backends": {
+          "type": "object",
+          "description": "Enable or disable each memory store backend. Missing keys default to enabled.",
+          "properties": {
+            "wsMemo": {
+              "type": "boolean",
+              "description": "Use the ws-memo vault (memo CLI) as the default knowledge store.",
+              "default": true
+            },
+            "traps": {
+              "type": "boolean",
+              "description": "Use the local .sdw/memory/traps.md table backend.",
+              "default": true
+            },
+            "files": {
+              "type": "boolean",
+              "description": "Search local MEMORY.md and memory/*.md files (read-only).",
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": true
     }
   },
   "additionalProperties": true
@@ -183,6 +212,9 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
 | `prePrInstructions` | `string` | `""` | Optional project-specific instructions or checklist for agents to verify prior to PR |
 | `reviewFixCommand` | `string` | `""` | Optional command that applies review-thread fixes. When unset, sdw-ship-pr never resolves active threads automatically |
 | `maxPreemptions` | `integer` | `3` | Maximum concurrent-push adaptation budget for post-PR review convergence before draining rounds |
+| `memory.backends.wsMemo` | `boolean` | `true` | Use the ws-memo vault (memo CLI) as the default sdw-memory knowledge store |
+| `memory.backends.traps` | `boolean` | `true` | Use the local .sdw/memory/traps.md table backend |
+| `memory.backends.files` | `boolean` | `true` | Search local MEMORY.md and memory/*.md files (read-only) |
 
 ### 2.2 Supported Path Tokens
 
