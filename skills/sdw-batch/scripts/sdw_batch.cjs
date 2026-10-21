@@ -70,24 +70,29 @@ function main(argv) {
     return options.help || options.subcommand === 'help' ? 0 : 1;
   }
 
-  switch (options.subcommand) {
-    case 'run':
-      return queue.runBatch(options.specPaths, options);
-    case 'resume':
-      return queue.resumeBatch(options.batchId, options);
-    case 'status': {
-      const config = queue.loadConfig(options.root);
-      const manifest = queue.loadManifest(config, options.batchId);
-      if (!manifest) {
-        console.error('No batch manifest found.');
-        return 1;
+  try {
+    switch (options.subcommand) {
+      case 'run':
+        return queue.runBatch(options.specPaths, options);
+      case 'resume':
+        return queue.resumeBatch(options.batchId, options);
+      case 'status': {
+        const config = queue.loadConfig(options.root);
+        const manifest = queue.loadManifest(config, options.batchId);
+        if (!manifest) {
+          console.error('No batch manifest found.');
+          return 1;
+        }
+        console.log(options.json ? JSON.stringify(manifest, null, 2) : queue.formatStatus(manifest));
+        return 0;
       }
-      console.log(options.json ? JSON.stringify(manifest, null, 2) : queue.formatStatus(manifest));
-      return 0;
+      default:
+        console.error(`Unknown subcommand: "${options.subcommand}". Run with --help.`);
+        return 1;
     }
-    default:
-      console.error(`Unknown subcommand: "${options.subcommand}". Run with --help.`);
-      return 1;
+  } catch (err) {
+    console.error(`Error: ${err.message}`);
+    return 1;
   }
 }
 

@@ -26,6 +26,7 @@ Coordinates a queue of specifications. Each item runs through the complete `sdw-
 ## Behavior
 
 - One delegated run at a time: `sdw-orch run <spec>` and wait for its exit code.
+- Specs recorded as `completed` or `archived` in `index.specs.md` are skipped (`already_implemented`) before delegation, including on resume. `sdw-batch` never refines; a delivered spec is refined only by an explicit `sdw-orch run <spec> --second-pass`.
 - Exit `0` completes the item and advances; exit `4` or `5` pauses the queue with the item's `runId` recorded.
 - `resume` continues the paused run through `sdw-orch resume --run-id`; a run that already completed is reconciled without re-execution.
 - A failed item halts the queue unless `--continue-on-error` is supplied.

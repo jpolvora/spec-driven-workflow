@@ -8,8 +8,9 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
+// Batch delegation is unattended and never passes --abort-on-gaps, so the only
+// pause codes sdw-orch can return here are dispatch (4) and judgment (5).
 const PAUSE_STATUS = {
-  3: 'awaiting_grilling',
   4: 'awaiting_implementation',
   5: 'awaiting_judgment'
 };
@@ -18,15 +19,25 @@ function normalizePath(value) {
   return String(value || '').replace(/\\/g, '/');
 }
 
+// Human progress belongs on stderr under --json so stdout stays one JSON document.
+function say(options, message) {
+  if (options && options.json) console.error(message);
+  else console.log(message);
+}
+
 function loadConfig(targetRoot) {
   const root = targetRoot ? path.resolve(targetRoot) : process.cwd();
   const configFile = path.join(root, '.sdw', 'config.json');
   let raw = {};
   if (fs.existsSync(configFile)) {
     try {
-      raw = JSON.parse(fs.readFileSync(configFile, 'utf8')) || {};
+      raw = JSON.parse(fs.readFileSync(configFile, 'utf8'))
+        || {};
     } catch (e) {
-      raw = {};
+      throw new Error(`invalid .sdw/config.json: ${e.message}`);
+    }
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new Error('invalid .sdw/config.json: expected a JSON object');
     }
   }
   const expand = (value, fallback) => {
@@ -74,19 +85,46 @@ function manifestFilePath(config, batchId) {
   return path.join(runStateDir(config), `${batchId}.json`);
 }
 
+// A specification is already implemented when the registry records it as
+// completed or archived; the queue must not re-run it from scratch.
+function implementedStatuses(config) {
+  try {
+    const specIndex = require('../../sdw-spec/scripts/spec_index.cjs');
+    const { entries } = specIndex.readIndex({ root: config.root });
+    const statuses = new Map();
+    for (const entry of entries || []) {
+      if (entry.status === 'completed' || entry.status === 'archived') {
+        statuses.set(entry.slug, entry.status);
+      }
+    }
+    return statuses;
+  } catch (e) {
+    console.warn(`[sdw-batch] WARNING: could not read the specification index: ${e.message}`);
+    return new Map();
+  }
+}
+
 function createManifest({ specs, options, config }) {
   // Discovery without an explicit id only scans `batch-*.json`, so every batch
   // id is normalized to that prefix; a custom id stays resumable by itself.
   const requested = options.batchId ? String(options.batchId) : `batch-${Date.now()}`;
   const batchId = requested.startsWith('batch-') ? requested : `batch-${requested}`;
+  const manifestFile = manifestFilePath(config, batchId);
+  if (fs.existsSync(manifestFile)) {
+    throw new Error(`batch "${batchId}" already exists at ${normalizePath(path.relative(config.root, manifestFile))}; pass a different --batch-id`);
+  }
   const now = new Date().toISOString();
+  const implemented = implementedStatuses(config);
   const queue = specs.map((specInput, index) => {
     const resolved = resolveSpec(specInput, config);
+    const slug = inferSlug(resolved);
+    const registryStatus = implemented.get(slug) || null;
     return {
       index,
       spec: normalizePath(path.relative(config.root, resolved)) || specInput,
-      slug: inferSlug(resolved),
-      status: 'pending',
+      slug,
+      status: registryStatus ? 'already_implemented' : 'pending',
+      skipReason: registryStatus ? `already implemented (index.specs.md status: ${registryStatus})` : null,
       runId: null,
       deliveryCommit: null,
       branch: null,
@@ -185,7 +223,7 @@ function applyRunState(item, state) {
 
 function printSummary(manifest, options = {}) {
   if (options.json) {
-    console.log(JSON.stringify(manifest, null, 2));
+    process.stdout.write(`${JSON.stringify(manifest, null, 2)}\n`);
     return;
   }
   const count = status => manifest.queue.filter(item => item.status === status).length;
@@ -193,7 +231,7 @@ function printSummary(manifest, options = {}) {
   console.log('SDW Batch Execution Summary');
   console.log(`Batch ID: ${manifest.batchId}`);
   console.log(`Status:   ${manifest.status}`);
-  console.log(`Total:    ${manifest.total} (Completed: ${count('completed')}, Failed: ${count('failed')}, Paused: ${manifest.queue.filter(item => item.status.startsWith('awaiting_')).length})`);
+  console.log(`Total:    ${manifest.total} (Completed: ${count('completed')}, Skipped: ${count('already_implemented')}, Failed: ${count('failed')}, Paused: ${manifest.queue.filter(item => item.status.startsWith('awaiting_')).length})`);
   console.log('------------------------------------------------------------');
   console.log('# | Slug                           | Status      | Duration | Delivery Commit');
   console.log('--|--------------------------------|-------------|----------|----------------');
@@ -217,9 +255,10 @@ function finishFailure(manifest, config, item, exitCode, message, options, conti
     saveManifest(config, manifest);
     console.error(`\n[sdw-batch] Halting queue on failure: "${item.slug}". Remaining ${manifest.total - item.index - 1} specification(s) pending.`);
     printSummary(manifest, options);
-    return exitCode || 1;
+    // Batch exit codes stay unambiguous: 0 completed, 1 failure, 4/5 pause.
+    return 1;
   }
-  console.log(`[sdw-batch] "${item.slug}" failed; continuing queue (--continue-on-error).`);
+  say(options, `[sdw-batch] "${item.slug}" failed; continuing queue (--continue-on-error).`);
   return null;
 }
 
@@ -231,11 +270,23 @@ function executeQueue(manifest, config, options) {
   const syncIndex = options.noSync !== undefined
     ? !options.noSync
     : manifest.policy.syncIndex !== false;
+  const implemented = implementedStatuses(config);
 
   for (let i = manifest.currentIndex; i < manifest.queue.length; i += 1) {
     const item = manifest.queue[i];
     if (item.status === 'completed') {
-      console.log(`[sdw-batch] Skipping completed specification [${item.index + 1}/${manifest.total}]: ${item.slug}`);
+      say(options, `[sdw-batch] Skipping completed specification [${item.index + 1}/${manifest.total}]: ${item.slug}`);
+      continue;
+    }
+    // Re-check the registry per item so a spec completed since the manifest was
+    // created is never implemented twice, including on resume.
+    if (item.status !== 'already_implemented' && implemented.has(item.slug)) {
+      item.status = 'already_implemented';
+      item.skipReason = `already implemented (index.specs.md status: ${implemented.get(item.slug)})`;
+      saveManifest(config, manifest);
+    }
+    if (item.status === 'already_implemented') {
+      say(options, `[sdw-batch] Skipping already-implemented specification [${item.index + 1}/${manifest.total}]: ${item.slug} (${item.skipReason})`);
       continue;
     }
 
@@ -243,7 +294,7 @@ function executeQueue(manifest, config, options) {
     item.status = 'in_progress';
     saveManifest(config, manifest);
 
-    console.log(`\n[sdw-batch] [${item.index + 1}/${manifest.total}] Delegating ${item.slug} to sdw-orch (single run)`);
+    say(options, `\n[sdw-batch] [${item.index + 1}/${manifest.total}] Delegating ${item.slug} to sdw-orch (single run)`);
     const started = Date.now();
     const prior = readRunState(config, item.runId);
     const resumable = prior && (prior.status === 'paused' || prior.status === 'in_progress');
@@ -251,7 +302,7 @@ function executeQueue(manifest, config, options) {
     let failureMessage = null;
 
     if (prior && prior.status === 'completed') {
-      console.log(`[sdw-batch] Run "${item.runId}" already completed; reconciling queue item.`);
+      say(options, `[sdw-batch] Run "${item.runId}" already completed; reconciling queue item.`);
       applyRunState(item, prior);
     } else {
       const runId = item.runId || generateRunId(item.slug);
@@ -280,7 +331,7 @@ function executeQueue(manifest, config, options) {
       applyRunState(item, finalState);
       item.status = 'completed';
       item.error = null;
-      console.log(`[sdw-batch] "${item.slug}" completed in ${(item.durationMs / 1000).toFixed(1)}s.`);
+      say(options, `[sdw-batch] "${item.slug}" completed in ${(item.durationMs / 1000).toFixed(1)}s.`);
       saveManifest(config, manifest);
       if (syncIndex) triggerSpecSync(config);
     } else if (PAUSE_STATUS[exitCode]) {
@@ -288,8 +339,8 @@ function executeQueue(manifest, config, options) {
       item.error = null;
       manifest.status = 'paused';
       saveManifest(config, manifest);
-      console.log(`\n[sdw-batch] "${item.slug}" paused with ${item.status} (sdw-orch exit code ${exitCode}).`);
-      console.log(`[sdw-batch] Continue that run, then resume the queue with: sdw-batch resume ${manifest.batchId}`);
+      say(options, `\n[sdw-batch] "${item.slug}" paused with ${item.status} (sdw-orch exit code ${exitCode}).`);
+      say(options, `[sdw-batch] Continue that run, then resume the queue with: sdw-batch resume ${manifest.batchId}`);
       printSummary(manifest, options);
       return exitCode;
     } else {
@@ -299,10 +350,13 @@ function executeQueue(manifest, config, options) {
     }
   }
 
-  manifest.status = anyFailed ? 'completed_with_errors' : 'completed';
+  // A resume can begin past items that already failed, so the terminal status is
+  // derived from the whole queue, not only from failures observed this pass.
+  const stillFailed = manifest.queue.some(item => item.status === 'failed');
+  manifest.status = (anyFailed || stillFailed) ? 'completed_with_errors' : 'completed';
   saveManifest(config, manifest);
   printSummary(manifest, options);
-  return anyFailed ? 1 : 0;
+  return manifest.status === 'completed' ? 0 : 1;
 }
 
 function validateSpecs(specs, config) {
@@ -330,16 +384,20 @@ function runBatch(specs, options = {}) {
     return 1;
   }
   if (options.dryRun) {
+    const implemented = implementedStatuses(config);
     console.log(`\n[sdw-batch] Dry-run plan (${validation.resolved.length} specification(s)):`);
     validation.resolved.forEach((specPath, index) => {
-      console.log(`  ${index + 1}. ${inferSlug(specPath)} (${normalizePath(specPath)})`);
+      const slug = inferSlug(specPath);
+      const registryStatus = implemented.get(slug);
+      const note = registryStatus ? ` - skipped: already implemented (${registryStatus})` : '';
+      console.log(`  ${index + 1}. ${slug} (${normalizePath(specPath)})${note}`);
     });
     console.log('No specification executed (--dry-run).\n');
     return 0;
   }
   const manifest = createManifest({ specs: validation.resolved, options, config });
-  console.log(`[sdw-batch] Initialized "${manifest.batchId}" with ${manifest.total} specification(s).`);
-  console.log(`Policy: continueOnError=${manifest.policy.continueOnError}, syncIndex=${manifest.policy.syncIndex}`);
+  say(options, `[sdw-batch] Initialized "${manifest.batchId}" with ${manifest.total} specification(s).`);
+  say(options, `Policy: continueOnError=${manifest.policy.continueOnError}, syncIndex=${manifest.policy.syncIndex}`);
   return executeQueue(manifest, config, options);
 }
 
@@ -350,14 +408,15 @@ function resumeBatch(batchId, options = {}) {
     console.error(`Error: No batch manifest found (${batchId || 'latest'}).`);
     return 1;
   }
-  if (manifest.status === 'completed') {
-    console.log(`[sdw-batch] Batch "${manifest.batchId}" is already completed.`);
+  if (manifest.status === 'completed' || manifest.status === 'completed_with_errors') {
+    const ok = manifest.status === 'completed';
+    say(options, `[sdw-batch] Batch "${manifest.batchId}" is already finished (${manifest.status}).`);
     printSummary(manifest, options);
-    return 0;
+    return ok ? 0 : 1;
   }
   manifest.status = 'in_progress';
   saveManifest(config, manifest);
-  console.log(`[sdw-batch] Resuming "${manifest.batchId}" (${manifest.currentIndex + 1}/${manifest.total})...`);
+  say(options, `[sdw-batch] Resuming "${manifest.batchId}" (${manifest.currentIndex + 1}/${manifest.total})...`);
   return executeQueue(manifest, config, options);
 }
 

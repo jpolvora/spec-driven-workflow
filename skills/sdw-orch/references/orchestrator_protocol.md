@@ -210,7 +210,20 @@ Step 7 delegates all working-tree review execution to the standalone `sdw-code-r
 - **Fix Iteration:** While blocking findings remain and fixable findings exist (up to 3 iterations): run with `--fix`, gate via `sdw-security-checks`, commit only fixer-touched files (`fix(<slug>): apply automated review fixes (iteration N)`), re-verify without `--fix`.
 - **Outcome:** `passed` advances to Step 8; residual blocking records `review_failed` and halts; artifact path recorded in `state.steps[7].artifact`.
 
-## 9. Dry Run & Sandbox Isolation (Spec 029)
+## 9. Second Pass / Refinement Mode (`--second-pass`, alias `--refine`)
+
+Re-executes an already delivered specification in refinement mode instead of implementing it again.
+
+- **Eligibility:** the registry must record the slug as `completed`/`archived`, or a completed run must carry a `deliveryCommit`. Otherwise the run refuses with exit `1` and writes no state.
+- **Mode persistence:** `state.refineMode = true`, so `resume` continues as a second pass; `state.deliveryCommitCreated` records whether the pass produced a commit.
+- **Steps 2-3:** decision-gap grilling and complexity DAG generation are replaced by one `task-refine` task whose `coveredAcs` are the specification's criteria, treated as must-keep-holding constraints.
+- **Step 4:** the dispatch prompt gains a `## Second Pass (Refinement) Mode` section (simplify, do not re-implement, no new scope, empty change allowed, summary must list opportunities considered). `task finish` accepts `filesChanged: []` in this mode.
+- **No change:** Steps 5-8 are marked `skipped`, the report is written, `status: completed`, exit `0`, and `options._runResult.refineOutcome = "no-change"`.
+- **Changed:** Step 5 scoring and Step 7 review run normally against `state.baseCommit` (the prior delivery commit when discoverable, so the judge sees the delivered implementation, not only the delta). Step 6 commits as `refine({slug}): second pass refinement`, never rewrites `index.specs.md`, and Step 8 runs only when `state.deliveryCommitCreated === true`.
+- **Report:** `{slug}-refine.md` in the run artifacts directory, always written, with outcome, base commit, files changed, score, summary, and criteria. Path stored in `state.refineReport`.
+- **Boundary:** `sdw-batch` never refines; it skips delivered specs and requires a manual single-spec call for a second pass.
+
+## 10. Dry Run & Sandbox Isolation (Spec 029)
 
 `--dry-run` and `--sandbox` answer two different questions and are mutually exclusive.
 
