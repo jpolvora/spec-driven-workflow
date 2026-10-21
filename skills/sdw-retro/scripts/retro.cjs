@@ -20,9 +20,16 @@
 
 const fs = require('fs');
 const path = require('path');
+const util = require('util');
+const zlib = require('zlib');
 
 const STATE_DIR = '.sdw/state';
-const USAGE = 'Usage: retro.cjs run [--run-id <id>] [--root <path>] [--transcript <path>]... [--json]';
+const USAGE = 'Usage: retro.cjs run [--run-id <id>] [--root <path>] [--transcript <path>]... [--transcript-mode <host|captured>] [--json]';
+
+// A named transcript can be a host session file: a zstd frame sequence where
+// one zstdDecompressSync call returns only the first frame.
+const ZSTD_MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
+const TRANSCRIPT_MODES = Object.freeze(['host', 'captured']);
 
 const CANDIDATE_FIELDS = Object.freeze(['id', 'title', 'severity', 'category', 'evidence', 'proposedChange']);
 const SEVERITIES = Object.freeze(['critical', 'high', 'medium', 'low']);
@@ -210,6 +217,47 @@ function countLines(content) {
   return content === '' ? 0 : content.split(/\r?\n/).length;
 }
 
+// Spec 00047 AC2: host session files hold thousands of concatenated zstd
+// frames, and decoding only the first one loses almost everything. Split on
+// the frame magic, decode each frame, and concatenate the results.
+function zstdFrameOffsets(buffer) {
+  const offsets = [];
+  let offset = buffer.indexOf(ZSTD_MAGIC);
+  while (offset !== -1) {
+    offsets.push(offset);
+    offset = buffer.indexOf(ZSTD_MAGIC, offset + ZSTD_MAGIC.length);
+  }
+  return offsets;
+}
+
+function decodeZstdFrames(buffer) {
+  const offsets = zstdFrameOffsets(buffer);
+  const parts = [];
+  for (let index = 0; index < offsets.length; index += 1) {
+    const start = offsets[index];
+    const end = index + 1 < offsets.length ? offsets[index + 1] : buffer.length;
+    try {
+      parts.push(zlib.zstdDecompressSync(buffer.subarray(start, end)));
+    } catch (error) {
+      // A magic sequence that does not begin a frame must not abort the run.
+    }
+  }
+  return parts.length === 0 ? null : Buffer.concat(parts);
+}
+
+// Spec 00047 AC2/AC5: zstd frames are decoded in memory; anything that is
+// neither valid UTF-8 text nor a decodable zstd frame is not a transcript.
+function decodeTranscriptContent(buffer) {
+  const isZstd = buffer.subarray(0, ZSTD_MAGIC.length).equals(ZSTD_MAGIC);
+  const bytes = isZstd ? decodeZstdFrames(buffer) : buffer;
+  if (!bytes) return null;
+  try {
+    return new util.TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch (error) {
+    return null;
+  }
+}
+
 // Spec 00045 AC7: format-agnostic command signatures. A line is an
 // orchestrator invocation when it mentions sdw-orch (or its script) and a
 // `run` or `resume` command word. Only the `--spec` value identifies the
@@ -251,9 +299,10 @@ function scanTranscriptLines(reportedPath, content) {
   return findings;
 }
 
-// Spec 00045 AC6-AC8: read every explicitly named transcript once. Unreadable
-// paths become signals; they never abort the report.
-function collectTranscripts(root, declaredPaths) {
+// Spec 00045 AC6-AC8, 00047 AC2-AC5: read every explicitly named transcript
+// once, decoding zstd frames in memory. Unreadable paths become signals; they
+// never abort the report.
+function collectTranscripts(root, declaredPaths, mode) {
   const inputs = [];
   const unreadable = [];
   const repeated = [];
@@ -262,9 +311,9 @@ function collectTranscripts(root, declaredPaths) {
     const resolved = resolveTranscript(root, declared);
     if (seen.has(resolved.absolute)) continue;
     seen.add(resolved.absolute);
-    let content = null;
+    let buffer = null;
     try {
-      content = fs.readFileSync(resolved.absolute, 'utf8');
+      buffer = fs.readFileSync(resolved.absolute);
     } catch (error) {
       unreadable.push({
         path: resolved.reported,
@@ -272,7 +321,12 @@ function collectTranscripts(root, declaredPaths) {
       });
       continue;
     }
-    inputs.push({ path: resolved.reported, lines: countLines(content) });
+    const content = decodeTranscriptContent(buffer);
+    if (content === null) {
+      unreadable.push({ path: resolved.reported, reason: 'not-text' });
+      continue;
+    }
+    inputs.push({ path: resolved.reported, lines: countLines(content), mode });
     repeated.push(...scanTranscriptLines(resolved.reported, content));
   }
   return { inputs, unreadable, repeated };
@@ -568,6 +622,7 @@ function buildReport(options) {
     statePath: options.statePath,
     artifactsDir: options.artifactsDir,
     generatedAt: new Date().toISOString(),
+    transcriptMode: options.transcriptMode || 'host',
     inputs: [...options.inspection.inputs],
     transcripts: toArray(options.transcripts),
     excludedInputs: [...options.inspection.excludedInputs],
@@ -590,13 +645,15 @@ function renderMarkdown(report) {
   lines.push('');
 
   lines.push('## Inputs', '');
-  const transcriptLineCounts = new Map(toArray(report.transcripts).map((item) => [item.path, item.lines]));
+  const transcriptInputs = new Map(toArray(report.transcripts).map((item) => [item.path, item]));
   if (report.inputs.length === 0) {
     lines.push('No inputs were read.');
   } else {
     for (const input of report.inputs) {
-      const lineCount = transcriptLineCounts.get(input);
-      lines.push(lineCount === undefined ? `- \`${input}\`` : `- \`${input}\` (transcript, ${lineCount} lines)`);
+      const transcript = transcriptInputs.get(input);
+      lines.push(transcript
+        ? `- \`${input}\` (transcript, ${transcript.lines} lines, ${transcript.mode || 'host'})`
+        : `- \`${input}\``);
     }
   }
   lines.push('');
@@ -757,10 +814,11 @@ function runRetro(options = {}) {
 
   const expected = collectExpectedArtifacts(state);
   const inspection = inspectArtifacts(root, expected);
+  const transcriptMode = options.transcriptMode || 'host';
   const transcripts = collectTranscripts(root, [
     ...readConfiguredTranscripts(root),
     ...toArray(options.transcripts)
-  ]);
+  ], transcriptMode);
   for (const transcript of transcripts.inputs) {
     if (!inspection.inputs.includes(transcript.path)) inspection.inputs.push(transcript.path);
   }
@@ -770,6 +828,7 @@ function runRetro(options = {}) {
     runIdFallback: selected.name.replace(/\.state\.json$/i, ''),
     statePath,
     artifactsDir,
+    transcriptMode,
     inspection,
     signals,
     transcripts: transcripts.inputs,
@@ -780,7 +839,15 @@ function runRetro(options = {}) {
 }
 
 function parseArgs(argv) {
-  const options = { subcommand: null, runId: null, root: null, transcripts: [], json: false, help: false };
+  const options = {
+    subcommand: null,
+    runId: null,
+    root: null,
+    transcripts: [],
+    transcriptMode: 'host',
+    json: false,
+    help: false
+  };
   const positional = [];
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -799,7 +866,12 @@ function parseArgs(argv) {
       if (value === undefined) throw new Error('missing value for --transcript');
       options.transcripts.push(value);
     } else if (arg.startsWith('--transcript=')) options.transcripts.push(arg.slice('--transcript='.length));
-    else if (arg.startsWith('-')) throw new Error(`unknown argument: ${arg}`);
+    else if (arg === '--transcript-mode') {
+      options.transcriptMode = argv[++index];
+      if (options.transcriptMode === undefined) throw new Error('missing value for --transcript-mode');
+    } else if (arg.startsWith('--transcript-mode=')) {
+      options.transcriptMode = arg.slice('--transcript-mode='.length);
+    } else if (arg.startsWith('-')) throw new Error(`unknown argument: ${arg}`);
     else positional.push(arg);
   }
   options.subcommand = positional[0] || null;
@@ -807,6 +879,9 @@ function parseArgs(argv) {
   if (options.runId !== null && String(options.runId).trim() === '') throw new Error('missing value for --run-id');
   if (options.root !== null && String(options.root).trim() === '') throw new Error('missing value for --root');
   if (options.transcripts.some((value) => String(value).trim() === '')) throw new Error('missing value for --transcript');
+  if (!TRANSCRIPT_MODES.includes(options.transcriptMode)) {
+    throw new Error(`invalid --transcript-mode: ${options.transcriptMode}; expected ${TRANSCRIPT_MODES.join('|')}`);
+  }
   options.transcripts = options.transcripts.map((value) => String(value).trim());
   return options;
 }

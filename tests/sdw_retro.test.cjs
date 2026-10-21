@@ -6,6 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const zlib = require('zlib');
 const { execSync, spawnSync } = require('child_process');
 
 const retro = require('../skills/sdw-retro/scripts/retro.cjs');
@@ -114,6 +115,12 @@ function writeArtifact(root, relative, content) {
   const absolute = path.join(root, relative);
   fs.mkdirSync(path.dirname(absolute), { recursive: true });
   fs.writeFileSync(absolute, content, 'utf8');
+}
+
+function writeBinaryArtifact(root, relative, buffer) {
+  const absolute = path.join(root, relative);
+  fs.mkdirSync(path.dirname(absolute), { recursive: true });
+  fs.writeFileSync(absolute, buffer);
 }
 
 function writeDefaultArtifacts(root, state) {
@@ -645,11 +652,12 @@ test('AC6: a configured transcript is read, listed with its line count, and scan
   assert.equal(result.status, 0, result.stderr);
   const report = JSON.parse(result.stdout);
   assert.ok(report.inputs.includes(transcriptPath), 'transcript is listed under report inputs');
-  assert.deepEqual(report.transcripts, [{ path: transcriptPath, lines: 3 }]);
+  assert.deepEqual(report.transcripts, [{ path: transcriptPath, lines: 3, mode: 'host' }]);
+  assert.equal(report.transcriptMode, 'host', 'the mode defaults to host');
   assert.deepEqual(report.signals.repeated_run_invocation, [], 'run followed by resume is not a repeat');
 
   const markdown = fs.readFileSync(path.join(root, report.outputs.markdown), 'utf8');
-  assert.ok(markdown.includes(`- \`${transcriptPath}\` (transcript, 3 lines)`));
+  assert.ok(markdown.includes(`- \`${transcriptPath}\` (transcript, 3 lines, host)`));
 
   // The repeatable CLI flag feeds the same input list.
   const cliTranscript = 'notes/cli-session.txt';
@@ -658,8 +666,8 @@ test('AC6: a configured transcript is read, listed with its line count, and scan
   assert.equal(cli.status, 0, cli.stderr);
   const cliReport = JSON.parse(cli.stdout);
   assert.deepEqual(cliReport.transcripts, [
-    { path: transcriptPath, lines: 3 },
-    { path: cliTranscript, lines: 2 }
+    { path: transcriptPath, lines: 3, mode: 'host' },
+    { path: cliTranscript, lines: 2, mode: 'host' }
   ]);
   assert.ok(cliReport.inputs.includes(cliTranscript));
 });
@@ -737,6 +745,116 @@ test('AC8: a missing configured transcript produces transcript_unreadable and ex
 
   const markdown = fs.readFileSync(path.join(root, report.outputs.markdown), 'utf8');
   assert.ok(markdown.includes(`\`${missing}\`: transcript unreadable (not-found)`));
+});
+
+test('00047 AC2: a zstd transcript is decoded frame by frame, not only its first frame', (t) => {
+  const root = makeProject(t);
+  const state = makeState({ runId: 'run-5400-zstd', slug: '00540-zstd' });
+  writeState(root, state);
+  writeDefaultArtifacts(root, state);
+  const transcriptPath = 'transcripts/session-00540.jsonl.zstd';
+  const runLine = 'node skills/sdw-orch/scripts/sdw_orch.cjs run --spec .sdw/specs/00540-zstd.md';
+  const frameOne = zlib.zstdCompressSync(Buffer.from([
+    `operator: ${runLine}`,
+    'assistant: task-2 dispatched',
+    ''
+  ].join('\n'), 'utf8'));
+  const frameTwo = zlib.zstdCompressSync(Buffer.from([
+    `operator: ${runLine}`,
+    'assistant: task-2 accepted',
+    ''
+  ].join('\n'), 'utf8'));
+  const fileBytes = Buffer.concat([frameOne, frameTwo]);
+  writeBinaryArtifact(root, transcriptPath, fileBytes);
+  writeRetroConfig(root, { enabled: false, transcripts: [transcriptPath] });
+
+  const result = runRetroCli(root, ['run', '--run-id', state.runId, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.deepEqual(report.transcripts, [{ path: transcriptPath, lines: 5, mode: 'host' }]);
+  assert.deepEqual(report.signals.repeated_run_invocation, [
+    { path: transcriptPath, specification: '00540-zstd', lines: [1, 3] }
+  ], 'both frames are scanned, so both run invocations are found');
+
+  const firstFrameOnly = zlib.zstdDecompressSync(fileBytes).toString('utf8').split(/\r?\n/).length;
+  assert.ok(
+    report.transcripts[0].lines > firstFrameOnly,
+    'the reported line count covers every concatenated frame, not just the first'
+  );
+
+  const markdown = fs.readFileSync(path.join(root, report.outputs.markdown), 'utf8');
+  assert.ok(markdown.includes(`- \`${transcriptPath}\` (transcript, 5 lines, host)`));
+});
+
+test('00047 AC4: --transcript-mode is recorded next to each transcript input and defaults to host', (t) => {
+  const root = makeProject(t);
+  const state = makeState({ runId: 'run-5500-mode', slug: '00550-mode' });
+  writeState(root, state);
+  writeDefaultArtifacts(root, state);
+  const transcriptPath = 'transcripts/session-00550.txt';
+  writeArtifact(root, transcriptPath, 'user: run the retro\nassistant: retro dispatched');
+  writeRetroConfig(root, { enabled: false, transcripts: [transcriptPath] });
+
+  const defaulted = runRetroCli(root, ['run', '--run-id', state.runId, '--json']);
+  assert.equal(defaulted.status, 0, defaulted.stderr);
+  const defaultReport = JSON.parse(defaulted.stdout);
+  assert.equal(defaultReport.transcriptMode, 'host', 'the mode defaults to host when omitted');
+  assert.deepEqual(defaultReport.transcripts, [{ path: transcriptPath, lines: 2, mode: 'host' }]);
+  const defaultMarkdown = fs.readFileSync(path.join(root, defaultReport.outputs.markdown), 'utf8');
+  assert.ok(defaultMarkdown.includes(`- \`${transcriptPath}\` (transcript, 2 lines, host)`));
+
+  const captured = runRetroCli(root, [
+    'run', '--run-id', state.runId, '--transcript-mode', 'captured', '--json'
+  ]);
+  assert.equal(captured.status, 0, captured.stderr);
+  const capturedReport = JSON.parse(captured.stdout);
+  assert.equal(capturedReport.transcriptMode, 'captured');
+  assert.deepEqual(capturedReport.transcripts, [{ path: transcriptPath, lines: 2, mode: 'captured' }]);
+  const capturedMarkdown = fs.readFileSync(path.join(root, capturedReport.outputs.markdown), 'utf8');
+  assert.ok(capturedMarkdown.includes(`- \`${transcriptPath}\` (transcript, 2 lines, captured)`));
+  assert.equal(capturedMarkdown.includes('(transcript, 2 lines, host)'), false);
+
+  const invalid = runRetroCli(root, ['run', '--run-id', state.runId, '--transcript-mode', 'log']);
+  assert.equal(invalid.status, 1, 'an unsupported mode is rejected');
+  assert.match(invalid.stderr, /invalid --transcript-mode: log; expected host\|captured/);
+});
+
+test('00047 AC5: non-text transcripts report transcript_unreadable and exit 0', (t) => {
+  const root = makeProject(t);
+  const state = makeState({ runId: 'run-5600-binary', slug: '00560-binary' });
+  writeState(root, state);
+  writeDefaultArtifacts(root, state);
+  const transcriptPath = 'transcripts/session-00560.bin';
+  writeBinaryArtifact(root, transcriptPath, Buffer.from([0x00, 0xff, 0xfe, 0x80, 0x81, 0xc3, 0x28]));
+  writeRetroConfig(root, { enabled: false, transcripts: [transcriptPath] });
+
+  const result = runRetroCli(root, ['run', '--run-id', state.runId, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.deepEqual(report.signals.transcript_unreadable, [{ path: transcriptPath, reason: 'not-text' }]);
+  assert.deepEqual(report.transcripts, [], 'a non-text file is not a read transcript input');
+  assert.equal(report.inputs.includes(transcriptPath), false);
+  assert.ok(fs.existsSync(path.join(root, report.outputs.markdown)), 'the report still renders');
+
+  const markdown = fs.readFileSync(path.join(root, report.outputs.markdown), 'utf8');
+  assert.ok(markdown.includes(`\`${transcriptPath}\`: transcript unreadable (not-text)`));
+
+  // A decodable zstd frame whose payload is not UTF-8 text is not a transcript
+  // either: the frame decodes, the text decoding fails, and the reason is `not-text`.
+  const binaryZstd = 'transcripts/session-00560-text.zstd';
+  writeBinaryArtifact(root, binaryZstd, zlib.zstdCompressSync(Buffer.from([0xff, 0xfe, 0x80])));
+  const zstdResult = runRetroCli(root, [
+    'run', '--run-id', state.runId, '--transcript', binaryZstd, '--json'
+  ]);
+  assert.equal(zstdResult.status, 0, zstdResult.stderr);
+  const zstdReport = JSON.parse(zstdResult.stdout);
+  assert.deepEqual(zstdReport.signals.transcript_unreadable, [
+    { path: transcriptPath, reason: 'not-text' },
+    { path: binaryZstd, reason: 'not-text' }
+  ]);
+  assert.deepEqual(zstdReport.transcripts, [], 'a non-text payload is not a read transcript input');
+  const zstdMarkdown = fs.readFileSync(path.join(root, zstdReport.outputs.markdown), 'utf8');
+  assert.ok(zstdMarkdown.includes(`\`${binaryZstd}\`: transcript unreadable (not-text)`));
 });
 
 function makeOrchProject(t) {
