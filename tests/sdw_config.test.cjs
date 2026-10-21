@@ -206,6 +206,7 @@ test('sdw-config: resolveBranching expands presets and explicit overrides win', 
   assert.deepEqual(sdwConfig.resolveBranching({}), {
     strategy: 'trunk',
     source: 'default',
+    mirrorWorkToIntegration: false,
     workBranch: null,
     integrationBranch: null,
     featurePrefix: 'feature/',
@@ -225,6 +226,7 @@ test('sdw-config: resolveBranching expands presets and explicit overrides win', 
   // github: work lane mirrors the integration lane (auto -> null)
   const github = sdwConfig.resolveBranching({ branching: { strategy: 'github' } });
   assert.equal(github.strategy, 'github');
+  assert.equal(github.mirrorWorkToIntegration, true);
   assert.equal(github.workBranch, null);
   assert.equal(github.integrationBranch, null);
   assert.equal(github.updateWorkBranch, true);
@@ -271,6 +273,7 @@ test('sdw-config: resolveBranching expands presets and explicit overrides win', 
   assert.deepEqual(overridden, {
     strategy: 'gitflow',
     source: 'config',
+    mirrorWorkToIntegration: false,
     workBranch: 'release-line',
     integrationBranch: 'production',
     featurePrefix: 'feat/',

@@ -523,6 +523,82 @@ test('sdw-orch branch & worktree - branching AC7 gitflow: same-lane update fast-
   }
 });
 
+test('sdw-orch branch & worktree - branching auto: the github preset resolves origin/HEAD into both lanes', () => {
+  const tmpDir = setupTestRepo();
+  const remoteDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-bw-remote-'));
+  try {
+    const slug = '00012-github-auto';
+    const defaultBranch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: tmpDir, encoding: 'utf8' }).trim();
+    fs.writeFileSync(path.join(tmpDir, 'remote-only.txt'), 'remote change\n', 'utf8');
+    execSync('git add -A && git commit -m "remote change"', { cwd: tmpDir, stdio: 'ignore' });
+    execSync('git init --bare', { cwd: remoteDir, stdio: 'ignore' });
+    const remoteUrl = remoteDir.replace(/\\/g, '/');
+    execSync(`git remote add origin "${remoteUrl}"`, { cwd: tmpDir, stdio: 'ignore' });
+    execSync(`git push -u origin ${defaultBranch}`, { cwd: tmpDir, stdio: 'ignore' });
+    execSync(`git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/${defaultBranch}`, { cwd: tmpDir, stdio: 'ignore' });
+    const remoteHead = execSync(`git rev-parse origin/${defaultBranch}`, { cwd: tmpDir, encoding: 'utf8' }).trim();
+    execSync('git reset --hard HEAD~1', { cwd: tmpDir, stdio: 'ignore' });
+    const specPath = createDummySpec(tmpDir, slug);
+
+    const cfgPath = path.join(tmpDir, '.sdw', 'config.json');
+    const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+    cfg.useFeatureBranches = true;
+    cfg.branching = { strategy: 'github' };
+    fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
+
+    const runId = `run-${Date.now()}-${slug}`;
+    const code = sdwOrch.cmdRun({ specPath, root: tmpDir, runId, minScore: 0, skipReview: true, skipPr: true });
+    assert.strictEqual(code, 0);
+
+    const state = stateManager.loadRunState(tmpDir, runId);
+    assert.strictEqual(state.branching.integrationBranch, defaultBranch, 'Auto integration lane resolves to origin/HEAD');
+    assert.strictEqual(state.branching.workBranch, defaultBranch, 'Mirror preset resolves the work lane too');
+    assert.strictEqual(execSync(`git rev-parse ${defaultBranch}`, { cwd: tmpDir, encoding: 'utf8' }).trim(), remoteHead, 'Same-lane update fast-forwards the mirrored lane');
+    assert.strictEqual(execSync(`git merge-base feature/${slug} ${defaultBranch}`, { cwd: tmpDir, encoding: 'utf8' }).trim(), remoteHead, 'Feature branch starts at the resolved lane');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.rmSync(remoteDir, { recursive: true, force: true });
+  }
+});
+
+test('sdw-orch branch & worktree - branching dirty tree: a conflicting work lane never blocks activation', () => {
+  const tmpDir = setupTestRepo();
+  const remoteDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-bw-remote-'));
+  try {
+    const slug = '00013-dirty-work-lane';
+    const defaultBranch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: tmpDir, encoding: 'utf8' }).trim();
+    execSync('git switch -c develop', { cwd: tmpDir, stdio: 'ignore' });
+    fs.writeFileSync(path.join(tmpDir, 'README.md'), 'develop content\n', 'utf8');
+    execSync('git add -A && git commit -m "develop readme"', { cwd: tmpDir, stdio: 'ignore' });
+    execSync('git init --bare', { cwd: remoteDir, stdio: 'ignore' });
+    const remoteUrl = remoteDir.replace(/\\/g, '/');
+    execSync(`git remote add origin "${remoteUrl}"`, { cwd: tmpDir, stdio: 'ignore' });
+    execSync('git push -u origin develop', { cwd: tmpDir, stdio: 'ignore' });
+    execSync(`git push origin ${defaultBranch}`, { cwd: tmpDir, stdio: 'ignore' });
+    execSync(`git switch ${defaultBranch}`, { cwd: tmpDir, stdio: 'ignore' });
+    fs.writeFileSync(path.join(tmpDir, 'README.md'), 'dirty local edit\n', 'utf8');
+    const startHead = execSync('git rev-parse HEAD', { cwd: tmpDir, encoding: 'utf8' }).trim();
+    const specPath = createDummySpec(tmpDir, slug);
+
+    const cfgPath = path.join(tmpDir, '.sdw', 'config.json');
+    const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+    cfg.useFeatureBranches = true;
+    cfg.branching = { strategy: 'develop', workBranch: 'develop', integrationBranch: defaultBranch, updateWorkBranch: true };
+    fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
+
+    const runId = `run-${Date.now()}-${slug}`;
+    const code = sdwOrch.cmdRun({ specPath, root: tmpDir, runId, minScore: 0, skipReview: true, skipPr: true });
+    assert.strictEqual(code, 0, 'A dirty tree must never halt activation');
+
+    const featureBase = execSync(`git merge-base feature/${slug} ${defaultBranch}`, { cwd: tmpDir, encoding: 'utf8' }).trim();
+    assert.strictEqual(featureBase, startHead, 'Fallback starts the feature branch from the checked-out branch');
+    assert.match(fs.readFileSync(path.join(tmpDir, 'README.md'), 'utf8'), /^dirty local edit/, 'The dirty edit survives');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.rmSync(remoteDir, { recursive: true, force: true });
+  }
+});
+
 test('sdw-orch branch & worktree - branching AC8: work-branch update failure exits 1 before creating the feature branch', () => {
   const tmpDir = setupTestRepo();
   try {

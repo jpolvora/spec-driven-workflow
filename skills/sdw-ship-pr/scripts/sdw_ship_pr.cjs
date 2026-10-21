@@ -521,6 +521,15 @@ async function runShipPr(options = {}, customExecutor = null) {
     }
   }
 
+  // AC2: `auto` integration lanes resolve to the detected base, so mirror
+  // presets (github, gitlab) get a concrete work lane for post-merge sync.
+  if (branching && (!branching.integrationBranch || !String(branching.integrationBranch).trim())) {
+    branching.integrationBranch = base;
+    if (branching.mirrorWorkToIntegration && (!branching.workBranch || !String(branching.workBranch).trim())) {
+      branching.workBranch = base;
+    }
+  }
+
   const specSlug = options.spec || options.specSlug || null;
   if (specSlug) assertSafeSlug(specSlug);
   assertSafeRef(head, 'head');

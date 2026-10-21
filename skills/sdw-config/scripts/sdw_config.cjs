@@ -289,6 +289,7 @@ function resolveBranching(config) {
   return {
     strategy,
     source: has('strategy') ? 'config' : 'default',
+    mirrorWorkToIntegration: Boolean(preset.mirrorWorkToIntegration),
     workBranch,
     integrationBranch,
     featurePrefix: has('featurePrefix') ? branching.featurePrefix : BRANCHING_DEFAULTS.featurePrefix,

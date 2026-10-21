@@ -973,19 +973,6 @@ function cmdRun(options) {
     ? { useWorktrees, useFeatureBranches, worktreesSource, featureBranchSource }
     : null;
 
-  // AC14: the effective branch values recorded in run state.
-  const runBranching = {
-    strategy: branching.strategy,
-    source: branching.source,
-    featurePrefix: branching.featurePrefix,
-    featureBranch: useFeatureBranches ? featureBranchName : null,
-    workBranch: branching.workBranch,
-    integrationBranch: branching.integrationBranch,
-    updateWorkBranch: Boolean(branching.updateWorkBranch),
-    syncWorkBranchAfterMerge: Boolean(branching.syncWorkBranchAfterMerge),
-    pushSyncedWorkBranch: Boolean(branching.pushSyncedWorkBranch)
-  };
-
   // Resolve current and base branch
   let currentBranch = 'main';
   let baseBranch = 'main';
@@ -998,6 +985,28 @@ function cmdRun(options) {
   } catch (e) {
     baseBranch = currentBranch;
   }
+
+  // AC2, AC3: `auto` integration lanes resolve to the repository default branch,
+  // so mirror presets (github, gitlab) get a concrete work lane.
+  if (!branching.integrationBranch || !String(branching.integrationBranch).trim()) {
+    branching.integrationBranch = baseBranch;
+    if (branching.mirrorWorkToIntegration && (!branching.workBranch || !String(branching.workBranch).trim())) {
+      branching.workBranch = baseBranch;
+    }
+  }
+
+  // AC14: the effective branch values recorded in run state.
+  const runBranching = {
+    strategy: branching.strategy,
+    source: branching.source,
+    featurePrefix: branching.featurePrefix,
+    featureBranch: useFeatureBranches ? featureBranchName : null,
+    workBranch: branching.workBranch,
+    integrationBranch: branching.integrationBranch,
+    updateWorkBranch: Boolean(branching.updateWorkBranch),
+    syncWorkBranchAfterMerge: Boolean(branching.syncWorkBranchAfterMerge),
+    pushSyncedWorkBranch: Boolean(branching.pushSyncedWorkBranch)
+  };
 
   let activeBranch = currentBranch;
   let branchReused = false;
@@ -1038,12 +1047,14 @@ function cmdRun(options) {
         const sameLaneCheckedOut = workBranchSet && !fromWorkLane && currentBranch === workBranch;
         if ((fromWorkLane || sameLaneCheckedOut) && branching.updateWorkBranch) {
           try {
-            if (fromWorkLane) git(targetRoot, ['switch', workBranch], { stdio: 'ignore' });
-            git(targetRoot, ['fetch', 'origin'], { stdio: 'ignore' });
-            git(targetRoot, ['merge', '--ff-only', `origin/${workBranch}`], { stdio: 'ignore' });
+            if (fromWorkLane) {
+              // Update the lane ref without checking it out, so a dirty tree never blocks.
+              git(targetRoot, ['fetch', 'origin', `${workBranch}:${workBranch}`], { stdio: 'ignore' });
+            } else {
+              git(targetRoot, ['fetch', 'origin'], { stdio: 'ignore' });
+              git(targetRoot, ['merge', '--ff-only', `origin/${workBranch}`], { stdio: 'ignore' });
+            }
           } catch (updateErr) {
-            // AC8: leave the working tree as it was, then fail before creating.
-            try { git(targetRoot, ['switch', currentBranch], { stdio: 'ignore' }); } catch (rollbackErr) {}
             const message = `Failed to update work branch "${workBranch}": ${updateErr.message}`;
             console.error(`[Branch Activation] ${message}`);
             options._runResult = { error: message };
@@ -1054,17 +1065,34 @@ function cmdRun(options) {
         const createArgs = fromWorkLane
           ? ['switch', '-c', targetBranch, workBranch]
           : ['switch', '-c', targetBranch];
+        const announceCreation = (startPoint) => {
+          let startSha = '';
+          try { startSha = String(git(targetRoot, ['rev-parse', '--short', 'HEAD'], { stdio: ['ignore', 'pipe', 'ignore'] }) || '').trim(); } catch (shaErr) {}
+          console.log(`[Branch Activation] ${branching.strategy}: created ${targetBranch} from ${startPoint}${startSha ? ` at ${startSha}` : ''}.`);
+        };
         try {
           git(targetRoot, createArgs, { stdio: 'ignore' });
           branchReused = false;
           activeBranch = targetBranch;
-          const startPoint = fromWorkLane ? workBranch : currentBranch;
-          let startSha = '';
-          try { startSha = String(git(targetRoot, ['rev-parse', '--short', 'HEAD'], { stdio: ['ignore', 'pipe', 'ignore'] }) || '').trim(); } catch (shaErr) {}
-          console.log(`[Branch Activation] ${branching.strategy}: created ${targetBranch} from ${startPoint}${startSha ? ` at ${startSha}` : ''}.`);
+          announceCreation(fromWorkLane ? workBranch : currentBranch);
         } catch (createErr) {
-          console.error(`[Branch Activation] Failed to create branch "${targetBranch}": ${createErr.message}`);
-          return 1;
+          // Product guarantee: a dirty tree never blocks activation. When the work
+          // lane checkout would overwrite dirty files, start from the current branch.
+          if (fromWorkLane) {
+            try {
+              git(targetRoot, ['switch', '-c', targetBranch], { stdio: 'ignore' });
+              branchReused = false;
+              activeBranch = targetBranch;
+              console.warn(`[Branch Activation] ${branching.strategy}: work lane "${workBranch}" could not be checked out over dirty files; created ${targetBranch} from ${currentBranch}.`);
+              announceCreation(currentBranch);
+            } catch (fallbackErr) {
+              console.error(`[Branch Activation] Failed to create branch "${targetBranch}": ${fallbackErr.message}`);
+              return 1;
+            }
+          } else {
+            console.error(`[Branch Activation] Failed to create branch "${targetBranch}": ${createErr.message}`);
+            return 1;
+          }
         }
       }
     }
