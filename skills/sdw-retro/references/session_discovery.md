@@ -1,124 +1,125 @@
 # Session Transcript Discovery
 
-`retro.cjs` never discovers host files. The agent resolves the current session
-transcript from host facts, verifies that the resolved path exists, and passes
-it with `--transcript`. This document describes the supported layouts and the
-capture fallback. Paths use environment variables and `~` so they stay portable.
+`retro.cjs` never discovers host files. The agent resolves this session's
+transcript in a fixed order: configured inputs first, then the deterministic
+finder, then this session's captured context. A transcript is read-only input;
+never copy it into the project, quote its line bodies, or commit it.
 
-## Rules
+## 1. Configured Inputs
 
-1. Resolve the path from a host fact (environment variable or documented layout)
-   and verify it exists before passing it. Never pass a path you did not resolve:
-   a guessed path that does not exist only produces `transcript_unreadable`.
-2. Pass the resolved path with `--transcript <path>`. A host transcript keeps the
-   default `--transcript-mode host`.
-3. Treat a session file as read-only input. Never copy it into the project,
-   quote its line bodies, or commit it.
-4. When no supported transcript exists, or the resolved file cannot be decoded,
-   write the capture file described under Fallback and pass it with
-   `--transcript <file> --transcript-mode captured`.
-
-## DeepSeek Harness
-
-Environment facts: `DSH_HOME` (default host data directory) and
-`DSH_SESSION_ID` (this session's id).
-
-Layout:
-
-```
-%DSH_HOME%\sessions\--<project>--\session-<DSH_SESSION_ID>\session.v4.jsonl.zstd
-```
-
-The `<project>` segment is derived from the project root path and is not
-reproducible by hand. List the sessions directory and pick the entry that
-matches this project instead of computing the segment.
-
-PowerShell:
-
-```powershell
-Test-Path "$env:DSH_HOME\sessions\--<project>--\session-$env:DSH_SESSION_ID\session.v4.jsonl.zstd"
-Get-ChildItem "$env:DSH_HOME\sessions" -Directory | Select-Object Name
-```
-
-POSIX shell:
+A transcript named by `retro.transcripts` in `.sdw/config.json` or by a
+`--transcript` flag is already configured. Verify the path exists, then pass it
+unchanged with the default mode:
 
 ```bash
-test -f "$DSH_HOME/sessions/--<project>--/session-$DSH_SESSION_ID/session.v4.jsonl.zstd"
-ls "$DSH_HOME/sessions"
+node skills/sdw-retro/scripts/retro.cjs run --run-id <runId> --transcript <path>
 ```
 
-The file is zstd-compressed, often as thousands of concatenated frames.
-`retro.cjs` decodes every frame in memory with the Node.js standard library, so
-no external codec is needed. Pass the `.zstd` path unchanged.
+Do not run the finder when a usable transcript is configured.
 
-## Claude Code
+## 2. Finder
 
-Environment fact: `CLAUDE_CONFIG_DIR` (defaults to `~/.claude`).
-
-Layout:
-
-```
-~/.claude/projects/<slug>/<sessionId>.jsonl
-```
-
-`<slug>` is the absolute project path with its separators and drive colon
-replaced by `-`. `<sessionId>` is the current session id. When the host does not
-expose the id to the agent, take the most recently modified `.jsonl` in the
-project directory only after confirming it was written by this session.
-
-PowerShell:
-
-```powershell
-Get-ChildItem "$env:CLAUDE_CONFIG_DIR\projects" -Directory | Select-Object Name
-Get-ChildItem "$env:CLAUDE_CONFIG_DIR\projects\<slug>" -Filter *.jsonl |
-  Sort-Object LastWriteTime -Descending | Select-Object -First 1 FullName
-```
-
-POSIX shell:
+When no transcript is configured, run the finder before any capture fallback:
 
 ```bash
-ls "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects"
-ls -t "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/<slug>"/*.jsonl
+node skills/sdw-retro/scripts/find_session_transcript.cjs [--root <projectRoot>] [--json]
 ```
 
-## Codex
+It exits `0` whether it finds a candidate or not and prints one JSON object:
 
-Environment fact: `CODEX_HOME` (defaults to `~/.codex`).
-
-Layout:
-
-```
-~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-<timestamp>-<sessionId>.jsonl
-```
-
-PowerShell:
-
-```powershell
-Get-ChildItem "$env:CODEX_HOME\sessions" -Recurse -Filter rollout-*.jsonl |
-  Sort-Object LastWriteTime -Descending | Select-Object -First 1 FullName
+```json
+{
+  "found": true,
+  "path": "relative-or-absolute-path",
+  "score": 90,
+  "source": "search-root",
+  "sessionId": "session-id",
+  "entriesScanned": 42,
+  "elapsedMs": 18,
+  "roots": [{ "variable": "HOME", "path": "..." }]
+}
 ```
 
-POSIX shell:
+- `source` is `env-file` when an environment variable names the file directly,
+  and `search-root` when the file was found under a candidate root.
+- `path` is relative to `--root` when it is inside that project root; otherwise
+  it is absolute.
+- When `found` is true, pass `path` with `--transcript <path>` and keep the
+  default mode; omit `--transcript-mode` (default `host`). Do not guess a
+  different path:
 
 ```bash
-find "${CODEX_HOME:-$HOME/.codex}/sessions" -name 'rollout-*.jsonl' -type f | sort | tail -n 1
+node skills/sdw-retro/scripts/retro.cjs run --run-id <runId> \
+  --transcript <path>
 ```
 
-Pick the rollout written after this session started. An older rollout belongs to
-a different session and must not be passed.
+- When `found` is false, write this session's messages to
+  `.sdw/state/retro-session-{runId}.md` and pass
+  `--transcript <file> --transcript-mode captured`; the capture procedure is
+  [Captured-Context Fallback](#3-captured-context-fallback). Do not guess a
+  different path.
 
-## Fallback: Captured Context
+### Facts The Finder Uses
 
-Use the fallback when no layout applies, the resolved file cannot be decoded, or
-the planner blocks access to host paths. Do not use it to escape a decoding
-problem you can fix by passing the right path.
+The finder has no product-specific layout. It inspects environment values:
 
-Write this session's messages to `.sdw/state/retro-session-{runId}.md`:
+1. **File-valued variables.** A variable whose value is an existing file with a
+   transcript-shaped extension is a direct candidate.
+2. **Session-identifier variables.** A variable whose name contains `SESSION`,
+   `CONVERSATION`, `THREAD`, or `RUN` and whose value is an 8-64 character
+   identifier of letters, digits, `_`, or `-` is a session id. When several
+   match, the longest value wins.
+3. **Candidate roots.** A variable whose value is an existing directory and
+   whose name contains `HOME`, `DIR`, `ROOT`, `DATA`, `CONFIG`, or `PROFILE` is
+   a candidate root. Operating-system trees are skipped: a root inside the
+   directory named by `SystemRoot`, `windir`, `ProgramFiles`, or `ProgramData`,
+   a drive root, and a name matching `SYSTEM`, `DRIVERS`, `DOTNET`, `TEMP`, or
+   `TMP`. Preferred names (`SESSION`, `HARNESS`, `AGENT`, `DATA`, `CONFIG`,
+   `HOME`, `PROFILE`) come first; at most six roots are searched.
+
+Only these facts affect discovery. The finder does not read project
+configuration, state, or any transcript body.
+
+### Search Bounds And Filters
+
+A root search is breadth-first and bounded by default to:
+
+- depth `4`;
+- `4000` scanned entries across all roots;
+- a `2000` ms wall-clock budget.
+
+`--max-entries <n>` and `--timeout-ms <n>` override the last two bounds for
+tests or unusually large layouts. `entriesScanned` and `elapsedMs` always report
+what happened. The remaining entry and time budgets are split across the
+unscanned roots, so one noisy root cannot consume the whole bound, and scanning
+stops at a root that yields a session-id match.
+
+The finder skips `node_modules`, `.git`, `dist`, `build`, `.cache`, `tmp`, and
+`temp`, and stats only `.jsonl`, `.json`, `.log`, `.txt`, `.md`, `.zst`, and
+`.zstd` files. When a session id is known, only a file with the id in a segment
+of its path (a directory or the file name) qualifies; recency and extension only
+rank it against other matches. When no session id is known, only `.jsonl`,
+`.json`, `.log`, `.zst`, and `.zstd` qualify.
+
+Candidates are scored: session id in the path `+60`, transcript extension
+`+20`, recent modification `+10`, and a data-like root variable name `+10` (a
+name containing `HOME`, `DATA`, `CONFIG`, or `PROFILE`). The highest score wins.
+
+The finder only stats files and opens the first bytes to reject binary content.
+Compressed transcript frames are treated as text-like. It prints no transcript
+content and creates, modifies, copies, and moves no file.
+
+## 3. Captured-Context Fallback
+
+Use the fallback only when no transcript is configured and the finder returns
+`found: false`, or when the configured path cannot be decoded. Write this
+session's messages to `.sdw/state/retro-session-{runId}.md`:
 
 - One message per line, no other prose.
-- Role prefix on every line: `user: `, `assistant: `, or `tool: `.
+- A role prefix on every line: `user: `, `assistant: `, or `tool: `.
 - Include only this session's messages. No secrets, tokens, or credentials.
-- The state directory is git-ignored, so the file never enters a delivery commit.
+- The state directory is git-ignored, so the file never enters a delivery
+  commit.
 
 Example:
 
@@ -129,12 +130,12 @@ tool: node skills/sdw-retro/scripts/retro.cjs run --run-id run-1792614056524
 assistant: task-1 reported success
 ```
 
-Pass the file:
+Pass the capture with mode `captured`:
 
 ```bash
 node skills/sdw-retro/scripts/retro.cjs run --run-id <runId> \
   --transcript .sdw/state/retro-session-<runId>.md --transcript-mode captured
 ```
 
-The report records the mode next to the input, so a later reader can tell a host
-transcript (`host`) from an agent-captured one (`captured`).
+The report records the mode next to each input, so a later reader can tell a
+host transcript (`host`) from an agent-captured one (`captured`).

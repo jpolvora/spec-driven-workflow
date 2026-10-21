@@ -11,9 +11,9 @@ invocation_names:
 > When this skill is loaded, output "sdw-retro loaded."
 
 Reviews one `sdw-orch` run after delivery. It reads the run state file, the step
-artifacts that state declares, and every transcript the operator explicitly
-names. It reports deterministic friction signals and leaves every improvement
-judgment to an explicit operator decision.
+artifacts that state declares, and the transcript the finder resolves or the
+operator explicitly names. It reports deterministic friction signals and leaves
+every improvement judgment to an explicit operator decision.
 
 > **Rules:** apply [`sdw-rules`](../sdw-rules/SKILL.md) before acting.
 
@@ -22,7 +22,7 @@ judgment to an explicit operator decision.
 - `sdw-orch` runs this skill automatically for a completed run when `retro.enabled` is `true` and records the outcome in `state.retro`; a retro failure never changes the completed status or the exit code.
 - When `retro.enabled` is `false` or absent, `sdw-orch` prints the advisory command only; the operator starts the retro.
 - Inputs are the run state file, the step artifacts it declares, and the transcripts named by `retro.transcripts` or `--transcript`, nothing else.
-- Unconfigured host transcripts, session logs, and agent chat logs stay excluded and are reported as excluded inputs.
+- Unconfigured host transcripts, session logs, and agent chat logs stay excluded from the analyzer and are reported as excluded inputs.
 - Configured transcripts are scanned line by line; the report cites path and line numbers only and never copies transcript line bodies.
 - Missing declared artifacts are recorded as absences; the report never synthesizes their content.
 - The report carries the `leftover_run`, `repeated_run_invocation`, and `transcript_unreadable` signals.
@@ -48,8 +48,15 @@ judgment to an explicit operator decision.
    - Done when: the command prints the selected run identifier and artifact directory.
 
 2. **Locate the session transcript**
-   Resolve this session's transcript from host facts, never by guessing: DeepSeek Harness (`DSH_HOME`, `DSH_SESSION_ID`, `sessions/--<project>--/session-<id>/session.v4.jsonl.zstd`), Claude Code (`~/.claude/projects/<slug>/<sessionId>.jsonl`), Codex (`~/.codex/sessions/.../rollout-*.jsonl`). Details and checks: [`references/session_discovery.md`](references/session_discovery.md). Pass an existing path with `--transcript`; never invent a path that does not exist. When no supported transcript exists or it cannot be decoded, write this session's messages to `.sdw/state/retro-session-{runId}.md`, one `user:`/`assistant:`/`tool:` line per message, and pass that file with `--transcript --transcript-mode captured`.
-   - Done when: the transcript path exists and came from a host fact or from this session.
+   Use a transcript named by `retro.transcripts` or `--transcript` first. When none is configured, run the finder before any capture fallback:
+   ```bash
+   node skills/sdw-retro/scripts/find_session_transcript.cjs [--root <projectRoot>] [--json]
+   ```
+   It prints JSON with `found`, `path`, `score`, `source`, `sessionId`, `entriesScanned`, `elapsedMs`, and `roots`, and never prints transcript content.
+   - `found: true`: pass `path` with `--transcript <path>` and keep the default mode; omit `--transcript-mode` (default `host`).
+   - `found: false`: write this session's messages to `.sdw/state/retro-session-{runId}.md`, one `user:`/`assistant:`/`tool:` line per message, and pass `--transcript <file> --transcript-mode captured`.
+   Procedure and bounds: [`references/session_discovery.md`](references/session_discovery.md).
+   - Done when: the transcript path exists and came from a configured input, the finder, or this session's capture.
 
 3. **Run the analysis**
    ```bash
@@ -75,7 +82,7 @@ judgment to an explicit operator decision.
 ## Reference
 
 - Run selection, inputs, signals, and report contract: [`references/retro_protocol.md`](references/retro_protocol.md)
-- Per-host transcript discovery and capture fallback: [`references/session_discovery.md`](references/session_discovery.md)
+- Generic transcript discovery and capture fallback: [`references/session_discovery.md`](references/session_discovery.md)
 - Candidate fields, locator rules, memory drafts, reason codes: [`references/candidate_contract.md`](references/candidate_contract.md)
 - Deterministic analyzer: [`scripts/retro.cjs`](scripts/retro.cjs)
 - Deterministic candidate validator: [`scripts/validate_candidates.cjs`](scripts/validate_candidates.cjs)

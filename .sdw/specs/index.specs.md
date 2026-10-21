@@ -59,3 +59,4 @@ Central repository index tracking specification lifecycle states, metadata, and 
 | 00046 | 00046-sdw-batch-retro-followup | Unattended Batch Retro Follow-Up — Queued Specs From Retrospective Candidates | completed | local | 2026-10-21 | PASS | - |
 | 00047 | 00047-sdw-retro-session-discovery | Host-Aware Session Transcript Discovery and Context Fallback for Retrospectives | completed | local | 2026-10-21 | PASS | - |
 | 00048 | 00048-sdw-retro-signal-precision | Transcript Signal Precision — Command Shape and Repeated Invocation Matching | completed | local | 2026-10-21 | PASS | - |
+| 00049 | 00049-sdw-retro-agnostic-discovery | Agent-Agnostic Transcript Discovery — Environment Facts and Bounded Search | completed | local | 2026-10-21 | PASS | - |

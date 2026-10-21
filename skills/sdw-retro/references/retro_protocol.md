@@ -42,10 +42,11 @@ The only retro inputs are:
    `steps.4.tasks.<id>.evidencePath`, `steps.5.output.judgePromptPath`, and
    `steps.5.output.judgeVerdictPath`.
 3. Every transcript path named by `retro.transcripts` in `.sdw/config.json` or
-   by a `--transcript` flag. Transcripts are opt-in: empty configuration means
-   no transcript is read. The agent resolves the path from a host fact and never
-   guesses one; [`session_discovery.md`](session_discovery.md) documents the
-   supported layouts, their environment variables, and the capture fallback.
+   by a `--transcript` flag, including a path the finder returned and the agent
+   passed with that flag. Transcripts are opt-in: empty configuration means the
+   analyzer reads no transcript until the finder resolves one.
+   [`session_discovery.md`](session_discovery.md) defines the resolution order,
+   the environment facts, the search bounds, and the capture fallback.
 
 The analyzer never enumerates host transcript directories, session stores, chat
 logs, or agent conversation records. An unconfigured declared path that looks
@@ -63,18 +64,30 @@ through the `transcript_unreadable` signal and never fails the command.
 ## Transcript Inputs
 
 Discovery is agent work, not script work: `retro.cjs` never enumerates a host
-directory. The agent resolves this session's transcript from a host fact
-(environment variable or documented layout), verifies that the path exists, and
-passes it with `--transcript`. The supported layouts are the DeepSeek Harness
-(`DSH_HOME`, `DSH_SESSION_ID`), Claude Code (`CLAUDE_CONFIG_DIR`), and Codex
-(`CODEX_HOME`); [`session_discovery.md`](session_discovery.md) gives each path
-pattern and the commands that check it.
+directory. The agent resolves the transcript in a fixed order.
 
-When no supported transcript exists, or the resolved file cannot be decoded, the
-agent writes this session's messages to `.sdw/state/retro-session-{runId}.md`,
-one `user:`, `assistant:`, or `tool:` line per message, and passes that file
-with `--transcript <file> --transcript-mode captured`. `.sdw/state/` is
-git-ignored, so the capture never enters a delivery commit.
+1. A path named by `retro.transcripts` or `--transcript` is configured input and
+   is used first. Verify that it exists and keep mode `host`.
+2. When no transcript is configured, run the finder before any fallback:
+
+   ```bash
+   node skills/sdw-retro/scripts/find_session_transcript.cjs --root <projectRoot> --json
+   ```
+
+   The finder derives candidates only from environment facts and filesystem
+   conventions: file-valued variables, session-identifier variables, and
+   existing directories named by home, data, config, or profile variables. It
+   searches breadth-first with a depth limit, an entry limit, and a wall-clock
+   budget, and prints `found`, `path`, `score`, `source`, `sessionId`,
+   `entriesScanned`, `elapsedMs`, and `roots`. When `found` is true, pass
+   `path` with `--transcript <path>` and omit `--transcript-mode`; the default
+   mode is `host`. The finder never reads transcript bodies into its output and
+   never writes a file.
+3. When the finder returns `found: false`, write this session's messages to
+   `.sdw/state/retro-session-{runId}.md`, one `user:`, `assistant:`, or `tool:`
+   line per message, and pass that file with
+   `--transcript <file> --transcript-mode captured`. `.sdw/state/` is
+   git-ignored, so the capture never enters a delivery commit.
 
 Content decoding:
 
