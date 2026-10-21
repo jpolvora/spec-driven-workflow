@@ -75,7 +75,7 @@ When evaluating a user turn, the router applies four strict precedence tiers:
 - **Domain**: End-to-end specification implementation, subagent DAG orchestration, conformance scoring, code review, and delivery push.
 - **Explicit Invocations**: `/sdw-orch`, `@sdw-orch`, `sdw-orch`, `/orch`, `@orch`, `orch`
 - **Trigger Keywords**:
-  - `orchestrate`, `orchestrator`, `implement spec`, `run spec`, `workflow execution`
+  - `orchestrate`, `orchestrator`, `implement spec`, `run spec`, `execute spec`, `workflow execution`
   - `resume run`, `orch status`, `dag tasks`, `conformance score`, `delivery commit`
   - `automated code review`, `review loop`, `remote push`, `pr preparation`
 - **Typical Prompts**:

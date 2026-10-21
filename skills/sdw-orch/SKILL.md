@@ -5,10 +5,13 @@ version: 0.2.0
 invocation_names:
   - sdw-orch
   - sdw-orch run
+  - sdw-orch implement
   - sdw-orch resume
   - sdw-orch status
   - sdw-orchestrator
   - orch
+  - orch run
+  - orch implement
 ---
 # sdw-orch
 
