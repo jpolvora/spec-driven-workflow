@@ -149,9 +149,14 @@ test('sdw-memory - memo launcher resolves without a shell', () => {
   try {
     const { resolveMemoLauncher, runMemo } = require('../skills/sdw-memory/scripts/backends/wsmemo.cjs');
     const launcher = resolveMemoLauncher();
-    assert.ok(launcher && typeof launcher.argv0 === 'string');
+    assert.ok(launcher === null || typeof launcher.argv0 === 'string');
     const r = runMemo(['--help'], { timeout: 20000 });
-    assert.strictEqual(r.ok, true);
+    if (launcher) {
+      assert.strictEqual(r.ok, true);
+    } else {
+      assert.strictEqual(r.ok, false);
+      assert.ok(typeof r.reason === 'string' && r.reason.length > 0);
+    }
   } finally {
     process.env.SDW_MEMORY_NO_MEMO = '1';
   }

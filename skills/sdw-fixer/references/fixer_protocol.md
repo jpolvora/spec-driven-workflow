@@ -95,6 +95,7 @@ Rules outside this catalog have no deterministic patch and route to
   "fixed": [{ "file": "src/a.js", "line": 12, "defectClass": "no_debugger_statements" }],
   "skipped": [{ "file": "src/b.js", "reason": "non-trivial: requires agent reasoning" }],
   "wouldFix": [],
+  "covered": [{ "file": "src/a.js", "line": 12, "defectClass": "no_debugger_statements" }],
   "learned": [{ "rule": "no_debugger_statements", "slug": "no-debugger-statements", "recorded": true }],
   "verification": { "exitCode": null, "status": "skipped", "reason": "no --verify command given" },
   "reportPath": "result.json"
@@ -104,6 +105,9 @@ Rules outside this catalog have no deterministic patch and route to
 - `status`: `completed`, `no-op` (empty findings, or `fixed` empty with `skipped` non-empty, exit `0`), or
   `verify-failed` (exit `1`, partial report preserved).
 - `wouldFix` is populated only under `--dry-run`; `fixed` stays empty there.
+- `covered` lists duplicate/overlapping findings on lines this batch already
+  patched (`outcome: covered-by-batch`); they are never reported as
+  pattern-mismatch skips.
 - `learned` holds one entry per fixed defect class: `recorded: true` when a
   new knowledge entry was stored via `sdw-memory` (traps table row and/or
   vault record per backend config), otherwise `recorded: false` with a

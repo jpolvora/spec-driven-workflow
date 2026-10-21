@@ -302,8 +302,10 @@ function cmdRun(options) {
   const fixed = [];
   const skipped = [];
   const wouldFix = [];
+  const covered = [];
   const details = [];
   const knowledgeCache = new Map();
+  const handled = new Set(); // file:line keys already patched in this batch
 
   for (const { finding, score } of scored) {
     const file = finding.file.trim();
@@ -334,19 +336,31 @@ function cmdRun(options) {
       specMemo.skipped ? 'spec-memo:consult-skipped' : `spec-memo:${specMemo.hints.length} hints`,
       'pr-context:consult-skipped'
     ];
-    const outcome = applyTrivialFix(root, finding, hits, options.dryRun);
+    const outcome = (() => {
+      // Duplicate or overlapping finding on a line this batch already
+      // patched: the defect is closed, so report coverage instead of a
+      // contradictory pattern-mismatch skip.
+      const anchorKey = finding.line ? `${norm(file)}:${finding.line}` : null;
+      if (anchorKey && handled.has(anchorKey)) {
+        return { status: 'covered', fixed: [], skippedFiles: [] };
+      }
+      return applyTrivialFix(root, finding, hits, options.dryRun);
+    })();
     const detail = {
       file, line: finding.line || null, rule,
       score, sourcesConsulted, siblingHits: hits,
       memoryHints: mem.hints, memoryFileHints: memFiles.hints, specMemoHints: specMemo.hints,
       outcome: outcome.status
     };
-    if (outcome.status === 'fixed') {
-      for (const f of outcome.fixed) fixed.push({ file: f.file, line: f.line, defectClass: finding.rule.trim() });
+    if (outcome.status === 'covered') {
+      covered.push({ file, line: finding.line, defectClass: finding.rule.trim() });
+      detail.coveredBy = [{ file, line: finding.line }];
+    } else if (outcome.status === 'fixed') {
+      for (const f of outcome.fixed) { fixed.push({ file: f.file, line: f.line, defectClass: finding.rule.trim() }); handled.add(`${norm(f.file)}:${f.line}`); }
       for (const s of outcome.skippedFiles || []) skipped.push({ file: s.file, reason: s.reason });
       detail.fixedFiles = outcome.fixed;
     } else if (outcome.status === 'simulated') {
-      for (const f of outcome.fixed) wouldFix.push({ file: f.file, line: f.line, defectClass: finding.rule.trim() });
+      for (const f of outcome.fixed) { wouldFix.push({ file: f.file, line: f.line, defectClass: finding.rule.trim() }); handled.add(`${norm(f.file)}:${f.line}`); }
       for (const s of outcome.skippedFiles || []) skipped.push({ file: s.file, reason: s.reason });
       detail.simulatedFiles = outcome.fixed;
     } else {
@@ -375,7 +389,7 @@ function cmdRun(options) {
     }
   }
   const status = verification.status === 'failed' ? 'verify-failed'
-    : (fixed.length === 0 && skipped.length > 0) ? 'no-op'
+    : (fixed.length === 0 && covered.length === 0 && skipped.length > 0) ? 'no-op'
     : loaded.list.length === 0 ? 'no-op' : 'completed';
   const report = {
     batchId: loaded.batchId,
@@ -383,6 +397,7 @@ function cmdRun(options) {
     fixed,
     skipped,
     wouldFix,
+    covered,
     learned,
     verification: { exitCode: verification.exitCode, status: verification.status,
       ...(verification.reason ? { reason: verification.reason } : {}),
@@ -395,8 +410,8 @@ function cmdRun(options) {
   fs.writeFileSync(reportAbs, JSON.stringify(report, null, 2) + '\n', 'utf8');
   console.log(`[sdw-fixer] Report written to ${norm(path.relative(root, reportAbs))}`);
 
-  if (options.json) console.log(JSON.stringify({ batchId: report.batchId, status, fixed, skipped, wouldFix, verification: report.verification }, null, 2));
-  else console.log(`[sdw-fixer] Batch ${report.batchId}: ${fixed.length} fixed, ${skipped.length} skipped${options.dryRun ? `, ${wouldFix.length} would-fix (dry-run)` : ''}, verification ${verification.status}`);
+  if (options.json) console.log(JSON.stringify({ batchId: report.batchId, status, fixed, skipped, wouldFix, covered, verification: report.verification }, null, 2));
+  else console.log(`[sdw-fixer] Batch ${report.batchId}: ${fixed.length} fixed, ${covered.length} already-covered, ${skipped.length} skipped${options.dryRun ? `, ${wouldFix.length} would-fix (dry-run)` : ''}, verification ${verification.status}`);
 
   return { exit: verification.status === 'failed' ? 1 : 0, report };
 }

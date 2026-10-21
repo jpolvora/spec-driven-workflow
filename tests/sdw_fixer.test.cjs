@@ -62,6 +62,32 @@ test('sdw-fixer - fixes defect-class siblings across files and records unpatched
   }
 });
 
+test('sdw-fixer - duplicate findings on an already-fixed line report covered, not skipped', () => {
+  const root = setupRoot(true);
+  try {
+    const p = path.join(root, 'findings.json');
+    fs.writeFileSync(p, JSON.stringify({
+      batchId: 'dup-batch',
+      findings: [
+        { file: 'buggy.js', line: 2, rule: 'no_debugger_statements', evidence: 'reviewer A' },
+        { file: 'buggy.js', line: 2, rule: 'no_debugger_statements', evidence: 'reviewer B' }
+      ]
+    }), 'utf8');
+    const reportPath = path.join(root, 'result.json');
+    const r = fixer.cmdRun({ root, findings: p, report: reportPath });
+    assert.strictEqual(r.exit, 0);
+    assert.strictEqual(r.report.status, 'completed');
+    assert.strictEqual(r.report.fixed.length, 1);
+    assert.strictEqual(r.report.covered.length, 1);
+    assert.deepStrictEqual(r.report.covered[0], { file: 'buggy.js', line: 2, defectClass: 'no_debugger_statements' });
+    assert.ok(!r.report.skipped.some(s => s.file === 'buggy.js' && /pattern mismatch/.test(s.reason || '')),
+      'duplicate anchor must not be reported as pattern mismatch');
+    assert.ok(!fs.readFileSync(path.join(root, 'buggy.js'), 'utf8').includes('debugger'));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('sdw-fixer - learn registers a trap row for the fixed defect class', () => {
   const root = setupRoot(true);
   try {
