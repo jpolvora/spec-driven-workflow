@@ -866,7 +866,9 @@ async function runShipPr(options = {}, customExecutor = null) {
             if (dirtyCommit.skipped) {
               warn(`[sdw-ship-pr] Working tree is dirty; commit skipped (${dirtyCommit.reason}).`);
             } else if (dirtyCommit.error) {
-              warn(`[sdw-ship-pr] Working tree is dirty but the commit failed: ${dirtyCommit.error}`);
+              // A selected commit that fails means the push would publish a branch
+              // without the delivered work. Fail closed instead of shipping it.
+              throw new Error(`Selected working-tree changes could not be committed before push: ${dirtyCommit.error}`);
             } else {
               log(`[sdw-ship-pr] Committed ${dirtyCommit.files.length} ${dirtyCommit.mode} file(s) as ${dirtyCommit.sha} before pushing${dirtyCommit.excluded.length ? `; ${dirtyCommit.excluded.length} unrelated file(s) left dirty` : ''}.`);
             }
