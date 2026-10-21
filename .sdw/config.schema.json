@@ -135,6 +135,61 @@
       "description": "Automatically create and activate an isolated feature branch derived from specification slug.",
       "default": false
     },
+    "branching": {
+      "type": "object",
+      "description": "Branch lane model (spec 00040): the work lane is where feature branches start and where the repository returns after delivery; the integration lane is where the pull request merges. `strategy` selects a preset and every explicit key overrides that preset.",
+      "properties": {
+        "strategy": {
+          "type": "string",
+          "enum": [
+            "trunk",
+            "github",
+            "develop",
+            "gitflow",
+            "gitlab"
+          ],
+          "default": "trunk",
+          "description": "Preset: trunk (feature branches start from the checked-out branch), github (work lane mirrors the integration lane), develop (feature branches start from develop; pull requests target the auto-detected integration branch), gitflow (feature branches start from develop and pull requests merge into develop), gitlab (work lane mirrors the integration lane; promotions between environment lanes stay manual)."
+        },
+        "featurePrefix": {
+          "type": "string",
+          "default": "feature/",
+          "description": "Prefix for the feature branch name: {branching.featurePrefix}{specSlug}."
+        },
+        "workBranch": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "description": "Branch where feature branches start and where the repository returns after delivery. null uses the checked-out branch; the github and gitlab presets mirror integrationBranch."
+        },
+        "integrationBranch": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "description": "Branch that receives the pull request merge. null means auto: the repository default branch resolved from origin/HEAD."
+        },
+        "updateWorkBranch": {
+          "type": "boolean",
+          "default": false,
+          "description": "Fetch origin and fast-forward the work branch before creating the feature branch."
+        },
+        "syncWorkBranchAfterMerge": {
+          "type": "boolean",
+          "default": false,
+          "description": "After the pull request merges, fast-forward the work branch to the integration branch."
+        },
+        "pushSyncedWorkBranch": {
+          "type": "boolean",
+          "default": false,
+          "description": "Push the synchronized work branch to origin after the post-merge fast-forward."
+        }
+      },
+      "additionalProperties": false
+    },
     "scmProvider": {
       "type": "string",
       "enum": [

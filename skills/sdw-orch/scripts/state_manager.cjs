@@ -95,6 +95,8 @@ function createRunState(options) {
     branch: options.branch || null,
     baseBranch: options.baseBranch || null,
     branchReused: Boolean(options.branchReused),
+    branching: options.branching || null,
+    branchingSync: options.branchingSync || null,
     worktrees: [],
     worktreeSkipReason: null,
     runtimeOverrides: options.runtimeOverrides || null,

@@ -471,3 +471,157 @@ test('AC13: Multi-spec run is rejected and names sdw-batch', () => {
   assert.match(String(failure.stderr), /sdw-batch/, 'Error must name sdw-batch (AC13)');
 });
 
+test('AC15: dry run prints the resolved branch plan without executing git', () => {
+  const root = path.resolve(__dirname, '..');
+  const spec = path.join(root, '.sdw', 'specs', '00040-sdw-branching-strategy.md');
+  let output = '';
+  const origLog = console.log;
+  console.log = (msg) => { output += String(msg) + '\n'; };
+  let code;
+  try {
+    code = sdwOrch.printRunDryRunPlan({
+      targetRoot: root,
+      resolvedSpec: spec,
+      specSlug: '00040-sdw-branching-strategy',
+      config: {
+        useFeatureBranches: true,
+        branching: {
+          strategy: 'develop',
+          featurePrefix: 'feature/',
+          workBranch: 'develop',
+          integrationBranch: 'main',
+          updateWorkBranch: true,
+          syncWorkBranchAfterMerge: true,
+          pushSyncedWorkBranch: false
+        }
+      },
+      options: {}
+    });
+  } finally {
+    console.log = origLog;
+  }
+
+  assert.equal(code, 0);
+  assert.match(output, /Strategy: develop/);
+  assert.match(output, /Start lane: develop \(update: yes\)/);
+  assert.match(output, /Feature branch: feature\/00040-sdw-branching-strategy/);
+  assert.match(output, /Pull request target: main/);
+  assert.match(output, /After merge: fast-forward develop to main/);
+  assert.match(output, /branching=develop/);
+  assert.match(output, /No steps executed \(--dry-run\)/);
+
+  // AC10/AC15: a work lane equal to the integration lane plans the trunk fallback.
+  let sameLaneOutput = '';
+  console.log = (msg) => { sameLaneOutput += String(msg) + '\n'; };
+  try {
+    code = sdwOrch.printRunDryRunPlan({
+      targetRoot: root,
+      resolvedSpec: spec,
+      specSlug: '00040-sdw-branching-strategy',
+      config: {
+        branching: {
+          strategy: 'gitflow',
+          workBranch: 'develop',
+          integrationBranch: 'develop',
+          updateWorkBranch: true,
+          syncWorkBranchAfterMerge: true
+        }
+      },
+      options: {}
+    });
+  } finally {
+    console.log = origLog;
+  }
+  assert.equal(code, 0);
+  assert.match(sameLaneOutput, /Start lane: develop \(update: yes\)/);
+  assert.match(sameLaneOutput, /After merge: fetch origin and fast-forward develop to origin\/develop/);
+});
+
+test('AC9, AC10, AC14: feature prefix names the branch and run state records the resolved lanes', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-branching-state-'));
+  try {
+    execSync('git init', { cwd: tmpDir, stdio: 'ignore' });
+    execSync('git config user.name "SDW Tester"', { cwd: tmpDir, stdio: 'ignore' });
+    execSync('git config user.email "tester@sdw.org"', { cwd: tmpDir, stdio: 'ignore' });
+    fs.mkdirSync(path.join(tmpDir, '.sdw', 'specs'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'README.md'), '# repo\n', 'utf8');
+    execSync('git add -A && git commit -m "initial"', { cwd: tmpDir, stdio: 'ignore' });
+    const defaultBranch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: tmpDir, encoding: 'utf8' }).trim();
+
+    fs.writeFileSync(path.join(tmpDir, '.sdw', 'config.json'), JSON.stringify({
+      useFeatureBranches: true,
+      useWorktrees: false,
+      pushDelivery: false,
+      scmProvider: 'none',
+      branching: {
+        strategy: 'trunk',
+        featurePrefix: 'feat/',
+        workBranch: null,
+        integrationBranch: defaultBranch,
+        updateWorkBranch: false,
+        syncWorkBranchAfterMerge: false,
+        pushSyncedWorkBranch: false
+      }
+    }, null, 2), 'utf8');
+
+    const slug = 'branch-state';
+    fs.writeFileSync(path.join(tmpDir, '.sdw', 'specs', `${slug}.md`), `---
+slug: ${slug}
+title: Branch State
+---
+# Branch State
+## Acceptance Criteria
+- AC1: The system shall record branch state.
+`, 'utf8');
+    execSync('git add -A && git commit -m "baseline"', { cwd: tmpDir, stdio: 'ignore' });
+    const baseHead = execSync('git rev-parse HEAD', { cwd: tmpDir, encoding: 'utf8' }).trim();
+
+    const runId = `run-${Date.now()}-${slug}`;
+    let output = '';
+    const origLog = console.log;
+    console.log = (msg) => { output += String(msg) + '\n'; };
+    let code;
+    try {
+      code = sdwOrch.cmdRun({
+        root: tmpDir,
+        specPath: `.sdw/specs/${slug}.md`,
+        runId,
+        minScore: 0,
+        skipReview: true,
+        skipPr: true,
+        implementation: {
+          mode: 'command',
+          command: 'node -e "const fs = require(\'fs\'); fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({ taskId: process.env.SDW_TASK_ID, acIds: [\'AC1\'], filesChanged: [\'README.md\'], summary: \'task done\' })); fs.appendFileSync(\'README.md\', \'\\n# update for \' + process.env.SDW_TASK_ID);"'
+        },
+        scoring: judgeScoring()
+      });
+    } finally {
+      console.log = origLog;
+    }
+    assert.equal(code, 0);
+
+    const activeBranch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: tmpDir, encoding: 'utf8' }).trim();
+    assert.equal(activeBranch, `feat/${slug}`, 'AC9: feature prefix names the branch');
+    assert.equal(
+      execSync(`git merge-base feat/${slug} ${baseHead}`, { cwd: tmpDir, encoding: 'utf8' }).trim(),
+      baseHead,
+      'AC10: a null work lane starts the feature branch from the checked-out branch'
+    );
+    assert.match(output, new RegExp(`trunk: created feat/${slug} from ${defaultBranch} at [0-9a-f]+`), 'Activation names the strategy and the real start point');
+
+    const state = stateManager.loadRunState(tmpDir, runId);
+    assert.equal(state.branch, `feat/${slug}`);
+    assert.equal(state.branching.strategy, 'trunk');
+    assert.equal(state.branching.source, 'config');
+    assert.equal(state.branching.featurePrefix, 'feat/');
+    assert.equal(state.branching.featureBranch, `feat/${slug}`);
+    assert.equal(state.branching.workBranch, null);
+    assert.equal(state.branching.integrationBranch, defaultBranch);
+    assert.equal(state.branching.syncWorkBranchAfterMerge, false);
+    assert.equal(state.branchingSync, null);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+

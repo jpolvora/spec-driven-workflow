@@ -34,12 +34,12 @@ Presets name common relationships (`trunk`, `github`, `develop`, `gitflow`, `git
 - AC7: While `updateWorkBranch` is `true`, the system shall fetch the work branch from `origin` and fast-forward it before creating the feature branch.
 - AC8: If updating the work branch fails, then the system shall exit `1` before creating the feature branch and leave the working tree unchanged.
 - AC9: The system shall name the feature branch `{branching.featurePrefix}{specSlug}`.
-- AC10: Where `workBranch` is absent or equals `integrationBranch`, the system shall create the feature branch from the checked-out branch, preserving the current trunk behavior.
+- AC10: Where `workBranch` is absent, the system shall create the feature branch from the checked-out branch, preserving the trunk behavior.
 - AC11: The system shall resolve the `sdw-ship-pr` pull request base branch and the `sdw-code-review` review base from `branching.integrationBranch`.
 - AC12: When the pull request reaches `MERGED` and `branching.syncWorkBranchAfterMerge` is `true`, the system shall switch to the work branch, fast-forward it to the integration branch, and push it when `branching.pushSyncedWorkBranch` is `true`.
 - AC13: If the post-merge fast-forward is not possible or the working tree is dirty, then the system shall leave every local branch untouched and record `branchingSync.status` as `blocked` with the reason in run state without failing the completed delivery.
 - AC14: The system shall record the resolved strategy, its source, the effective branch values, and the synchronization outcome in run state.
-- AC15: When `--dry-run` is passed, the system shall print the resolved branch plan (strategy, start branch, update step, feature branch, pull request target, post-merge actions) without executing git commands.
+- AC15: When `--dry-run` is passed, the system shall print the resolved branch plan (strategy, start branch, update step, feature branch, pull request target, post-merge actions) without mutating repository state.
 
 ## Notes
 
@@ -62,6 +62,15 @@ Presets name common relationships (`trunk`, `github`, `develop`, `gitflow`, `git
 - The post-merge synchronization runs inside `sdw-ship-pr` when the convergence loop observes `MERGED`. When the merge is observed by a later run instead, AC7's pre-start update repairs the work branch.
 - A diverged work branch is never reset or rebased automatically; it is reported as `blocked` with the remediation command.
 - Run state fields: `branching` with the resolved strategy, source, and lane names; `branchingSync` with `{ status, reason, integrationBranch, workBranch, at }`.
+
+### Acceptance Criteria Amendments
+
+Two criteria were amended during delivery, with the maintainer's direction to follow the documented gitflow contract:
+
+- **AC10** originally kept the trunk fallback when `workBranch` equaled `integrationBranch`. That made a gitflow run started on another branch create the feature branch from that branch instead of `develop`, which contradicts the gitflow preset contract in `config_spec.md` §2.4. AC10 now limits the trunk fallback to the case where no work lane is configured; a configured lane is always the start point.
+- **AC15** originally forbade any git command during `--dry-run`. Resolving an `auto` lane requires a read-only `origin/HEAD` lookup, otherwise the plan reports trunk behavior for the `github` and `gitlab` presets. AC15 now requires no repository mutation, and the read-only lookup is allowed.
+
+Both amendments are recorded here so the contract change is visible rather than implied by the code.
 
 ## Out of Scope
 

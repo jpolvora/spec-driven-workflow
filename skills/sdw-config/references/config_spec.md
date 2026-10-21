@@ -107,6 +107,49 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
       "description": "Automatically create and activate an isolated feature branch derived from specification slug.",
       "default": false
     },
+    "branching": {
+      "type": "object",
+      "description": "Branch lane model (spec 00040): the work lane is where feature branches start and where the repository returns after delivery; the integration lane is where the pull request merges. `strategy` selects a preset and every explicit key overrides that preset.",
+      "properties": {
+        "strategy": {
+          "type": "string",
+          "enum": ["trunk", "github", "develop", "gitflow", "gitlab"],
+          "default": "trunk",
+          "description": "Preset: trunk (feature branches start from the checked-out branch), github (work lane mirrors the integration lane), develop (feature branches start from develop; pull requests target the auto-detected integration branch), gitflow (feature branches start from develop and pull requests merge into develop), gitlab (work lane mirrors the integration lane; promotions between environment lanes stay manual)."
+        },
+        "featurePrefix": {
+          "type": "string",
+          "default": "feature/",
+          "description": "Prefix for the feature branch name: {branching.featurePrefix}{specSlug}."
+        },
+        "workBranch": {
+          "type": ["string", "null"],
+          "default": null,
+          "description": "Branch where feature branches start and where the repository returns after delivery. null uses the checked-out branch; the github and gitlab presets mirror integrationBranch."
+        },
+        "integrationBranch": {
+          "type": ["string", "null"],
+          "default": null,
+          "description": "Branch that receives the pull request merge. null means auto: the repository default branch resolved from origin/HEAD."
+        },
+        "updateWorkBranch": {
+          "type": "boolean",
+          "default": false,
+          "description": "Fetch origin and fast-forward the work branch before creating the feature branch."
+        },
+        "syncWorkBranchAfterMerge": {
+          "type": "boolean",
+          "default": false,
+          "description": "After the pull request merges, fast-forward the work branch to the integration branch."
+        },
+        "pushSyncedWorkBranch": {
+          "type": "boolean",
+          "default": false,
+          "description": "Push the synchronized work branch to origin after the post-merge fast-forward."
+        }
+      },
+      "additionalProperties": false
+    },
     "scmProvider": {
       "type": "string",
       "enum": ["none", "ado", "github"],
@@ -215,6 +258,13 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
 | `securityChecksEnabled` | `boolean` | `false` | Enable pre-commit secrets and credentials leak scanning |
 | `useWorktrees` | `boolean` | `false` | Enable per-task isolated git worktrees for dispatched subagents under `.sdw/worktrees/{runId}/` |
 | `useFeatureBranches` | `boolean` | `false` | Automatically create and activate an isolated feature branch derived from specification slug |
+| `branching.strategy` | `string` | `"trunk"` | Branch preset: `trunk`, `github`, `develop`, `gitflow`, or `gitlab` (see §2.4) |
+| `branching.featurePrefix` | `string` | `"feature/"` | Prefix for the feature branch name: `{branching.featurePrefix}{specSlug}` |
+| `branching.workBranch` | `string \| null` | `null` | Work lane: where feature branches start and where the repository returns after delivery. `null` uses the checked-out branch; `github` and `gitlab` mirror `integrationBranch` |
+| `branching.integrationBranch` | `string \| null` | `null` | Integration lane: the branch that receives the pull request merge. `null` means auto (`origin/HEAD`) |
+| `branching.updateWorkBranch` | `boolean` | `false` | Fetch `origin` and fast-forward the work branch before creating the feature branch (default `true` for every preset that names a work lane) |
+| `branching.syncWorkBranchAfterMerge` | `boolean` | `false` | Fast-forward the work branch to the integration branch after the pull request merges (default `true` for every preset that names a work lane) |
+| `branching.pushSyncedWorkBranch` | `boolean` | `false` | Push the synchronized work branch to `origin` after the post-merge fast-forward |
 | `scmProvider` | `string` | `"none"` | Configured SCM provider for issues, work items, and pull requests (`none`, `ado`, `github`) |
 | `requiredBuild` | `boolean` | `false` | Enforce successful build verification in Step 8 before creating delivery commit or PR |
 | `buildCommand` | `string` | `"npm run build"` | Command to execute for build verification |
@@ -250,6 +300,15 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
   "securityChecksEnabled": false,
   "useWorktrees": false,
   "useFeatureBranches": false,
+  "branching": {
+    "strategy": "trunk",
+    "featurePrefix": "feature/",
+    "workBranch": null,
+    "integrationBranch": null,
+    "updateWorkBranch": false,
+    "syncWorkBranchAfterMerge": false,
+    "pushSyncedWorkBranch": false
+  },
   "scmProvider": "none",
   "requiredBuild": false,
   "runAllTests": false,
@@ -257,6 +316,49 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
   "maxPreemptions": 3
 }
 ```
+
+### 2.4 Branching Strategy & Presets
+
+`branching` models the delivery topology as two lanes plus a synchronization rule:
+
+- **work lane**: where feature branches start and where the repository returns after delivery.
+- **integration lane**: the branch that receives the pull request merge.
+
+A preset resolves the defaults; every explicit `branching` key overrides the preset value (explicit `null` keeps `null`):
+
+| `strategy` | `workBranch` | `integrationBranch` | `updateWorkBranch` | `syncWorkBranchAfterMerge` |
+|:---|:---|:---|:---|:---|
+| `trunk` (default) | `null` (checked-out branch) | `null` (auto) | `false` | `false` |
+| `github` | mirrors `integrationBranch` | `null` (auto) | `true` | `true` |
+| `develop` | `"develop"` | `null` (auto) | `true` | `true` |
+| `gitflow` | `"develop"` | `"develop"` | `true` | `true` |
+| `gitlab` | mirrors `integrationBranch` | `null` (auto) | `true` | `true` |
+
+`featurePrefix` defaults to `"feature/"` and `pushSyncedWorkBranch` defaults to `false` for every preset. `null` on `integrationBranch` means auto: resolve the repository default branch from `origin/HEAD`. `null` on `workBranch` means the checked-out branch (trunk behavior), and the `github`/`gitlab` presets mirror the resolved `integrationBranch` when `workBranch` is not set.
+
+Any lane name works through overrides. A release run sets `integrationBranch` to `release/1.4`; a maintenance run sets `workBranch` to `maintenance/2.x`; a GitLab promotion reuses the post-merge sequence with `workBranch` = `main` and `integrationBranch` = `staging`.
+
+```json
+{
+  "branching": {
+    "strategy": "gitflow",
+    "featurePrefix": "feature/",
+    "workBranch": "develop",
+    "integrationBranch": "develop",
+    "updateWorkBranch": true,
+    "syncWorkBranchAfterMerge": true,
+    "pushSyncedWorkBranch": false
+  }
+}
+```
+
+`resolveBranching(config)` in [`sdw_config.cjs`](../scripts/sdw_config.cjs) expands the preset and applies the overrides. It returns `{ strategy, source, workBranch, integrationBranch, featurePrefix, updateWorkBranch, syncWorkBranchAfterMerge, pushSyncedWorkBranch }`, where `source` is `"config"` when `branching.strategy` is set in `.sdw/config.json` and `"default"` when the default `trunk` preset applies.
+
+Git sequences:
+
+- Pre-start update (when `updateWorkBranch` is `true`): `git switch <workBranch>`, `git fetch origin`, `git merge --ff-only origin/<workBranch>`.
+- Feature creation: `git switch -c <featurePrefix><specSlug> <workBranch>`.
+- Post-merge synchronization (when `syncWorkBranchAfterMerge` is `true`): `git switch <workBranch>`; when the work lane equals the integration lane, `git merge --ff-only origin/<integrationBranch>`; otherwise `git fetch origin <integrationBranch>:<integrationBranch>` then `git merge --ff-only <integrationBranch>`; then `git push origin <workBranch>` when `pushSyncedWorkBranch` is `true`.
 
 ---
 

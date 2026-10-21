@@ -81,16 +81,17 @@ flowchart TD
    - Creates an atomic, structured delivery git commit (`feat(...)`).
 
 7. **Automated Code Review Loop (Delegated to `sdw-code-review`)**
-   - Dispatches `sdw-code-review` to inspect working-tree and branch diffs against an auto-detected base branch.
+   - Dispatches `sdw-code-review` to inspect working-tree and branch diffs against the configured integration lane (`branching.integrationBranch`) or an auto-detected base branch.
    - Evaluates `sdw-rules` simplicity, surgical diff hygiene, and syntax invariants.
    - Generates an actionable Markdown fix plan (`{slug}-step-7.md`) and applies surgical fixes in an iterative loop.
 
 8. **PR Preparation, Delivery & Review Convergence (Delegated to `sdw-ship-pr`)**
    - Delegates pre-PR verification gates (`requiredBuild`, `runAllTests`, `prePrCommand`, `prePrInstructions`) and delivery publishing to `sdw-ship-pr`.
+   - Targets the pull request base at `branching.integrationBranch`, so Git Flow, GitHub flow, and trunk repositories merge into their own integration lane.
    - Executes cooperative and proactive review convergence with push-before-resolve guarantees, posting structured resolution comments before closing threads.
    - Delegates active review findings to `sdw-fixer` when `reviewFixCommand` is unset, and reports `review_pending` when the fixer returns no applied fix.
-   - Optionally merges the converged pull request with `--merge` / `--allow-merge` (fire and forget: a merge failure is recorded but never fails the delivery).
-   - Updates the specification index to `completed` and records PR metadata in the run state.
+   - Optionally merges the converged pull request with `--merge` / `--allow-merge` (fire and forget: a merge failure is recorded but never fails the delivery). After an observed merge, `branching.syncWorkBranchAfterMerge` fast-forwards the work lane to the integration lane and `branching.pushSyncedWorkBranch` pushes it; a dirty tree or a non-fast-forward leaves every local branch untouched and records `branchingSync.status: "blocked"`.
+   - Updates the specification index to `completed` and records PR metadata, the resolved `branching` lanes, and the `branchingSync` outcome in the run state.
 
 ---
 
@@ -132,6 +133,7 @@ spec-driven-workflow/
 │   ├── sdw-ship-pr/              # Standalone PR shipping & review convergence skill
 │   └── sdw-spec/                 # Spec authoring, validation, sync, and index manager
 ├── tests/                        # Automated unit & integration test suites
+│   ├── sdw_branch_sync.test.cjs
 │   ├── sdw_branch_worktree.test.cjs
 │   ├── sdw_code_review.test.cjs
 │   ├── sdw_config.test.cjs
@@ -410,11 +412,14 @@ node skills/sdw-security-checks/scripts/sdw_security_checks.cjs scan --staged --
 
 ### Using `sdw-ship-pr` (PR Shipping & Review Convergence)
 
-The `sdw-ship-pr` skill executes pre-PR verification, publishes branches, creates/reuses PRs, and runs automated review convergence:
+The `sdw-ship-pr` skill executes pre-PR verification, publishes branches, creates/reuses PRs, and runs automated review convergence. The pull request base resolves from `branching.integrationBranch` (explicit `--base` still wins), and a merged pull request can fast-forward and optionally push the work lane:
 
 ```bash
 # Execute standalone PR shipping with pre-PR verification
 node skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs --head <branch> --base <baseBranch>
+
+# Resolve the PR base from branching.integrationBranch
+node skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs --head <branch> --merge
 
 # Dry-run simulation without git push or remote mutations
 node skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs --head develop --dry-run --json

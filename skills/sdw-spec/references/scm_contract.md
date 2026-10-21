@@ -17,6 +17,24 @@ interface ScmProvider {
    * Queries work items matching criteria.
    */
   queryWorkItems(query: Record<string, any>): Promise<NormalizedWorkItem[]>;
+
+  /**
+   * Reports whether the provider can block on native pull-request check watch
+   * instead of caller-side timer polling. Defaults to false.
+   */
+  supportsNativeWatch(): boolean;
+
+  /**
+   * Blocks until the pull-request checks settle, when supported.
+   * Rejects with a descriptive error when the capability is unavailable.
+   */
+  watchPrChecks(prNumber: string | number, options?: { intervalSeconds?: number }): Promise<string>;
+
+  /**
+   * Reports whether the pull request actually reached the MERGED/completed
+   * state. An accepted merge command is not proof of a merge.
+   */
+  isPullRequestMerged(prNumber: string | number): Promise<boolean>;
 }
 ```
 

@@ -313,6 +313,74 @@ class GitHubProvider extends ScmProvider {
     }
   }
 
+  // Native capability: `gh run watch <run-id> --exit-status` blocks until the
+  // Actions run behind the PR checks finishes and reports the outcome. Probed
+  // once from the CLI help so an older gh falls back to caller polling.
+  supportsNativeWatch() {
+    if (this._nativeWatchSupport !== undefined) return this._nativeWatchSupport;
+    try {
+      const help = String(this.executor('gh run watch --help') || '');
+      this._nativeWatchSupport = help.includes('--exit-status');
+    } catch (e) {
+      this._nativeWatchSupport = false;
+    }
+    return this._nativeWatchSupport;
+  }
+
+  async watchPrChecks(prIdentifier, options = {}) {
+    if (!prIdentifier) {
+      throw new Error('prIdentifier is required for GitHub watchPrChecks.');
+    }
+    if (!this.supportsNativeWatch()) {
+      throw new Error('GitHub CLI does not support native run watch.');
+    }
+    const seconds = Math.max(1, Number(options.intervalSeconds) || 10);
+    let checks = [];
+    try {
+      checks = JSON.parse(this.executor(`gh pr checks ${prIdentifier} --json name,state,link`) || '[]');
+    } catch (e) {
+      // `gh pr checks` exits non-zero while checks are pending/failing but still
+      // prints the JSON payload on stdout.
+      const output = e && e.stdout ? String(e.stdout) : '';
+      try {
+        checks = output.trim() ? JSON.parse(output) : [];
+      } catch (parseErr) {
+        checks = [];
+      }
+    }
+    const runIds = [];
+    for (const check of Array.isArray(checks) ? checks : []) {
+      const match = String(check.link || '').match(/\/actions\/runs\/(\d+)/);
+      if (match && !runIds.includes(match[1])) runIds.push(match[1]);
+    }
+    if (runIds.length === 0) {
+      throw new Error('no Actions run is associated with the pull request checks yet');
+    }
+    const watched = [];
+    for (const runId of runIds) {
+      try {
+        this.executor(`gh run watch ${runId} --exit-status --interval ${seconds}`);
+        watched.push({ runId, ok: true });
+      } catch (watchErr) {
+        // A failing run exits non-zero; the caller re-reads the PR state next.
+        watched.push({ runId, ok: false, reason: watchErr.message });
+      }
+    }
+    return JSON.stringify(watched);
+  }
+
+  // Merge observation: a merge command that was only accepted (queue,
+  // auto-merge pending, blocked by branch rules) must not be treated as merged.
+  async isPullRequestMerged(prIdentifier) {
+    if (!prIdentifier) return false;
+    try {
+      const state = String(this.executor(`gh pr view ${prIdentifier} --json state --jq .state`) || '').trim();
+      return state.toUpperCase() === 'MERGED';
+    } catch (e) {
+      return false;
+    }
+  }
+
   async listReviewThreads(prIdentifier) {
     if (!prIdentifier) {
       throw new Error('prIdentifier is required for GitHub listReviewThreads.');

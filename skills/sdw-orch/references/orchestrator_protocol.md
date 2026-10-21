@@ -20,6 +20,21 @@ Each execution session is completely isolated within a dedicated JSON state file
   "updatedAt": "2026-10-18T23:05:00.000Z",
   "baseCommit": "38a7c1...",
   "deliveryCommit": null,
+  "branch": "feature/00040-example",
+  "baseBranch": "master",
+  "branchReused": false,
+  "branching": {
+    "strategy": "gitflow",
+    "source": "config",
+    "featurePrefix": "feature/",
+    "featureBranch": "feature/00040-example",
+    "workBranch": "develop",
+    "integrationBranch": "develop",
+    "updateWorkBranch": true,
+    "syncWorkBranchAfterMerge": true,
+    "pushSyncedWorkBranch": false
+  },
+  "branchingSync": null,
   "score": 9,
   "scoreIteration": 1,
   "reviewIteration": 1,
@@ -68,9 +83,11 @@ Configurable feature branch activation and per-task isolated git worktrees:
 
 ### Feature Branch Lifecycle (`useFeatureBranches: true`)
 - **Activation:** No working-tree cleanliness gate. Execution proceeds independently of git state; dirty trees never block, refuse, or halt a run.
-- **Naming:** Derives branch name `feature/{specSlug}`.
-- **Switch/Reuse:** If `feature/{specSlug}` already exists, switches to it and marks `branchReused: true`. Otherwise, creates and switches to `feature/{specSlug}` from the resolved base branch.
-- **Metadata:** Records `branch`, `baseBranch`, and `branchReused` in state. Step 8 PR payload includes `head: branch` and `base: baseBranch`.
+- **Naming:** `branching.featurePrefix` + `specSlug` (default `feature/<specSlug>`).
+- **Start Lane:** From `branching.workBranch` when it is a non-empty branch distinct from `branching.integrationBranch`; a null work lane, or one equal to the integration lane, starts from the checked-out branch (trunk behavior). With `branching.updateWorkBranch`, the work lane is fetched and fast-forwarded first.
+- **Switch/Reuse:** If the feature branch already exists, switches to it and marks `branchReused: true`. Otherwise, creates and switches to it from the start lane. Resuming on the feature branch reuses it in place without checkout, fetch, or fast-forward.
+- **Metadata:** Records `branch`, `baseBranch`, `branchReused`, and `branching` (strategy, source, prefix, feature branch, lanes, flags) in state. The Step 8 PR payload includes `head: branch` and `base` resolved by `sdw-ship-pr` from `branching.integrationBranch` (falling back to the detected base branch).
+- **Configuration:** Presets (`trunk`, `github`, `develop`, `gitflow`, `gitlab`) and explicit overrides are documented in [`sdw-config/references/config_spec.md`](../../sdw-config/references/config_spec.md).
 
 ### Per-Task Worktree Lifecycle (`useWorktrees: true`)
 - **Preconditions:** Verifies git availability, repository initialization, and writability of `.sdw/worktrees/`.
@@ -190,12 +207,13 @@ Step 8 delegates all final PR verification gates, remote publishing, SCM submiss
   - Evaluation of pre-PR instructions and lifecycle commands (`prePrCommand`, `prePrInstructions`).
   - Pre-PR build and test verification gates (`requiredBuild`, `runAllTests`).
   - Remote branch pushing (`pushDelivery` or `--push`).
-  - Pull request creation and idempotent reuse across SCM providers (`github`, `ado`, `none`).
+  - Pull request creation and idempotent reuse across SCM providers (`github`, `ado`, `none`). The PR base is `branching.integrationBranch`; an explicit `--base` and the legacy fallbacks keep lower priority.
   - Post-PR review convergence loop, remote CI polling, cooperative defect class fixing, and thread resolution.
   - Opt-in merge after convergence (`--merge` / `--allow-merge`): one SCM merge command, fire and forget. The outcome is recorded in `steps[8].output.merge` and never changes the delivery result, because permissions, approvals, and branch rules are operator concerns.
+  - Post-merge synchronization when the pull request reaches `MERGED` and `branching.syncWorkBranchAfterMerge` is `true`: switch to the work lane, fast-forward it to the integration lane, then push it when `branching.pushSyncedWorkBranch` is `true`. A dirty tree or a non-fast-forward leaves every local branch untouched and records `branchingSync.status: "blocked"` with the reason; the delivery still succeeds.
 - **Orchestrator Lifecycle Finalization:**
   - Consumes structured JSON report from `sdw-ship-pr`.
-  - Records delivery outcome (`pullRequest`, `shipStatus`, `pushedBranch`, `reviewConvergence`) into `.sdw/state/{runId}.state.json`.
+  - Records delivery outcome (`pullRequest`, `shipStatus`, `pushedBranch`, `reviewConvergence`, `branchingSync`) into `.sdw/state/{runId}.state.json`.
   - Transitions specification status to `completed` in `.sdw/specs/index.specs.md`.
 
 ## 8. Delegated Code Review via sdw-code-review (Step 7)
@@ -205,7 +223,7 @@ Step 7 delegates all working-tree review execution to the standalone `sdw-code-r
 ### Delegation Contract
 - **Invocation:** `node skills/sdw-code-review/scripts/sdw_code_review.cjs run --target <root> [--base <ref>] --report <artifactsDir>/<slug>-step-7.md [--fix] [--json]`
   (or inline in the host agent with the same CLI contract).
-- **Base Resolution:** Explicit `--base` (run `baseCommit`) when available; otherwise `sdw-code-review` auto-detects via config `baseBranch`, tracking remotes, local branches, merge-base, or initial commit.
+- **Base Resolution:** Explicit `--base` (run `baseCommit`) when available; otherwise `sdw-code-review` resolves `branching.integrationBranch` first, then auto-detects via config `baseBranch`, tracking remotes, local branches, merge-base, or initial commit.
 - **Report Consumption:** Parses JSON (`passed`, `errorCount`/`criticalCount`, `warningCount`, `suggestionCount`, `blockingCount`, `findings` with `id`, `severity`, `path`, `rule`, `fix`, `status`).
 - **Fix Iteration:** While blocking findings remain and fixable findings exist (up to 3 iterations): run with `--fix`, gate via `sdw-security-checks`, commit only fixer-touched files (`fix(<slug>): apply automated review fixes (iteration N)`), re-verify without `--fix`.
 - **Outcome:** `passed` advances to Step 8; residual blocking records `review_failed` and halts; artifact path recorded in `state.steps[7].artifact`.
@@ -229,7 +247,8 @@ Re-executes an already delivered specification in refinement mode instead of imp
 `--dry-run` and `--sandbox` answer two different questions and are mutually exclusive.
 
 ### Plan-Only Dry Run (`--dry-run`)
-- `run <specPath> --dry-run` validates the specification in authoring mode and prints the plan: spec path and slug, target root, scoring/delivery/branch settings, the eight step names, and `No steps executed (--dry-run).`
+- `run <specPath> --dry-run` validates the specification in authoring mode and prints the plan: spec path and slug, target root, scoring/delivery/branch settings, the resolved branch plan, the eight step names, and `No steps executed (--dry-run).`
+- The branch plan prints `Strategy: <preset>`, `Start lane: <branch> (update: yes|no)`, `Feature branch: <prefix><slug>`, `Pull request target: <integration branch>`, and `After merge: <actions>`, all resolved from configuration without executing git commands.
 - It creates no run state, no artifacts, no branches, no worktrees, and no clones. Exit code `0` when the spec validates, `1` when it does not.
 
 ### Sandbox Execution (`--sandbox`)
