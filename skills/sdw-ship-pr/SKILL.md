@@ -70,7 +70,7 @@ When the working tree is dirty, the host agent (LLM) selects what belongs to thi
 2. Analyze as the host agent: compare each candidate against this session's task evidence, prompts, dependencies, and artifacts. Approve only files this session produced or that its tasks depend on. Leave pre-existing or unrelated work-in-progress out.
 3. Approve: write the approved project-relative paths as a JSON array to `.sdw/state/<runId>/dirty-files.json` (or pass a comma-separated `--dirty-files`).
 4. Publish: `git status --porcelain -uall` candidates are filtered to the approved list, staged path by path (`git add -A -- <path>`), committed with a pathspec limited to those paths (`chore(delivery): include pending working-tree changes`, override with `dirtyCommitMessage`), and only then pushed. Files already staged outside the approved list stay staged and out of the delivery commit.
-5. Without an approved list or run scope, the commit is skipped with a warning and the dirty files stay in place.
+5. Without an approved list or run scope, the commit is skipped with a warning and the dirty files stay in place; a selected commit that fails aborts the run before any push, so the branch never publishes without the delivered work.
 - Done when: Only approved session files are committed, unrelated dirty files remain untouched, and the branch is synchronized with origin or push is explicitly bypassed.
 
 ### Step 4: SCM Pull Request Creation / Reuse

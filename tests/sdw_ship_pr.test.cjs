@@ -1268,3 +1268,41 @@ test('sdw-ship-pr - the dirty commit never sweeps files staged outside the appro
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('sdw-ship-pr - a failed dirty commit aborts before publishing the branch', async () => {
+  const { tmpDir, config } = setupTestWorkspace();
+  config.scmProvider = 'github';
+  const calls = [];
+  const fakeExecutor = (cmd) => {
+    calls.push(cmd);
+    if (cmd.includes('git status --porcelain')) return ' M feature.js\u0000';
+    if (cmd.startsWith('git remote')) return 'origin';
+    if (cmd.startsWith('git add')) return '';
+    if (cmd.startsWith('git commit')) throw new Error('pre-commit hook rejected the change');
+    if (cmd.includes('where gh') || cmd.includes('command -v gh')) return '/usr/bin/gh';
+    if (cmd.includes('gh auth status')) return 'Logged in';
+    if (cmd.includes('gh repo view')) return JSON.stringify({ owner: { login: 'o' }, name: 'r' });
+    if (cmd.includes('gh pr list')) return '[]';
+    return '';
+  };
+  try {
+    await assert.rejects(
+      async () => sdwShipPr.runShipPr({
+        projectRoot: tmpDir,
+        config,
+        head: 'develop',
+        base: 'master',
+        push: true,
+        dirtyFilesPath: 'feature.js'
+      }, fakeExecutor),
+      /could not be committed before push/
+    );
+    assert.strictEqual(
+      calls.some(c => c.startsWith('git push')),
+      false,
+      'No push may follow a failed delivery commit'
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
