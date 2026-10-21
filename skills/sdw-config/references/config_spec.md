@@ -53,6 +53,26 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
       "maximum": 10,
       "default": 8
     },
+    "retro": {
+      "type": "object",
+      "description": "Automatic retrospective after a run reaches completed (spec 00045).",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "When true, sdw-orch runs sdw-retro for the completed run and records the outcome in state.retro. When false or absent, it prints the advisory retro command only."
+        },
+        "transcripts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Explicit transcript files the retrospective scans line by line for sdw-orch command signatures. Supports the {projectRoot} token; project-relative paths stay inside the project root. Empty by default: transcripts are never discovered."
+        }
+      },
+      "additionalProperties": false
+    },
     "scmCodeReviewEnabled": {
       "type": "boolean",
       "description": "Enable remote pull request review polling loop and automated review comment resolution.",
@@ -244,6 +264,8 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
 | `scoring.judgeEffort` | `string \| null` | `null` | Judge reasoning-effort hint passed to the judge command or host agent |
 | `scoring.judgeApiEndpoint` | `string \| null` | `null` | Judge API endpoint passed to the judge command or host agent |
 | `scoring.judgeCriticity` | `string` | `"strict"` | Judge strictness: `permissive`, `strict`, or `perfectionist` |
+| `retro.enabled` | `boolean` | `false` | Run `sdw-retro` automatically when a run reaches `completed` and record the outcome in `state.retro` (status, report paths, error). When `false` or absent, sdw-orch prints the advisory retro command only. This repository enables it. |
+| `retro.transcripts` | `string[]` | `[]` | Explicit transcript files the retrospective scans line by line for `sdw-orch run` and `resume` signatures; each is listed under report inputs with its line count. Supports `{projectRoot}`; empty by default, so transcripts are never discovered. A missing path produces a `transcript_unreadable` signal and the retro still exits `0`. |
 | `implementation.mode` | `string` | `"subagent"` | Step 4 mode: `subagent` (sequential host-dispatched workers) or `command` (automated subprocess per task). `handoff` was replaced by `subagent` |
 | `implementation.command` | `string \| null` | `null` | Required when `implementation.mode` is `command`; supports `{taskId}`, `{promptFile}`, `{evidenceFile}`, `{workingDir}`, `{targetRoot}`, `{slug}` |
 | `implementation.timeoutMs` | `integer` | `1800000` | Per-task execution timeout for `command` mode |

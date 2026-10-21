@@ -81,6 +81,26 @@
       },
       "additionalProperties": false
     },
+    "retro": {
+      "type": "object",
+      "description": "Automatic retrospective after a run reaches completed (spec 00045).",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "When true, sdw-orch runs sdw-retro for the completed run and records the outcome in state.retro. When false or absent, it prints the advisory retro command only."
+        },
+        "transcripts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Explicit transcript files the retrospective scans line by line for sdw-orch command signatures. Supports the {projectRoot} token; project-relative paths stay inside the project root. Empty by default: transcripts are never discovered."
+        }
+      },
+      "additionalProperties": false
+    },
     "scmCodeReviewEnabled": {
       "type": "boolean",
       "description": "Enable remote pull request review polling loop and automated review comment resolution.",
