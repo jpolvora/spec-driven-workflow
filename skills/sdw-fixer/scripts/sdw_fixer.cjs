@@ -216,37 +216,58 @@ function recordTrap(root, rule, summary) {
 
 function applyTrivialFix(root, finding, siblingHits, dryRun) {
   const catalog = TRIVIAL_RULES[finding.rule];
-  const file = finding.file.trim();
   if (!catalog) return { status: 'skipped', reason: 'non-trivial: requires agent reasoning' };
-  const abs = path.resolve(root, file);
-  if (!fs.existsSync(abs)) return { status: 'skipped', reason: 'file-not-found on disk' };
-  let content;
-  try {
-    content = fs.readFileSync(abs, 'utf8');
-  } catch (e) {
-    return { status: 'skipped', reason: `unreadable file: ${e.message}` };
+  // Group candidate lines by file: the anchor file plus every sibling file
+  // with grep hits. A defect class is closed only when each in-scope file is
+  // either patched or recorded as skipped with an explicit reason.
+  const candidates = new Map();
+  const addCandidate = (file, line) => {
+    const f = norm(String(file || '').trim());
+    if (!f) return;
+    if (!candidates.has(f)) candidates.set(f, new Set());
+    if (Number.isInteger(line) && line > 0) candidates.get(f).add(line);
+  };
+  addCandidate(finding.file, finding.line);
+  for (const h of siblingHits || []) addCandidate(h.file, h.line);
+  const fixed = [];
+  const skippedFiles = [];
+  for (const [file, lines] of candidates) {
+    let content;
+    try {
+      const abs = path.resolve(root, file);
+      if (!fs.existsSync(abs)) { skippedFiles.push({ file, reason: 'file-not-found on disk' }); continue; }
+      content = fs.readFileSync(abs, 'utf8');
+    } catch (e) {
+      skippedFiles.push({ file, reason: `unreadable file: ${e.message}` });
+      continue;
+    }
+    const fileLines = content.split('\n');
+    const targets = [...lines]
+      .filter(ln => fileLines[ln - 1] !== undefined && catalog.linePattern.test(fileLines[ln - 1]))
+      .sort((a, b) => a - b);
+    if (targets.length === 0) {
+      skippedFiles.push({ file, reason: 'pattern mismatch: no patchable defect-class line in this file' });
+      continue;
+    }
+    if (!dryRun) {
+      try {
+        const targetSet = new Set(targets);
+        const next = fileLines.filter((_, i) => !targetSet.has(i + 1)).join('\n');
+        fs.writeFileSync(path.resolve(root, file), next, 'utf8');
+      } catch (e) {
+        skippedFiles.push({ file, reason: `write failed: ${e.message}` });
+        continue;
+      }
+    }
+    for (const ln of targets) fixed.push({ file, line: ln });
   }
-  const lines = content.split('\n');
-  const siblingLines = new Set(
-    siblingHits.filter(h => h.file === norm(file)).map(h => h.line)
-  );
-  const targets = new Set();
-  if (finding.line && lines[finding.line - 1] !== undefined &&
-      catalog.linePattern.test(lines[finding.line - 1])) {
-    targets.add(finding.line);
+  if (fixed.length === 0) {
+    const reason = skippedFiles.length > 0
+      ? skippedFiles.map(s => `${s.file}: ${s.reason}`).join('; ')
+      : 'pattern mismatch at cited line and sibling lines';
+    return { status: 'skipped', reason, skippedFiles };
   }
-  for (const ln of siblingLines) {
-    if (lines[ln - 1] !== undefined && catalog.linePattern.test(lines[ln - 1])) targets.add(ln);
-  }
-  if (targets.size === 0) {
-    return { status: 'skipped', reason: 'pattern mismatch at cited line and sibling lines' };
-  }
-  const removed = Array.from(targets).sort((a, b) => a - b);
-  if (!dryRun) {
-    const next = lines.filter((_, i) => !targets.has(i + 1)).join('\n');
-    fs.writeFileSync(abs, next, 'utf8');
-  }
-  return { status: dryRun ? 'simulated' : 'fixed', removed };
+  return { status: dryRun ? 'simulated' : 'fixed', fixed, skippedFiles };
 }
 
 function runVerification(root, command) {
@@ -287,7 +308,15 @@ function cmdRun(options) {
   for (const { finding, score } of scored) {
     const file = finding.file.trim();
     const rule = finding.rule.trim();
-    const { hits, scanned, truncated } = grepSiblings(root, rule);
+    const { hits: rawHits, scanned, truncated } = grepSiblings(root, rule);
+    // Run-own artifacts (findings input, JSON report) are not product code:
+    // never patch them and never report them as siblings.
+    const ownFiles = new Set(
+      [options.findings, options.report]
+        .map(f => { try { return norm(path.relative(root, path.resolve(root, f))); } catch (e) { return null; } })
+        .filter(Boolean)
+    );
+    const hits = rawHits.filter(h => !ownFiles.has(h.file));
     if (truncated) {
       skipped.push({ file, reason: `sibling sweep truncated at ${MAX_HITS} hits; remaining occurrences unverified` });
     }
@@ -313,12 +342,18 @@ function cmdRun(options) {
       outcome: outcome.status
     };
     if (outcome.status === 'fixed') {
-      for (const ln of outcome.removed) fixed.push({ file, line: ln, defectClass: finding.rule.trim() });
+      for (const f of outcome.fixed) fixed.push({ file: f.file, line: f.line, defectClass: finding.rule.trim() });
+      for (const s of outcome.skippedFiles || []) skipped.push({ file: s.file, reason: s.reason });
+      detail.fixedFiles = outcome.fixed;
     } else if (outcome.status === 'simulated') {
-      for (const ln of outcome.removed) wouldFix.push({ file, line: ln, defectClass: finding.rule.trim() });
-      detail.simulatedLines = outcome.removed;
+      for (const f of outcome.fixed) wouldFix.push({ file: f.file, line: f.line, defectClass: finding.rule.trim() });
+      for (const s of outcome.skippedFiles || []) skipped.push({ file: s.file, reason: s.reason });
+      detail.simulatedFiles = outcome.fixed;
     } else {
       skipped.push({ file, reason: outcome.reason });
+      for (const s of outcome.skippedFiles || []) {
+        if (s.file !== file) skipped.push({ file: s.file, reason: s.reason });
+      }
       detail.skipReason = outcome.reason;
     }
     details.push(detail);

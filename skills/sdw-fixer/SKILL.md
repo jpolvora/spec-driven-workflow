@@ -37,7 +37,7 @@ Single remediation authority for Spec-Driven Workflow. Scores one finding batch 
    - Done when: Each finding lists sibling hits plus memory hints or explicit skips.
 
 4. **Apply Surgical Edits**
-   Apply deterministic trivial patches only at finding lines plus verified sibling lines; anything else becomes a `skipped` entry with `path + reason` for agent reasoning. Never close a class with an unrecorded surgical sibling.
+   Apply deterministic trivial patches at finding lines plus verified sibling lines across all files in the batch (run-own artifacts excluded); anything else becomes a `skipped` entry with `path + reason` for agent reasoning. Never close a defect class with an unrecorded surgical sibling.
    - Done when: Diffs touch only finding scope and `--dry-run` mutates nothing.
 
 5. **Report Results & Register Learning via sdw-memory**

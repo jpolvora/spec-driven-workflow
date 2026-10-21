@@ -64,11 +64,14 @@ Per finding, consult backends in this order and record `sourcesConsulted`:
 
 ## 4. Surgical Scope Gate
 
-- Editable in this round: lines matching a catalog trivial pattern at the
-  finding's `file:line` plus matching lines at verified sibling hits in the
-  same file.
+- Editable in this round: lines matching a catalog trivial pattern, grouped
+  by file across the anchor file plus every verified sibling file (not just
+  the anchored `file:line`). Run-own artifacts (findings input, JSON report)
+  are never patched and never reported as siblings.
 - Everything else (unknown rule, pattern mismatch at the cited line, missing
-  file) becomes a `skipped` entry with `path + reason` for agent reasoning.
+  file) becomes a `skipped` entry with `path + reason` for agent reasoning;
+  sibling files with grep hits but no patchable line each get their own
+  `skipped` entry instead of being silently dropped.
 - Large refactor scope is never auto-fixed: record `path + reason` and leave
   the class open. Never close a defect class with an unfixed surgical sibling
   left unrecorded.
@@ -78,7 +81,7 @@ Per finding, consult backends in this order and record `sourcesConsulted`:
 
 | `rule` | Grep tokens | Patch |
 |---|---|---|
-| `no_debugger_statements` | `debugger` | Delete lines matching `^\s*debugger\s*;?\s*$` at finding + sibling lines. |
+| `no_debugger_statements` | `debugger` | Delete lines matching `^\s*debugger\s*;?\s*$` at finding lines plus verified sibling lines across all files in the batch. |
 
 Rules outside this catalog have no deterministic patch and route to
 `skipped` with reason `non-trivial: requires agent reasoning`.

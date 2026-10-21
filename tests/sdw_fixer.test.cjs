@@ -41,6 +41,27 @@ function writeFindings(root, batchId = 'test-batch') {
   return p;
 }
 
+test('sdw-fixer - fixes defect-class siblings across files and records unpatched siblings', () => {
+  const root = setupRoot(true);
+  try {
+    fs.writeFileSync(path.join(root, 'sibling.js'), 'function x() {\ndebugger;\n}\n', 'utf8');
+    fs.writeFileSync(path.join(root, 'mentions.js'), '// note: the debugger keyword appears here but no statement to remove\n', 'utf8');
+    const reportPath = path.join(root, 'result.json');
+    const r = fixer.cmdRun({ root, findings: writeFindings(root), report: reportPath });
+    assert.strictEqual(r.exit, 0);
+    assert.strictEqual(r.report.status, 'completed');
+    const fixedFiles = r.report.fixed.map(f => f.file).sort();
+    assert.deepStrictEqual(fixedFiles, ['buggy.js', 'sibling.js']);
+    assert.ok(!fs.readFileSync(path.join(root, 'buggy.js'), 'utf8').includes('debugger;'));
+    assert.ok(!fs.readFileSync(path.join(root, 'sibling.js'), 'utf8').includes('debugger;'));
+    const mentionSkip = r.report.skipped.find(s => s.file === 'mentions.js');
+    assert.ok(mentionSkip, 'unpatched sibling file must be recorded as skipped');
+    assert.match(mentionSkip.reason, /pattern mismatch/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('sdw-fixer - learn registers a trap row for the fixed defect class', () => {
   const root = setupRoot(true);
   try {
