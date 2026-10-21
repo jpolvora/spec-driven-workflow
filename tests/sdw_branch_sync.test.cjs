@@ -160,6 +160,90 @@ test('sdw-branch-sync - AC12: cross-lane post-merge fast-forward and push', () =
   }
 });
 
+test('sdw-branch-sync - AC13: a blocked cross-lane fast-forward leaves the local integration ref untouched', () => {
+  const { repo, remote } = setupRepo();
+  try {
+    // The work lane carries its own commit, so it can never fast-forward to main.
+    git(repo, 'switch -c develop');
+    fs.writeFileSync(path.join(repo, 'develop.txt'), 'develop work\n', 'utf8');
+    git(repo, 'add -A');
+    git(repo, 'commit -m "develop work"');
+    git(repo, 'push -u origin develop');
+
+    // Advance origin/main from a throwaway branch so the local main ref stays behind.
+    const localMain = git(repo, 'rev-parse main');
+    git(repo, 'switch -c promo main');
+    fs.writeFileSync(path.join(repo, 'main.txt'), 'production change\n', 'utf8');
+    git(repo, 'add -A');
+    git(repo, 'commit -m "main promotion"');
+    git(repo, 'push origin promo:main');
+    git(repo, 'switch -c feature/sync');
+    git(repo, 'fetch origin');
+    assert.notStrictEqual(git(repo, 'rev-parse origin/main'), localMain, 'origin/main is ahead of the local ref');
+
+    const result = sdwShipPr.syncWorkBranchAfterMerge({
+      executor: realExecutor(repo),
+      branching: {
+        strategy: 'develop',
+        workBranch: 'develop',
+        integrationBranch: 'main',
+        syncWorkBranchAfterMerge: true,
+        pushSyncedWorkBranch: false
+      },
+      integrationBranch: 'main'
+    });
+
+    assert.strictEqual(result.status, 'blocked');
+    assert.match(result.reason, /fast-forward to "main" failed/);
+    assert.match(result.reason, /git fetch origin \+refs\/heads\/main:refs\/remotes\/origin\/main && git merge --ff-only origin\/main/);
+    assert.strictEqual(git(repo, 'rev-parse main'), localMain, 'Local integration ref must not move');
+    assert.strictEqual(git(repo, 'rev-parse --abbrev-ref HEAD'), 'feature/sync', 'Restores the original branch');
+  } finally {
+    removeRepo(repo, remote);
+  }
+});
+
+test('sdw-branch-sync - AC12: cross-lane sync writes the tracking ref even when the fetch refspec is narrowed', () => {
+  const { repo, remote } = setupRepo();
+  try {
+    git(repo, 'switch -c develop');
+    git(repo, 'push -u origin develop');
+
+    const localMain = git(repo, 'rev-parse main');
+    git(repo, 'switch -c promo main');
+    fs.writeFileSync(path.join(repo, 'main.txt'), 'production change\n', 'utf8');
+    git(repo, 'add -A');
+    git(repo, 'commit -m "main promotion"');
+    git(repo, 'push origin promo:main');
+    const mainHead = git(repo, 'rev-parse promo');
+
+    git(repo, 'switch -c feature/sync');
+    git(repo, 'fetch origin');
+    // Narrow the clone the way --single-branch does, then drop the tracking ref.
+    git(repo, 'config remote.origin.fetch "+refs/heads/develop:refs/remotes/origin/develop"');
+    git(repo, 'update-ref -d refs/remotes/origin/main');
+
+    const result = sdwShipPr.syncWorkBranchAfterMerge({
+      executor: realExecutor(repo),
+      branching: {
+        strategy: 'develop',
+        workBranch: 'develop',
+        integrationBranch: 'main',
+        syncWorkBranchAfterMerge: true,
+        pushSyncedWorkBranch: false
+      },
+      integrationBranch: 'main'
+    });
+
+    assert.strictEqual(result.status, 'synced');
+    assert.strictEqual(git(repo, 'rev-parse develop'), mainHead, 'Work branch fast-forwards to the integration lane');
+    assert.strictEqual(git(repo, 'rev-parse refs/remotes/origin/main'), mainHead, 'Tracking ref is written explicitly');
+    assert.strictEqual(git(repo, 'rev-parse main'), localMain, 'Local integration ref stays untouched');
+  } finally {
+    removeRepo(repo, remote);
+  }
+});
+
 test('sdw-branch-sync - AC13: dirty working tree blocks without touching any branch', () => {
   const { repo, remote } = setupRepo();
   try {
