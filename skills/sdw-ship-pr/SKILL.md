@@ -33,7 +33,7 @@ Parameters:
 - `--base <branch>`: PR target base branch (defaults to `.sdw/config.json` `baseBranch`, then `master`/`main`).
 - `--title <string>`: Custom PR title.
 - `--body <string>`: Custom PR description body.
-- `--push`: Force push active branch to remote origin before PR creation.
+- `--push`: Force push active branch to remote origin before PR creation. A dirty working tree is committed first (`chore(delivery): include pending working-tree changes`, override with `dirtyCommitMessage` in config) so the pushed branch carries the delivered work.
 - `--poll-pr`: Enable post-PR review polling and convergence loop.
 - `--merge` / `--allow-merge`: After review convergence, ask the SCM CLI to merge the pull request (`gh pr merge <n> --merge` or `az repos pr update --id <n> --status completed`). Fire and forget: the outcome is recorded but never fails the delivery, because permissions, pending approvals, and branch rules are outside this skill's contract. Default: off.
 - `--max-iterations <n>`: Review convergence ceiling (default `3`).

@@ -169,6 +169,7 @@ function buildDefaultFixerCommand(projectRoot, activeList) {
     const firstComment = t.comments && t.comments[0] ? String(t.comments[0].body || '') : '';
     const evidence = (firstComment.trim() || 'Review feedback').slice(0, 500) || 'Review feedback';
     return {
+      threadId: t.id || null,
       file: safe ? rawPath : 'REVIEW_THREADS.md',
       line: Number.isInteger(t.line) && t.line > 0 ? t.line : 1,
       rule: 'review_thread_feedback',
@@ -366,6 +367,36 @@ function locateStateFile(projectRoot, runId, specSlug = null, config = {}) {
   }
 
   return null;
+}
+
+/**
+ * Commits a dirty working tree before publishing (adapted from the ws-fix-pr /
+ * ws-goal-fix-pr auto-commit posture). Returns null when the tree is clean.
+ */
+function commitDirtyWorktree(executor, projectRoot, options = {}) {
+  const dryRun = Boolean(options.dryRun);
+  let status = '';
+  try {
+    status = String(executor('git status --porcelain -uall') || '').trim();
+  } catch (e) {
+    return null;
+  }
+  if (!status) return null;
+  const files = status.split('\n')
+    .map(line => line.slice(3).trim())
+    .filter(Boolean);
+  if (dryRun) {
+    return { simulated: true, files };
+  }
+  const message = options.message || 'chore(delivery): include pending working-tree changes';
+  try {
+    executor('git add -A');
+    executor(`git commit -m "${message}"`);
+    const sha = String(executor('git rev-parse --short HEAD') || '').trim();
+    return { sha, files, message };
+  } catch (e) {
+    return { error: e.message, files };
+  }
 }
 
 /**
@@ -714,6 +745,17 @@ async function runShipPr(options = {}, customExecutor = null) {
         if (!hasRemote) {
           log('[sdw-ship-pr] Remote push skipped: no git remote configured.');
         } else {
+          const dirtyCommit = commitDirtyWorktree(executor, projectRoot, {
+            message: options.dirtyCommitMessage || config.dirtyCommitMessage
+          });
+          if (dirtyCommit) {
+            report.dirtyCommit = dirtyCommit;
+            if (dirtyCommit.error) {
+              warn(`[sdw-ship-pr] Working tree is dirty but the commit failed: ${dirtyCommit.error}`);
+            } else {
+              log(`[sdw-ship-pr] Committed ${dirtyCommit.files.length} pending file(s) as ${dirtyCommit.sha} before pushing.`);
+            }
+          }
           log(`[sdw-ship-pr] Pushing branch ${head} to remote origin${activePrEarly ? ` (complementing active PR #${activePrEarly.number})` : ''}...`);
           try {
             executor(`git push -u origin ${head}`);
@@ -991,6 +1033,10 @@ async function runShipPr(options = {}, customExecutor = null) {
             let fixSummary = 'Applied and verified the requested review fix.';
             let canResolve = false;
             let fixResult = null;
+            // Structured sdw-fixer output, consumed collaboratively: fixed
+            // threads get the fixer's own resolution comment, skipped threads
+            // stay open with the recorded reason.
+            let fixerReport = null;
             // Delegate to sdw-fixer when no explicit reviewFixCommand is set (AC13).
             // Non-catalog rules record skipped entries with status no-op, so the
             // delegation is observable and never misread as completed work.
@@ -1034,9 +1080,12 @@ async function runShipPr(options = {}, customExecutor = null) {
               try {
                 const fixerReportPath = defaultFixer && defaultFixer.reportPath;
                 if (fixerReportPath && fs.existsSync(fixerReportPath)) {
-                  const fixerReport = JSON.parse(fs.readFileSync(fixerReportPath, 'utf8'));
+                  fixerReport = JSON.parse(fs.readFileSync(fixerReportPath, 'utf8'));
                   if (fixerReport && fixerReport.status === 'no-op') {
                     warn('[sdw-ship-pr] sdw-fixer reported no-op: no deterministic fix applies to these threads; manual agent remediation required (see cooperative protocol above).');
+                  }
+                  if (fixerReport && Array.isArray(fixerReport.amendments) && fixerReport.amendments.length > 0) {
+                    log(`[sdw-ship-pr] sdw-fixer recorded ${fixerReport.amendments.length} amendment(s) while applying the batch.`);
                   }
                 }
               } catch (e) {}
@@ -1079,11 +1128,27 @@ async function runShipPr(options = {}, customExecutor = null) {
                 commitSha = executor('git rev-parse --short HEAD').toString().trim();
               } catch (e) {}
 
+              // Consume the fixer report: only threads the fixer actually fixed
+              // are resolved, each with the fixer's own resolution comment.
+              const fixerComments = new Map();
+              if (fixerReport && Array.isArray(fixerReport.comments)) {
+                for (const c of fixerReport.comments) {
+                  if (c && c.threadId) fixerComments.set(c.threadId, c.comment);
+                }
+              }
               for (const thread of activeList) {
-                const perThreadSummary = (fixResult && fixResult.resolutions && fixResult.resolutions[thread.id])
+                if (fixerComments.size > 0 && !fixerComments.has(thread.id)) {
+                  warn(`[sdw-ship-pr] sdw-fixer left thread ${thread.id} open: no deterministic fix applied.`);
+                  continue;
+                }
+                const fixerNote = fixerComments.get(thread.id);
+                const perThreadSummary = fixerNote
+                  || (fixResult && fixResult.resolutions && fixResult.resolutions[thread.id])
                   || fixSummary;
                 const commitLine = commitSha ? `Fixed in commit ${commitSha}.\n\n` : '';
-                const summaryNote = `<!-- resolution-reply -->\nResolved review issue: applied fix and verified acceptance criteria.\n\n${commitLine}Summary: ${perThreadSummary}`;
+                const summaryNote = fixerNote
+                  ? `${fixerNote}\n\n${commitLine}`.trim()
+                  : `<!-- resolution-reply -->\nResolved review issue: applied fix and verified acceptance criteria.\n\n${commitLine}Summary: ${perThreadSummary}`;
 
                 const resolveRes = await provider.resolveReviewThread({
                   prNumber: prResult.number,

@@ -24,6 +24,7 @@ A bare array of finding objects is also accepted. Field rules:
 | `rule` | yes | Non-empty defect-class identifier, `^[A-Za-z0-9][A-Za-z0-9._-]*$`. Doubles as the grep token source. |
 | `evidence` | yes | Non-empty reference (review report id, log excerpt, thread URL). |
 | `severityHint` | no | `critical`, `high`, `medium`, or `low`. Missing or unknown scores as `medium`. |
+| `threadId` | no | Review thread identifier supplied by `sdw-ship-pr`. Carried into `fixed` and `comments` so the caller can resolve exactly the threads the fixer closed. |
 
 Validation runs before any read beyond the findings file itself. The first
 malformed entry halts the batch with exit `1` and zero mutations.
@@ -96,6 +97,16 @@ Rules outside this catalog have no deterministic patch and route to
   "skipped": [{ "file": "src/b.js", "reason": "non-trivial: requires agent reasoning" }],
   "wouldFix": [],
   "covered": [{ "file": "src/a.js", "line": 12, "defectClass": "no_debugger_statements" }],
+  "comments": [
+    { "threadId": "PRRT_123", "file": "src/a.js", "line": 12,
+      "defectClass": "no_debugger_statements",
+      "comment": "<!-- resolution-reply -->\nResolved review issue: fixed no_debugger_statements at src/a.js:12." }
+  ],
+  "amendments": [
+    { "at": "2026-10-21T12:00:00.000Z", "file": "src/b.js", "line": 3,
+      "rule": "custom_rule", "from": "fix", "to": "skipped",
+      "reason": "non-trivial: requires agent reasoning", "evidence": "scope-gate" }
+  ],
   "learned": [{ "rule": "no_debugger_statements", "slug": "no-debugger-statements", "recorded": true }],
   "verification": { "exitCode": null, "status": "skipped", "reason": "no --verify command given" },
   "reportPath": "result.json"
@@ -115,6 +126,17 @@ Rules outside this catalog have no deterministic patch and route to
   failed verification suppress learning). Callers stage `.sdw/memory/traps.md` when
   any entry reports `recorded: true`.
 - `verification.status` is `passed`, `failed`, or `skipped`.
+- `comments` carries one resolution comment per fixed thread (adapted from the
+  `ws-fix-pr` resolution-reply contract): it names the defect class and the
+  exact `file:line`, never a bare commit hash. `sdw-ship-pr` posts it on the
+  matching `threadId` and leaves unfixed threads open.
+- `amendments` is the structured deviation log (adapted from the `ws-fix-pr`
+  amendment protocol): `{ at, file, line, rule, from, to, reason, evidence }`.
+  It records when evidence changes a scored finding's action, for example a
+  scope-gate skip, a duplicate line covered by the batch, or a truncated
+  sibling sweep.
+- `--markdown <path>` writes a human-readable round report (status, per-finding
+  table, skipped entries, amendments); the path is recorded as `markdownPath`.
 
 ## 7. Exit Codes
 

@@ -18,7 +18,7 @@ Single remediation authority for Spec-Driven Workflow. Scores one finding batch 
 
 ## Subcommands
 
-- `run --findings <path> --report <path> [--dry-run] [--json] [--verify <cmd>] [--no-learn]`: Validate, score, gather context, apply trivial patches, register traps, write JSON report.
+- `run --findings <path> --report <path> [--markdown <path>] [--dry-run] [--json] [--verify <cmd>] [--no-learn]`: Validate, score, gather context, apply trivial patches, register traps, write the JSON report (and an optional Markdown round report).
 - `doctor [--json]`: Validate skill layout, references, script syntax, and zero-dependency guarantee.
 
 ## Steps
@@ -41,7 +41,7 @@ Single remediation authority for Spec-Driven Workflow. Scores one finding batch 
    - Done when: Diffs touch only finding scope and `--dry-run` mutates nothing.
 
 5. **Report Results & Register Learning via sdw-memory**
-   Write `{ batchId, fixed, skipped, learned, verification, reportPath }` JSON to `--report`; record one knowledge entry per fixed defect class through `sdw-memory` (deduplicated by slug, skipped under `--dry-run`, `--no-learn`, or failed verification); run the `--verify` command when given, otherwise record verification `skipped`. Caller commits fixer-touched files plus `.sdw/memory/traps.md` when `learned` reports a new row.
+   Write `{ batchId, fixed, skipped, covered, comments, amendments, wouldFix, learned, verification, reportPath }` JSON to `--report`, plus a Markdown round report when `--markdown` is given. `comments` carries one resolution comment per fixed thread (the caller posts it and leaves unfixed threads open); `amendments` records each deviation from the scored plan with its reason and evidence. Record one knowledge entry per fixed defect class through `sdw-memory` (deduplicated by slug, skipped under `--dry-run`, `--no-learn`, or failed verification); run the `--verify` command when given, otherwise record verification `skipped`. Caller commits fixer-touched files plus `.sdw/memory/traps.md` when `learned` reports a new row.
    - Done when: Report exists at `--report` and exit is `0` (`1` only on invalid intake or verify failure with the partial report preserved).
 
 ## References
