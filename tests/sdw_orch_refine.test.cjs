@@ -155,6 +155,23 @@ test('refine: skipped grilling, one refine task, and a no-change pass ships noth
   }
 });
 
+test('refine: the dispatch prompt mandates closing gaps and drift before simplifying', () => {
+  const root = setupRepo();
+  try {
+    assert.equal(startSecondPass(root), 4);
+    const state = stateManager.findLatestRunState(root);
+    const promptRel = state.steps[4].tasks['task-refine'].promptPath;
+    assert.ok(promptRel, 'the dispatch records the prompt path');
+    const prompt = fs.readFileSync(path.join(root, promptRel), 'utf8');
+    assert.match(prompt, /## Second Pass \(Refinement\) Mode/);
+    assert.match(prompt, /Fill what is missing or drifted/, 'the prompt names the gap-closure mandate');
+    assert.match(prompt, /Drift also covers stale documentation, configuration, schema entries, and tests/);
+    assert.match(prompt, /is honest only when every criterion already holds and no drift remains/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('refine: a real change is scored, committed as refine(...), and shipped', () => {
   const root = setupRepo();
   try {

@@ -25,7 +25,7 @@ Orchestrates spec execution from input requirement to delivery commit, automated
 
 - `run <specPath>`: Executes the full 8-step workflow pipeline for one specification.
 - `run <specPath> --dry-run`: Validates the specification and prints the execution plan; executes nothing and writes no state.
-- `run <specPath> --second-pass` (alias `--refine`): Refines an already implemented specification: reviews how it was delivered, applies only clear simplification or quality gains, writes a `{slug}-refine.md` report, commits only when the pass changed code, and runs Step 8 only when that commit exists. Producing no change is a valid outcome.
+- `run <specPath> --second-pass` (alias `--refine`): Refines an already implemented specification: audits how it was delivered, fills acceptance criteria that are missing or drifted from the spec, then applies clear simplification or quality gains. Writes a `{slug}-refine.md` report, commits only when the pass changed code, and runs Step 8 only when that commit exists. Producing no change is valid only when every criterion already holds and no drift remains.
 - `run <specPath> --sandbox`: Executes the whole pipeline against an isolated local clone of `HEAD`; never pushes or opens a pull request.
 - `sandbox list`: Lists isolated sandboxes with status, branch, and age.
 - `sandbox report --run-id <runId>`: Regenerates and prints the sandbox report.
@@ -45,7 +45,8 @@ Orchestrates spec execution from input requirement to delivery commit, automated
 
 - Requires an already delivered spec (registry `completed`/`archived`, or a completed run with a delivery commit); otherwise it refuses with exit `1`.
 - Steps 2 and 3 are skipped in favor of one `task-refine` task, and `task finish` accepts an empty `filesChanged` for it.
-- No code change: Steps 5-8 are `skipped`, the refinement report is written, and the command exits `0` with `refineOutcome: "no-change"`.
+- Gap closure is the first mandate: each acceptance criterion is audited against the delivered code, tests, configuration, and docs, and missing, partial, or drifted behavior is implemented. Simplification and quality passes follow, inside the same specification scope.
+- No code change: Steps 5-8 are `skipped`, the refinement report is written, and the command exits `0` with `refineOutcome: "no-change"`. This is honest only when every criterion already holds and no drift remains.
 - Code change: scoring, review, and shipping run normally. The commit is `refine({slug}): second pass refinement`, and shipping runs only because that commit exists.
 
 ## Dry Run vs Sandbox
