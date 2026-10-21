@@ -412,6 +412,10 @@ function applyRetroFollowUp({ config, manifest, item, options, deps } = {}) {
           error: err && err.message ? err.message : String(err)
         });
       }
+      // Persist each queued entry before the next candidate: a specification
+      // that exists on disk must already have its queue entry, otherwise an
+      // interrupted batch leaves an orphan spec the queue never delivers.
+      saveManifest(config, manifest);
     }
     return record(followUp);
   } catch (err) {

@@ -203,6 +203,40 @@ test('AC2: critical and high candidates become draft specs appended after the re
   }
 });
 
+test('AC2: a queued entry is on disk before the next specification is created', () => {
+  const root = makeRoot('queue');
+  try {
+    writeRun(root, 'run-1', [
+      candidate('RETRO-001', 'critical'),
+      candidate('RETRO-003', 'high')
+    ]);
+    const config = queue.loadConfig(root);
+    const manifest = makeManifest();
+    const manifestPath = path.join(root, '.sdw', 'state', `${manifest.batchId}.json`);
+    let firstEntryPersisted = null;
+    queue.applyRetroFollowUp({
+      config,
+      manifest,
+      item: manifest.queue[0],
+      deps: {
+        createSpec: ({ candidate: entry }) => {
+          if (entry.id === 'RETRO-003') {
+            const onDisk = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+            firstEntryPersisted = onDisk.queue.some(item => item.slug === '00100-retro-001');
+          }
+          return {
+            filePath: path.join(root, '.sdw', 'specs', `00100-${entry.id.toLowerCase()}.md`),
+            slug: `00100-${entry.id.toLowerCase()}`
+          };
+        }
+      }
+    });
+    assert.equal(firstEntryPersisted, true, 'the earlier follow-up must survive an interruption before the batch save');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('AC2: the default seam creates the draft specification through the sdw-spec CLI', () => {
   const root = makeRoot('queue');
   try {
