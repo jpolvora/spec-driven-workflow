@@ -159,7 +159,7 @@ Step 4 turns each DAG task into a dispatched worker. Exactly one task is in flig
 - **DAG Dependency Gate:** Rejects completion if upstream DAG dependencies are not yet completed.
 
 ### Dispatch Prompt Contract
-Sections in order: `## Task Context`, `## Description`, `## Assigned Acceptance Criteria`, `## Remaining Acceptance Criteria (do not regress)`, `## Target Files`, `## Scope Fence`, `## Dependency Context`, `## Prior Partial Progress`, `## Implementation Rules (sdw-rules)`, `## Prohibited Actions`, `## Evidence Schema`, `## Report Contract`, `## Finish Command`. Dependency context and prior progress are omitted when empty.
+Sections in order: `## Task Context`, `## Description`, `## Assigned Acceptance Criteria`, `## Remaining Acceptance Criteria (do not regress)`, `## Target Files`, `## Scope Fence`, `## Dependency Context`, `## Prior Partial Progress`, `## Implementation Rules (sdw-rules)`, `## Test Discipline`, `## Prohibited Actions`, `## Evidence Schema`, `## Report Contract`, `## Finish Command`. Dependency context and prior progress are omitted when empty.
 
 Every prompt opens its rules section by requiring the worker to load the shared `sdw-rules` skill (installed under `.agents/skills/sdw-rules/` or `skills/sdw-rules/`); the bullets that follow are a summary, never a replacement.
 
@@ -174,6 +174,7 @@ Prohibitions carried by every prompt: no `git commit`/`push`/`branch`/`checkout`
 - On conflict, execution halts with code 1 and preserves the worktree for inspection.
 
 ### Build & Test Verification Gates
+- **Focused first, full last:** while iterating, a worker runs only the focused check for the files it touched (the covering test file, a single case, or `node --check` for syntax); it escalates to the full suite only for shared helpers, multi-task areas, or gate fixes outside task scope, recording the run and reason in evidence `tests`, and it runs the full suite once before reporting. The orchestrator runs the full suite once at the gates below.
 - Once all DAG tasks complete, verification gates execute:
   - `verification.buildCommand` (or `requiredBuild` with `buildCommand`).
   - `verification.testCommand` (or `runAllTests` with `testCommand`).

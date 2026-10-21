@@ -154,6 +154,11 @@ function renderTaskPrompt(options) {
   prompt += `- **Surgical changes:** touch only the scope fence; no drive-by refactors, renames, or formatting churn.\n`;
   prompt += `- **No unrequested features:** implement exactly what the assigned criteria require.\n\n`;
 
+  prompt += `## Test Discipline\n`;
+  prompt += `- **While iterating:** run only the focused check for the files you touched, such as the single test file that covers them, one case, or \`node --check\` for syntax; do not re-run the full suite after every edit.\n`;
+  prompt += `- **Full suite only when required:** the change touches a shared helper, an area shared by several tasks, or a gate failure outside this task's scope; record the run and the reason in \`tests\`.\n`;
+  prompt += `- **Before reporting:** run the full suite once and record that run in \`tests\`.\n\n`;
+
   prompt += `## Prohibited Actions\n`;
   prompt += `- Do not run \`git commit\`, \`git push\`, \`git branch\`, \`git checkout\`, \`git worktree\`, or \`git tag\`. The orchestrator owns version control.\n`;
   prompt += `- Do not spawn subagents or delegate this task to another agent.\n`;
