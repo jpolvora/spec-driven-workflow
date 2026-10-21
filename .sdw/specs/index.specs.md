@@ -46,6 +46,6 @@ Central repository index tracking specification lifecycle states, metadata, and 
 | 00033 | 00033-sdw-orch-diagnostic-mode | SDW Orchestrator Diagnostic Run Mode — Upstream Issue Detection and Follow-up Spec Suggestion | pending | local | 2026-10-21 | PASS | - |
 | 00034 | 00034-sdw-memory-skill | SDW Memory Skill — Central Knowledge Wrapper with Pluggable Store Backends | pending | local | 2026-10-21 | PASS | - |
 | 00035 | 00035-sdw-delivery-changelog-retro-spec-update | SDW Delivery Changelog, Retrospective, and Spec-Drift Update | pending | local | 2026-10-21 | PASS | - |
-| 00036 | 00036-sdw-changelog-delivery-records | SDW Changelog Delivery Records | pending | local | 2026-10-21 | PASS | - |
+| 00036 | 00036-sdw-changelog-delivery-records | SDW Changelog Delivery Records | completed | local | 2026-10-21 | PASS | - |
 | 00037 | 00037-sdw-run-retrospective-candidates | SDW Run Retrospective Candidates | pending | local | 2026-10-21 | PASS | - |
 | 00038 | 00038-sdw-spec-drift-repair | SDW Spec Drift Repair | pending | local | 2026-10-21 | PASS | - |

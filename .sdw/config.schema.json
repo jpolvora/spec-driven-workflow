@@ -91,6 +91,16 @@
       "description": "Automatically push the delivery commit and branch to remote origin upon workflow completion.",
       "default": false
     },
+    "changelogEnabled": {
+      "type": "boolean",
+      "description": "Enable appending delivery records to the project changelog. When false, sdw-changelog exits 0 with 'skipped: disabled' and writes nothing.",
+      "default": true
+    },
+    "changelogFile": {
+      "type": "string",
+      "description": "Path to the project changelog. Supports the {projectRoot} token; the resolved path must stay inside the project root.",
+      "default": "{projectRoot}/CHANGELOG.md"
+    },
     "stateDir": {
       "type": "string",
       "description": "Path to the directory storing run session state files. Supports tokens {projectRoot} and {skillsRoot}.",
