@@ -263,6 +263,42 @@ test('AC3: worktree mode rejects a leaking task before the cherry-pick reaches H
   }
 });
 
+test('AC3: worktree mode tags the integrated primary-tree commit, not the worktree SHA', () => {
+  const root = setupRepo();
+  try {
+    fs.writeFileSync(path.join(root, '.sdw', 'config.json'), JSON.stringify({ useWorktrees: true }, null, 2), 'utf8');
+    assert.equal(pauseAtDispatch(root), 4);
+    const state = stateManager.findLatestRunState(root);
+    const taskId = state.steps[4].dispatch.activeTaskId;
+    const wtRel = `.sdw/worktrees/${state.runId}/${taskId}`;
+    execSync(`git worktree add -q "${wtRel}" -b "sdw-${state.runId}-${taskId}" HEAD`, { cwd: root, stdio: 'ignore' });
+
+    fs.appendFileSync(path.join(root, wtRel, 'app.cjs'), `// ${taskId} worktree work\n`, 'utf8');
+    const evidence = {
+      taskId,
+      status: 'success',
+      acIds: [state.dagTasks[0].coveredAcs[0]],
+      filesChanged: ['app.cjs'],
+      tests: [],
+      summary: 'worktree task'
+    };
+    const evidencePath = path.join(root, 'worktree.evidence.json');
+    fs.writeFileSync(evidencePath, JSON.stringify(evidence, null, 2), 'utf8');
+
+    assert.equal(sdwOrch.cmdTaskFinish({ root, runId: state.runId, taskId, evidencePath }), 0, 'The integrated task is accepted');
+
+    const after = stateManager.loadRunState(root, state.runId);
+    const record = after.steps[4].tasks[taskId];
+    const head = gitOut(root, 'rev-parse HEAD');
+    assert.ok(record.checkpointTag, 'A checkpoint tag is created');
+    assert.equal(gitOut(root, `rev-parse ${record.checkpointTag}`), head, 'The tag points at the integrated primary-tree HEAD');
+    assert.equal(record.commitSha, head, 'The recorded SHA is the integrated commit');
+    assert.equal(gitOut(root, 'rev-list --count HEAD~1..HEAD'), '1', 'Exactly one cherry-picked commit landed');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('AC9-AC10: task finish rejects a non-dispatched task and names the active one', () => {
   const root = setupRepo();
   try {

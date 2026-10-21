@@ -3095,7 +3095,10 @@ function cmdTaskFinish(options) {
         runId: state.runId,
         taskId,
         files: evidenceData.filesChanged,
-        commitSha: effectiveUseWorktrees ? commitSha : null
+        // Worktree mode: the cherry-pick creates a new SHA on the primary branch,
+        // so the tag must point at that integrated commit, not the pre-integration
+        // worktree commit whose branch is deleted right after integration.
+        commitSha: effectiveUseWorktrees ? getBaseCommit(targetRoot) : null
       });
       commitSha = checkpoint.commitSha || commitSha;
       checkpointTag = checkpoint.tag;

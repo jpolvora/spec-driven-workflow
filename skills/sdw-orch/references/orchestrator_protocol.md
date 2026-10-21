@@ -163,7 +163,7 @@ Step 4 turns each DAG task into a dispatched worker. Exactly one task is in flig
 - Scope is the Step 6 set: the same `isScopedExcluded` rules apply, so `.sdw/state/`, `.sdw/worktrees/`, `.sdw/sandbox/`, `.git/`, absolute paths, and `..` traversal are never committed. Unrelated dirty files stay uncommitted.
 - The commit is tagged `sdw-checkpoint-{runId}-{taskId}` (`git tag -f`). The tag is the crash and reset recovery pointer: `git show <tag>:<path>` recovers accepted file content, and `git tag --list "sdw-checkpoint-*"` matches completed tasks in state.
 - `steps[4].tasks[taskId]` records `commitSha` and `checkpointTag`. A task that accepted no file change (second-pass no-change) records `HEAD` and gets no tag.
-- Worktree mode tags the cherry-picked integration commit rather than creating a second commit.
+- Worktree mode tags the cherry-picked integration commit (`HEAD` after integration) rather than creating a second commit, so the tag points into the accepted primary-branch history instead of the pre-integration worktree SHA; that worktree SHA stays recorded under `state.worktrees`.
 - **Second pass excluded:** `--second-pass` runs keep a single `refine({slug}): second pass refinement` Step 6 commit, so `deliveryCommitCreated` still describes the refinement save.
 - **Opt out:** `--no-task-checkpoint` skips the checkpoint commit and tag; the Step 6 delivery commit then remains the only save and `commitSha` records `HEAD` at acceptance.
 - **Fail closed:** a git failure creating the commit or tag rejects the task (`task finish` exits `1` with the git error) and leaves it dispatched for retry.
