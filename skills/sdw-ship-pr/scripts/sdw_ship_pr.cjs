@@ -206,20 +206,11 @@ function resolveStateDir(projectRoot, config = {}) {
 function listChangedPaths(executor) {
   let out = '';
   try {
-    out = String(executor('git status --porcelain -uall') || '');
+    out = String(executor('git status --porcelain -z -uall') || '');
   } catch (e) {
     return new Set();
   }
-  const paths = new Set();
-  for (const line of out.split(/\r?\n/)) {
-    if (!line.trim()) continue;
-    let file = line.slice(3).trim();
-    const arrow = file.indexOf(' -> ');
-    if (arrow !== -1) file = file.slice(arrow + 4);
-    file = file.replace(/^"(.*)"$/, '$1');
-    if (file) paths.add(file);
-  }
-  return paths;
+  return new Set(parsePorcelain(out).map(entry => entry.path));
 }
 
 function stageChangedSince(executor, before, projectRoot) {
@@ -377,13 +368,39 @@ function locateStateFile(projectRoot, runId, specSlug = null, config = {}) {
  * Commits a dirty working tree before publishing (adapted from the ws-fix-pr /
  * ws-goal-fix-pr auto-commit posture). Returns null when the tree is clean.
  */
-function selectDirtyFiles(statusText, options = {}) {
-  const normalize = p => String(p || '').trim().replace(/\\/g, '/');
-  const entries = String(statusText || '')
+function shellQuote(value) {
+  const text = String(value);
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(text)) return text;
+  return `'${text.replace(/'/g, `'\\''`)}'`;
+}
+
+// Parses `git status --porcelain` output. With -z the entries are NUL
+// terminated, which keeps quoted, non-ASCII, and renamed paths intact.
+function parsePorcelain(statusText) {
+  const text = String(statusText || '');
+  const entries = [];
+  if (text.includes('\0')) {
+    const tokens = text.split('\0');
+    for (let i = 0; i < tokens.length; i += 1) {
+      const token = tokens[i];
+      if (!token.trim()) continue;
+      const status = token.slice(0, 2).trim();
+      entries.push({ status, path: token.slice(3).trim().replace(/\\/g, '/') });
+      // Rename/copy entries carry the original path in the next NUL token.
+      if (status.startsWith('R') || status.startsWith('C')) i += 1;
+    }
+    return entries.filter(entry => entry.path);
+  }
+  return text
     .split('\n')
     .filter(line => line.trim())
-    .map(line => ({ status: line.slice(0, 2).trim(), path: normalize(line.slice(3)) }))
+    .map(line => ({ status: line.slice(0, 2).trim(), path: line.slice(3).trim().replace(/\\/g, '/') }))
     .filter(entry => entry.path);
+}
+
+function selectDirtyFiles(statusText, options = {}) {
+  const normalize = p => String(p || '').trim().replace(/\\/g, '/');
+  const entries = parsePorcelain(statusText);
   const approved = Array.isArray(options.approved) && options.approved.length > 0
     ? new Set(options.approved.map(normalize))
     : null;
@@ -404,7 +421,7 @@ function commitDirtyWorktree(executor, projectRoot, options = {}) {
   const dryRun = Boolean(options.dryRun);
   let status = '';
   try {
-    status = String(executor('git status --porcelain -uall') || '');
+    status = String(executor('git status --porcelain -z -uall') || '');
   } catch (e) {
     return null;
   }
@@ -428,8 +445,8 @@ function commitDirtyWorktree(executor, projectRoot, options = {}) {
   if (dryRun) return { simulated: true, mode: selection.mode, files, excluded };
   const message = options.message || 'chore(delivery): include pending working-tree changes';
   try {
-    for (const file of files) executor(`git add -A -- "${file}"`);
-    executor(`git commit -m "${message}"`);
+    for (const file of files) executor(`git add -A -- ${shellQuote(file)}`);
+    executor(`git commit -m ${shellQuote(message)}`);
     const sha = String(executor('git rev-parse --short HEAD') || '').trim();
     return { sha, mode: selection.mode, files, excluded, message };
   } catch (e) {
@@ -1216,7 +1233,12 @@ async function runShipPr(options = {}, customExecutor = null) {
                   if (c && c.threadId) fixerComments.set(c.threadId, c.comment);
                 }
               }
+              const fixerDelegated = Boolean(defaultFixer);
+              if (fixerDelegated && fixerComments.size === 0) {
+                warn('[sdw-ship-pr] sdw-fixer produced no readable report; leaving every review thread open.');
+              }
               for (const thread of activeList) {
+                if (fixerDelegated && fixerComments.size === 0) continue;
                 if (fixerComments.size > 0 && !fixerComments.has(thread.id)) {
                   warn(`[sdw-ship-pr] sdw-fixer left thread ${thread.id} open: no deterministic fix applied.`);
                   continue;
@@ -1344,9 +1366,13 @@ async function runShipPr(options = {}, customExecutor = null) {
     // Step 4.6: Post-merge work-lane synchronization (spec 00040 AC12/AC13).
     // Runs only after the pull request is observed as MERGED, not merely after
     // the merge command was accepted, and never changes the delivery result.
+    // The sync is driven by the observed pull-request state, not by whether this
+    // run issued the merge: a maintainer merging later still closes the loop.
     const mergeAccepted = Boolean(report.merge && report.merge.ok === true);
+    const syncEnabled = Boolean(branching && branching.syncWorkBranchAfterMerge);
+    const prNumberForSync = report.pullRequest && report.pullRequest.number;
     let mergeObserver = null;
-    if (mergeAccepted && !dryRun) {
+    if (syncEnabled && !dryRun) {
       try {
         mergeObserver = providerEarly || (scmContract && scmContract.createScmProvider
           ? scmContract.createScmProvider(scmProviderName, { executor })
@@ -1355,14 +1381,11 @@ async function runShipPr(options = {}, customExecutor = null) {
         mergeObserver = null;
       }
     }
-    const prMerged = mergeAccepted
-      ? (dryRun ? true : Boolean(
-        mergeObserver
-        && typeof mergeObserver.isPullRequestMerged === 'function'
-        && await mergeObserver.isPullRequestMerged(report.pullRequest && report.pullRequest.number)
-      ))
+    const observedMerged = mergeObserver && typeof mergeObserver.isPullRequestMerged === 'function'
+      ? Boolean(await mergeObserver.isPullRequestMerged(prNumberForSync))
       : false;
-    if (mergeAccepted && !prMerged && branching && branching.syncWorkBranchAfterMerge) {
+    const prMerged = dryRun ? mergeAccepted : observedMerged;
+    if (!prMerged && syncEnabled) {
       report.branchingSync = {
         status: 'skipped',
         reason: 'pull request not observed as MERGED',
@@ -1372,7 +1395,7 @@ async function runShipPr(options = {}, customExecutor = null) {
       };
       log('[Branch Sync] skipped: the pull request is not MERGED yet.');
     }
-    if (prMerged && branching && branching.syncWorkBranchAfterMerge) {
+    if (prMerged && syncEnabled) {
       report.branchingSync = syncWorkBranchAfterMerge({
         executor,
         branching,
