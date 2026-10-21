@@ -324,12 +324,15 @@ async function runShipPr(options = {}, customExecutor = null) {
             }
 
             log(`[sdw-ship-pr] Committing ${changed.length} pre-PR change(s)...`);
-            const commitMsg = specSlug && specSlug !== 'unspecified' ? `chore(${specSlug}): apply pre-pr requirements` : 'chore: apply pre-pr requirements';
-            executor(`git commit -m "${commitMsg}"`);
+            const safeSlug = specSlug && specSlug !== 'unspecified' && /^[a-z0-9][a-z0-9-]*$/.test(specSlug) ? specSlug : null;
+            const commitMsg = safeSlug ? `chore(${safeSlug}): apply pre-pr requirements` : 'chore: apply pre-pr requirements';
+            const commitRes = spawnSync('git', ['commit', '-m', commitMsg], { cwd: projectRoot, stdio: 'ignore' });
+            if (commitRes.status !== 0) {
+              throw new Error(`pre-PR commit failed with exit code ${commitRes.status}`);
+            }
           }
         } catch (modErr) {
-          if (String(modErr.message || '').includes('Security checks failed')) throw modErr;
-          // non-git or commit error ignored
+          throw modErr;
         }
       }
 
