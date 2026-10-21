@@ -16,6 +16,14 @@ try {
   }
 }
 
+// Branching configuration helper from sdw-config (spec 00040).
+let sdwConfig;
+try {
+  sdwConfig = require('../../sdw-config/scripts/sdw_config.cjs');
+} catch (e) {
+  sdwConfig = null;
+}
+
 function assertSafeSlug(specSlug) {
   if (!/^[a-z0-9][a-z0-9-]*$/.test(String(specSlug))) {
     throw new Error(
@@ -356,6 +364,111 @@ function locateStateFile(projectRoot, runId, specSlug = null, config = {}) {
 }
 
 /**
+ * Post-merge work-lane synchronization (spec 00040 AC12/AC13).
+ * Fast-forwards the work lane to the integration lane and optionally pushes it.
+ * Any failure is reported as `blocked` and never fails the completed delivery.
+ */
+function syncWorkBranchAfterMerge(options = {}) {
+  const executor = options.executor;
+  const branching = options.branching || {};
+  const integrationBranch = options.integrationBranch || null;
+  const result = {
+    status: 'skipped',
+    reason: null,
+    integrationBranch: null,
+    workBranch: null,
+    at: new Date().toISOString()
+  };
+
+  if (options.dryRun) {
+    result.reason = 'dry-run';
+    return result;
+  }
+  if (!branching.syncWorkBranchAfterMerge) {
+    result.reason = 'syncWorkBranchAfterMerge disabled';
+    return result;
+  }
+  const workBranch = typeof branching.workBranch === 'string' && branching.workBranch.trim()
+    ? branching.workBranch.trim()
+    : null;
+  if (!workBranch) {
+    result.reason = 'no work branch configured';
+    return result;
+  }
+
+  const integration = integrationBranch || workBranch;
+  result.workBranch = workBranch;
+  result.integrationBranch = integration;
+
+  let originalBranch = '';
+  try {
+    originalBranch = String(executor('git rev-parse --abbrev-ref HEAD') || '').trim();
+  } catch (e) {
+    originalBranch = '';
+  }
+
+  // AC13: a dirty working tree blocks the synchronization before any switch.
+  let dirty = '';
+  try {
+    dirty = String(executor('git status --porcelain') || '').trim();
+  } catch (statusErr) {
+    result.status = 'blocked';
+    result.reason = `unable to inspect the working tree: ${statusErr.message}`;
+    return result;
+  }
+  if (dirty) {
+    result.status = 'blocked';
+    result.reason = 'working tree is dirty';
+    return result;
+  }
+
+  const sameLane = workBranch === integration;
+  const remediation = sameLane
+    ? `git switch ${workBranch} && git fetch origin && git merge --ff-only origin/${integration}`
+    : `git switch ${workBranch} && git fetch origin ${integration}:${integration} && git merge --ff-only ${integration}`;
+
+  try {
+    executor(`git switch ${workBranch}`);
+  } catch (switchErr) {
+    result.status = 'blocked';
+    result.reason = `cannot switch to work branch "${workBranch}": ${switchErr.message}`;
+    return result;
+  }
+
+  try {
+    if (sameLane) {
+      executor('git fetch origin');
+      executor(`git merge --ff-only origin/${integration}`);
+    } else {
+      executor(`git fetch origin ${integration}:${integration}`);
+      executor(`git merge --ff-only ${integration}`);
+    }
+  } catch (syncErr) {
+    // AC13: never leave the repository on a half-synchronized branch.
+    if (originalBranch) {
+      try { executor(`git switch ${originalBranch}`); } catch (rollbackErr) {}
+    }
+    result.status = 'blocked';
+    result.reason = `fast-forward to "${integration}" failed: ${syncErr.message}; resolve manually with: ${remediation}`;
+    return result;
+  }
+
+  if (branching.pushSyncedWorkBranch) {
+    try {
+      executor(`git push origin ${workBranch}`);
+    } catch (pushErr) {
+      result.status = 'blocked';
+      result.reason = `fast-forward applied but push failed: ${pushErr.message}`;
+      return result;
+    }
+  }
+
+  result.status = 'synced';
+  result.reason = null;
+  return result;
+}
+
+/**
  * Core PR Shipping execution
  */
 async function runShipPr(options = {}, customExecutor = null) {
@@ -378,8 +491,22 @@ async function runShipPr(options = {}, customExecutor = null) {
     }
   }
 
-  let base = options.base || config.baseBranch || 'master';
-  if (!options.base && !config.baseBranch) {
+  // AC11: the pull request base is the configured integration lane; explicit
+  // --base and the legacy fallbacks keep lower priority.
+  let branching = null;
+  if (sdwConfig && typeof sdwConfig.resolveBranching === 'function') {
+    try {
+      branching = sdwConfig.resolveBranching(config);
+    } catch (branchConfigErr) {
+      branching = null;
+    }
+  }
+  const integrationBranch = branching && typeof branching.integrationBranch === 'string' && branching.integrationBranch.trim()
+    ? branching.integrationBranch.trim()
+    : null;
+
+  let base = options.base || integrationBranch || config.baseBranch || 'master';
+  if (!options.base && !integrationBranch && !config.baseBranch) {
     try {
       const remotes = executor('git remote').trim();
       if (remotes) {
@@ -425,6 +552,7 @@ async function runShipPr(options = {}, customExecutor = null) {
     merge: options.merge
       ? { requested: true, attempted: false, ok: null, reason: 'delivery did not reach merge step' }
       : null,
+    branchingSync: null,
     reviewConvergence: {
       enabled: scmCodeReviewEnabled,
       converged: false,
@@ -1021,6 +1149,25 @@ async function runShipPr(options = {}, customExecutor = null) {
       }
     }
 
+    // Step 4.6: Post-merge work-lane synchronization (spec 00040 AC12/AC13).
+    // Runs only after an observed MERGED, and never changes the delivery result.
+    const prMerged = Boolean(report.merge && report.merge.ok === true);
+    if (prMerged && branching && branching.syncWorkBranchAfterMerge) {
+      report.branchingSync = syncWorkBranchAfterMerge({
+        executor,
+        branching,
+        integrationBranch: integrationBranch || base,
+        dryRun
+      });
+      if (report.branchingSync.status === 'synced') {
+        let syncSha = '';
+        try { syncSha = String(executor('git rev-parse --short HEAD') || '').trim(); } catch (e) {}
+        log(`[Branch Sync] ${branching.strategy}: fast-forwarded ${report.branchingSync.workBranch} to ${report.branchingSync.integrationBranch}${syncSha ? ` at ${syncSha}` : ''}.`);
+      } else if (report.branchingSync.status === 'blocked') {
+        warn(`[Branch Sync] blocked: ${report.branchingSync.reason}`);
+      }
+    }
+
     // Step 5: State Persistence
     if (options.runId) {
       const stateFilePath = locateStateFile(projectRoot, options.runId, specSlug, config);
@@ -1046,12 +1193,14 @@ async function runShipPr(options = {}, customExecutor = null) {
               adaptedActivePr: Boolean(report.adaptedActivePr),
               pushedBranch: report.pushed ? head : null,
               merge: report.merge || null,
+              branchingSync: report.branchingSync || null,
               reviewConvergence: report.reviewConvergence
             }
           };
 
           stateData.pullRequest = report.pullRequest;
           stateData.shipStatus = report.shipStatus;
+          if (report.branchingSync) stateData.branchingSync = report.branchingSync;
           fs.writeFileSync(stateFilePath, JSON.stringify(stateData, null, 2), 'utf8');
           log(`[sdw-ship-pr] Updated run state at ${stateFilePath}`);
         } catch (saveErr) {
@@ -1246,5 +1395,6 @@ module.exports = {
   getSpecTitle,
   buildPrTitle,
   buildPrBody,
-  buildDefaultFixerCommand
+  buildDefaultFixerCommand,
+  syncWorkBranchAfterMerge
 };

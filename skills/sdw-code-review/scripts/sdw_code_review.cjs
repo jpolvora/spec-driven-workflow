@@ -135,6 +135,27 @@ function resolveBaseRef(options) {
   }
 
   const config = loadProjectConfig(projectRoot);
+
+  // AC11: the integration lane is the primary review base.
+  let integrationBranch = null;
+  try {
+    const sdwConfig = require('../../sdw-config/scripts/sdw_config.cjs');
+    const branching = sdwConfig.resolveBranching(config);
+    if (branching && typeof branching.integrationBranch === 'string' && branching.integrationBranch.trim()) {
+      integrationBranch = branching.integrationBranch.trim();
+    }
+  } catch (e) {
+    integrationBranch = null;
+  }
+  if (integrationBranch) {
+    const candidates = [integrationBranch, `origin/${integrationBranch}`, `refs/heads/${integrationBranch}`, `refs/remotes/origin/${integrationBranch}`];
+    for (const c of candidates) {
+      if (gitVerifies(projectRoot, c)) {
+        return { base: c, source: 'branching' };
+      }
+    }
+  }
+
   if (config.baseBranch && typeof config.baseBranch === 'string' && config.baseBranch.trim()) {
     const cfgBase = config.baseBranch.trim();
     const candidates = [cfgBase, `origin/${cfgBase}`, `refs/heads/${cfgBase}`, `refs/remotes/origin/${cfgBase}`];

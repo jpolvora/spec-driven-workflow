@@ -21,6 +21,15 @@
   "securityChecksEnabled": true,
   "useWorktrees": false,
   "useFeatureBranches": true,
+  "branching": {
+    "strategy": "gitflow",
+    "featurePrefix": "feature/",
+    "workBranch": "develop",
+    "integrationBranch": "develop",
+    "updateWorkBranch": true,
+    "syncWorkBranchAfterMerge": true,
+    "pushSyncedWorkBranch": false
+  },
   "scmProvider": "github",
   "implementation": {
     "mode": "subagent",

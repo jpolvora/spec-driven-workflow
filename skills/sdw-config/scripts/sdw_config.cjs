@@ -218,6 +218,86 @@ function parseArgs(args) {
   return result;
 }
 
+// Branching presets (spec 00040). A preset describes the relationship between a
+// work lane (where feature branches start) and an integration lane (where the
+// pull request merges); every explicit `branching` key overrides the preset.
+const BRANCHING_PRESETS = {
+  trunk: {
+    workBranch: null,
+    integrationBranch: null,
+    updateWorkBranch: false,
+    syncWorkBranchAfterMerge: false
+  },
+  github: {
+    mirrorWorkToIntegration: true,
+    workBranch: null,
+    integrationBranch: null,
+    updateWorkBranch: true,
+    syncWorkBranchAfterMerge: true
+  },
+  develop: {
+    workBranch: 'develop',
+    integrationBranch: null,
+    updateWorkBranch: true,
+    syncWorkBranchAfterMerge: true
+  },
+  gitflow: {
+    workBranch: 'develop',
+    integrationBranch: 'develop',
+    updateWorkBranch: true,
+    syncWorkBranchAfterMerge: true
+  },
+  gitlab: {
+    mirrorWorkToIntegration: true,
+    workBranch: null,
+    integrationBranch: null,
+    updateWorkBranch: true,
+    syncWorkBranchAfterMerge: true
+  }
+};
+
+const BRANCHING_DEFAULTS = {
+  strategy: 'trunk',
+  featurePrefix: 'feature/',
+  workBranch: null,
+  integrationBranch: null,
+  updateWorkBranch: false,
+  syncWorkBranchAfterMerge: false,
+  pushSyncedWorkBranch: false
+};
+
+// Expands the configured preset and applies explicit overrides. `source` records
+// whether the strategy came from `.sdw/config.json` ("config") or the default
+// preset ("default").
+function resolveBranching(config) {
+  // `loadConfig` exposes the unmerged file contents as `raw`; prefer it so the
+  // scaffolded default block is not mistaken for an explicit configuration.
+  const configured = config && typeof config === 'object' && config.raw && typeof config.raw === 'object'
+    ? config.raw.branching
+    : (config && typeof config === 'object' && !Array.isArray(config) ? config.branching : undefined);
+  const branching = configured && typeof configured === 'object' && !Array.isArray(configured) ? configured : {};
+  const has = (key) => Object.prototype.hasOwnProperty.call(branching, key);
+  const strategy = has('strategy') ? branching.strategy : BRANCHING_DEFAULTS.strategy;
+  if (typeof strategy !== 'string' || !Object.prototype.hasOwnProperty.call(BRANCHING_PRESETS, strategy)) {
+    throw new Error(`Unknown branching.strategy "${strategy}". Allowed: ${Object.keys(BRANCHING_PRESETS).join(', ')}.`);
+  }
+  const preset = BRANCHING_PRESETS[strategy];
+  const integrationBranch = has('integrationBranch') ? branching.integrationBranch : preset.integrationBranch;
+  const workBranch = has('workBranch')
+    ? branching.workBranch
+    : (preset.mirrorWorkToIntegration ? integrationBranch : preset.workBranch);
+  return {
+    strategy,
+    source: has('strategy') ? 'config' : 'default',
+    workBranch,
+    integrationBranch,
+    featurePrefix: has('featurePrefix') ? branching.featurePrefix : BRANCHING_DEFAULTS.featurePrefix,
+    updateWorkBranch: has('updateWorkBranch') ? branching.updateWorkBranch : preset.updateWorkBranch,
+    syncWorkBranchAfterMerge: has('syncWorkBranchAfterMerge') ? branching.syncWorkBranchAfterMerge : preset.syncWorkBranchAfterMerge,
+    pushSyncedWorkBranch: has('pushSyncedWorkBranch') ? branching.pushSyncedWorkBranch : BRANCHING_DEFAULTS.pushSyncedWorkBranch
+  };
+}
+
 const DEFAULT_CONFIG = {
   $schema: './config.schema.json',
   specsDir: '{projectRoot}/.sdw/specs',
@@ -380,6 +460,49 @@ const DEFAULT_SCHEMA = {
       "type": "boolean",
       "description": "Automatically create and activate an isolated feature branch derived from specification slug.",
       "default": false
+    },
+    "branching": {
+      "type": "object",
+      "description": "Branch lane model (spec 00040): the work lane is where feature branches start and where the repository returns after delivery; the integration lane is where the pull request merges. `strategy` selects a preset and every explicit key overrides that preset.",
+      "properties": {
+        "strategy": {
+          "type": "string",
+          "enum": ["trunk", "github", "develop", "gitflow", "gitlab"],
+          "default": "trunk",
+          "description": "Preset: trunk (feature branches start from the checked-out branch), github (work lane mirrors the integration lane), develop (feature branches start from develop; pull requests target the auto-detected integration branch), gitflow (feature branches start from develop and pull requests merge into develop), gitlab (work lane mirrors the integration lane; promotions between environment lanes stay manual)."
+        },
+        "featurePrefix": {
+          "type": "string",
+          "default": "feature/",
+          "description": "Prefix for the feature branch name: {branching.featurePrefix}{specSlug}."
+        },
+        "workBranch": {
+          "type": ["string", "null"],
+          "default": null,
+          "description": "Branch where feature branches start and where the repository returns after delivery. null uses the checked-out branch; the github and gitlab presets mirror integrationBranch."
+        },
+        "integrationBranch": {
+          "type": ["string", "null"],
+          "default": null,
+          "description": "Branch that receives the pull request merge. null means auto: the repository default branch resolved from origin/HEAD."
+        },
+        "updateWorkBranch": {
+          "type": "boolean",
+          "default": false,
+          "description": "Fetch origin and fast-forward the work branch before creating the feature branch."
+        },
+        "syncWorkBranchAfterMerge": {
+          "type": "boolean",
+          "default": false,
+          "description": "After the pull request merges, fast-forward the work branch to the integration branch."
+        },
+        "pushSyncedWorkBranch": {
+          "type": "boolean",
+          "default": false,
+          "description": "Push the synchronized work branch to origin after the post-merge fast-forward."
+        }
+      },
+      "additionalProperties": false
     },
     "scmProvider": {
       "type": "string",
@@ -635,6 +758,42 @@ function validateConfigSchema(config) {
   if ('useFeatureBranches' in config) {
     if (typeof config.useFeatureBranches !== 'boolean') {
       errors.push('Property "useFeatureBranches" must be a boolean.');
+    }
+  }
+
+  // branching (AC1-AC5)
+  if ('branching' in config) {
+    if (!config.branching || typeof config.branching !== 'object' || Array.isArray(config.branching)) {
+      errors.push('Property "branching" must be an object.');
+    } else {
+      const allowedBranchingKeys = ['strategy', 'featurePrefix', 'workBranch', 'integrationBranch', 'updateWorkBranch', 'syncWorkBranchAfterMerge', 'pushSyncedWorkBranch'];
+      for (const key of Object.keys(config.branching)) {
+        if (!allowedBranchingKeys.includes(key)) {
+          errors.push(`Property "branching.${key}" is not a recognized key. Expected one of: ${allowedBranchingKeys.join(', ')}.`);
+        }
+      }
+      if ('strategy' in config.branching) {
+        const allowedStrategies = Object.keys(BRANCHING_PRESETS);
+        const strategy = config.branching.strategy;
+        if (typeof strategy !== 'string') {
+          errors.push(`Property "branching.strategy" must be a string; allowed values: ${allowedStrategies.join(', ')}.`);
+        } else if (!allowedStrategies.includes(strategy)) {
+          errors.push(`Property "branching.strategy" must be one of: ${allowedStrategies.join(', ')}; got unknown value "${strategy}".`);
+        }
+      }
+      for (const key of ['featurePrefix', 'workBranch', 'integrationBranch']) {
+        if (!(key in config.branching)) continue;
+        const value = config.branching[key];
+        if (value === null && key !== 'featurePrefix') continue;
+        if (typeof value !== 'string') {
+          errors.push(`Property "branching.${key}" must be a string${key === 'featurePrefix' ? '' : ' or null'}.`);
+        }
+      }
+      for (const key of ['updateWorkBranch', 'syncWorkBranchAfterMerge', 'pushSyncedWorkBranch']) {
+        if (key in config.branching && typeof config.branching[key] !== 'boolean') {
+          errors.push(`Property "branching.${key}" must be a boolean.`);
+        }
+      }
     }
   }
 
@@ -1385,6 +1544,7 @@ module.exports = {
   cmdParse,
   loadConfig,
   validateConfigSchema,
+  resolveBranching,
   resolveSkillsRoot,
   hasSdwSkills,
   findEnclosingSkillsDir,

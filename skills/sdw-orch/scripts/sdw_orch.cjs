@@ -672,8 +672,49 @@ function applySandboxIsolation(config, options, meta) {
   return config;
 }
 
+function buildBranchPlan(branching, specSlug) {
+  const integrationBranch = typeof branching.integrationBranch === 'string' && branching.integrationBranch.trim()
+    ? branching.integrationBranch.trim()
+    : 'auto (origin/HEAD)';
+  const workBranch = typeof branching.workBranch === 'string' && branching.workBranch.trim()
+    ? branching.workBranch.trim()
+    : null;
+  // AC10: a null work lane, or one equal to the integration lane, starts from
+  // the checked-out branch and needs no pre-start update.
+  const workLaneSet = Boolean(workBranch);
+  const distinctWorkLane = workLaneSet && workBranch !== branching.integrationBranch;
+  const startLane = distinctWorkLane
+    ? workBranch
+    : (workLaneSet ? `${workBranch} (checked out)` : 'current branch');
+  const afterMerge = branching.syncWorkBranchAfterMerge
+    ? (distinctWorkLane
+      ? `fast-forward ${workBranch} to ${integrationBranch}${branching.pushSyncedWorkBranch ? `, then push ${workBranch} to origin` : ''}`
+      : `fetch origin and fast-forward ${workBranch || 'the work branch'} to origin/${integrationBranch}`)
+    : 'none';
+  return {
+    strategy: branching.strategy,
+    source: branching.source,
+    startLane,
+    update: workLaneSet && Boolean(branching.updateWorkBranch),
+    featureBranch: `${branching.featurePrefix}${specSlug}`,
+    pullRequestTarget: integrationBranch,
+    afterMerge
+  };
+}
+
 function printRunDryRunPlan(context) {
-  const { targetRoot, resolvedSpec, specSlug, config, options } = context;
+  const { targetRoot, resolvedSpec, specSlug, config, options, branching: resolvedBranching } = context;
+  let branching = resolvedBranching;
+  if (!branching) {
+    try {
+      const sdwConfig = require('../../sdw-config/scripts/sdw_config.cjs');
+      branching = sdwConfig.resolveBranching(config);
+    } catch (e) {
+      branching = { strategy: 'trunk', source: 'default', featurePrefix: 'feature/', workBranch: null, integrationBranch: null, updateWorkBranch: false, syncWorkBranchAfterMerge: false, pushSyncedWorkBranch: false };
+    }
+  }
+  // AC15: the branch plan is resolved from configuration only; no git command runs.
+  const branchPlan = buildBranchPlan(branching, specSlug);
   let validation = null;
   let validatorFailure = null;
   try {
@@ -705,7 +746,8 @@ function printRunDryRunPlan(context) {
     pushDelivery: Boolean(config.pushDelivery),
     scmProvider: config.scmProvider || 'none',
     useFeatureBranches: Boolean(config.useFeatureBranches),
-    useWorktrees: Boolean(config.useWorktrees)
+    useWorktrees: Boolean(config.useWorktrees),
+    branching: branchPlan.strategy
   };
 
   if (options.json) {
@@ -717,6 +759,7 @@ function printRunDryRunPlan(context) {
       specPath: normalizePath(path.relative(targetRoot, resolvedSpec)),
       root: normalizePath(targetRoot),
       settings,
+      branchPlan,
       steps,
       errors
     }, null, 2));
@@ -733,7 +776,12 @@ function printRunDryRunPlan(context) {
 
   console.log(`[sdw-orch dry-run] Specification: ${normalizePath(path.relative(targetRoot, resolvedSpec))} (${specSlug})`);
   console.log(`[sdw-orch dry-run] Target root: ${normalizePath(targetRoot)}`);
-  console.log(`[sdw-orch dry-run] Settings: scoreMin=${settings.scoreMin}, pushDelivery=${settings.pushDelivery}, scmProvider=${settings.scmProvider}, useFeatureBranches=${settings.useFeatureBranches}, useWorktrees=${settings.useWorktrees}`);
+  console.log(`[sdw-orch dry-run] Settings: scoreMin=${settings.scoreMin}, pushDelivery=${settings.pushDelivery}, scmProvider=${settings.scmProvider}, useFeatureBranches=${settings.useFeatureBranches}, useWorktrees=${settings.useWorktrees}, branching=${settings.branching}`);
+  console.log(`[sdw-orch dry-run] Strategy: ${branchPlan.strategy}`);
+  console.log(`[sdw-orch dry-run] Start lane: ${branchPlan.startLane} (update: ${branchPlan.update ? 'yes' : 'no'})`);
+  console.log(`[sdw-orch dry-run] Feature branch: ${branchPlan.featureBranch}`);
+  console.log(`[sdw-orch dry-run] Pull request target: ${branchPlan.pullRequestTarget}`);
+  console.log(`[sdw-orch dry-run] After merge: ${branchPlan.afterMerge}`);
   console.log(`[sdw-orch dry-run] Steps: ${steps.join(' -> ')}`);
   console.log('[sdw-orch dry-run] No steps executed (--dry-run).');
   return 0;
@@ -801,10 +849,25 @@ function cmdRun(options) {
     return 1;
   }
 
+  // AC9, AC14, AC15: resolve the branch lanes once so branch activation, run
+  // state, and the dry-run plan share the same names and flags.
+  let branching;
+  try {
+    if (!sdwConfig || typeof sdwConfig.resolveBranching !== 'function') {
+      throw new Error('sdw-config resolveBranching is unavailable.');
+    }
+    branching = sdwConfig.resolveBranching(config);
+  } catch (branchConfigErr) {
+    console.error(`[sdw-orch] ${branchConfigErr.message}`);
+    options._runResult = { error: branchConfigErr.message };
+    return 1;
+  }
+  const featureBranchName = `${branching.featurePrefix}${specSlug}`;
+
   // Plan-only dry run: validate the specification and print the plan without
   // touching run state, artifacts, branches, worktrees, or clones (spec 029 AC1-AC3).
   if (options.dryRun) {
-    return printRunDryRunPlan({ targetRoot, resolvedSpec, specSlug, config, options });
+    return printRunDryRunPlan({ targetRoot, resolvedSpec, specSlug, config, options, branching });
   }
 
   // Sandbox execution: run the whole pipeline against an isolated local clone
@@ -910,6 +973,19 @@ function cmdRun(options) {
     ? { useWorktrees, useFeatureBranches, worktreesSource, featureBranchSource }
     : null;
 
+  // AC14: the effective branch values recorded in run state.
+  const runBranching = {
+    strategy: branching.strategy,
+    source: branching.source,
+    featurePrefix: branching.featurePrefix,
+    featureBranch: useFeatureBranches ? featureBranchName : null,
+    workBranch: branching.workBranch,
+    integrationBranch: branching.integrationBranch,
+    updateWorkBranch: Boolean(branching.updateWorkBranch),
+    syncWorkBranchAfterMerge: Boolean(branching.syncWorkBranchAfterMerge),
+    pushSyncedWorkBranch: Boolean(branching.pushSyncedWorkBranch)
+  };
+
   // Resolve current and base branch
   let currentBranch = 'main';
   let baseBranch = 'main';
@@ -930,8 +1006,10 @@ function cmdRun(options) {
   // Dirty working trees are allowed: execution proceeds independently of git
   // state and delivery commits stage only tracked spec files (scoped commits).
   if (useFeatureBranches) {
-    const targetBranch = `feature/${specSlug}`;
+    const targetBranch = featureBranchName;
     if (currentBranch === targetBranch) {
+      // Safety: resumes run with uncommitted delivery changes on the feature
+      // branch. Reuse it in place; never checkout, fetch, or fast-forward.
       branchReused = true;
       activeBranch = targetBranch;
       console.log(`[Branch Activation] Already on feature branch "${targetBranch}" (reused).`);
@@ -949,12 +1027,41 @@ function cmdRun(options) {
           return 1;
         }
       } else {
-        // AC6: Create and switch to new feature branch
+        const workBranch = branching.workBranch;
+        // AC6, AC7, AC10: start from the work lane only when it is a distinct,
+        // non-empty branch; a null work lane or one equal to the integration
+        // lane preserves the trunk behavior (start from the checked-out branch).
+        // AC7 still applies to the same-lane case (gitflow): the checked-out work
+        // lane is updated in place before the feature branch is created.
+        const workBranchSet = typeof workBranch === 'string' && workBranch.trim().length > 0;
+        const fromWorkLane = workBranchSet && workBranch !== branching.integrationBranch;
+        const sameLaneCheckedOut = workBranchSet && !fromWorkLane && currentBranch === workBranch;
+        if ((fromWorkLane || sameLaneCheckedOut) && branching.updateWorkBranch) {
+          try {
+            if (fromWorkLane) git(targetRoot, ['switch', workBranch], { stdio: 'ignore' });
+            git(targetRoot, ['fetch', 'origin'], { stdio: 'ignore' });
+            git(targetRoot, ['merge', '--ff-only', `origin/${workBranch}`], { stdio: 'ignore' });
+          } catch (updateErr) {
+            // AC8: leave the working tree as it was, then fail before creating.
+            try { git(targetRoot, ['switch', currentBranch], { stdio: 'ignore' }); } catch (rollbackErr) {}
+            const message = `Failed to update work branch "${workBranch}": ${updateErr.message}`;
+            console.error(`[Branch Activation] ${message}`);
+            options._runResult = { error: message };
+            return 1;
+          }
+        }
+        // AC6: Create and switch to new feature branch from the work lane
+        const createArgs = fromWorkLane
+          ? ['switch', '-c', targetBranch, workBranch]
+          : ['switch', '-c', targetBranch];
         try {
-          git(targetRoot, ['switch', '-c', targetBranch], { stdio: 'ignore' });
+          git(targetRoot, createArgs, { stdio: 'ignore' });
           branchReused = false;
           activeBranch = targetBranch;
-          console.log(`[Branch Activation] Created and switched to feature branch "${targetBranch}" from ${baseBranch}.`);
+          const startPoint = fromWorkLane ? workBranch : currentBranch;
+          let startSha = '';
+          try { startSha = String(git(targetRoot, ['rev-parse', '--short', 'HEAD'], { stdio: ['ignore', 'pipe', 'ignore'] }) || '').trim(); } catch (shaErr) {}
+          console.log(`[Branch Activation] ${branching.strategy}: created ${targetBranch} from ${startPoint}${startSha ? ` at ${startSha}` : ''}.`);
         } catch (createErr) {
           console.error(`[Branch Activation] Failed to create branch "${targetBranch}": ${createErr.message}`);
           return 1;
@@ -986,6 +1093,7 @@ function cmdRun(options) {
     state.branch = activeBranch;
     state.baseBranch = baseBranch;
     state.branchReused = branchReused;
+    state.branching = runBranching;
     if (!state.scm) state.scm = scmState;
     if (runtimeOverrides) state.runtimeOverrides = runtimeOverrides;
     state = stateManager.saveRunState(targetRoot, state);
@@ -999,6 +1107,7 @@ function cmdRun(options) {
       branch: activeBranch,
       baseBranch,
       branchReused,
+      branching: runBranching,
       runtimeOverrides,
       scm: scmState,
       refineMode: Boolean(options.refineMode)
@@ -2240,6 +2349,10 @@ function cmdRun(options) {
           if (shipResult.pushed) {
             state.pushedBranch = shipResult.head;
             prPayload.pushedBranch = shipResult.head;
+          }
+          if (shipResult.branchingSync) {
+            state.branchingSync = shipResult.branchingSync;
+            prPayload.branchingSync = shipResult.branchingSync;
           }
           prPayload.reviewConvergence = shipResult.reviewConvergence;
         }

@@ -50,4 +50,4 @@ Central repository index tracking specification lifecycle states, metadata, and 
 | 00037 | 00037-sdw-run-retrospective-candidates | SDW Run Retrospective Candidates | completed | local | 2026-10-21 | PASS | - |
 | 00038 | 00038-sdw-spec-drift-repair | SDW Spec Drift Repair | pending | local | 2026-10-21 | PASS | - |
 | 00039 | 00039-sdw-batch-skill | SDW Batch Skill — Multi-Spec Queue Delegating to Single sdw-orch Runs | completed | local | 2026-10-21 | PASS | - |
-| 00040 | 00040-sdw-branching-strategy | SDW Branching Strategy — Configurable Presets, Branch Lanes, and Post-Merge Sync | pending | local | 2026-10-21 | PASS | - |
+| 00040 | 00040-sdw-branching-strategy | SDW Branching Strategy — Configurable Presets, Branch Lanes, and Post-Merge Sync | completed | local | 2026-10-21 | PASS | - |
