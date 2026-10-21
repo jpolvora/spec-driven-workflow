@@ -12,6 +12,8 @@
   },
   "scmCodeReviewEnabled": true,
   "pushDelivery": true,
+  "changelogEnabled": true,
+  "changelogFile": "{projectRoot}/CHANGELOG.md",
   "stateDir": "{projectRoot}/.sdw/state",
   "sandboxDir": "{projectRoot}/.sdw/sandbox",
   "skillsRoot": "{projectRoot}/skills",

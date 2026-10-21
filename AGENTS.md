@@ -106,7 +106,8 @@ At session start, or when receiving task instructions, inspect and apply [`skill
 
 - Configuration/environment inquiries → `sdw-config`.
 - Spec authoring, formatting, validation, indexing → `sdw-spec`. **Authoring/registration never triggers `sdw-orch`.**
-- Spec implementation, orchestration, delivery → `sdw-orch`, only on an explicit implementation order (see `sdw-rules`).
+- Spec implementation, orchestration, delivery → `sdw-orch`, only on an explicit implementation order (see `sdw-rules`). `sdw-orch` executes exactly one specification.
+- Multiple specifications / a spec queue → `sdw-batch`, which loops single `sdw-orch` runs.
 - General conversational or non-SDW coding → pass through without interception.
 
 ---

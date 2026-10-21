@@ -1,19 +1,33 @@
 {
-  "batchId": "fix-example-001",
+  "batchId": "pr12-review-round-2",
   "findings": [
     {
-      "file": "skills/sdw-fixer/scripts/sdw_fixer.cjs",
-      "line": 1,
-      "rule": "no_debugger_statements",
-      "evidence": "Example intake entry: sweep the fixer helper itself for stray debugger statements.",
-      "severityHint": "low"
+      "file": "skills/sdw-changelog/scripts/append_changelog.cjs",
+      "line": 134,
+      "rule": "changelog_duplicate_substring_match",
+      "evidence": "PR #12 review thread PRRT_kwDOVPKGU86uwWb4 https://github.com/jpolvora/spec-driven-workflow/pull/12#discussion_r4336595663: ⚠️ **WARNING:** The duplicate check is a raw substring match of the three-line block against the whole file. A new record is silently skipped when its Prompt, Done, and Result lines are a prefix of an existing longer line, so a real delivery record is dropped while the command still exits 0. AC7 requires skipping only an identical Prompt/Done/Result block.",
+      "severityHint": "high"
     },
     {
-      "file": ".sdw/traps.md",
-      "line": 7,
-      "rule": "surgical-diff-hygiene",
-      "evidence": "Example intake entry: non-trivial defect class routed to agent reasoning.",
+      "file": "skills/sdw-changelog/scripts/append_changelog.cjs",
+      "line": 83,
+      "rule": "changelog_config_parse_fail_open",
+      "evidence": "PR #12 review thread PRRT_kwDOVPKGU86uwWc0 https://github.com/jpolvora/spec-driven-workflow/pull/12#discussion_r4336595772: ⚠️ **WARNING:** A malformed .sdw/config.json is treated as an empty config. The disable switch is then ignored, so a project that set changelogEnabled to false still gets a changelog write. The failure must stop the command, not fall back to enabled.",
+      "severityHint": "high"
+    },
+    {
+      "file": "skills/sdw-batch/scripts/batch_queue.cjs",
+      "line": 78,
+      "rule": "batch_id_prefix_not_normalized",
+      "evidence": "PR #12 review thread PRRT_kwDOVPKGU86uxmOl https://github.com/jpolvora/spec-driven-workflow/pull/12#discussion_r4337122351: ⚠️ **WARNING:** A batch started with a custom --batch-id is written as <id>.json, but resume without an id only scans files whose names start with batch-. The queue then cannot be found by `sdw-batch resume` (or `status`) without the explicit id, even though the pause message tells the operator to run `sdw-batch resume <batchId>`. The id is not normalized to the batch- prefix that discovery relies on.",
       "severityHint": "medium"
+    },
+    {
+      "file": "skills/sdw-batch/scripts/batch_queue.cjs",
+      "line": 155,
+      "rule": "spec_sync_error_swallowed",
+      "evidence": "PR #12 review thread PRRT_kwDOVPKGU86uxmQZ https://github.com/jpolvora/spec-driven-workflow/pull/12#discussion_r4337122533: 💡 **SUGGESTION:** triggerSpecSync swallows every error from the spec index synchronization and returns false, which the caller ignores. A failed `sdw-spec sync` after a completed item therefore leaves the registry stale while the queue reports the item as completed, and no message reaches the operator. AC12 requires the sync to run after each completed item, so its failure should be visible.",
+      "severityHint": "low"
     }
   ]
 }

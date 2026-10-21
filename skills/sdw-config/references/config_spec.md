@@ -63,6 +63,16 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
       "description": "Automatically push the delivery commit and branch to remote origin upon workflow completion.",
       "default": false
     },
+    "changelogEnabled": {
+      "type": "boolean",
+      "description": "Enable appending delivery records to the project changelog. When false, sdw-changelog exits 0 with 'skipped: disabled' and writes nothing.",
+      "default": true
+    },
+    "changelogFile": {
+      "type": "string",
+      "description": "Path to the project changelog. Supports the {projectRoot} token; the resolved path must stay inside the project root.",
+      "default": "{projectRoot}/CHANGELOG.md"
+    },
     "stateDir": {
       "type": "string",
       "description": "Path to the directory storing run session state files. Supports tokens {projectRoot} and {skillsRoot}.",
@@ -196,6 +206,8 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
 | `implementation.timeoutMs` | `integer` | `1800000` | Per-task execution timeout for `command` mode |
 | `scmCodeReviewEnabled` | `boolean` | `false` | Whether remote PR comment polling and automated fix resolution loop is active |
 | `pushDelivery` | `boolean` | `false` | Whether to automatically push delivery commits to remote origin |
+| `changelogEnabled` | `boolean` | `true` | Enable appending delivery records to the project changelog; `false` skips the append with exit `0` and writes nothing |
+| `changelogFile` | `string` | `"{projectRoot}/CHANGELOG.md"` | Changelog path; supports `{projectRoot}` and must resolve inside the project root |
 | `stateDir` | `string` | `"{projectRoot}/.sdw/state"` | Path to isolated execution run state directory (supports `{projectRoot}` and `{skillsRoot}`) |
 | `sandboxDir` | `string` | `"{projectRoot}/.sdw/sandbox"` | Root directory for `sdw-orch --sandbox` clones; each run creates `{sandboxDir}/{runId}/repo`. Supports `{projectRoot}`, `{skillsRoot}`, and `{temp}` (OS temp directory). A custom value must resolve **outside** the project root; only the default may live inside it |
 | `skillsRoot` | `string` | — | Path to the active skills directory (supports `{projectRoot}` and `{skillsRoot}`) |
@@ -230,6 +242,8 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
   "scoreMin": 8,
   "scmCodeReviewEnabled": false,
   "pushDelivery": false,
+  "changelogEnabled": true,
+  "changelogFile": "{projectRoot}/CHANGELOG.md",
   "stateDir": "{projectRoot}/.sdw/state",
   "sandboxDir": "{projectRoot}/.sdw/sandbox",
   "autoResolveGaps": true,

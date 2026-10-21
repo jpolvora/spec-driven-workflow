@@ -232,6 +232,8 @@ const DEFAULT_CONFIG = {
   },
   scmCodeReviewEnabled: false,
   pushDelivery: false,
+  changelogEnabled: true,
+  changelogFile: '{projectRoot}/CHANGELOG.md',
   stateDir: '{projectRoot}/.sdw/state',
   sandboxDir: '{projectRoot}/.sdw/sandbox',
   autoResolveGaps: true,
@@ -334,6 +336,16 @@ const DEFAULT_SCHEMA = {
       "type": "boolean",
       "description": "Automatically push the delivery commit and branch to remote origin upon workflow completion.",
       "default": false
+    },
+    "changelogEnabled": {
+      "type": "boolean",
+      "description": "Enable appending delivery records to the project changelog. When false, sdw-changelog exits 0 with 'skipped: disabled' and writes nothing.",
+      "default": true
+    },
+    "changelogFile": {
+      "type": "string",
+      "description": "Path to the project changelog. Supports the {projectRoot} token; the resolved path must stay inside the project root.",
+      "default": "{projectRoot}/CHANGELOG.md"
     },
     "stateDir": {
       "type": "string",
@@ -693,6 +705,18 @@ function validateConfigSchema(config) {
   if ('pushDelivery' in config) {
     if (typeof config.pushDelivery !== 'boolean') {
       errors.push('Property "pushDelivery" must be a boolean.');
+    }
+  }
+
+  // changelogEnabled / changelogFile (AC12)
+  if ('changelogEnabled' in config) {
+    if (typeof config.changelogEnabled !== 'boolean') {
+      errors.push('Property "changelogEnabled" must be a boolean.');
+    }
+  }
+  if ('changelogFile' in config) {
+    if (typeof config.changelogFile !== 'string' || config.changelogFile.trim().length === 0) {
+      errors.push('Property "changelogFile" must be a non-empty string.');
     }
   }
 

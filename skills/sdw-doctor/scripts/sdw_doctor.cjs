@@ -10,12 +10,15 @@ const builtinModules = require('module').builtinModules;
 const ALLOWED_BUILTINS = new Set(builtinModules.map(m => m.replace(/^node:/, '')));
 
 const EXPECTED_SKILLS = [
+  'sdw-batch',
+  'sdw-changelog',
   'sdw-code-review',
   'sdw-config',
   'sdw-doctor',
   'sdw-fixer',
   'sdw-memory',
   'sdw-orch',
+  'sdw-retro',
   'sdw-router',
   'sdw-rules',
   'sdw-security-checks',

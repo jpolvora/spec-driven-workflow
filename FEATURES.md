@@ -71,7 +71,6 @@
 - **Task Dispatch Subcommands (`task next`, `task finish`, `task abandon`):** Enforces exactly one in-flight task, renders a complete worker brief per dispatch, rejects out-of-order completion, releases a lost worker's task back to the queue with a recorded reason, and corroborates changes against a hash baseline captured at dispatch so inherited edits never count.
 - **Run State Isolation & Resumption:** Persists active run state in `.sdw/state/{runId}.state.json`, enabling seamless pauses, status inspections, and one-click resumption from interrupted steps.
 - **Configurable Feature Branches & Task Worktrees:** Opt-in branch and worktree isolation (`useFeatureBranches: false`, `useWorktrees: false`). Derives feature branches from spec slugs (`feature/{slug}`), refuses activation on dirty trees, reuses existing branches safely, dispatches multi-task DAGs into isolated git worktrees (`.sdw/worktrees/{runId}/{taskId}`), integrates worktree changes via linear cherry-pick, safely cleans worktrees, and supports runtime CLI overrides (`--no-worktrees`, `--no-feature-branch`).
-- **Multi-Specification Batch Queue Execution:** Enqueue and sequentially execute multiple specifications (`sdw-orch run spec1 spec2 ...`) with strict context fencing, batch manifest tracking (`.sdw/state/batch-{id}.json`), failure policies (`--continue-on-error`), dry-run pre-flight validation (`--dry-run`), automated resumption (`resume-batch`), batch queue pause on dispatch (exit code 4), and **enforced unattended execution** that runs continuously through all queued specifications without intermediate conversational interruption.
 - **Plan-Only Dry Run & Sandboxed Execution:** `--dry-run` validates the specification and prints the plan without creating state, artifacts, branches, or clones. `--sandbox` executes the entire 8-step pipeline against an isolated shallow single-branch `git clone` of `HEAD` (`{sandboxDir}/{runId}/repo`, branch `sdw-sandbox/{runId}`, `origin` removed). `sandboxDir` is configurable in `.sdw/config.json` (default `{projectRoot}/.sdw/sandbox`, tokens `{projectRoot}`, `{skillsRoot}`, `{temp}`); a custom value must resolve outside the project root. It forces push and SCM delivery off, prints absolute sandbox paths for subagents, and refreshes a step/task/gate/commit report (`sandbox report`). Creation halts when the resolved target already exists (run `sandbox clean --run-id` first), and `sandbox clean` also removes orphaned targets left by an interrupted creation. Cleanup is explicit via `sandbox clean`, which deletes the clone and keeps the report.
 
 ---
@@ -241,6 +240,18 @@
 - **Consolidation Without Deletion:** merges duplicate local rows and reports vault duplicates, leaving vault lifecycle to `memo gc` / `forget`.
 - **Write Safety:** rejects secret-bearing payloads before any backend mutation; `doctor` validates layout, script syntax, and vault reachability.
 - **Shared Surface:** `sdw-rules log-trap` records through the wrapper, and `sdw-fixer` consults it for defect-class hints.
+
+---
+
+### 16. 🗂️ `sdw-batch` — Multi-Specification Queue over Single Runs
+
+*One pipeline, repeated. Each queued specification runs exactly as if it were the only specification.*
+
+- **Loop, Not a Second State Machine:** `sdw-batch run <spec...>` delegates each item to `sdw-orch run <spec>` and waits for the exit code; implementation, scoring, delivery commit, review, PR, and convergence stay in `sdw-orch`.
+- **Queue Manifest:** `.sdw/state/batch-{batchId}.json` records per-item status, run id, delivery commit, duration, and error; `status` reports progress.
+- **Pause/Resume Continuity:** exit `4`/`5` pauses the queue with the item's run id; `resume` continues that exact run through `sdw-orch resume --run-id`, and an already-completed run is reconciled without re-execution.
+- **Failure Policy:** halts by default; `--continue-on-error` records the failure and advances.
+- **Sequential and Non-Invasive:** one delegated run at a time; the batch prints a per-item summary and never edits code itself.
 
 ---
 

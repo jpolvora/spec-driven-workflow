@@ -14,7 +14,6 @@ const dagPlanner = require('../skills/sdw-orch/scripts/dag_planner.cjs');
 const evidenceValidator = require('../skills/sdw-orch/scripts/evidence_validator.cjs');
 const implementationRunner = require('../skills/sdw-orch/scripts/implementation_runner.cjs');
 const scoreEvaluator = require('../skills/sdw-orch/scripts/score_evaluator.cjs');
-const batchRunner = require('../skills/sdw-orch/scripts/batch_runner.cjs');
 
 // Spec 027: wire the deterministic judge stub for unattended runs past Step 4.
 require('./fixtures/judge_env.cjs').installJudgeEnv();
@@ -522,36 +521,6 @@ test('AC26, AC27, AC28, AC29, AC30: Command mode token substitution, env allowli
     const state = stateManager.findLatestRunState(tmpDir);
     assert.equal(state.status, 'completed', 'Run completes through step 8');
     assert.equal(state.steps[4].status, 'completed');
-  } finally {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  }
-});
-
-// ---------------------------------------------------------------------------
-// AC31 - AC32: Batch Runner Queue Pause on Code 4
-// ---------------------------------------------------------------------------
-test('AC31, AC32: Batch runner pauses queue and sets status to awaiting_implementation when item exits code 4', () => {
-  const tmpDir = setupTestRepo();
-  try {
-    const spec1 = createTestSpec(tmpDir, 'batch-pause-1', 1);
-    const spec2 = createTestSpec(tmpDir, 'batch-pause-2', 1);
-
-    const exitCode = sdwOrch.cmdBatchRun({
-      root: tmpDir,
-      specPaths: [spec1, spec2],
-      skipReview: true,
-      skipPr: true
-    });
-
-    assert.equal(exitCode, 4, 'Batch runner must exit with code 4 when item pauses (AC32)');
-
-    const manifests = batchRunner.listBatchManifests(tmpDir);
-    assert.equal(manifests.length, 1);
-    const manifest = manifests[0].manifest;
-
-    assert.equal(manifest.status, 'paused', 'Batch manifest status must be paused (AC31)');
-    assert.equal(manifest.queue[0].status, 'awaiting_implementation', 'Item status must be awaiting_implementation (AC31)');
-    assert.equal(manifest.queue[1].status, 'pending', 'Subsequent items remain pending (AC31)');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

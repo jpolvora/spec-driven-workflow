@@ -301,16 +301,6 @@ test('AC4/AC32: conflicting --dry-run/--sandbox and --sandbox/--push are rejecte
   }
 });
 
-test('AC31: batch execution rejects --sandbox', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-batch-'));
-  try {
-    const code = sdwOrch.cmdBatchRun({ subcommand: 'run', specPaths: ['a.md'], root: dir, sandbox: true });
-    assert.equal(code, 1);
-  } finally {
-    removeRepo(dir);
-  }
-});
-
 test('AC1-AC3: plan-only dry run prints the plan and returns 0', () => {
   const root = path.resolve(__dirname, '..');
   const spec = path.join(root, '.sdw', 'specs', '00029-sdw-orch-sandboxed-execution.md');
