@@ -8,6 +8,9 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { spawnSync } = require('child_process');
+
+const CLI = path.join(__dirname, '..', 'skills', 'sdw-batch', 'scripts', 'sdw_batch.cjs');
 
 const queue = require('../skills/sdw-batch/scripts/batch_queue.cjs');
 const cli = require('../skills/sdw-batch/scripts/sdw_batch.cjs');
@@ -349,6 +352,123 @@ test('review: a failed spec index sync warns the operator instead of failing sil
   } finally {
     specSync.syncIndex = originalSyncIndex;
     console.warn = originalWarn;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('review: resuming a completed_with_errors batch reports the failure instead of success', () => {
+  const { root, specs } = setup();
+  try {
+    const code = queue.runBatch(specs, {
+      root,
+      noSync: true,
+      continueOnError: true,
+      _invoke: ({ runId, specPath }) => {
+        if (specPath.includes('alpha')) { writeState(root, runId, 'failed'); return 1; }
+        writeState(root, runId, 'completed', { deliveryCommit: 'beta-done' });
+        return 0;
+      }
+    });
+    assert.equal(code, 1, 'the run finishes with errors');
+
+    const config = queue.loadConfig(root);
+    const manifest = queue.loadManifest(config);
+    assert.equal(manifest.status, 'completed_with_errors');
+
+    const { result: resumed } = captureLogs(() => queue.resumeBatch(manifest.batchId, {
+      root,
+      noSync: true,
+      _invoke: () => { throw new Error('a finished batch must not delegate'); }
+    }));
+    assert.equal(resumed, 1, 'resuming a finished-with-errors batch stays a failure');
+
+    const after = queue.loadManifest(config, manifest.batchId);
+    assert.equal(after.status, 'completed_with_errors', 'the failure is never relabeled as completed');
+    assert.equal(after.queue[0].status, 'failed');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('review: an existing batch id is rejected instead of overwriting the queue', () => {
+  const { root, specs } = setup();
+  try {
+    const config = queue.loadConfig(root);
+    const first = queue.createManifest({ specs: [specs[0]], options: { batchId: 'nightly' }, config });
+
+    assert.throws(
+      () => queue.createManifest({ specs, options: { batchId: 'nightly' }, config }),
+      /already exists/,
+      'a colliding batch id is refused'
+    );
+
+    const reloaded = queue.loadManifest(config, 'nightly');
+    assert.equal(reloaded.total, 1, 'the original queue is untouched');
+    assert.equal(reloaded.createdAt, first.createdAt);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('review: a delegated exit code 3 is a failure, not a pause', () => {
+  const { root, specs } = setup();
+  try {
+    const { result } = captureLogs(() => queue.runBatch(specs, {
+      root,
+      noSync: true,
+      _invoke: ({ runId }) => { writeState(root, runId, 'paused'); return 3; }
+    }));
+
+    assert.equal(result, 1, 'the batch reports a plain failure');
+    const manifest = queue.loadManifest(queue.loadConfig(root));
+    assert.equal(manifest.status, 'halted');
+    assert.equal(manifest.queue[0].status, 'failed', 'exit 3 never maps to awaiting_grilling');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('review: --json emits one manifest document on stdout and progress on stderr', () => {
+  const { root, specs } = setup();
+  const stdoutChunks = [];
+  const progress = [];
+  const originalWrite = process.stdout.write;
+  const originalLog = console.log;
+  const originalError = console.error;
+  let code;
+  try {
+    process.stdout.write = (chunk) => { stdoutChunks.push(String(chunk)); return true; };
+    console.log = (...args) => { throw new Error(`unexpected stdout log: ${args.join(' ')}`); };
+    console.error = (...args) => { progress.push(args.join(' ')); };
+    code = queue.runBatch(specs, {
+      root,
+      noSync: true,
+      json: true,
+      _invoke: ({ runId }) => { writeState(root, runId, 'completed', { deliveryCommit: 'ok' }); return 0; }
+    });
+  } finally {
+    process.stdout.write = originalWrite;
+    console.log = originalLog;
+    console.error = originalError;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+
+  assert.equal(code, 0);
+  const manifest = JSON.parse(stdoutChunks.join(''));
+  assert.equal(manifest.status, 'completed');
+  assert.equal(manifest.total, 2);
+  assert.ok(progress.some(line => line.includes('Delegating')), 'progress lines move to stderr');
+});
+
+test('review: a malformed .sdw/config.json exits 1 with a clear error', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-batch-config-'));
+  try {
+    fs.mkdirSync(path.join(root, '.sdw'), { recursive: true });
+    fs.writeFileSync(path.join(root, '.sdw', 'config.json'), '{"specsDir": ', 'utf8');
+    const result = spawnSync(process.execPath, [CLI, 'status', '--root', root], { encoding: 'utf8' });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /invalid \.sdw\/config\.json/);
+  } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });

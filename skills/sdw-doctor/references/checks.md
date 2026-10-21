@@ -18,7 +18,7 @@ Deterministic reference for the audit run by `sdw_doctor.cjs`. Every check is re
 
 | Code | Level | Check |
 |---|---|---|
-| `skill-missing` | error | Every expected skill folder exists (`sdw-code-review`, `sdw-config`, `sdw-doctor`, `sdw-orch`, `sdw-router`, `sdw-rules`, `sdw-security-checks`, `sdw-ship-pr`, `sdw-spec`). |
+| `skill-missing` | error | Every expected skill folder exists (`sdw-batch`, `sdw-changelog`, `sdw-code-review`, `sdw-config`, `sdw-doctor`, `sdw-fixer`, `sdw-memory`, `sdw-orch`, `sdw-retro`, `sdw-router`, `sdw-rules`, `sdw-security-checks`, `sdw-ship-pr`, `sdw-spec`). |
 | `skill-entry-missing` | error | `SKILL.md` exists in the skill folder. |
 | `skill-frontmatter` | error | YAML frontmatter parses. |
 | `skill-frontmatter-key` | error | `name`, `description`, `version`, and `invocation_names` are present. |
