@@ -2067,11 +2067,16 @@ function cmdRun(options) {
 
         if (shipResult) {
           const hasActivePr = Boolean(shipResult.pullRequest && (shipResult.pullRequest.url || shipResult.pullRequest.number));
+          if (shipResult.blocking === true) {
+            // The pull request still has failing checks or active review threads.
+            // A multi-spec queue must not advance past an unconverged delivery.
+            throw new Error(shipResult.error || 'sdw-ship-pr reported an unconverged pull request');
+          }
           if (shipResult.shipStatus === 'failed' || (shipResult.success === false && !hasActivePr)) {
             throw new Error(shipResult.error || 'sdw-ship-pr reported delivery failure');
           }
           if (hasActivePr && shipResult.shipStatus === 'review_pending') {
-            console.log(`[sdw-orch Step 8] Active pull request #${shipResult.pullRequest.number || ''} is in review / awaiting approval (${shipResult.pullRequest.url || ''}). Notice: Amending an active pull request while review/approval is pending is not a recommended practice; adapting non-blocking workflow.`);
+            console.log(`[sdw-orch Step 8] Active pull request #${shipResult.pullRequest.number || ''} is in review / awaiting approval (${shipResult.pullRequest.url || ''}).`);
           }
           if (shipResult.pullRequest) {
             state.pullRequest = shipResult.pullRequest;

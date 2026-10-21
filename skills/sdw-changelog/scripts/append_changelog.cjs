@@ -77,12 +77,16 @@ function findProjectRoot(startDir) {
 function readConfig(root) {
   const configFile = path.join(root, '.sdw', 'config.json');
   if (!fs.existsSync(configFile)) return {};
+  let parsed;
   try {
-    const parsed = JSON.parse(fs.readFileSync(configFile, 'utf8'));
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    parsed = JSON.parse(fs.readFileSync(configFile, 'utf8'));
   } catch (error) {
-    return {};
+    throw new Error(`invalid .sdw/config.json: ${error.message}`);
   }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('invalid .sdw/config.json: expected a JSON object');
+  }
+  return parsed;
 }
 
 function resolveChangelogFile(root, config) {
@@ -127,11 +131,21 @@ function formatEntry(options, agent, stamp) {
   ].join('\n');
 }
 
-// A record is a duplicate when its Prompt/Done/Result lines already appear
-// verbatim in the existing file, regardless of agent or timestamp.
+// A record is a duplicate only when the exact three-line block occupies whole
+// lines in the existing file. A substring match would silently drop a genuine
+// record whose lines happen to prefix a longer line.
 function isDuplicate(existing, body) {
   if (!existing) return false;
-  return existing.replace(/\r\n/g, '\n').includes(body);
+  const normalized = existing.replace(/\r\n/g, '\n');
+  let index = normalized.indexOf(body);
+  while (index !== -1) {
+    const atLineStart = index === 0 || normalized[index - 1] === '\n';
+    const afterBody = index + body.length;
+    const atLineEnd = afterBody === normalized.length || normalized[afterBody] === '\n';
+    if (atLineStart && atLineEnd) return true;
+    index = normalized.indexOf(body, index + 1);
+  }
+  return false;
 }
 
 // Insert the block below `# Changelog` without rewriting existing content.

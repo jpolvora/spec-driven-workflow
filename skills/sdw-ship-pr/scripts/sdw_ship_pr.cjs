@@ -955,8 +955,16 @@ async function runShipPr(options = {}, customExecutor = null) {
         if (!converged && !dryRun) {
           report.shipStatus = 'review_pending';
           const hasActivePr = Boolean(report.pullRequest && (report.pullRequest.url || report.pullRequest.number));
-          if (hasActivePr) {
-            log(`[sdw-ship-pr] Active PR #${report.pullRequest.number || ''} is in review / awaiting approval. Notice: Amending an active pull request while review/approval is pending is not a recommended practice; adapting non-blocking workflow.`);
+          const residualThreads = Number(report.reviewConvergence.activeThreads) || 0;
+          const residualChecks = Array.isArray(report.reviewConvergence.failingChecks)
+            ? report.reviewConvergence.failingChecks.length
+            : 0;
+          report.blocking = residualThreads > 0 || residualChecks > 0;
+          if (report.blocking) {
+            report.error = `Pull request did not converge: ${residualChecks} failing check(s), ${residualThreads} active thread(s) remain`;
+            log(`[sdw-ship-pr] ${report.error}.`);
+          } else if (hasActivePr) {
+            log(`[sdw-ship-pr] Active PR #${report.pullRequest.number || ''} is in review / awaiting approval.`);
             report.nonBlocking = true;
             report.adaptedActivePr = true;
           }

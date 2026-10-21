@@ -46,17 +46,38 @@ const DECISION_DIMENSIONS = [
   }
 ];
 
+function looksLikeProjectPath(rawToken) {
+  const token = String(rawToken || '').replace(/^[("'`\[]+/, '').replace(/[)"'`\],.;:]+$/, '');
+  if (!token) return null;
+  if (/\s/.test(token)) return null;
+  if (token.includes('*') || token.includes('{') || token.includes('<') || token.includes('>')) return null;
+  if (/^(https?:|git@)/i.test(token)) return null;
+  if (/^[a-zA-Z]:[\\/]/.test(token)) return null;
+  if (token.startsWith('/') || token.startsWith('-') || token.startsWith('~')) return null;
+  const normalized = token.replace(/\\/g, '/').replace(/^\.\//, '');
+  if (!normalized.includes('/')) return null;
+  if (!/\.[a-zA-Z0-9]{1,6}$/.test(normalized)) return null;
+  if (normalized.split('/').includes('..')) return null;
+  return normalized;
+}
+
 function extractTargetFiles(specContent) {
   if (!specContent) return [];
   const files = new Set();
-  const matches = specContent.matchAll(/`([a-zA-Z0-9_\-\./\\]+\.[a-zA-Z0-9]{1,5})`/g);
-  for (const m of matches) {
-    const p = m[1].replace(/\\/g, '/');
-    if (p.includes('/') || p.endsWith('.json') || p.endsWith('.cjs') || p.endsWith('.js') || p.endsWith('.md')) {
-      if (!p.startsWith('http') && !p.includes('*') && !p.includes('{') && !p.includes('schema#')) {
-        files.add(p);
-      }
-    }
+  const push = (raw) => {
+    const candidate = looksLikeProjectPath(raw);
+    if (candidate) files.add(candidate);
+  };
+
+  // Backticked spans hold either one path or a command line that names paths.
+  for (const match of specContent.matchAll(/`([^`\n]+)`/g)) {
+    const span = match[1].trim();
+    push(span);
+    for (const token of span.split(/\s+/)) push(token);
+  }
+  // Fenced code blocks hold CLI contracts and path templates.
+  for (const match of specContent.matchAll(/```[^\n]*\n([\s\S]*?)```/g)) {
+    for (const token of match[1].split(/\s+/)) push(token);
   }
   return Array.from(files);
 }

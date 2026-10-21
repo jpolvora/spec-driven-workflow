@@ -103,7 +103,9 @@ function generateDagPlan(specContent, options) {
       contextPrompt: prompt
     });
   } else {
-    // Multi-task DAG decomposition
+    // Multi-task DAG decomposition. Both execution units may touch any file the
+    // specification names: the AC split, not an arbitrary file slice, defines
+    // ownership, and a later task often needs to extend a file the first created.
     // Task 1: Core foundation / state / data models
     const t1Acs = acs.slice(0, Math.ceil(acs.length / 2));
     const t2Acs = acs.slice(Math.ceil(acs.length / 2));
@@ -119,7 +121,7 @@ function generateDagPlan(specContent, options) {
       coveredAcs: t1Acs.map(a => a.id),
       dependencies: [],
       status: 'pending',
-      targetFiles: defaultTargetFiles.slice(0, 4),
+      targetFiles: defaultTargetFiles,
       architecturalApproach: architecturalApproach || undefined,
       testPlan: testPlan || undefined,
       contextPrompt: p1
@@ -136,7 +138,7 @@ function generateDagPlan(specContent, options) {
       coveredAcs: t2Acs.map(a => a.id),
       dependencies: ['task-1'],
       status: 'pending',
-      targetFiles: defaultTargetFiles.slice(4),
+      targetFiles: defaultTargetFiles,
       architecturalApproach: architecturalApproach || undefined,
       testPlan: testPlan || undefined,
       contextPrompt: p2
