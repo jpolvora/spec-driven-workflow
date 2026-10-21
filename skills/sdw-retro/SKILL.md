@@ -35,7 +35,7 @@ judgment to an explicit operator decision.
 
 - `leftover_run`: a sibling run state of the same specification never reached a terminal status. Names the run id, status, and age.
 - `repeated_run_invocation`: one transcript contains more than one `sdw-orch ... run` invocation for the same `--spec` with no `resume` between them. Names the file and line numbers.
-- `transcript_unreadable`: a named transcript path does not exist or cannot be read. Names the file and reason; the command still exits `0`.
+- `transcript_unreadable`: a named transcript path does not exist, cannot be read, or is not decodable text. Names the file and reason; the command still exits `0`.
 
 ## Start Guard
 
@@ -47,30 +47,35 @@ judgment to an explicit operator decision.
    Omit `--run-id` to take the most recent completed run under `.sdw/state`, or name one explicitly.
    - Done when: the command prints the selected run identifier and artifact directory.
 
-2. **Run the analysis**
+2. **Locate the session transcript**
+   Resolve this session's transcript from host facts, never by guessing: DeepSeek Harness (`DSH_HOME`, `DSH_SESSION_ID`, `sessions/--<project>--/session-<id>/session.v4.jsonl.zstd`), Claude Code (`~/.claude/projects/<slug>/<sessionId>.jsonl`), Codex (`~/.codex/sessions/.../rollout-*.jsonl`). Details and checks: [`references/session_discovery.md`](references/session_discovery.md). Pass an existing path with `--transcript`; never invent a path that does not exist. When no supported transcript exists or it cannot be decoded, write this session's messages to `.sdw/state/retro-session-{runId}.md`, one `user:`/`assistant:`/`tool:` line per message, and pass that file with `--transcript --transcript-mode captured`.
+   - Done when: the transcript path exists and came from a host fact or from this session.
+
+3. **Run the analysis**
    ```bash
-   node skills/sdw-retro/scripts/retro.cjs run [--run-id <runId>] [--root <projectRoot>] [--transcript <path>]... [--json]
+   node skills/sdw-retro/scripts/retro.cjs run [--run-id <runId>] [--root <projectRoot>] [--transcript <path>]... [--transcript-mode <host|captured>] [--json]
    ```
-   Name transcripts with `retro.transcripts` or repeated `--transcript`; nothing is discovered.
+   Name transcripts with `retro.transcripts` or repeated `--transcript`; the script never discovers them and decodes zstd frames in memory. `--transcript-mode <host|captured>` defaults to `host` and labels every transcript input in both reports.
    - Done when: the command exits `0` and writes both report files, even when a transcript is unreadable.
 
-3. **Review signals and record candidates**
+4. **Review signals and record candidates**
    Read the deterministic signals. A candidate is an operator- or agent-supplied judgment with `id`, `title`, `severity`, `category`, `evidence`, and `proposedChange`.
    - Done when: each recorded candidate uses an allowed severity and category and cites run evidence.
 
-4. **Validate the candidates**
+5. **Validate the candidates**
    ```bash
    node skills/sdw-retro/scripts/validate_candidates.cjs --input <file> [--root <projectRoot>] [--json]
    ```
    - Done when: the command exits `0` with every candidate complete and ordered `critical` -> `low`; memory candidates carry an `sdw-memory` draft.
 
-5. **Decide the follow-up**
+6. **Decide the follow-up**
    Route an accepted candidate to a specification, an `sdw-memory` record, or an operator edit. A retro never applies changes; a direct `skills/` edit is rejected with `skills-requires-spec` and the specification route.
    - Done when: the operator knows the route for each candidate or accepts an empty candidate list.
 
 ## Reference
 
 - Run selection, inputs, signals, and report contract: [`references/retro_protocol.md`](references/retro_protocol.md)
+- Per-host transcript discovery and capture fallback: [`references/session_discovery.md`](references/session_discovery.md)
 - Candidate fields, locator rules, memory drafts, reason codes: [`references/candidate_contract.md`](references/candidate_contract.md)
 - Deterministic analyzer: [`scripts/retro.cjs`](scripts/retro.cjs)
 - Deterministic candidate validator: [`scripts/validate_candidates.cjs`](scripts/validate_candidates.cjs)
