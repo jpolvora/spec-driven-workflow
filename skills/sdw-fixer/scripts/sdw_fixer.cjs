@@ -49,7 +49,7 @@ function findProjectRoot(startDir) {
 }
 
 function parseArgs(args) {
-  const o = { subcommand: null, findings: null, report: null, dryRun: false, json: false, verify: null, root: null };
+  const o = { subcommand: null, findings: null, report: null, dryRun: false, json: false, verify: null, root: null, learn: true };
   const positional = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -63,6 +63,7 @@ function parseArgs(args) {
     else if (a.startsWith('--verify=')) o.verify = a.slice(9);
     else if (a === '--root') o.root = args[++i];
     else if (a.startsWith('--root=')) o.root = a.slice(7);
+    else if (a === '--no-learn') o.learn = false;
     else if (!a.startsWith('-')) positional.push(a);
   }
   o.subcommand = positional[0] || null;
@@ -212,6 +213,133 @@ function readMemoryHints(root, rule) {
   return { hints, skipped: false };
 }
 
+function slugOfRule(rule) {
+  const slug = String(rule).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return slug || null;
+}
+
+function cellText(value, maxLen) {
+  return String(value || '').replace(/\|/g, '/').replace(/\s+/g, ' ').trim().slice(0, maxLen);
+}
+
+function humanizeRule(rule) {
+  const words = String(rule).replace(/[_.-]+/g, ' ').trim().replace(/\s+/g, ' ');
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : String(rule);
+}
+
+function readTrapSlugs(root) {
+  const trapsPath = path.join(root, '.sdw', 'traps.md');
+  if (!fs.existsSync(trapsPath)) return { trapsPath, slugs: new Set(), exists: false };
+  const slugs = new Set();
+  for (const rawLine of fs.readFileSync(trapsPath, 'utf8').split('\n')) {
+    const line = rawLine.trim();
+    if (!line.startsWith('|')) continue;
+    const cells = line.split('|').map(c => c.trim());
+    const slug = cells.length > 1 ? cells[1] : '';
+    if (slug && !/^slugs?$/i.test(slug) && !/^-+$/.test(slug)) slugs.add(slug);
+  }
+  return { trapsPath, slugs, exists: true };
+}
+
+function recordTrap(root, rule, summary) {
+  const slug = slugOfRule(rule);
+  if (!slug) return { recorded: false, reason: 'rule yields empty trap slug' };
+  const { trapsPath, slugs, exists } = readTrapSlugs(root);
+  if (slugs.has(slug)) return { slug, recorded: false, reason: 'trap slug already registered' };
+  const catalog = TRIVIAL_RULES[rule];
+  const date = new Date().toISOString().slice(0, 10);
+  const row = `| ${slug} | ${cellText(humanizeRule(rule), 80)} | implementation | ${cellText(`Reintroducing ${rule} lines (${summary})`, 140)} | ${cellText(catalog ? `Delete lines matching ${catalog.linePattern.source} at finding plus verified sibling hits` : 'Apply the verified surgical fix at finding plus sibling hits', 140)} | ${date} |`;
+  if (!exists) {
+    fs.mkdirSync(path.dirname(trapsPath), { recursive: true });
+    fs.writeFileSync(trapsPath, [
+      '# Anti-Regression Traps Log',
+      '',
+      'Central repository log of behavioral and engineering traps to prevent repeating mistakes.',
+      '',
+      '| Slug | Title | Layer | Avoid | Action | Date |',
+      '|---|---|---|---|---|---|',
+      row,
+      ''
+    ].join('\n'), 'utf8');
+  } else {
+    fs.appendFileSync(trapsPath, row + '\n', 'utf8');
+  }
+  console.log(`[sdw-fixer] Trap registered: ${slug}`);
+  return { slug, recorded: true };
+}
+
+function readMemoryFiles(root, rule) {
+  const candidates = [
+    path.join(root, 'MEMORY.md'),
+    path.join(root, '.sdw', 'MEMORY.md')
+  ];
+  try {
+    const memDir = path.join(root, 'memory');
+    if (fs.existsSync(memDir) && fs.statSync(memDir).isDirectory()) {
+      for (const entry of fs.readdirSync(memDir)) {
+        if (entry.toLowerCase().endsWith('.md')) candidates.push(path.join(memDir, entry));
+      }
+    }
+  } catch (e) {}
+  const ruleLower = String(rule).toLowerCase();
+  const keywords = ruleKeywords(rule);
+  const hints = [];
+  let scannedFiles = 0;
+  for (const abs of candidates) {
+    let content;
+    try {
+      if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) continue;
+      content = fs.readFileSync(abs, 'utf8');
+    } catch (e) {
+      continue;
+    }
+    scannedFiles += 1;
+    for (const rawLine of content.split('\n')) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith('#')) continue;
+      const lineLower = line.toLowerCase();
+      if (lineLower.includes(ruleLower) || keywords.some(k => lineLower.includes(k))) {
+        hints.push({ source: norm(path.relative(root, abs)), snippet: line.slice(0, SNIPPET_LEN) });
+        if (hints.length >= 5) break;
+      }
+    }
+    if (hints.length >= 5) break;
+  }
+  return { hints, scannedFiles, skipped: scannedFiles === 0 };
+}
+
+function searchSpecMemo(root, rule) {
+  if (process.env.SDW_FIXER_NO_MEMO === '1') return { hints: [], skipped: true };
+  const keywords = ruleKeywords(rule);
+  const query = `${rule} ${keywords.join(' ')}`.trim().slice(0, 120);
+  let raw = '';
+  try {
+    const res = spawnSync('memo',
+      ['search', '--query', query, '--kinds', 'trap', '--limit', '5', '--sort', 'relevance', '--json', '--cwd', root],
+      { encoding: 'utf8', timeout: 15000 });
+    if (!res || res.status !== 0) return { hints: [], skipped: true };
+    raw = res.stdout || '';
+  } catch (e) {
+    return { hints: [], skipped: true };
+  }
+  const hints = [];
+  try {
+    const data = JSON.parse(raw);
+    const list = Array.isArray(data) ? data : data.hits || data.records || data.results || [];
+    for (const h of list.slice(0, 5)) {
+      if (!h || typeof h !== 'object') continue;
+      hints.push({
+        id: String(h.id || h.slug || ''),
+        title: String(h.title || '').slice(0, 120),
+        snippet: String(h.snippet || h.summary || '').replace(/<!--[\s\S]*?-->/g, ' ').replace(/\s+/g, ' ').trim().slice(0, SNIPPET_LEN)
+      });
+    }
+  } catch (e) {
+    return { hints: [], skipped: true };
+  }
+  return { hints, skipped: false };
+}
+
 function applyTrivialFix(root, finding, siblingHits, dryRun) {
   const catalog = TRIVIAL_RULES[finding.rule];
   const file = finding.file.trim();
@@ -280,25 +408,39 @@ function cmdRun(options) {
   const skipped = [];
   const wouldFix = [];
   const details = [];
+  const knowledgeCache = new Map();
 
   for (const { finding, score } of scored) {
     const file = finding.file.trim();
-    const { hits, scanned, truncated } = grepSiblings(root, finding.rule.trim());
+    const rule = finding.rule.trim();
+    const { hits, scanned, truncated } = grepSiblings(root, rule);
     if (truncated) {
       skipped.push({ file, reason: `sibling sweep truncated at ${MAX_HITS} hits; remaining occurrences unverified` });
     }
-    const mem = readMemoryHints(root, finding.rule.trim());
-    console.log(`[sdw-fixer] Memory hints for ${finding.rule.trim()}: ${mem.hints.length} hit(s)`);
+    let cached = knowledgeCache.get(rule);
+    if (!cached) {
+      cached = {
+        mem: readMemoryHints(root, rule),
+        files: readMemoryFiles(root, rule),
+        memo: searchSpecMemo(root, rule)
+      };
+      knowledgeCache.set(rule, cached);
+    }
+    const { mem, files: memFiles, memo: specMemo } = cached;
+    console.log(`[sdw-fixer] Memory hints for ${rule}: traps=${mem.hints.length} files=${memFiles.hints.length} vault=${specMemo.hints.length}`);
     const sourcesConsulted = [
       `code-grep:${hits.length} hits/${scanned} files`,
       mem.skipped ? 'memory-traps:consult-skipped' : `memory-traps:${mem.hints.length} hints`,
+      memFiles.skipped ? 'memory-files:consult-skipped' : `memory-files:${memFiles.hints.length} hints`,
+      specMemo.skipped ? 'spec-memo:consult-skipped' : `spec-memo:${specMemo.hints.length} hints`,
       'pr-context:consult-skipped'
     ];
     const outcome = applyTrivialFix(root, finding, hits, options.dryRun);
     const detail = {
-      file, line: finding.line || null, rule: finding.rule.trim(),
+      file, line: finding.line || null, rule,
       score, sourcesConsulted, siblingHits: hits,
-      memoryHints: mem.hints, outcome: outcome.status
+      memoryHints: mem.hints, memoryFileHints: memFiles.hints, specMemoHints: specMemo.hints,
+      outcome: outcome.status
     };
     if (outcome.status === 'fixed') {
       for (const ln of outcome.removed) fixed.push({ file, line: ln, defectClass: finding.rule.trim() });
@@ -313,6 +455,20 @@ function cmdRun(options) {
   }
 
   const verification = runVerification(root, options.verify);
+  const learned = [];
+  const learnEnabled = options.learn !== false;
+  if (!options.dryRun && learnEnabled && verification.status !== 'failed') {
+    const byRule = new Map();
+    for (const f of fixed) {
+      if (!byRule.has(f.defectClass)) byRule.set(f.defectClass, []);
+      byRule.get(f.defectClass).push(f);
+    }
+    for (const [rule, items] of byRule) {
+      const files = [...new Set(items.map(i => i.file))];
+      const res = recordTrap(root, rule, `${items.length} line(s) in ${files.join(', ')}`);
+      learned.push({ rule, slug: res.slug || slugOfRule(rule), recorded: res.recorded, ...(res.reason ? { reason: res.reason } : {}) });
+    }
+  }
   const status = verification.status === 'failed' ? 'verify-failed'
     : (fixed.length === 0 && skipped.length > 0) ? 'no-op'
     : loaded.list.length === 0 ? 'no-op' : 'completed';
@@ -322,6 +478,7 @@ function cmdRun(options) {
     fixed,
     skipped,
     wouldFix,
+    learned,
     verification: { exitCode: verification.exitCode, status: verification.status,
       ...(verification.reason ? { reason: verification.reason } : {}),
       ...(verification.command ? { command: verification.command } : {}) },
@@ -381,7 +538,7 @@ function main() {
   if (!options.subcommand || options.subcommand === 'help' || options.subcommand === '--help') {
     console.log(`sdw-fixer — shared findings intake and surgical remediation
 Usage:
-  node sdw_fixer.cjs run --findings <path> --report <path> [--dry-run] [--json] [--verify <cmd>] [--root <path>]
+  node sdw_fixer.cjs run --findings <path> --report <path> [--dry-run] [--json] [--verify <cmd>] [--root <path>] [--no-learn]
   node sdw_fixer.cjs doctor [--json] [--root <path>]`);
     process.exit(0);
   }
@@ -400,7 +557,8 @@ Usage:
 
 module.exports = {
   findProjectRoot, loadFindings, validateFinding, scoreOf,
-  grepSiblings, readMemoryHints, applyTrivialFix, cmdRun, cmdDoctor
+  grepSiblings, readMemoryHints, readMemoryFiles, searchSpecMemo,
+  applyTrivialFix, recordTrap, slugOfRule, cmdRun, cmdDoctor
 };
 
 if (require.main === module) main();

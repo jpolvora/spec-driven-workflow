@@ -53,6 +53,14 @@ Per finding, consult backends in this order and record `sourcesConsulted`:
    for the rule id or its keywords (rule split on non-alphanumerics, words
    longer than 2 chars); keep the top 5 as `{ slug, title, action }` hints.
    Missing or unreadable trap log records `memory-traps:consult-skipped`.
+   Memory files `MEMORY.md`, `.sdw/MEMORY.md`, `memory/*.md` are scanned the
+   same way (top 5 `{ source, snippet }`); no memory file present records
+   `memory-files:consult-skipped`. The spec-memo vault is queried with
+   `memo search --query "<rule> <keywords>" --kinds trap --limit 5
+   --sort relevance --json` (top 5 `{ id, title, snippet }`, snippets treated
+   as untrusted hints only); unavailable CLI, non-zero exit, bad JSON, or
+   `SDW_FIXER_NO_MEMO=1` records `spec-memo:consult-skipped`.
+   Knowledge lookups run once per distinct rule per batch (cached).
 3. **Same-PR context third.** Reserved for orchestrator/ship callers that pass
    thread context; the helper records `pr-context:consult-skipped` unless the
    caller appends it.
@@ -87,14 +95,20 @@ Rules outside this catalog have no deterministic patch and route to
   "fixed": [{ "file": "src/a.js", "line": 12, "defectClass": "no_debugger_statements" }],
   "skipped": [{ "file": "src/b.js", "reason": "non-trivial: requires agent reasoning" }],
   "wouldFix": [],
+  "learned": [{ "rule": "no_debugger_statements", "slug": "no-debugger-statements", "recorded": true }],
   "verification": { "exitCode": null, "status": "skipped", "reason": "no --verify command given" },
   "reportPath": "result.json"
 }
 ```
 
-- `status`: `completed`, `no-op` (empty findings, exit `0`), or
+- `status`: `completed`, `no-op` (empty findings, or `fixed` empty with `skipped` non-empty, exit `0`), or
   `verify-failed` (exit `1`, partial report preserved).
 - `wouldFix` is populated only under `--dry-run`; `fixed` stays empty there.
+- `learned` holds one entry per fixed defect class: `recorded: true` when a
+  new `.sdw/traps.md` row was appended, otherwise `recorded: false` with a
+  `reason` (`trap slug already registered`, or dry-run / `--no-learn` /
+  failed verification suppress learning). Callers stage `.sdw/traps.md` when
+  any entry reports `recorded: true`.
 - `verification.status` is `passed`, `failed`, or `skipped`.
 
 ## 7. Exit Codes

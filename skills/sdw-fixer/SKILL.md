@@ -18,7 +18,7 @@ Single remediation authority for Spec-Driven Workflow. Scores one finding batch 
 
 ## Subcommands
 
-- `run --findings <path> --report <path> [--dry-run] [--json] [--verify <cmd>]`: Validate, score, gather context, apply trivial patches, write JSON report.
+- `run --findings <path> --report <path> [--dry-run] [--json] [--verify <cmd>] [--no-learn]`: Validate, score, gather context, apply trivial patches, register traps, write JSON report.
 - `doctor [--json]`: Validate skill layout, references, script syntax, and zero-dependency guarantee.
 
 ## Steps
@@ -33,15 +33,15 @@ Single remediation authority for Spec-Driven Workflow. Scores one finding batch 
    - Done when: `[sdw-fixer] Scoring N findings` names every finding with its score.
 
 3. **Gather Context**
-   Grep the repo for defect-class siblings (cap 50 hits) first, then filter `.sdw/traps.md` by defect class (top 5); record `sourcesConsulted` per finding, `consult-skipped` when a backend is unavailable.
+   Grep the repo for defect-class siblings (cap 50 hits) first, then query knowledge backends per finding in order: `.sdw/traps.md` rows (top 5), `MEMORY.md` / `.sdw/MEMORY.md` / `memory/*.md` lines (top 5), spec-memo vault traps via `memo search` (top 5, `SDW_FIXER_NO_MEMO=1` opts out); record `sourcesConsulted` per finding, `consult-skipped` when a backend is unavailable. Results are cached per defect class within the batch.
    - Done when: Each finding lists sibling hits plus memory hints or explicit skips.
 
 4. **Apply Surgical Edits**
    Apply deterministic trivial patches only at finding lines plus verified sibling lines; anything else becomes a `skipped` entry with `path + reason` for agent reasoning. Never close a class with an unrecorded surgical sibling.
    - Done when: Diffs touch only finding scope and `--dry-run` mutates nothing.
 
-5. **Report Results**
-   Write `{ batchId, fixed, skipped, verification, reportPath }` JSON to `--report`; run the `--verify` command when given, otherwise record verification `skipped`. Caller commits fixer-touched files.
+5. **Report Results & Register Learning**
+   Write `{ batchId, fixed, skipped, learned, verification, reportPath }` JSON to `--report`; record one `.sdw/traps.md` row per fixed defect class (deduplicated by slug, skipped under `--dry-run`, `--no-learn`, or failed verification); run the `--verify` command when given, otherwise record verification `skipped`. Caller commits fixer-touched files plus `.sdw/traps.md` when `learned` reports a new row.
    - Done when: Report exists at `--report` and exit is `0` (`1` only on invalid intake or verify failure with the partial report preserved).
 
 ## References
