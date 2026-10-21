@@ -70,6 +70,7 @@ When `scmCodeReviewEnabled: true` or `--poll-pr` is active, `sdw-ship-pr` execut
 > **Explain before Closing:** A thread must NEVER be closed without an informative resolution comment detailing what was fixed and why it resolves the defect. Hash-only or empty comments are forbidden.
 
 ### 4.2 Settle Period & Status Polling
+- Waits for the pipeline to exist before waiting on it: after a push or a fresh PR, providers can leave the run queued with no check reported. Before each settle period, `provider.checkPrStatus(prNumber)` is polled until at least one check appears, bounded by `--checks-start-timeout` (default `30000`, `0` disables) and spaced by `--checks-start-interval` (default `5000`). The outcome is recorded as `reviewConvergence.checksStart = { detected, waitedMs, polls }`; a timeout only warns and hands the wait to the native watch or the poll interval.
 - Waits between rounds with the provider's native capability first: `provider.supportsNativeWatch()` selects `provider.watchPrChecks(prNumber, { intervalSeconds })` (GitHub runs `gh run watch <run-id> --exit-status` on the Actions runs behind the checks), which blocks until the runs finish instead of firing a shell timer. `--no-native-watch` disables it.
 - Falls back to waiting `--poll-interval` milliseconds between rounds (default `20000`) when the provider, the CLI, or the flag is unavailable.
 - Runs up to `--max-iterations` convergence rounds (default `3`).
@@ -137,6 +138,7 @@ When invoked with `--json`, `sdw-ship-pr` emits JSON with the following structur
     "activeThreads": 0,
     "pendingThreads": [],
     "preemptions": 0,
+    "checksStart": { "detected": true, "waitedMs": 4200, "polls": 2 },
     "supersededChecks": [],
     "issuesFixed": [
       {

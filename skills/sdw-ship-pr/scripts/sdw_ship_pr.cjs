@@ -248,6 +248,8 @@ function parseArgs(args) {
     json: false,
     maxIterations: 3,
     pollIntervalMs: 20000,
+    checksStartTimeoutMs: 30000,
+    checksStartIntervalMs: 5000,
     maxPreemptions: null,
     nativeWatch: true
   };
@@ -299,6 +301,12 @@ function parseArgs(args) {
     } else if (arg === '--poll-interval' && args[i + 1]) {
       const parsedInterval = parseInt(args[++i], 10);
       options.pollIntervalMs = Number.isFinite(parsedInterval) && parsedInterval >= 0 ? parsedInterval : 20000;
+    } else if (arg === '--checks-start-timeout' && args[i + 1]) {
+      const parsedTimeout = parseInt(args[++i], 10);
+      options.checksStartTimeoutMs = Number.isFinite(parsedTimeout) && parsedTimeout >= 0 ? parsedTimeout : 30000;
+    } else if (arg === '--checks-start-interval' && args[i + 1]) {
+      const parsedStartInterval = parseInt(args[++i], 10);
+      options.checksStartIntervalMs = Number.isFinite(parsedStartInterval) && parsedStartInterval >= 0 ? parsedStartInterval : 5000;
     } else if (arg === '--max-preemptions' && args[i + 1]) {
       const parsedPreemptions = parseInt(args[++i], 10);
       options.maxPreemptions = Number.isFinite(parsedPreemptions) && parsedPreemptions >= 0 ? parsedPreemptions : 3;
@@ -700,6 +708,7 @@ async function runShipPr(options = {}, customExecutor = null) {
       activeThreads: 0,
       pendingThreads: [],
       failingChecks: [],
+      checksStart: null,
       issuesFixed: []
     },
     shipStatus: 'pending',
@@ -949,7 +958,43 @@ async function runShipPr(options = {}, customExecutor = null) {
           && !dryRun
           && options.nativeWatch !== false
           && Boolean(provider && typeof provider.supportsNativeWatch === 'function' && provider.supportsNativeWatch());
+        const checksStartTimeoutMs = options.checksStartTimeoutMs === undefined
+          ? 30000
+          : (Number.isFinite(Number(options.checksStartTimeoutMs)) ? Math.max(0, Number(options.checksStartTimeoutMs)) : 30000);
+        const checksStartIntervalMs = options.checksStartIntervalMs === undefined
+          ? 5000
+          : (Number.isFinite(Number(options.checksStartIntervalMs)) ? Math.max(10, Number(options.checksStartIntervalMs)) : 5000);
+        const awaitChecksToStart = async () => {
+          if (dryRun || pollIntervalMs <= 0 || checksStartTimeoutMs <= 0 || !prResult.number) return;
+          const startedAt = Date.now();
+          let polls = 0;
+          while (true) {
+            polls += 1;
+            let observed = 0;
+            try {
+              const snapshot = await provider.checkPrStatus(prResult.number);
+              observed = snapshot && Array.isArray(snapshot.checks) ? snapshot.checks.length : 0;
+            } catch (e) {
+              observed = 0;
+            }
+            const waitedMs = Date.now() - startedAt;
+            if (observed > 0) {
+              report.reviewConvergence.checksStart = { detected: true, waitedMs, polls };
+              if (waitedMs >= 1000) {
+                log(`[sdw-ship-pr] ${observed} check(s) reported after ${waitedMs}ms; watching the pipeline.`);
+              }
+              return;
+            }
+            if (waitedMs + checksStartIntervalMs > checksStartTimeoutMs) {
+              report.reviewConvergence.checksStart = { detected: false, waitedMs, polls };
+              warn(`[sdw-ship-pr] No check run started within ${checksStartTimeoutMs}ms; continuing with ${nativeWatch ? 'the native check watch' : 'the poll interval'}.`);
+              return;
+            }
+            await new Promise(r => setTimeout(r, checksStartIntervalMs));
+          }
+        };
         const waitForNextRound = async () => {
+          await awaitChecksToStart();
           if (nativeWatch && prResult.number) {
             try {
               const seconds = Math.max(1, Math.ceil(pollIntervalMs / 1000) || 10);

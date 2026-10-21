@@ -38,6 +38,8 @@ Parameters:
 - `--merge` / `--allow-merge`: After review convergence, ask the SCM CLI to merge the pull request (`gh pr merge <n> --merge` or `az repos pr update --id <n> --status completed`). Fire and forget: the outcome is recorded but never fails the delivery, because permissions, pending approvals, and branch rules are outside this skill's contract. Default: off.
 - `--max-iterations <n>`: Review convergence ceiling (default `3`).
 - `--poll-interval <ms>`: Fallback wait between convergence rounds when native watch is unavailable (default `20000`).
+- `--checks-start-timeout <ms>`: How long to wait for the provider to report the first check run after a push before falling back to watch/polling (default `30000`, `0` disables the wait).
+- `--checks-start-interval <ms>`: Poll interval while waiting for the first check run (default `5000`).
 - `--no-native-watch`: Disable the provider's native run watch (`gh run watch <run-id> --exit-status`) and always use interval polling.
 - `--max-preemptions <n>`: Concurrent-push adaptation budget (default `3`).
 - `--dry-run`: Simulate pre-PR checks, branch push, PR creation, and review polling without remote mutations.
@@ -83,6 +85,7 @@ When the working tree is dirty, the host agent (LLM) selects what belongs to thi
 
 ### Step 5: Post-PR Review Convergence (Cooperative & Proactive Fix Cycle)
 1. When `scmCodeReviewEnabled: true` or `--poll-pr` passed (and `scmProvider != "none"`):
+   - **Wait for the pipeline to start:** A push or a fresh PR can stay queued before the provider creates any check run. Before each wait, poll `provider.checkPrStatus(prNumber)` until at least one check is reported, bounded by `--checks-start-timeout` (default 30s, `0` disables). A timeout warns and hands the wait to the native watch or the poll interval; it never fails the delivery.
    - **Wait for code-review & CI:** Await remote CI workflows and automated/agentic review runs (`provider.checkPrStatus` / `gh pr checks`) to finish.
    - Loop up to configured iteration ceiling (default 3 rounds):
      a. **Check active threads:** Call `provider.listReviewThreads(prNumber)`. If all checks pass and `activeCount === 0`, mark converged and exit loop.
