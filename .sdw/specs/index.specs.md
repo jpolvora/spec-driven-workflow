@@ -56,5 +56,5 @@ Central repository index tracking specification lifecycle states, metadata, and 
 | 00043 | 00043-us-17-emphasize-step-number-progress-in | Emphasize step number progress in sdw-orch agent output | pending | github | 2026-10-21 | PASS | - |
 | 00044 | 00044-us-16-add-gitattributes-and-per-task-sa | Add .gitattributes and per-task save in sdw-orch DAG | pending | github | 2026-10-21 | PASS | - |
 | 00045 | 00045-sdw-retro-auto-run | Automatic Retrospective After Delivery and Delivery-Integrity Signals | completed | local | 2026-10-21 | PASS | - |
-| 00046 | 00046-sdw-batch-retro-followup | Unattended Batch Retro Follow-Up — Queued Specs From Retrospective Candidates | pending | local | 2026-10-21 | PASS | - |
+| 00046 | 00046-sdw-batch-retro-followup | Unattended Batch Retro Follow-Up — Queued Specs From Retrospective Candidates | completed | local | 2026-10-21 | PASS | - |
 | 00047 | 00047-sdw-retro-session-discovery | Host-Aware Session Transcript Discovery and Context Fallback for Retrospectives | completed | local | 2026-10-21 | PASS | - |
