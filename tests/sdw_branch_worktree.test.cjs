@@ -561,6 +561,50 @@ test('sdw-orch branch & worktree - branching auto: the github preset resolves or
   }
 });
 
+test('sdw-orch branch & worktree - branching AC7: a distinct work lane that is checked out updates in place', () => {
+  const tmpDir = setupTestRepo();
+  const remoteDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-bw-remote-'));
+  try {
+    const slug = '00014-checked-out-work-lane';
+    const defaultBranch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: tmpDir, encoding: 'utf8' }).trim();
+    execSync('git switch -c develop', { cwd: tmpDir, stdio: 'ignore' });
+    fs.writeFileSync(path.join(tmpDir, 'develop-only.txt'), 'remote work lane change\n', 'utf8');
+    execSync('git add -A && git commit -m "develop work"', { cwd: tmpDir, stdio: 'ignore' });
+    execSync('git init --bare', { cwd: remoteDir, stdio: 'ignore' });
+    const remoteUrl = remoteDir.replace(/\\/g, '/');
+    execSync(`git remote add origin "${remoteUrl}"`, { cwd: tmpDir, stdio: 'ignore' });
+    execSync('git push -u origin develop', { cwd: tmpDir, stdio: 'ignore' });
+    execSync(`git push origin ${defaultBranch}`, { cwd: tmpDir, stdio: 'ignore' });
+    const remoteHead = execSync('git rev-parse origin/develop', { cwd: tmpDir, encoding: 'utf8' }).trim();
+    execSync('git reset --hard HEAD~1', { cwd: tmpDir, stdio: 'ignore' });
+    // Stay on develop: a distinct work lane that is also the checked-out branch.
+    const specPath = createDummySpec(tmpDir, slug);
+
+    const cfgPath = path.join(tmpDir, '.sdw', 'config.json');
+    const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+    cfg.useFeatureBranches = true;
+    cfg.branching = {
+      strategy: 'develop',
+      workBranch: 'develop',
+      integrationBranch: defaultBranch,
+      updateWorkBranch: true
+    };
+    fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
+
+    const runId = `run-${Date.now()}-${slug}`;
+    const code = sdwOrch.cmdRun({ specPath, root: tmpDir, runId, minScore: 0, skipReview: true, skipPr: true });
+    assert.strictEqual(code, 0, 'A checked-out work lane must not block the fetch');
+
+    const updatedWorkHead = execSync('git rev-parse develop', { cwd: tmpDir, encoding: 'utf8' }).trim();
+    assert.strictEqual(updatedWorkHead, remoteHead, 'Checked-out work lane fast-forwards in place');
+    const featureBase = execSync(`git merge-base feature/${slug} develop`, { cwd: tmpDir, encoding: 'utf8' }).trim();
+    assert.strictEqual(featureBase, remoteHead, 'Feature branch starts at the updated checked-out lane');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.rmSync(remoteDir, { recursive: true, force: true });
+  }
+});
+
 test('sdw-orch branch & worktree - branching dirty tree: a conflicting work lane never blocks activation', () => {
   const tmpDir = setupTestRepo();
   const remoteDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-bw-remote-'));

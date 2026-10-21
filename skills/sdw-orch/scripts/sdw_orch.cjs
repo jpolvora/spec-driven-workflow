@@ -1044,15 +1044,16 @@ function cmdRun(options) {
         // lane is updated in place before the feature branch is created.
         const workBranchSet = typeof workBranch === 'string' && workBranch.trim().length > 0;
         const fromWorkLane = workBranchSet && workBranch !== branching.integrationBranch;
-        const sameLaneCheckedOut = workBranchSet && !fromWorkLane && currentBranch === workBranch;
-        if ((fromWorkLane || sameLaneCheckedOut) && branching.updateWorkBranch) {
+        const workLaneCheckedOut = workBranchSet && currentBranch === workBranch;
+        if ((fromWorkLane || workLaneCheckedOut) && branching.updateWorkBranch) {
           try {
-            if (fromWorkLane) {
-              // Update the lane ref without checking it out, so a dirty tree never blocks.
-              git(targetRoot, ['fetch', 'origin', `${workBranch}:${workBranch}`], { stdio: 'ignore' });
-            } else {
+            if (workLaneCheckedOut) {
+              // A checked-out lane is updated in place: git refuses to fetch into it.
               git(targetRoot, ['fetch', 'origin'], { stdio: 'ignore' });
               git(targetRoot, ['merge', '--ff-only', `origin/${workBranch}`], { stdio: 'ignore' });
+            } else {
+              // Update the lane ref without checking it out, so a dirty tree never blocks.
+              git(targetRoot, ['fetch', 'origin', `${workBranch}:${workBranch}`], { stdio: 'ignore' });
             }
           } catch (updateErr) {
             const message = `Failed to update work branch "${workBranch}": ${updateErr.message}`;

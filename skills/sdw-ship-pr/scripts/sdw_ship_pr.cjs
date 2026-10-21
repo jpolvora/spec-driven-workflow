@@ -364,6 +364,28 @@ function locateStateFile(projectRoot, runId, specSlug = null, config = {}) {
 }
 
 /**
+ * Confirms that the pull request is actually MERGED. A merge command that was
+ * only accepted (queued, auto-merge pending, or blocked by branch rules) must
+ * not trigger the post-merge synchronization.
+ */
+function confirmPullRequestMerged(executor, providerName, prNumber) {
+  if (!prNumber || providerName === 'none' || !providerName) return false;
+  try {
+    if (providerName === 'github') {
+      const out = executor(`gh pr view ${prNumber} --json state --jq .state`);
+      return String(out || '').trim().toUpperCase() === 'MERGED';
+    }
+    if (providerName === 'ado' || providerName === 'azure-devops') {
+      const out = executor(`az repos pr show --id ${prNumber} --query status -o tsv`);
+      return String(out || '').trim().toLowerCase() === 'completed';
+    }
+  } catch (e) {
+    return false;
+  }
+  return false;
+}
+
+/**
  * Post-merge work-lane synchronization (spec 00040 AC12/AC13).
  * Fast-forwards the work lane to the integration lane and optionally pushes it.
  * Any failure is reported as `blocked` and never fails the completed delivery.
@@ -1159,8 +1181,22 @@ async function runShipPr(options = {}, customExecutor = null) {
     }
 
     // Step 4.6: Post-merge work-lane synchronization (spec 00040 AC12/AC13).
-    // Runs only after an observed MERGED, and never changes the delivery result.
-    const prMerged = Boolean(report.merge && report.merge.ok === true);
+    // Runs only after the pull request is observed as MERGED, not merely after
+    // the merge command was accepted, and never changes the delivery result.
+    const mergeAccepted = Boolean(report.merge && report.merge.ok === true);
+    const prMerged = mergeAccepted
+      ? (dryRun ? true : confirmPullRequestMerged(executor, scmProviderName, report.pullRequest && report.pullRequest.number))
+      : false;
+    if (mergeAccepted && !prMerged && branching && branching.syncWorkBranchAfterMerge) {
+      report.branchingSync = {
+        status: 'skipped',
+        reason: 'pull request not observed as MERGED',
+        integrationBranch: integrationBranch || base,
+        workBranch: branching.workBranch || null,
+        at: new Date().toISOString()
+      };
+      log('[Branch Sync] skipped: the pull request is not MERGED yet.');
+    }
     if (prMerged && branching && branching.syncWorkBranchAfterMerge) {
       report.branchingSync = syncWorkBranchAfterMerge({
         executor,
