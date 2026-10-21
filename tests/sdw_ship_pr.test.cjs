@@ -1167,3 +1167,20 @@ test('sdw-ship-pr - native watch: a watch failure falls back to the poll interva
   }
 });
 
+
+test('sdw-ship-pr - dirty selection honors an approved list, run scope, and refuses unknowns', () => {
+  const status = ' M a.js\n?? b.js\n M c.js\n';
+  const approved = sdwShipPr.selectDirtyFiles(status, { approved: ['a.js', 'c.js'] });
+  assert.strictEqual(approved.mode, 'approved-list');
+  assert.deepStrictEqual(approved.selected.map(e => e.path), ['a.js', 'c.js']);
+  assert.deepStrictEqual(approved.excluded.map(e => e.path), ['b.js']);
+
+  const runScope = sdwShipPr.selectDirtyFiles(status, { runFiles: ['b.js'] });
+  assert.strictEqual(runScope.mode, 'run-scope');
+  assert.deepStrictEqual(runScope.selected.map(e => e.path), ['b.js']);
+  assert.deepStrictEqual(runScope.excluded.map(e => e.path), ['a.js', 'c.js']);
+
+  const none = sdwShipPr.selectDirtyFiles(status, {});
+  assert.strictEqual(none.mode, 'none');
+  assert.strictEqual(none.selected.length, 0);
+});

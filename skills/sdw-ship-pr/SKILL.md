@@ -61,12 +61,15 @@ Detailed protocol: [`references/ship_protocol.md`](references/ship_protocol.md).
 5. If `securityChecksEnabled: true`, inspect staged diff for secret leaks or sensitive patterns.
 - Done when: All configured pre-PR gates evaluate to pass; failures halt execution with exit code 1.
 
-### Step 3: Remote Branch Push
-1. If `pushDelivery: true` or `--push` passed:
-   - When not in `--dry-run`, execute `git push -u origin <head>`.
-   - When `--dry-run`, log simulated branch push.
-2. If `pushDelivery: false` and no `--push`, proceed without pushing.
-- Done when: Remote branch is synchronized with origin or push is explicitly bypassed.
+### Step 3: Dirty Worktree Selection and Remote Branch Push
+When the working tree is dirty, the host agent (LLM) selects what belongs to this session before anything is staged. `sdw-ship-pr` never commits unrelated changes on its own.
+
+1. Plan: `node skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs dirty-plan --run-id <runId> [--json]`. It returns `candidates` (every dirty path), `runFiles` (paths recorded by this run's accepted tasks plus the spec), `suggested`, `excluded`, and the resolved `statePath`.
+2. Analyze as the host agent: compare each candidate against this session's task evidence, prompts, dependencies, and artifacts. Approve only files this session produced or that its tasks depend on. Leave pre-existing or unrelated work-in-progress out.
+3. Approve: write the approved project-relative paths as a JSON array to `.sdw/state/<runId>/dirty-files.json` (or pass a comma-separated `--dirty-files`).
+4. Publish: `git status --porcelain -uall` candidates are filtered to the approved list, staged path by path (`git add -A -- <path>`), committed (`chore(delivery): include pending working-tree changes`, override with `dirtyCommitMessage`), and only then pushed.
+5. Without an approved list or run scope, the commit is skipped with a warning and the dirty files stay in place.
+- Done when: Only approved session files are committed, unrelated dirty files remain untouched, and the branch is synchronized with origin or push is explicitly bypassed.
 
 ### Step 4: SCM Pull Request Creation / Reuse
 1. When `scmProvider` is `none`: skip remote PR creation, log local delivery readiness, and return exit 0.

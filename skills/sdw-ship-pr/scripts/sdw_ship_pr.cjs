@@ -263,7 +263,7 @@ function parseArgs(args) {
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (arg === 'list-threads' || arg === 'resolve-thread' || arg === 'check-status') {
+    if (arg === 'list-threads' || arg === 'resolve-thread' || arg === 'check-status' || arg === 'dirty-plan') {
       options.subcommand = arg;
     } else if ((arg === '--pr' || arg === '--pr-number') && args[i + 1]) {
       options.pr = args[++i];
@@ -291,6 +291,10 @@ function parseArgs(args) {
       options.pollPr = true;
     } else if (arg === '--merge' || arg === '--allow-merge') {
       options.merge = true;
+    } else if (arg === '--dirty-files') {
+      options.dirtyFilesPath = args[++i];
+    } else if (arg.startsWith('--dirty-files=')) {
+      options.dirtyFilesPath = arg.slice(14);
     } else if (arg === '--no-native-watch') {
       options.nativeWatch = false;
     } else if (arg === '--native-watch') {
@@ -373,29 +377,99 @@ function locateStateFile(projectRoot, runId, specSlug = null, config = {}) {
  * Commits a dirty working tree before publishing (adapted from the ws-fix-pr /
  * ws-goal-fix-pr auto-commit posture). Returns null when the tree is clean.
  */
+function selectDirtyFiles(statusText, options = {}) {
+  const normalize = p => String(p || '').trim().replace(/\\/g, '/');
+  const entries = String(statusText || '')
+    .split('\n')
+    .filter(line => line.trim())
+    .map(line => ({ status: line.slice(0, 2).trim(), path: normalize(line.slice(3)) }))
+    .filter(entry => entry.path);
+  const approved = Array.isArray(options.approved) && options.approved.length > 0
+    ? new Set(options.approved.map(normalize))
+    : null;
+  const runFiles = new Set((Array.isArray(options.runFiles) ? options.runFiles : []).map(normalize));
+  const selected = approved
+    ? entries.filter(entry => approved.has(entry.path))
+    : entries.filter(entry => runFiles.has(entry.path));
+  const excluded = entries.filter(entry => !selected.includes(entry));
+  return {
+    entries,
+    selected,
+    excluded,
+    mode: approved ? 'approved-list' : (runFiles.size > 0 ? 'run-scope' : 'none')
+  };
+}
+
 function commitDirtyWorktree(executor, projectRoot, options = {}) {
   const dryRun = Boolean(options.dryRun);
   let status = '';
   try {
-    status = String(executor('git status --porcelain -uall') || '').trim();
+    status = String(executor('git status --porcelain -uall') || '');
   } catch (e) {
     return null;
   }
-  if (!status) return null;
-  const files = status.split('\n')
-    .map(line => line.slice(3).trim())
-    .filter(Boolean);
-  if (dryRun) {
-    return { simulated: true, files };
+  if (!status.trim()) return null;
+  const selection = selectDirtyFiles(status, {
+    approved: options.approved,
+    runFiles: options.runFiles
+  });
+  const excluded = selection.excluded.map(entry => entry.path);
+  if (selection.selected.length === 0) {
+    return {
+      skipped: true,
+      mode: selection.mode,
+      reason: selection.mode === 'none'
+        ? 'no approved or run-scoped files; refusing to commit unrelated working-tree changes'
+        : 'no approved or run-scoped file is currently dirty',
+      excluded
+    };
   }
+  const files = selection.selected.map(entry => entry.path);
+  if (dryRun) return { simulated: true, mode: selection.mode, files, excluded };
   const message = options.message || 'chore(delivery): include pending working-tree changes';
   try {
-    executor('git add -A');
+    for (const file of files) executor(`git add -A -- "${file}"`);
     executor(`git commit -m "${message}"`);
     const sha = String(executor('git rev-parse --short HEAD') || '').trim();
-    return { sha, files, message };
+    return { sha, mode: selection.mode, files, excluded, message };
   } catch (e) {
-    return { error: e.message, files };
+    return { error: e.message, mode: selection.mode, files, excluded };
+  }
+}
+
+// Reads an approved dirty-file list: a JSON file (`["a","b"]` or
+// `{"files":[...]}`) or a comma-separated argument value.
+function resolveApprovedDirtyFiles(value) {
+  if (!value) return null;
+  try {
+    if (fs.existsSync(value)) {
+      const data = JSON.parse(fs.readFileSync(value, 'utf8'));
+      const list = Array.isArray(data) ? data : (Array.isArray(data.files) ? data.files : null);
+      return list ? list.map(String) : null;
+    }
+  } catch (e) {
+    return null;
+  }
+  return String(value).split(',').map(item => item.trim()).filter(Boolean);
+}
+
+// Files the current run actually produced, used as the conservative default
+// when the host agent has not produced an approved dirty-file list.
+function collectRunFiles(projectRoot, options = {}, config = {}) {
+  try {
+    const specSlug = options.spec || options.specSlug || null;
+    const statePath = locateStateFile(projectRoot, options.runId, specSlug, config);
+    if (!statePath || !fs.existsSync(statePath)) return [];
+    const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    const files = new Set();
+    const tasks = (state.steps && state.steps[4] && state.steps[4].tasks) || {};
+    for (const task of Object.values(tasks)) {
+      for (const file of task.filesChanged || []) files.add(String(file).replace(/\\/g, '/'));
+    }
+    if (state.specPath) files.add(String(state.specPath).replace(/\\/g, '/'));
+    return [...files];
+  } catch (e) {
+    return [];
   }
 }
 
@@ -745,15 +819,21 @@ async function runShipPr(options = {}, customExecutor = null) {
         if (!hasRemote) {
           log('[sdw-ship-pr] Remote push skipped: no git remote configured.');
         } else {
+          const approvedFiles = resolveApprovedDirtyFiles(options.dirtyFilesPath);
+          const runFiles = collectRunFiles(projectRoot, options, config);
           const dirtyCommit = commitDirtyWorktree(executor, projectRoot, {
+            approved: approvedFiles,
+            runFiles,
             message: options.dirtyCommitMessage || config.dirtyCommitMessage
           });
           if (dirtyCommit) {
             report.dirtyCommit = dirtyCommit;
-            if (dirtyCommit.error) {
+            if (dirtyCommit.skipped) {
+              warn(`[sdw-ship-pr] Working tree is dirty; commit skipped (${dirtyCommit.reason}).`);
+            } else if (dirtyCommit.error) {
               warn(`[sdw-ship-pr] Working tree is dirty but the commit failed: ${dirtyCommit.error}`);
             } else {
-              log(`[sdw-ship-pr] Committed ${dirtyCommit.files.length} pending file(s) as ${dirtyCommit.sha} before pushing.`);
+              log(`[sdw-ship-pr] Committed ${dirtyCommit.files.length} ${dirtyCommit.mode} file(s) as ${dirtyCommit.sha} before pushing${dirtyCommit.excluded.length ? `; ${dirtyCommit.excluded.length} unrelated file(s) left dirty` : ''}.`);
             }
           }
           log(`[sdw-ship-pr] Pushing branch ${head} to remote origin${activePrEarly ? ` (complementing active PR #${activePrEarly.number})` : ''}...`);
@@ -1462,10 +1542,53 @@ async function cmdCheckStatus(options, customExecutor) {
   return await provider.checkPrStatus(prNumber);
 }
 
+/**
+ * Plans the dirty-worktree commit: lists the candidates plus the files the
+ * current run actually produced, so the host agent (LLM) can decide which
+ * changes belong to this session before ship-pr stages anything.
+ */
+function cmdDirtyPlan(options = {}) {
+  const projectRoot = options.projectRoot || process.cwd();
+  const config = loadConfig(projectRoot);
+  let status = '';
+  try {
+    status = String(execSync('git status --porcelain -uall', {
+      cwd: projectRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore']
+    }) || '');
+  } catch (e) {
+    status = '';
+  }
+  const runFiles = collectRunFiles(projectRoot, options, config);
+  const selection = selectDirtyFiles(status, { runFiles });
+  let statePath = null;
+  try {
+    statePath = locateStateFile(projectRoot, options.runId, options.spec || options.specSlug, config);
+  } catch (e) {
+    statePath = null;
+  }
+  return {
+    projectRoot,
+    runId: options.runId || null,
+    specSlug: options.spec || options.specSlug || null,
+    statePath,
+    mode: selection.mode,
+    runFiles,
+    candidates: selection.entries,
+    suggested: selection.selected.map(entry => entry.path),
+    excluded: selection.excluded.map(entry => entry.path),
+    instructions: 'Review every candidate against the current session tasks, prompts, and dependencies; write the approved project-relative paths as a JSON array to .sdw/state/<runId>/dirty-files.json, then run sdw-ship-pr with --dirty-files <path>.'
+  };
+}
+
 // CLI Execution entrypoint
 if (require.main === module) {
   const args = process.argv.slice(2);
   const options = parseArgs(args);
+
+  if (options.subcommand === 'dirty-plan') {
+    process.stdout.write(JSON.stringify(cmdDirtyPlan(options), null, 2) + '\n');
+    process.exit(0);
+  }
 
   let runnerPromise;
   if (options.subcommand === 'list-threads') {
@@ -1536,5 +1659,8 @@ module.exports = {
   buildPrTitle,
   buildPrBody,
   buildDefaultFixerCommand,
-  syncWorkBranchAfterMerge
+  syncWorkBranchAfterMerge,
+  selectDirtyFiles,
+  commitDirtyWorktree,
+  cmdDirtyPlan
 };
