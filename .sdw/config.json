@@ -58,6 +58,10 @@
   "prePrInstructions": "",
   "reviewFixCommand": "",
   "maxPreemptions": 10,
+  "retro": {
+    "enabled": true,
+    "transcripts": []
+  },
   "memory": {
     "backends": {
       "wsMemo": true

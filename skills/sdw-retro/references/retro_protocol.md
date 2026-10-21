@@ -1,24 +1,34 @@
 # Retro Protocol
 
-`sdw-retro` is a human-invoked review of one `sdw-orch` run. It turns the run's
-own record into deterministic friction signals and leaves every improvement
-judgment to an explicit operator decision. It never runs as part of delivery,
-never changes project code, and never writes memory records.
+`sdw-retro` is a review of one `sdw-orch` run. It turns the run's own record
+and the transcripts the operator explicitly names into deterministic friction
+signals and leaves every improvement judgment to an explicit operator decision.
+It never changes project code and never writes memory records.
+
+`sdw-orch` starts the review automatically when a run reaches `completed` and
+`retro.enabled` is `true`. The orchestrator records the outcome in
+`state.retro`; a non-zero retro exit or a missing report is recorded and never
+turns the completed delivery into a failed run. When `retro.enabled` is `false`
+or absent, `sdw-orch` prints the advisory retro command and does not run it.
 
 ## Invocation
 
 ```bash
-node skills/sdw-retro/scripts/retro.cjs run [--run-id <runId>] [--root <path>] [--json]
+node skills/sdw-retro/scripts/retro.cjs run [--run-id <runId>] [--root <path>] [--transcript <path>]... [--json]
 ```
 
 - `--run-id` selects one run. Omit it to select the most recent run whose state
   has `status: "completed"` under `.sdw/state`.
 - `--root` selects the project root. Omit it to walk up from the current
   directory to the nearest directory containing `.sdw/`.
+- `--transcript` names one transcript file and may repeat. Configured
+  `retro.transcripts` entries are added to the same list; duplicates are read
+  once.
 - `--json` prints the report object on stdout. Selection telemetry moves to
   stderr so stdout stays machine readable.
-- Exit `0` means both report files were written. Exit `1` means the subcommand,
-  argument, run, or report write failed; the error names the cause.
+- Exit `0` means both report files were written, including when a named
+  transcript is unreadable. Exit `1` means the subcommand, argument, run, or
+  report write failed; the error names the cause.
 
 ## Inputs
 
@@ -29,12 +39,21 @@ The only retro inputs are:
    `steps.<n>.artifact`, `steps.4.tasks.<id>.promptPath`,
    `steps.4.tasks.<id>.evidencePath`, `steps.5.output.judgePromptPath`, and
    `steps.5.output.judgeVerdictPath`.
+3. Every transcript path named by `retro.transcripts` in `.sdw/config.json` or
+   by a `--transcript` flag. Transcripts are opt-in: empty configuration means
+   no transcript is read.
 
 The analyzer never enumerates host transcript directories, session stores, chat
-logs, or agent conversation records. If a declared path looks like a transcript,
-session log, or chat log, the path is listed under `excludedInputs` with reason
-`host-log` and is not read. Declared paths outside the project root are listed
-with reason `outside-project-root`.
+logs, or agent conversation records. An unconfigured declared path that looks
+like a transcript, session log, or chat log is listed under `excludedInputs`
+with reason `host-log` and is not read. Declared paths outside the project root
+are listed with reason `outside-project-root`.
+
+A configured transcript is always read, even when its path would match a host
+log pattern, because the operator named it explicitly. It is listed under
+`inputs` as `{ path, lines }` under `transcripts` and in the Markdown report
+with its line count. A transcript that does not exist is reported through the
+`transcript_unreadable` signal and never fails the command.
 
 ## Run Selection
 
@@ -60,10 +79,20 @@ Signals are read from the state object, never invented from prose.
 | `reviewFindings` | `steps.7.output.findings[*]` | Counts by severity, open findings, and locators. |
 | `unresolvedThreads` | `steps.8.output.reviewConvergence` | Active, resolved, and pending threads with locators. |
 | `missingArtifacts` | declared artifact paths | Present only when a declared path is absent. |
+| `leftover_run` | sibling `*.state.json` files with the same `specSlug` | Sibling runs that never reached `completed` or `failed`, with run id, status, and age. |
+| `repeated_run_invocation` | configured transcripts | Two `sdw-orch ... run` invocations for the same `--spec` in one transcript with no `resume` between them. Cites the file and both line numbers; never copies line bodies. |
+| `transcript_unreadable` | configured transcripts | A named transcript path that does not exist or cannot be read, with `not-found` or `read-error`. The command still exits `0`. |
 
 The state stores only the latest gate record, so a repaired gate can appear as
 `passed` with no failure history. `gateRepairs` reports what the state records;
 it does not infer unrecorded repairs.
+
+Transcript scanning is line-based and format-agnostic: plain text and JSONL
+lines match the same command signature. A line counts as an orchestrator
+invocation when it mentions `sdw-orch` (or `sdw_orch.cjs`) and the `run` or
+`resume` command word. The specification is the basename of the `--spec` value;
+the rest of the line is ignored. Nothing is parsed from harness-specific JSON
+structure.
 
 ## Artifacts And Missing Content
 
@@ -80,8 +109,9 @@ Both files are written inside the run artifact directory, which the state names
 as `artifactsDir`:
 
 - `<runId>.retro.md` — human-readable report.
-- `<runId>.retro.json` — machine-readable report with `inputs`, `artifacts`,
-  `excludedInputs`, `signals`, `candidates`, and `candidateContract`.
+- `<runId>.retro.json` — machine-readable report with `inputs`, `transcripts`,
+  `artifacts`, `excludedInputs`, `signals`, `candidates`, and
+  `candidateContract`.
 
 Each report has `signals` and `candidates`. An empty `candidates` array is valid
 for a smooth run. Candidates are operator- or agent-supplied judgments; the
@@ -105,4 +135,10 @@ repository modification.
 - The run writes only the two report files. It does not edit source, specs, or
   memory, and it does not run git.
 - `.sdw/state/` is git-ignored, so a retro run leaves the working tree unchanged.
-- Every run needs an explicit operator invocation; no delivery step starts one.
+- `sdw-orch` starts one review automatically when `retro.enabled` is `true`;
+  otherwise the operator runs the command. A retro failure never changes the
+  run status or the orchestrator exit code.
+- `sdw-orch run` refuses to start a second run while the same specification has
+  a run that is neither `completed` nor `failed`; it names the open run id and
+  directs the operator to `resume --run-id <runId>`. `--new-run` overrides the
+  guard for an intentional restart.
