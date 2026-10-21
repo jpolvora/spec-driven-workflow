@@ -32,16 +32,16 @@ Single remediation authority for Spec-Driven Workflow. Scores one finding batch 
    Apply the severity rubric once per batch (`critical 100`, `high 75`, `medium 50`, `low 25`, missing `50`) and fix in descending score order.
    - Done when: `[sdw-fixer] Scoring N findings` names every finding with its score.
 
-3. **Gather Context**
-   Grep the repo for defect-class siblings (cap 50 hits) first, then query knowledge backends per finding in order: `.sdw/traps.md` rows (top 5), `MEMORY.md` / `.sdw/MEMORY.md` / `memory/*.md` lines (top 5), spec-memo vault traps via `memo search` (top 5, `SDW_FIXER_NO_MEMO=1` opts out); record `sourcesConsulted` per finding, `consult-skipped` when a backend is unavailable. Results are cached per defect class within the batch.
+3. **Gather Context via sdw-memory**
+   Grep the repo for defect-class siblings (cap 50 hits) first, then query knowledge per finding through the central `sdw-memory` wrapper (traps table, memory files, ws-memo vault in backend order); record `sourcesConsulted` per finding, `consult-skipped` when a backend is unavailable. Results are cached per defect class within the batch.
    - Done when: Each finding lists sibling hits plus memory hints or explicit skips.
 
 4. **Apply Surgical Edits**
    Apply deterministic trivial patches only at finding lines plus verified sibling lines; anything else becomes a `skipped` entry with `path + reason` for agent reasoning. Never close a class with an unrecorded surgical sibling.
    - Done when: Diffs touch only finding scope and `--dry-run` mutates nothing.
 
-5. **Report Results & Register Learning**
-   Write `{ batchId, fixed, skipped, learned, verification, reportPath }` JSON to `--report`; record one `.sdw/traps.md` row per fixed defect class (deduplicated by slug, skipped under `--dry-run`, `--no-learn`, or failed verification); run the `--verify` command when given, otherwise record verification `skipped`. Caller commits fixer-touched files plus `.sdw/traps.md` when `learned` reports a new row.
+5. **Report Results & Register Learning via sdw-memory**
+   Write `{ batchId, fixed, skipped, learned, verification, reportPath }` JSON to `--report`; record one knowledge entry per fixed defect class through `sdw-memory` (deduplicated by slug, skipped under `--dry-run`, `--no-learn`, or failed verification); run the `--verify` command when given, otherwise record verification `skipped`. Caller commits fixer-touched files plus `.sdw/memory/traps.md` when `learned` reports a new row.
    - Done when: Report exists at `--report` and exit is `0` (`1` only on invalid intake or verify failure with the partial report preserved).
 
 ## References

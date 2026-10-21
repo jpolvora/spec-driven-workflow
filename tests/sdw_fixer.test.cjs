@@ -8,13 +8,14 @@ const fixer = require('../skills/sdw-fixer/scripts/sdw_fixer.cjs');
 
 // Keep knowledge-backend tests hermetic by default; the live vault test opts back in.
 process.env.SDW_FIXER_NO_MEMO = '1';
+process.env.SDW_MEMORY_NO_MEMO = '1';
 
 function setupRoot(withTraps) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-fixer-test-'));
-  fs.mkdirSync(path.join(root, '.sdw'), { recursive: true });
+  fs.mkdirSync(path.join(root, '.sdw', 'memory'), { recursive: true });
   if (withTraps) {
     fs.writeFileSync(
-      path.join(root, '.sdw', 'traps.md'),
+      path.join(root, '.sdw', 'memory', 'traps.md'),
       [
         '# Anti-Regression Traps Log',
         '',
@@ -51,7 +52,7 @@ test('sdw-fixer - learn registers a trap row for the fixed defect class', () => 
     assert.strictEqual(r.report.learned.length, 1);
     assert.strictEqual(r.report.learned[0].slug, 'no-debugger-statements');
     assert.strictEqual(r.report.learned[0].recorded, true);
-    const traps = fs.readFileSync(path.join(root, '.sdw', 'traps.md'), 'utf8');
+    const traps = fs.readFileSync(path.join(root, '.sdw', 'memory', 'traps.md'), 'utf8');
     assert.match(traps, /\| no-debugger-statements \|/);
     assert.ok(!fs.readFileSync(path.join(root, 'buggy.js'), 'utf8').includes('debugger'));
   } finally {
@@ -71,7 +72,7 @@ test('sdw-fixer - learn deduplicates an already registered trap slug', () => {
     assert.strictEqual(r.report.learned.length, 1);
     assert.strictEqual(r.report.learned[0].recorded, false);
     assert.match(r.report.learned[0].reason, /already registered/);
-    const rows = fs.readFileSync(path.join(root, '.sdw', 'traps.md'), 'utf8')
+    const rows = fs.readFileSync(path.join(root, '.sdw', 'memory', 'traps.md'), 'utf8')
       .split('\n').filter(l => l.includes('| no-debugger-statements |'));
     assert.strictEqual(rows.length, 1);
   } finally {
@@ -82,17 +83,17 @@ test('sdw-fixer - learn deduplicates an already registered trap slug', () => {
 test('sdw-fixer - learn creates traps.md when missing and skips on dry-run', () => {
   const root = setupRoot(false);
   try {
-    assert.ok(!fs.existsSync(path.join(root, '.sdw', 'traps.md')));
+    assert.ok(!fs.existsSync(path.join(root, '.sdw', 'memory', 'traps.md')));
     const dry = path.join(root, 'dry.json');
     const r = fixer.cmdRun({ root, findings: writeFindings(root), report: dry, dryRun: true });
     assert.strictEqual(r.exit, 0);
     assert.deepStrictEqual(r.report.learned, []);
-    assert.ok(!fs.existsSync(path.join(root, '.sdw', 'traps.md')));
+    assert.ok(!fs.existsSync(path.join(root, '.sdw', 'memory', 'traps.md')));
     const real = path.join(root, 'real.json');
     const r2 = fixer.cmdRun({ root, findings: writeFindings(root, 'b2'), report: real });
     assert.strictEqual(r2.exit, 0);
     assert.strictEqual(r2.report.learned[0].recorded, true);
-    const traps = fs.readFileSync(path.join(root, '.sdw', 'traps.md'), 'utf8');
+    const traps = fs.readFileSync(path.join(root, '.sdw', 'memory', 'traps.md'), 'utf8');
     assert.match(traps, /^# Anti-Regression Traps Log/m);
     assert.match(traps, /\| Slug \| Title \| Layer \| Avoid \| Action \| Date \|/);
   } finally {
@@ -122,6 +123,7 @@ test('sdw-fixer - queries memory files for related knowledge before fixing', () 
 
 test('sdw-fixer - records spec-memo consult status before fixing', () => {
   delete process.env.SDW_FIXER_NO_MEMO;
+  delete process.env.SDW_MEMORY_NO_MEMO;
   try {
     const root = setupRoot(true);
     try {
@@ -136,6 +138,7 @@ test('sdw-fixer - records spec-memo consult status before fixing', () => {
     }
   } finally {
     process.env.SDW_FIXER_NO_MEMO = '1';
+    process.env.SDW_MEMORY_NO_MEMO = '1';
   }
 });
 
@@ -159,7 +162,7 @@ test('sdw-fixer - learn honors --no-learn and failed verification', () => {
     const r1 = fixer.cmdRun({ root, findings: writeFindings(root, 'b1'), report: p1, learn: false });
     assert.strictEqual(r1.exit, 0);
     assert.deepStrictEqual(r1.report.learned, []);
-    assert.ok(!fs.readFileSync(path.join(root, '.sdw', 'traps.md'), 'utf8').includes('no-debugger-statements'));
+    assert.ok(!fs.readFileSync(path.join(root, '.sdw', 'memory', 'traps.md'), 'utf8').includes('no-debugger-statements'));
 
     fs.writeFileSync(path.join(root, 'buggy.js'), 'const a = 1;\ndebugger;\nmodule.exports = a;\n', 'utf8');
     const p2 = path.join(root, 'r2.json');
@@ -167,7 +170,7 @@ test('sdw-fixer - learn honors --no-learn and failed verification', () => {
     assert.strictEqual(r2.exit, 1);
     assert.strictEqual(r2.report.status, 'verify-failed');
     assert.deepStrictEqual(r2.report.learned, []);
-    assert.ok(!fs.readFileSync(path.join(root, '.sdw', 'traps.md'), 'utf8').includes('no-debugger-statements'));
+    assert.ok(!fs.readFileSync(path.join(root, '.sdw', 'memory', 'traps.md'), 'utf8').includes('no-debugger-statements'));
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

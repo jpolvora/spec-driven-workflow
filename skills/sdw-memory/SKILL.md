@@ -14,7 +14,7 @@ invocation_names:
 
 > When this skill is loaded, output "sdw-memory loaded."
 
-Central source of truth for product knowledge. Wraps every memory read and write behind one contract and delegates to pluggable store backends (native: `ws-memo` vault; fallback: local `.sdw/traps.md` file). No skill writes memory through any other path.
+Central source of truth for product knowledge. Wraps every memory read and write behind one contract and delegates to pluggable store backends (native: `ws-memo` vault; fallback: local `.sdw/memory/traps.md` file). No skill writes memory through any other path.
 
 > **Rules:** apply [`sdw-rules`](../sdw-rules/SKILL.md) — surgical scope, verification — before any write. Reviewer and recorder stay separate; never self-approve a learning you just produced.
 
@@ -47,6 +47,17 @@ Central source of truth for product knowledge. Wraps every memory read and write
    Compact the local traps file by merging same-slug rows; vault lifecycle stays with `memo gc` / `forget`.
    - Run: `node skills/sdw-memory/scripts/sdw_memory.cjs consolidate [--dry-run]`
    - Done when: Report states removed vs kept counts.
+
+## Backend Configuration
+
+Default backend is the `ws-memo` vault (requires the `ws-memo` skill plus a
+reachable `memo` CLI; `sdw-memory doctor` reports both). Fallback order is
+`traps` file, then memory files. Select per user in `.sdw/config.json` with
+`memory.backends: { wsMemo, traps, files }` (`true` unless explicitly
+`false`); `--backend` pins the target set per call, `SDW_MEMORY_NO_MEMO=1`
+disables the vault. When no backend is enabled or reachable, calls succeed
+as no-ops: queries return empty hints, records report `noop: true` — callers
+never block. See [`references/memory_protocol.md`](references/memory_protocol.md) §2.
 
 ## References
 

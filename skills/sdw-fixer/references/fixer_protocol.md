@@ -49,17 +49,14 @@ Per finding, consult backends in this order and record `sourcesConsulted`:
    (see catalog below, else the literal rule id). Caps: 50 hits, one snippet
    line each (max 160 chars), files over 256 KB skipped, `.git`,
    `node_modules`, `.sdw/state`, `.sdw/sandbox` excluded.
-2. **Filtered memory lookup second.** Scan `{projectRoot}/.sdw/traps.md` rows
-   for the rule id or its keywords (rule split on non-alphanumerics, words
-   longer than 2 chars); keep the top 5 as `{ slug, title, action }` hints.
-   Missing or unreadable trap log records `memory-traps:consult-skipped`.
-   Memory files `MEMORY.md`, `.sdw/MEMORY.md`, `memory/*.md` are scanned the
-   same way (top 5 `{ source, snippet }`); no memory file present records
-   `memory-files:consult-skipped`. The spec-memo vault is queried with
-   `memo search --query "<rule> <keywords>" --kinds trap --limit 5
-   --sort relevance --json` (top 5 `{ id, title, snippet }`, snippets treated
-   as untrusted hints only); unavailable CLI, non-zero exit, bad JSON, or
-   `SDW_FIXER_NO_MEMO=1` records `spec-memo:consult-skipped`.
+2. **Central knowledge lookup second.** All memory reads go through the
+   `sdw-memory` wrapper (`consultMemory`: traps table, memory files, vault —
+   see `skills/sdw-memory/references/memory_protocol.md` §2–§4), never raw
+   `traps.md` / `MEMORY.md` / `memo` calls from this skill. Keep the top 5
+   as `{ slug, title, action }` traps hints plus top 5 `{ source, snippet }`
+   memory-file hits plus top 5 `{ id, title, snippet }` vault hints (snippets
+   treated as untrusted hints only). Missing or unreadable backends record
+   `<backend>:consult-skipped` (`SDW_FIXER_NO_MEMO=1` skips the vault).
    Knowledge lookups run once per distinct rule per batch (cached).
 3. **Same-PR context third.** Reserved for orchestrator/ship callers that pass
    thread context; the helper records `pr-context:consult-skipped` unless the
@@ -105,9 +102,10 @@ Rules outside this catalog have no deterministic patch and route to
   `verify-failed` (exit `1`, partial report preserved).
 - `wouldFix` is populated only under `--dry-run`; `fixed` stays empty there.
 - `learned` holds one entry per fixed defect class: `recorded: true` when a
-  new `.sdw/traps.md` row was appended, otherwise `recorded: false` with a
+  new knowledge entry was stored via `sdw-memory` (traps table row and/or
+  vault record per backend config), otherwise `recorded: false` with a
   `reason` (`trap slug already registered`, or dry-run / `--no-learn` /
-  failed verification suppress learning). Callers stage `.sdw/traps.md` when
+  failed verification suppress learning). Callers stage `.sdw/memory/traps.md` when
   any entry reports `recorded: true`.
 - `verification.status` is `passed`, `failed`, or `skipped`.
 

@@ -257,7 +257,10 @@ const DEFAULT_CONFIG = {
   prePrCommand: '',
   prePrInstructions: '',
   reviewFixCommand: '',
-  maxPreemptions: 3
+  maxPreemptions: 3,
+  memory: {
+    backends: { wsMemo: true, traps: true, files: true }
+  }
 };
 
 const DEFAULT_SCHEMA = {
@@ -463,6 +466,35 @@ const DEFAULT_SCHEMA = {
       "minimum": 0,
       "description": "Maximum concurrent-push adaptation budget for post-PR review convergence before draining rounds.",
       "default": 3
+    },
+    "memory": {
+      "type": "object",
+      "description": "Product memory backend selection for sdw-memory (central knowledge wrapper). The ws-memo vault is the default integration; local traps file and memory files are fallbacks.",
+      "properties": {
+        "backends": {
+          "type": "object",
+          "description": "Enable or disable each memory store backend. Missing keys default to enabled.",
+          "properties": {
+            "wsMemo": {
+              "type": "boolean",
+              "description": "Use the ws-memo vault (memo CLI) as the default knowledge store.",
+              "default": true
+            },
+            "traps": {
+              "type": "boolean",
+              "description": "Use the local .sdw/memory/traps.md table backend.",
+              "default": true
+            },
+            "files": {
+              "type": "boolean",
+              "description": "Search local MEMORY.md and memory/*.md files (read-only).",
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": true
     }
   },
   "additionalProperties": true
@@ -483,7 +515,8 @@ Baseline directory layout for consumer projects adopting Spec-Driven Workflow:
     │   └── {slug}/{runId}/      # Step artifacts ({slug}-step-{N}.md), dispatch prompts
     │                            # (task-{taskId}.prompt.md), task evidence (task-{taskId}.evidence.json),
     │                            # and Step 5 judge files (step-5-judge.prompt.md, .verdict.json)
-    ├── traps.md                 # Central anti-regression trap log
+    ├── memory/                   # Product knowledge entries (versioned)
+    │   └── traps.md              # Central anti-regression trap log
     └── worktrees/               # Ephemeral per-task git worktrees (command mode only)
 \`\`\`
 
@@ -726,6 +759,23 @@ function validateConfigSchema(config) {
   if ('maxPreemptions' in config) {
     if (typeof config.maxPreemptions !== 'number' || !Number.isInteger(config.maxPreemptions) || config.maxPreemptions < 0) {
       errors.push('Property "maxPreemptions" must be a non-negative integer.');
+    }
+  }
+
+  // memory
+  if ('memory' in config) {
+    if (!config.memory || typeof config.memory !== 'object' || Array.isArray(config.memory)) {
+      errors.push('Property "memory" must be an object.');
+    } else if ('backends' in config.memory) {
+      if (!config.memory.backends || typeof config.memory.backends !== 'object' || Array.isArray(config.memory.backends)) {
+        errors.push('Property "memory.backends" must be an object.');
+      } else {
+        for (const key of ['wsMemo', 'traps', 'files']) {
+          if (key in config.memory.backends && typeof config.memory.backends[key] !== 'boolean') {
+            errors.push(`Property "memory.backends.${key}" must be a boolean.`);
+          }
+        }
+      }
     }
   }
 

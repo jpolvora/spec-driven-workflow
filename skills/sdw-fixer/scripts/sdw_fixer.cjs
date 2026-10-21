@@ -3,13 +3,14 @@
 /**
  * sdw-fixer Tier-3 helper (stdlib only: fs, path, child_process).
  * Validates findings, scores them, sweeps defect-class siblings via grep,
- * injects .sdw/traps.md memory hints, applies deterministic trivial patches,
+ * injects memory hints via sdw-memory, applies deterministic trivial patches,
  * and writes a JSON result report.
  */
 
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const sdwMemory = require('../../sdw-memory/scripts/sdw_memory.cjs');
 
 const SEVERITY_SCORE = { critical: 100, high: 75, medium: 50, low: 25 };
 const RULE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -116,11 +117,6 @@ function scoreOf(finding) {
   return SEVERITY_SCORE[hint] !== undefined ? SEVERITY_SCORE[hint] : SEVERITY_SCORE.medium;
 }
 
-function ruleKeywords(rule) {
-  return String(rule).toLowerCase().split(/[^a-z0-9]+/)
-    .filter(w => w.length > 2 && !['the', 'and', 'for', 'with'].includes(w));
-}
-
 function tokensForRule(rule) {
   if (TRIVIAL_RULES[rule]) return TRIVIAL_RULES[rule].tokens;
   return [rule];
@@ -186,158 +182,36 @@ function grepSiblings(root, rule) {
   return { hits, scanned, truncated };
 }
 
-function readMemoryHints(root, rule) {
-  const trapsPath = path.join(root, '.sdw', 'traps.md');
-  if (!fs.existsSync(trapsPath)) return { hints: [], skipped: true };
-  let content;
-  try {
-    content = fs.readFileSync(trapsPath, 'utf8');
-  } catch (e) {
-    return { hints: [], skipped: true };
-  }
-  const ruleLower = String(rule).toLowerCase();
-  const keywords = ruleKeywords(rule);
-  const hints = [];
-  for (const rawLine of content.split('\n')) {
-    const line = rawLine.trim();
-    if (!line.startsWith('|')) continue;
-    const cells = line.split('|').map(c => c.trim()).filter((c, i, arr) => i > 0 && i < arr.length);
-    if (cells.length < 5 || /^slugs?$/i.test(cells[0]) || /^-+$/.test(cells[0])) continue;
-    const rowLower = cells.join(' ').toLowerCase();
-    const matched = rowLower.includes(ruleLower) || keywords.some(k => rowLower.includes(k));
-    if (matched) {
-      hints.push({ slug: cells[0], title: cells[1], action: cells[3] });
-      if (hints.length >= 5) break;
-    }
-  }
-  return { hints, skipped: false };
-}
-
-function slugOfRule(rule) {
-  const slug = String(rule).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-  return slug || null;
-}
-
-function cellText(value, maxLen) {
-  return String(value || '').replace(/\|/g, '/').replace(/\s+/g, ' ').trim().slice(0, maxLen);
-}
-
 function humanizeRule(rule) {
   const words = String(rule).replace(/[_.-]+/g, ' ').trim().replace(/\s+/g, ' ');
   return words ? words.charAt(0).toUpperCase() + words.slice(1) : String(rule);
 }
 
-function readTrapSlugs(root) {
-  const trapsPath = path.join(root, '.sdw', 'traps.md');
-  if (!fs.existsSync(trapsPath)) return { trapsPath, slugs: new Set(), exists: false };
-  const slugs = new Set();
-  for (const rawLine of fs.readFileSync(trapsPath, 'utf8').split('\n')) {
-    const line = rawLine.trim();
-    if (!line.startsWith('|')) continue;
-    const cells = line.split('|').map(c => c.trim());
-    const slug = cells.length > 1 ? cells[1] : '';
-    if (slug && !/^slugs?$/i.test(slug) && !/^-+$/.test(slug)) slugs.add(slug);
-  }
-  return { trapsPath, slugs, exists: true };
+/* All product knowledge flows through the central sdw-memory wrapper
+   (backends separated in skills/sdw-memory/scripts/backends/). This file
+   never reads traps.md, MEMORY.md, or the memo vault directly. */
+function consultKnowledge(root, rule) {
+  const only = process.env.SDW_FIXER_NO_MEMO === '1' ? ['traps', 'files'] : undefined;
+  const c = sdwMemory.consultMemory(root, rule, { limit: 5, ...(only ? { backends: only } : {}) });
+  return {
+    mem: { hints: c.traps.hints.map(h => ({ slug: h.slug, title: h.title, action: h.action })), skipped: c.traps.skipped },
+    files: { hints: c.files.hints.map(h => ({ source: h.file, snippet: h.snippet })), skipped: c.files.skipped },
+    memo: { hints: c.vault.hints, skipped: c.vault.skipped }
+  };
 }
 
 function recordTrap(root, rule, summary) {
-  const slug = slugOfRule(rule);
-  if (!slug) return { recorded: false, reason: 'rule yields empty trap slug' };
-  const { trapsPath, slugs, exists } = readTrapSlugs(root);
-  if (slugs.has(slug)) return { slug, recorded: false, reason: 'trap slug already registered' };
   const catalog = TRIVIAL_RULES[rule];
-  const date = new Date().toISOString().slice(0, 10);
-  const row = `| ${slug} | ${cellText(humanizeRule(rule), 80)} | implementation | ${cellText(`Reintroducing ${rule} lines (${summary})`, 140)} | ${cellText(catalog ? `Delete lines matching ${catalog.linePattern.source} at finding plus verified sibling hits` : 'Apply the verified surgical fix at finding plus sibling hits', 140)} | ${date} |`;
-  if (!exists) {
-    fs.mkdirSync(path.dirname(trapsPath), { recursive: true });
-    fs.writeFileSync(trapsPath, [
-      '# Anti-Regression Traps Log',
-      '',
-      'Central repository log of behavioral and engineering traps to prevent repeating mistakes.',
-      '',
-      '| Slug | Title | Layer | Avoid | Action | Date |',
-      '|---|---|---|---|---|---|',
-      row,
-      ''
-    ].join('\n'), 'utf8');
-  } else {
-    fs.appendFileSync(trapsPath, row + '\n', 'utf8');
-  }
-  console.log(`[sdw-fixer] Trap registered: ${slug}`);
-  return { slug, recorded: true };
-}
-
-function readMemoryFiles(root, rule) {
-  const candidates = [
-    path.join(root, 'MEMORY.md'),
-    path.join(root, '.sdw', 'MEMORY.md')
-  ];
-  try {
-    const memDir = path.join(root, 'memory');
-    if (fs.existsSync(memDir) && fs.statSync(memDir).isDirectory()) {
-      for (const entry of fs.readdirSync(memDir)) {
-        if (entry.toLowerCase().endsWith('.md')) candidates.push(path.join(memDir, entry));
-      }
-    }
-  } catch (e) {}
-  const ruleLower = String(rule).toLowerCase();
-  const keywords = ruleKeywords(rule);
-  const hints = [];
-  let scannedFiles = 0;
-  for (const abs of candidates) {
-    let content;
-    try {
-      if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) continue;
-      content = fs.readFileSync(abs, 'utf8');
-    } catch (e) {
-      continue;
-    }
-    scannedFiles += 1;
-    for (const rawLine of content.split('\n')) {
-      const line = rawLine.trim();
-      if (!line || line.startsWith('#')) continue;
-      const lineLower = line.toLowerCase();
-      if (lineLower.includes(ruleLower) || keywords.some(k => lineLower.includes(k))) {
-        hints.push({ source: norm(path.relative(root, abs)), snippet: line.slice(0, SNIPPET_LEN) });
-        if (hints.length >= 5) break;
-      }
-    }
-    if (hints.length >= 5) break;
-  }
-  return { hints, scannedFiles, skipped: scannedFiles === 0 };
-}
-
-function searchSpecMemo(root, rule) {
-  if (process.env.SDW_FIXER_NO_MEMO === '1') return { hints: [], skipped: true };
-  const keywords = ruleKeywords(rule);
-  const query = `${rule} ${keywords.join(' ')}`.trim().slice(0, 120);
-  let raw = '';
-  try {
-    const res = spawnSync('memo',
-      ['search', '--query', query, '--kinds', 'trap', '--limit', '5', '--sort', 'relevance', '--json', '--cwd', root],
-      { encoding: 'utf8', timeout: 15000 });
-    if (!res || res.status !== 0) return { hints: [], skipped: true };
-    raw = res.stdout || '';
-  } catch (e) {
-    return { hints: [], skipped: true };
-  }
-  const hints = [];
-  try {
-    const data = JSON.parse(raw);
-    const list = Array.isArray(data) ? data : data.hits || data.records || data.results || [];
-    for (const h of list.slice(0, 5)) {
-      if (!h || typeof h !== 'object') continue;
-      hints.push({
-        id: String(h.id || h.slug || ''),
-        title: String(h.title || '').slice(0, 120),
-        snippet: String(h.snippet || h.summary || '').replace(/<!--[\s\S]*?-->/g, ' ').replace(/\s+/g, ' ').trim().slice(0, SNIPPET_LEN)
-      });
-    }
-  } catch (e) {
-    return { hints: [], skipped: true };
-  }
-  return { hints, skipped: false };
+  const res = sdwMemory.recordTrap({
+    kind: 'trap',
+    title: humanizeRule(rule),
+    avoid: `Reintroducing ${rule} lines (${summary})`,
+    action: catalog ? `Delete lines matching ${catalog.linePattern.source} at finding plus verified sibling hits` : 'Apply the verified surgical fix at finding plus sibling hits',
+    layer: 'implementation',
+    root
+  });
+  if (res.recorded) console.log(`[sdw-fixer] Trap registered: ${res.slug}`);
+  return res;
 }
 
 function applyTrivialFix(root, finding, siblingHits, dryRun) {
@@ -419,11 +293,7 @@ function cmdRun(options) {
     }
     let cached = knowledgeCache.get(rule);
     if (!cached) {
-      cached = {
-        mem: readMemoryHints(root, rule),
-        files: readMemoryFiles(root, rule),
-        memo: searchSpecMemo(root, rule)
-      };
+      cached = consultKnowledge(root, rule);
       knowledgeCache.set(rule, cached);
     }
     const { mem, files: memFiles, memo: specMemo } = cached;
@@ -466,7 +336,7 @@ function cmdRun(options) {
     for (const [rule, items] of byRule) {
       const files = [...new Set(items.map(i => i.file))];
       const res = recordTrap(root, rule, `${items.length} line(s) in ${files.join(', ')}`);
-      learned.push({ rule, slug: res.slug || slugOfRule(rule), recorded: res.recorded, ...(res.reason ? { reason: res.reason } : {}) });
+      learned.push({ rule, slug: res.slug || sdwMemory.slugOf(rule), recorded: res.recorded, ...(res.reason ? { reason: res.reason } : {}) });
     }
   }
   const status = verification.status === 'failed' ? 'verify-failed'
@@ -557,8 +427,8 @@ Usage:
 
 module.exports = {
   findProjectRoot, loadFindings, validateFinding, scoreOf,
-  grepSiblings, readMemoryHints, readMemoryFiles, searchSpecMemo,
-  applyTrivialFix, recordTrap, slugOfRule, cmdRun, cmdDoctor
+  grepSiblings, consultKnowledge,
+  applyTrivialFix, recordTrap, cmdRun, cmdDoctor
 };
 
 if (require.main === module) main();

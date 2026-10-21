@@ -11,9 +11,9 @@ specDate: 2026-10-21
 
 ## Description
 
-Product knowledge (traps, gaps, patterns, errors) is currently read and written through scattered paths: `sdw-fixer` greps `.sdw/traps.md` directly plus shells out to the `memo` vault, `sdw-rules log-trap` appends rows with an optional sync hook, while no single contract defines entry shape, backend routing, or deduplication. Each caller re-implements keyword filtering, table parsing, plus vault flags, which duplicates logic plus risks divergent sources of truth.
+Product knowledge (traps, gaps, patterns, errors) was read and written through scattered paths: `sdw-fixer` grepped `.sdw/traps.md` directly plus shelled out to the `memo` vault, `sdw-rules log-trap` appended rows with an optional sync hook, while no single contract defined entry shape, backend routing, or deduplication.
 
-This specification introduces `sdw-memory`, the single central wrapper for all product knowledge operations. The skill exposes `query`, `record`, `consolidate`, `classify`, plus `doctor` subcommands over a unified entry model (`trap|gap|pattern|error`) and delegates to pluggable store backends with native `ws-memo` vault support plus local `.sdw/traps.md` file fallback. `sdw-rules` gains a dependency on `sdw-memory` plus a MEMORY-FIRST rule mandatory for every skill. This spec supersedes plus replaces `00007-sdw-memory-skill`.
+This specification introduces `sdw-memory`, the single central wrapper for all product knowledge operations. The skill exposes `query`, `record`, `consolidate`, `classify`, plus `doctor` subcommands over a unified entry model (`trap|gap|pattern|error`) and delegates to pluggable store backends implemented as separated files under `skills/sdw-memory/scripts/backends/` (contract `base.cjs`): native `ws-memo` vault support plus local `.sdw/memory/traps.md` file fallback plus read-only memory files. `sdw-rules` gains a dependency on `sdw-memory` plus a MEMORY-FIRST rule mandatory for every skill. This spec supersedes plus replaces `00007-sdw-memory-skill`.
 
 ### Design Intent
 
@@ -33,22 +33,25 @@ Establish one auditable knowledge authority so implementing, fixing, reviewing, 
 - AC10: If a memory payload contains secret material, then the system shall reject the write before any backend mutation.
 - AC11: The system shall declare an `sdw-memory` dependency inside `sdw-rules` plus enforce a MEMORY-FIRST rule for every skill.
 - AC12: The system shall register `sdw-memory` intents in `sdw-router` routing plus `sdw-doctor` expected skills.
+- AC13: The system shall implement each backend as a separated file implementing the backend contract under `skills/sdw-memory/scripts/backends/`.
+- AC14: The system shall select enabled backends per user from `.sdw/config.json memory.backends` with missing keys defaulting to enabled.
+- AC15: When no backend is enabled or reachable, the system shall complete queries with empty hints plus records with a no-op report instead of failing.
 
 ## Notes
 
 - Implementation layout:
   - `skills/sdw-memory/SKILL.md`: Tier-1 skill definition with frontmatter, subcommands (`query`, `record`, `consolidate`, `classify`, `doctor`), compact batch cycle (≤ 120 lines).
   - `skills/sdw-memory/references/memory_protocol.md`: Tier-2 reference detailing unified entry model, backend routing, kind mapping, discovery order, report schemas.
-  - `skills/sdw-memory/scripts/sdw_memory.cjs`: Tier-3 deterministic helper parsing CLI subcommands, querying backends, validating entries, deduplicating writes, merging local duplicates.
+  - `skills/sdw-memory/scripts/sdw_memory.cjs`: Tier-3 deterministic helper parsing CLI subcommands, routing to separated backend implementations, validating entries, deduplicating writes, merging local duplicates.
 - CLI contract:
   ```bash
-  node skills/sdw-memory/scripts/sdw_memory.cjs query "<text>" [--kind trap|gap|pattern|error] [--backend auto|ws-memo|traps] [--limit N] [--json]
+  node skills/sdw-memory/scripts/sdw_memory.cjs query "<text>" [--kind trap|gap|pattern|error] [--backend auto|ws-memo|traps|files|all] [--limit N] [--json]
   node skills/sdw-memory/scripts/sdw_memory.cjs record --kind <kind> --title "..." --avoid "..." --action "..." [--slug S] [--tags a,b] [--paths f] [--json]
   node skills/sdw-memory/scripts/sdw_memory.cjs consolidate [--backend traps] [--dry-run] [--json]
   node skills/sdw-memory/scripts/sdw_memory.cjs classify "<text>" [--json]
   node skills/sdw-memory/scripts/sdw_memory.cjs doctor [--json]
   ```
-- Backend routing: `--backend auto` uses the vault when the `memo` CLI is reachable (`SDW_MEMORY_NO_MEMO=1` opts out), otherwise the local file; explicit backends pin the set; `all` writes both on record.
+- Backend routing: `--backend auto` uses the vault when the `memo` CLI is reachable (resolved without a shell, including Windows npm shims; `SDW_MEMORY_NO_MEMO=1` opts out), otherwise the local file; explicit backends pin the set (`all` writes vault plus traps on record, `files` is read-only); `.sdw/config.json memory.backends` selects enabled backends per user with missing keys defaulting to enabled. When no backend is enabled or reachable, queries return empty hints plus records report `noop: true` instead of failing, so callers never block.
 - Kind mapping: all four SDW kinds persist to memo kind `trap` with an `sdw-kind:<kind>` tag; query searches memo kind `trap`.
 - Programmatic hook: `recordTrap({ slug, title, avoid, action, layer, root, ... })` serves the `sdw-rules log-trap` integration without double-writing the local file.
 - Supersession: `00007-sdw-memory-skill` is removed; its `MEMORY.md`-file design is replaced by the vault-native wrapper defined here.
@@ -57,7 +60,6 @@ Establish one auditable knowledge authority so implementing, fixing, reviewing, 
 
 | Feature | Reason |
 |---------|--------|
-| Rewiring `sdw-fixer` internals to the wrapper | Follow-up implementation spec; fixer behavior stays unchanged in this spec |
 | Vector database backends | Vault FTS plus local grep satisfy deterministic lookup |
 | Automatic vault deletion or TTL | Lifecycle stays with `memo gc` plus `forget` under operator control |
 
@@ -66,7 +68,8 @@ Establish one auditable knowledge authority so implementing, fixing, reviewing, 
 | Assumption | Chosen default | Rationale | Confirmed |
 |------------|----------------|-----------|-----------|
 | Native backend | `ws-memo` vault | Vault already backs session memory plus FTS search | y |
-| Local fallback | `.sdw/traps.md` table | Existing project trap log stays readable offline | y |
+| Local fallback | `.sdw/memory/traps.md` table | Existing project trap log stays readable offline | y |
+| Backend layout | Separated files under `skills/sdw-memory/scripts/backends/` | Contract plus per-backend files keep routing free of store logic | y |
 | Record default | Vault when reachable, file otherwise | Single source of truth online, portable offline | y |
 | Preserved spec | None; 00007 removed | New wrapper contract replaces the file-centric design | y |
 
@@ -94,4 +97,5 @@ Establish one auditable knowledge authority so implementing, fixing, reviewing, 
 - Record with unknown kind halts with exit code 1 plus zero backend mutations.
 - Duplicate slug record is refused with an explicit already-registered reason.
 - Vault unreachable falls back to the local file without failing the call.
+- Fully disabled or unreachable backends complete queries with empty hints plus records with a no-op report instead of failing.
 - Secret-bearing payload is rejected before any backend mutation.

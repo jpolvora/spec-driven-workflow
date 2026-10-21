@@ -101,7 +101,7 @@
 - **Empirical Goal-Driven Verification:** Directs multi-step tasks to define clear, verifiable success criteria and tests before declaring completion.
 - **Deterministic Compliance Doctor (`doctor`):** Audits installed skills for context line budgets (≤ 120 lines) and requires every skill except `sdw-rules` to reference it.
 - **Specification Scope Auditor (`audit-spec`):** Scans specifications for speculative scope creep markers, composite ACs, or missing Out of Scope boundaries.
-- **Anti-Regression Trap Log (`log-trap`):** Appends verified friction and overengineering lessons to `.sdw/traps.md` at project scope to prevent repeating mistakes.
+- **Anti-Regression Trap Log (`log-trap`):** Records verified friction and overengineering lessons through `sdw-memory` (vault first, local trap table as fallback) at project scope to prevent repeating mistakes.
 
 ---
 
@@ -176,6 +176,7 @@
   - `sdw_rules.test.cjs`: Three-tier progressive disclosure, announcement banners, engineering simplicity principles, plan-before-change and authorization layering, product guarantees, doctor compliance verification, scope creep audits, and trap logging.
   - `sdw_security_checks.test.cjs`: Secrets scanning, staged diff inspection, redaction hygiene, pragma suppression, fail-closed gate handling, and orchestrator bypass verification.
   - `sdw_fixer.test.cjs`: Findings intake validation, deterministic severity scoring, defect-class sibling sweep, trap and vault hint injection, trivial patch application, dry-run purity, report fields, and learning deduplication.
+  - `sdw_memory.test.cjs`: Entry classification rubric, backend routing and offline fallback, duplicate-slug refusal, consolidation counts, and secret rejection.
   - `sdw_sandbox.test.cjs`: Plan-only dry-run purity, sandbox clone creation, origin removal, spec copying, node_modules linking, report rendering, cleanup, conflicting flags, nested rejection, and absolute dispatch paths.
 - **Fast Execution:** Entire test suite runs in ~40 seconds with 100% pass rate.
 
@@ -225,10 +226,21 @@
 
 - **One Findings Contract:** Accepts a JSON batch of `{ file, line, rule, evidence, severityHint }`, rejects absolute or escaping paths, and halts with exit `1` and zero mutations on invalid intake.
 - **Deterministic Scoring:** Applies the severity rubric once per batch (`critical 100`, `high 75`, `medium 50`, `low 25`, missing `50`) and processes findings in descending score order.
-- **Context Before Edit:** Sweeps defect-class siblings (cap 50 hits), then consults `.sdw/traps.md`, in-repo memory files, and the spec-memo vault (`memo search`) for the rule, recording `sourcesConsulted` per finding.
+- **Context Before Edit:** Sweeps defect-class siblings (cap 50 hits), then consults defect-class knowledge through the central `sdw-memory` wrapper (traps table, memory files, ws-memo vault), recording `sourcesConsulted` per finding.
 - **Surgical Edits Only:** Deterministic trivial patches land at finding lines and verified sibling lines; everything else is reported as `skipped` with path and reason for agent reasoning. `--dry-run` mutates nothing.
-- **Structured Report & Learning:** Emits `{ batchId, fixed, skipped, learned, verification, reportPath }`, registers one deduplicated `.sdw/traps.md` row per fixed defect class, and keeps reviewer and fixer separate (never self-approves).
+- **Structured Report & Learning:** Emits `{ batchId, fixed, skipped, learned, verification, reportPath }`, registers one deduplicated knowledge entry per fixed defect class via `sdw-memory`, and keeps reviewer and fixer separate (never self-approves).
 - **Wired Into Delivery:** `sdw-ship-pr` delegates active review threads to the fixer when `reviewFixCommand` is unset, and `sdw-orch` Step 7 keeps using `sdw-code-review` for detection.
+
+### 15. 🧠 `sdw-memory` — Central Knowledge Wrapper with Pluggable Backends
+
+*Single contract for traps, gaps, patterns, and errors, shared by fixing, review, and orchestration flows.*
+
+- **Unified Entry Model:** `trap|gap|pattern|error`, with free text classified by a deterministic keyword rubric before any write.
+- **Pluggable Backends:** the `ws-memo` vault when the `memo` CLI is reachable, local `.sdw/memory/traps.md` otherwise; `--backend auto|ws-memo|traps|all` and `SDW_MEMORY_NO_MEMO=1` opt-out.
+- **Query and Deduplicate:** merged hints capped at `--limit`; a record whose slug already exists is refused with an explicit reason instead of writing a second row.
+- **Consolidation Without Deletion:** merges duplicate local rows and reports vault duplicates, leaving vault lifecycle to `memo gc` / `forget`.
+- **Write Safety:** rejects secret-bearing payloads before any backend mutation; `doctor` validates layout, script syntax, and vault reachability.
+- **Shared Surface:** `sdw-rules log-trap` records through the wrapper, and `sdw-fixer` consults it for defect-class hints.
 
 ---
 

@@ -106,7 +106,7 @@ Legend: **None** = parity · **Shallow** = exists but materially less deep · **
 
 | Capability | workflow-skills | SDW today | Gap |
 |---|---|---|---|
-| Local anti-regression memory | `MEMORY.md` + `memory/*.md` | `.sdw/traps.md` | Shallow |
+| Local anti-regression memory | `MEMORY.md` + `memory/*.md` | `.sdw/memory/traps.md` | Shallow |
 | Path-pattern trap query | `--match-paths` | — | Missing |
 | Fail-closed memory compile | Rejects undated / incomplete traps | `log-trap` append only | Shallow |
 | Changelog | `ws-changelog` | — | Missing |

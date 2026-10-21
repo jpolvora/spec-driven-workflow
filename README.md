@@ -115,13 +115,15 @@ spec-driven-workflow/
 │       └── *.md                  # Canonical feature specifications
 │   ├── state/                    # Ephemeral execution run state and step artifacts
 │   │   └── {slug}/{runId}/       # Human-auditable step artifacts ({slug}-step-{N}.md)
-│   ├── traps.md                  # Central anti-regression trap log
+│   ├── memory/                   # Product knowledge entries (versioned)
+│   │   └── traps.md              # Central anti-regression trap log
 │   └── worktrees/                # Ephemeral per-task git worktrees for isolated subagents
 ├── skills/                       # Canonical source of truth for all skills
 │   ├── sdw-code-review/          # Standalone deep working-tree review & fix planning
 │   ├── sdw-config/               # Project configuration & verification skill
 │   ├── sdw-doctor/               # Installation & workspace health checker
 │   ├── sdw-fixer/                # Shared findings intake, scoring & surgical remediation
+│   ├── sdw-memory/               # Central knowledge wrapper (query, record, consolidate, classify)
 │   ├── sdw-orch/                 # End-to-end workflow orchestrator skill
 │   ├── sdw-router/               # Always-autoloaded entrypoint and skill router
 │   ├── sdw-rules/                # Shared behavioral rules, simplicity & anti-overengineering
@@ -166,7 +168,7 @@ Verify what is available before installing:
 npx skills add jpolvora/spec-driven-workflow --list
 ```
 
-Expected: `11` discoverable skills — the 10 `sdw-*` skills plus `ws-memo`:
+Expected: `12` discoverable skills — the 11 `sdw-*` skills plus `ws-memo`:
 
 | Skill | Purpose |
 |---|---|
@@ -179,12 +181,13 @@ Expected: `11` discoverable skills — the 10 `sdw-*` skills plus `ws-memo`:
 | `sdw-security-checks` | Pre-commit secrets and credentials leak gate |
 | `sdw-code-review` | Standalone working-tree review and fix planning (also Step 7 delegation) |
 | `sdw-fixer` | Shared findings intake, deterministic scoring, surgical remediation (review and ship loops) |
+| `sdw-memory` | Central knowledge wrapper: query, record, consolidate, classify traps, gaps, patterns, errors |
 | `sdw-ship-pr` | Pre-PR checks, branch push, PR creation, review convergence |
 
 ### Copy-paste: install all SDW skills (recommended)
 
 ```bash
-npx skills add jpolvora/spec-driven-workflow --skill sdw-router --skill sdw-config --skill sdw-doctor --skill sdw-spec --skill sdw-orch --skill sdw-rules --skill sdw-security-checks --skill sdw-code-review --skill sdw-fixer --skill sdw-ship-pr -y
+npx skills add jpolvora/spec-driven-workflow --skill sdw-router --skill sdw-config --skill sdw-doctor --skill sdw-spec --skill sdw-orch --skill sdw-rules --skill sdw-security-checks --skill sdw-code-review --skill sdw-fixer --skill sdw-memory --skill sdw-ship-pr -y
 ```
 
 One-liner alternative (installs everything discoverable, including `ws-memo`):
@@ -204,7 +207,7 @@ npx skills add jpolvora/spec-driven-workflow
 ```bash
 # Project scope (default): installs to ./.agents/skills/, commit with your project
 # Global scope: available across all projects on the machine
-npx skills add jpolvora/spec-driven-workflow --skill sdw-router --skill sdw-config --skill sdw-doctor --skill sdw-spec --skill sdw-orch --skill sdw-rules --skill sdw-security-checks --skill sdw-code-review --skill sdw-fixer --skill sdw-ship-pr -g -y
+npx skills add jpolvora/spec-driven-workflow --skill sdw-router --skill sdw-config --skill sdw-doctor --skill sdw-spec --skill sdw-orch --skill sdw-rules --skill sdw-security-checks --skill sdw-code-review --skill sdw-fixer --skill sdw-memory --skill sdw-ship-pr -g -y
 
 # Target specific agents (default is auto-detected agents; use '*' for all agents)
 npx skills add jpolvora/spec-driven-workflow --skill sdw-orch -a opencode -y
@@ -416,7 +419,7 @@ node skills/sdw-code-review/scripts/sdw_code_review.cjs run --fix --dry-run --js
 
 ### Using `sdw-fixer` (Shared Findings Remediation)
 
-The `sdw-fixer` skill is the single remediation authority for review, verification, and ship loops. It validates one findings batch, scores it deterministically, consults traps for the defect class, applies surgical edits, and reports what it fixed, skipped, and learned:
+The `sdw-fixer` skill is the single remediation authority for review, verification, and ship loops. It validates one findings batch, scores it deterministically, consults defect-class knowledge through the central `sdw-memory` wrapper, applies surgical edits, and reports what it fixed, skipped, and learned:
 
 ```bash
 # Validate, score, and apply a findings batch; write the structured report
@@ -429,7 +432,27 @@ node skills/sdw-fixer/scripts/sdw_fixer.cjs run --findings findings.json --repor
 node skills/sdw-fixer/scripts/sdw_fixer.cjs doctor --json
 ```
 
-Findings use `{ file, line, rule, evidence, severityHint }` with project-relative paths. `sdw-ship-pr` builds this batch from active review threads and delegates automatically when `reviewFixCommand` is unset; `--no-learn` skips trap registration, and `SDW_FIXER_NO_MEMO=1` skips vault queries. Contract: `skills/sdw-fixer/references/fixer_protocol.md`.
+Findings use `{ file, line, rule, evidence, severityHint }` with project-relative paths. `sdw-ship-pr` builds this batch from active review threads and delegates automatically when `reviewFixCommand` is unset; `--no-learn` skips trap registration, and `SDW_FIXER_NO_MEMO=1` skips vault queries. All knowledge reads and writes go through `sdw-memory`. Contract: `skills/sdw-fixer/references/fixer_protocol.md`.
+
+### Using `sdw-memory` (Central Knowledge Wrapper)
+
+The `sdw-memory` skill is the single contract for product knowledge. It classifies entries as `trap`, `gap`, `pattern`, or `error`, queries every enabled backend, records verified learnings, and consolidates duplicates:
+
+```bash
+# Classify free text before writing (suggests kind, slug, tags, layer)
+node skills/sdw-memory/scripts/sdw_memory.cjs classify "commit failed because state gates were stale"
+
+# Query the vault first, then the local traps file, capped hints
+node skills/sdw-memory/scripts/sdw_memory.cjs query "gate repair" --kind trap --limit 5 --json
+
+# Record one verified learning (duplicate slugs are refused)
+node skills/sdw-memory/scripts/sdw_memory.cjs record --kind trap --title "..." --avoid "..." --action "..."
+
+# Merge duplicate local rows; vault records are reported, never deleted
+node skills/sdw-memory/scripts/sdw_memory.cjs consolidate --dry-run --json
+```
+
+Backends are pluggable: `--backend auto` uses the `ws-memo` vault when the `memo` CLI is reachable (`SDW_MEMORY_NO_MEMO=1` opts out) and falls back to `.sdw/memory/traps.md` offline; `all` writes both on record. Select backends per user in `.sdw/config.json` via `memory.backends: { wsMemo, traps, files }`. Contract: `skills/sdw-memory/references/memory_protocol.md`.
 
 ### Local Agentic Code Review Dry Run
 
