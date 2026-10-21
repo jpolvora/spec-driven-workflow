@@ -69,7 +69,7 @@ When the working tree is dirty, the host agent (LLM) selects what belongs to thi
 1. Plan: `node skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs dirty-plan --run-id <runId> [--json]`. It returns `candidates` (every dirty path), `runFiles` (paths recorded by this run's accepted tasks plus the spec), `suggested`, `excluded`, and the resolved `statePath`.
 2. Analyze as the host agent: compare each candidate against this session's task evidence, prompts, dependencies, and artifacts. Approve only files this session produced or that its tasks depend on. Leave pre-existing or unrelated work-in-progress out.
 3. Approve: write the approved project-relative paths as a JSON array to `.sdw/state/<runId>/dirty-files.json` (or pass a comma-separated `--dirty-files`).
-4. Publish: `git status --porcelain -uall` candidates are filtered to the approved list, staged path by path (`git add -A -- <path>`), committed (`chore(delivery): include pending working-tree changes`, override with `dirtyCommitMessage`), and only then pushed.
+4. Publish: `git status --porcelain -uall` candidates are filtered to the approved list, staged path by path (`git add -A -- <path>`), committed with a pathspec limited to those paths (`chore(delivery): include pending working-tree changes`, override with `dirtyCommitMessage`), and only then pushed. Files already staged outside the approved list stay staged and out of the delivery commit.
 5. Without an approved list or run scope, the commit is skipped with a warning and the dirty files stay in place.
 - Done when: Only approved session files are committed, unrelated dirty files remain untouched, and the branch is synchronized with origin or push is explicitly bypassed.
 

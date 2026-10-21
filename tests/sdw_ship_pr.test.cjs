@@ -1238,3 +1238,33 @@ test('sdw-ship-pr - dirty selection honors an approved list, run scope, and refu
   assert.strictEqual(none.mode, 'none');
   assert.strictEqual(none.selected.length, 0);
 });
+
+test('sdw-ship-pr - the dirty commit never sweeps files staged outside the approved list', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-dirty-commit-'));
+  const exec = (cmd) => execSync(cmd, { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  try {
+    exec('git init');
+    exec('git config user.name "SDW Tester"');
+    exec('git config user.email "tester@sdw.org"');
+    fs.writeFileSync(path.join(dir, 'approved.txt'), 'base\n', 'utf8');
+    fs.writeFileSync(path.join(dir, 'staged-elsewhere.txt'), 'base\n', 'utf8');
+    exec('git add -A');
+    exec('git commit -m "baseline"');
+
+    fs.writeFileSync(path.join(dir, 'approved.txt'), 'session change\n', 'utf8');
+    fs.writeFileSync(path.join(dir, 'staged-elsewhere.txt'), 'outside change\n', 'utf8');
+    exec('git add -- staged-elsewhere.txt');
+
+    const result = sdwShipPr.commitDirtyWorktree(exec, dir, {
+      approved: ['approved.txt']
+    });
+
+    assert.ok(result.sha, 'The approved file is committed');
+    const committed = exec('git show --name-only --pretty=format: HEAD').split('\n').map(l => l.trim()).filter(Boolean);
+    assert.deepStrictEqual(committed, ['approved.txt'], 'Only the approved path enters the delivery commit');
+    const staged = exec('git diff --cached --name-only').split('\n').map(l => l.trim()).filter(Boolean);
+    assert.deepStrictEqual(staged, ['staged-elsewhere.txt'], 'Unrelated staged work stays staged and uncommitted');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -379,6 +379,9 @@ function locateStateFile(projectRoot, runId, specSlug = null, config = {}) {
 function shellQuote(value) {
   const text = String(value);
   if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(text)) return text;
+  // cmd.exe does not treat single quotes as quoting, so Windows needs double
+  // quotes; POSIX shells get the safer single-quoted form.
+  if (process.platform === 'win32') return `"${text.replace(/"/g, '""')}"`;
   return `'${text.replace(/'/g, `'\\''`)}'`;
 }
 
@@ -454,7 +457,10 @@ function commitDirtyWorktree(executor, projectRoot, options = {}) {
   const message = options.message || 'chore(delivery): include pending working-tree changes';
   try {
     for (const file of files) executor(`git add -A -- ${shellQuote(file)}`);
-    executor(`git commit -m ${shellQuote(message)}`);
+    // A plain `git commit` would commit the whole index, including files the
+    // caller staged before this run. The pathspec limits the commit to the
+    // approved selection and leaves everything else staged but uncommitted.
+    executor(`git commit -m ${shellQuote(message)} -- ${files.map(shellQuote).join(' ')}`);
     const sha = String(executor('git rev-parse --short HEAD') || '').trim();
     return { sha, mode: selection.mode, files, excluded, message };
   } catch (e) {
