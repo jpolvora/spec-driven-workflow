@@ -39,7 +39,7 @@ Presets name common relationships (`trunk`, `github`, `develop`, `gitflow`, `git
 - AC12: When the pull request reaches `MERGED` and `branching.syncWorkBranchAfterMerge` is `true`, the system shall switch to the work branch, fast-forward it to the integration branch, and push it when `branching.pushSyncedWorkBranch` is `true`.
 - AC13: If the post-merge fast-forward is not possible or the working tree is dirty, then the system shall leave every local branch untouched and record `branchingSync.status` as `blocked` with the reason in run state without failing the completed delivery.
 - AC14: The system shall record the resolved strategy, its source, the effective branch values, and the synchronization outcome in run state.
-- AC15: When `--dry-run` is passed, the system shall print the resolved branch plan (strategy, start branch, update step, feature branch, pull request target, post-merge actions) without executing git commands.
+- AC15: When `--dry-run` is passed, the system shall print the resolved branch plan (strategy, start branch, update step, feature branch, pull request target, post-merge actions) without mutating repository state.
 
 ## Notes
 

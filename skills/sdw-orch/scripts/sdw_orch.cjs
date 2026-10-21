@@ -711,7 +711,8 @@ function printRunDryRunPlan(context) {
       branching = { strategy: 'trunk', source: 'default', featurePrefix: 'feature/', workBranch: null, integrationBranch: null, updateWorkBranch: false, syncWorkBranchAfterMerge: false, pushSyncedWorkBranch: false };
     }
   }
-  // AC15: the branch plan is resolved from configuration only; no git command runs.
+  // AC15: the branch plan is resolved from configuration plus a read-only
+  // origin/HEAD lookup; no pipeline step, state, branch, or mutation runs.
   const branchPlan = buildBranchPlan(branching, specSlug);
   let validation = null;
   let validatorFailure = null;
@@ -865,6 +866,24 @@ function cmdRun(options) {
   // Plan-only dry run: validate the specification and print the plan without
   // touching run state, artifacts, branches, worktrees, or clones (spec 029 AC1-AC3).
   if (options.dryRun) {
+    // AC15: resolve an `auto` lane read-only from origin/HEAD so the plan shows
+    // the same start lane, update step, and PR target the real run will use.
+    try {
+      if (!branching.integrationBranch || !String(branching.integrationBranch).trim()) {
+        const head = String(execSync('git symbolic-ref --short refs/remotes/origin/HEAD', {
+          cwd: targetRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore']
+        }) || '').trim();
+        const resolved = head.replace(/^origin\//, '');
+        if (resolved) {
+          branching.integrationBranch = resolved;
+          if (branching.mirrorWorkToIntegration && (!branching.workBranch || !String(branching.workBranch).trim())) {
+            branching.workBranch = resolved;
+          }
+        }
+      }
+    } catch (autoErr) {
+      // No remote default branch: keep the configuration-only lanes.
+    }
     return printRunDryRunPlan({ targetRoot, resolvedSpec, specSlug, config, options, branching });
   }
 
