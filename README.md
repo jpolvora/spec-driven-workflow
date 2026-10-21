@@ -119,6 +119,7 @@ spec-driven-workflow/
 │   │   └── traps.md              # Central anti-regression trap log
 │   └── worktrees/                # Ephemeral per-task git worktrees for isolated subagents
 ├── skills/                       # Canonical source of truth for all skills
+│   ├── sdw-batch/                # Multi-spec queue delegating to single sdw-orch runs
 │   ├── sdw-code-review/          # Standalone deep working-tree review & fix planning
 │   ├── sdw-config/               # Project configuration & verification skill
 │   ├── sdw-doctor/               # Installation & workspace health checker
@@ -176,7 +177,8 @@ Expected: `12` discoverable skills — the 11 `sdw-*` skills plus `ws-memo`:
 | `sdw-config` | Initializes and verifies the `.sdw/` workspace (`init`, `check`, `parse`) |
 | `sdw-doctor` | Installation and workspace health checker (upstream, local, global, hybrid) |
 | `sdw-spec` | Spec authoring, grilling, EARS validation, index sync |
-| `sdw-orch` | End-to-end 8-step delivery workflow (spec → DAG → implement → review → PR) |
+| `sdw-orch` | End-to-end 8-step delivery workflow for one specification (spec → DAG → implement → review → PR) |
+| `sdw-batch` | Queues multiple specifications and delegates each one to `sdw-orch` as a single run |
 | `sdw-rules` | Shared simplicity / anti-overengineering rules |
 | `sdw-security-checks` | Pre-commit secrets and credentials leak gate |
 | `sdw-code-review` | Standalone working-tree review and fix planning (also Step 7 delegation) |
@@ -187,7 +189,7 @@ Expected: `12` discoverable skills — the 11 `sdw-*` skills plus `ws-memo`:
 ### Copy-paste: install all SDW skills (recommended)
 
 ```bash
-npx skills add jpolvora/spec-driven-workflow --skill sdw-router --skill sdw-config --skill sdw-doctor --skill sdw-spec --skill sdw-orch --skill sdw-rules --skill sdw-security-checks --skill sdw-code-review --skill sdw-fixer --skill sdw-memory --skill sdw-ship-pr -y
+npx skills add jpolvora/spec-driven-workflow --skill sdw-router --skill sdw-config --skill sdw-doctor --skill sdw-spec --skill sdw-orch --skill sdw-batch --skill sdw-rules --skill sdw-security-checks --skill sdw-code-review --skill sdw-fixer --skill sdw-memory --skill sdw-ship-pr -y
 ```
 
 One-liner alternative (installs everything discoverable, including `ws-memo`):
@@ -207,7 +209,7 @@ npx skills add jpolvora/spec-driven-workflow
 ```bash
 # Project scope (default): installs to ./.agents/skills/, commit with your project
 # Global scope: available across all projects on the machine
-npx skills add jpolvora/spec-driven-workflow --skill sdw-router --skill sdw-config --skill sdw-doctor --skill sdw-spec --skill sdw-orch --skill sdw-rules --skill sdw-security-checks --skill sdw-code-review --skill sdw-fixer --skill sdw-memory --skill sdw-ship-pr -g -y
+npx skills add jpolvora/spec-driven-workflow --skill sdw-router --skill sdw-config --skill sdw-doctor --skill sdw-spec --skill sdw-orch --skill sdw-batch --skill sdw-rules --skill sdw-security-checks --skill sdw-code-review --skill sdw-fixer --skill sdw-memory --skill sdw-ship-pr -g -y
 
 # Target specific agents (default is auto-detected agents; use '*' for all agents)
 npx skills add jpolvora/spec-driven-workflow --skill sdw-orch -a opencode -y
@@ -348,8 +350,8 @@ The `sdw-orch` skill executes the end-to-end 8-step delivery workflow:
 # Execute the full delivery pipeline for a specification
 node skills/sdw-orch/scripts/sdw_orch.cjs run .sdw/specs/<spec-name>.md [--push]
 
-# Execute a multi-specification sequential batch queue
-node skills/sdw-orch/scripts/sdw_orch.cjs run <spec1.md> <spec2.md> ... [--continue-on-error] [--dry-run]
+# Queue several specifications; each one runs as its own single-spec pipeline
+node skills/sdw-batch/scripts/sdw_batch.cjs run <spec1.md> <spec2.md> ... [--continue-on-error]
 
 # Validate a spec and print the execution plan without executing anything
 node skills/sdw-orch/scripts/sdw_orch.cjs run .sdw/specs/<spec-name>.md --dry-run
@@ -363,14 +365,28 @@ node skills/sdw-orch/scripts/sdw_orch.cjs sandbox clean --run-id <runId>
 # Resume an interrupted single-spec run
 node skills/sdw-orch/scripts/sdw_orch.cjs resume [--run-id <runId>]
 
-# Resume an interrupted multi-spec batch queue
-node skills/sdw-orch/scripts/sdw_orch.cjs resume-batch [batchId]
-
 # Inspect status of active execution
 node skills/sdw-orch/scripts/sdw_orch.cjs status
 ```
 
 Skill-level aliases `sdw-orch implement`, `orch run`, and `orch implement` resolve to the same pipeline through `sdw-router`; `run` stays the canonical CLI subcommand.
+
+### Using `sdw-batch` (Specification Queue)
+
+`sdw-batch` is a loop around the single-spec pipeline. Each queued specification runs through the complete `sdw-orch` lifecycle (implementation, scoring, delivery commit, review, PR, convergence) before the next one starts:
+
+```bash
+# Queue specifications; each runs as an independent single-spec pipeline
+node skills/sdw-batch/scripts/sdw_batch.cjs run <spec1.md> <spec2.md> ... [--continue-on-error]
+
+# Resume a paused queue from its first non-completed item (same run, never restarted)
+node skills/sdw-batch/scripts/sdw_batch.cjs resume [batchId]
+
+# Inspect queue progress
+node skills/sdw-batch/scripts/sdw_batch.cjs status [batchId]
+```
+
+Queue state lives in `.sdw/state/batch-{batchId}.json`. Dispatch (`4`) and judgment (`5`) pauses stop the loop; the host agent drives the paused run and then resumes the queue.
 
 ### Using `sdw-security-checks` (Secrets & Credentials Gate)
 

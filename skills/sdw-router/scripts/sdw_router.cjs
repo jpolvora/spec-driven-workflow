@@ -157,8 +157,13 @@ const INTENT_RULES = {
   },
   'sdw-orch': {
     primaryKeywords: ['orch', 'orchestrator', 'orchestration', 'implement spec', 'run spec', 'execute spec', 'specification implementation', 'workflow execution'],
-    secondaryKeywords: ['workflow', 'implement', 'implementation', 'execute', 'execution', 'resumption', 'resume', 'status', 'dag', 'conformance', 'delivery commit', 'automated review', 'pull request', 'push', 'batch', 'resume-batch', 'multi-spec'],
+    secondaryKeywords: ['workflow', 'implement', 'implementation', 'execute', 'execution', 'resumption', 'resume', 'status', 'dag', 'conformance', 'delivery commit', 'automated review', 'pull request', 'push'],
     recommendedOption: 'Orchestrate end-to-end implementation and delivery using sdw-orch'
+  },
+  'sdw-batch': {
+    primaryKeywords: ['multiple specs', 'multiple specifications', 'spec queue', 'specification queue', 'all specs', 'implement all specs', 'queue specs', 'run specs in sequence'],
+    secondaryKeywords: ['batch', 'multi-spec', 'resume batch', 'batch status', 'sequential delivery', 'specs in sequence'],
+    recommendedOption: 'Queue specifications through single sdw-orch runs using sdw-batch'
   },
   'sdw-rules': {
     primaryKeywords: ['sdw-rules', 'shared rules', 'engineering principles', 'simplicity first', 'scope enclosure', 'anti-overengineering'],
@@ -282,6 +287,27 @@ function routePrompt(prompt, options) {
           error: `Routed skill "${s}" directory is missing or unreadable on disk. Please ensure the skill is installed under skills/, .agents/skills/, or $HOME/.agents/skills/.`
         };
       }
+    }
+  }
+
+  // Multi-specification requests belong to sdw-batch; sdw-orch runs exactly one spec.
+  const multiSpecRequest =
+    /\b(?:multiple|several)\s+(?:specs?|specifications?)\b/.test(lower) ||
+    /\b(?:specs?|specifications?)\s+queue\b/.test(lower) ||
+    /\bqueue\s+(?:the\s+|these\s+)?(?:specs?|specifications?)\b/.test(lower) ||
+    /\b(?:implement|run|execute|deliver|process|batch|queue)\b[^.]*\b(?:all|these|the)\s+(?:specs?|specifications?)\b/.test(lower) ||
+    /\b(?:specs?|specifications?)\b[^.]*\b(?:in sequence|one by one|sequentially)\b/.test(lower);
+  if (multiSpecRequest) {
+    const batchSkill = availableSkills.find(s => s.name === 'sdw-batch');
+    if (batchSkill) {
+      return {
+        matched: true,
+        targetSkill: 'sdw-batch',
+        confidence: 0.9,
+        reason: 'multi_spec_intent',
+        skill: batchSkill,
+        isAmbiguous: false
+      };
     }
   }
 

@@ -83,6 +83,17 @@ When evaluating a user turn, the router applies four strict precedence tiers:
   - "Resume interrupted run run-1792396125490"
   - "Check status of the current orchestrator execution"
 
+### Skill: `sdw-batch`
+- **Domain**: Queue multiple specifications and run each one through the full `sdw-orch` single-spec pipeline in sequence.
+- **Explicit Invocations**: `/sdw-batch`, `@sdw-batch`, `sdw-batch`, `/batch`, `@batch`, `batch`
+- **Trigger Keywords**:
+  - `multiple specs`, `spec queue`, `implement all specs`, `batch`, `queue specs`, `run specs in sequence`
+  - `resume batch`, `batch status`
+- **Typical Prompts**:
+  - "Implement specs 00036, 00037 and 00038 in sequence"
+  - "Resume the paused spec queue"
+  - "Batch these specifications to delivery"
+
 ### Skill: `sdw-ship-pr`
 - **Domain**: Pull request preparation, pre-PR requirement checks, remote branch publishing, SCM PR creation/reuse, and automated review convergence.
 - **Explicit Invocations**: `/sdw-ship-pr`, `@sdw-ship-pr`, `sdw-ship-pr`, `/ship-pr`, `@ship-pr`, `ship-pr`

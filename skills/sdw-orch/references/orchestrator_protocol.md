@@ -58,67 +58,11 @@ Each execution session is completely isolated within a dedicated JSON state file
 7. **Delegated Code Review via sdw-code-review:** Dispatches subagent or CLI runner for `sdw-code-review`; inspects the generated JSON report (`passed`, `errorCount`, `warningCount`, `suggestionCount`, `findings`) to advance to Step 8, iterate surgical fixes (up to 3 attempts with security gate and scoped fix commits), or pause on residual blocking findings. `sdw-code-review` is the sole review authority.
 8. **PR Preparation, Delivery & Code Review Convergence:** Assembles pull request metadata, marks the spec completed, pushes the active branch to remote origin (when `--push` or `pushDelivery` enabled), opens or reuses the pull request via the SCM provider contract, and executes the post-delivery review convergence loop (monitoring CI checks and automated code reviews to fix comments until green).
 
-## 3. Multi-Specification Batch Queue Lifecycle (`.sdw/state/batch-{batchId}.json`)
+## 3. Batch Execution Lives in sdw-batch
 
-When multiple specifications are provided to `sdw-orch run <spec1> <spec2> ...`, queue state is managed through a batch manifest:
+`sdw-orch` executes exactly one specification per run. Specification queues are owned by [`sdw-batch`](../../sdw-batch/SKILL.md), which creates `.sdw/state/batch-{batchId}.json`, invokes `sdw-orch run <spec>` for each item, waits for the exit code, and advances. Manifest schema, pause/resume continuity, and failure policy: [`sdw-batch/references/batch_protocol.md`](../../sdw-batch/references/batch_protocol.md).
 
-```json
-{
-  "batchId": "batch-1792386000000",
-  "createdAt": "2026-10-19T00:55:00.000Z",
-  "updatedAt": "2026-10-19T00:58:00.000Z",
-  "status": "in_progress",
-  "policy": {
-    "continueOnError": false,
-    "syncIndex": true
-  },
-  "total": 2,
-  "currentIndex": 0,
-  "queue": [
-    {
-      "index": 0,
-      "spec": ".sdw/specs/001-feature-a.md",
-      "slug": "001-feature-a",
-      "status": "completed",
-      "runId": "run-1792386010000-001-feature-a",
-      "branch": null,
-      "deliveryCommit": "a1b2c3d",
-      "durationMs": 4200,
-      "error": null
-    },
-    {
-      "index": 1,
-      "spec": ".sdw/specs/002-feature-b.md",
-      "slug": "002-feature-b",
-      "status": "pending",
-      "runId": null,
-      "branch": null,
-      "deliveryCommit": null,
-      "durationMs": null,
-      "error": null
-    }
-  ]
-}
-```
-
-### Batch Operational Guarantees:
-- **Pre-Flight Disk Validation:** Rejects execution before creating manifests if any queued specification file is missing on disk.
-- **Side-Effect-Free Dry-Run:** `--dry-run` validates all specifications and emits the execution plan without creating files or writing state.
-- **Sequential Context Isolation:** Each specification runs in an independent child run context with its own distinct `runId` and `.state.json` file.
-- **Deterministic Resumption:** `resume-batch [batchId]` skips completed items and resumes strictly from the first pending or failed item.
-- **Index Synchronization:** Automatically executes `sdw-spec sync` upon each item completion unless `--no-sync` is specified.
-
-## 4. Unattended Multi-Specification Execution Protocol
-
-When multiple specifications are queued (`sdw-orch run spec1 spec2 ...` or `resume-batch`):
-- **Unattended Execution Contract:** The orchestrator and executing agent operate strictly in non-interactive, unattended mode. No pauses or conversational confirmation queries are permitted between queue items.
-- **Autonomous Decision Resolution:** Grilling/Refinement decision gaps in Step 2 automatically select recommended defaults (`autoResolveGaps: true`, `abortOnGaps: false`), eliminating pauses.
-- **Per-Specification Isolation:** Each specification runs in its own child context with isolated run state (`run-*.state.json`), maintaining clean subagent context fencing.
-- **Autonomous Delivery & Synchronization:** Upon successful implementation and verification (conformance score ≥ threshold, tests passing, review clean), the orchestrator stages the delivery commit, updates `index.specs.md` to `completed`, syncs via `sdw-spec sync`, and immediately initiates the next queued specification.
-- **Halting vs Continuation:** Default policy halts execution on specification failure, saving batch state for `resume-batch`. When `--continue-on-error` is active, errors are logged in the manifest and the queue advances uninterrupted to the next item.
-- **Terminal Consolidated Summary:** The orchestrator emits the batch manifest summary report only once all queued items have completed or halted.
-
-## 5. Branch & Worktree Strategy Protocol
+## 4. Branch & Worktree Strategy Protocol
 
 Configurable feature branch activation and per-task isolated git worktrees:
 
@@ -138,7 +82,7 @@ Configurable feature branch activation and per-task isolated git worktrees:
 - **Clean Removal:** Once integrated, removes worktree via `git worktree remove` and deletes task branch via `git branch -d`.
 - **Overrides:** `--no-worktrees` and `--no-feature-branch` flags override configuration for the current run.
 
-## 6. Step Artifacts Persistence Protocol
+## 5. Step Artifacts Persistence Protocol
 
 Intermediate outputs of human-auditable steps (2, 3, 5) are persisted as human-readable Markdown files:
 
@@ -159,7 +103,7 @@ Intermediate outputs of human-auditable steps (2, 3, 5) are persisted as human-r
 - **Step Re-execution:** Rewrites the existing step artifact deterministically within the same run.
 - **Failure Policy:** Persistence is best-effort. Failures log a warning, record an error prefixed `Artifact persistence warning:` in `state.errors`, and continue workflow execution without changing run status.
 
-## 7. Sequential Subagent Dispatch & Evidence Gate (Spec 028, supersedes Spec 015 handoff)
+## 6. Sequential Subagent Dispatch & Evidence Gate (Spec 028, supersedes Spec 015 handoff)
 
 Step 4 turns each DAG task into a dispatched worker. Exactly one task is in flight at a time; the CLI is the sequencer and never spawns agents itself.
 
@@ -235,10 +179,7 @@ Prohibitions carried by every prompt: no `git commit`/`push`/`branch`/`checkout`
 - **Scoped commits only:** never run `git add -A`. Stage exactly the tracked spec files: accepted evidence `filesChanged` plus `index.specs.md`. Unrelated worktree changes are left uncommitted.
 - Fixer, pre-PR, and review-fix commits stage only their own delta (`diffSinceSnapshot`) or fixer-touched files, never the whole tree.
 
-### Batch Queue Pause
-- When a batch item halts with code 4 (`awaiting_implementation`), the batch queue pauses, marks the item `awaiting_implementation`, saves manifest with status `paused`, and exits with code 4.
-
-## 8. PR Delivery & Review Convergence Delegation (Step 8)
+## 7. PR Delivery & Review Convergence Delegation (Step 8)
 
 Step 8 delegates all final PR verification gates, remote publishing, SCM submission, and post-PR review convergence to the dedicated `sdw-ship-pr` skill.
 
@@ -257,7 +198,7 @@ Step 8 delegates all final PR verification gates, remote publishing, SCM submiss
   - Records delivery outcome (`pullRequest`, `shipStatus`, `pushedBranch`, `reviewConvergence`) into `.sdw/state/{runId}.state.json`.
   - Transitions specification status to `completed` in `.sdw/specs/index.specs.md`.
 
-## 9. Delegated Code Review via sdw-code-review (Step 7)
+## 8. Delegated Code Review via sdw-code-review (Step 7)
 
 Step 7 delegates all working-tree review execution to the standalone `sdw-code-review` skill. The orchestrator holds no duplicated review instructions.
 
@@ -269,14 +210,13 @@ Step 7 delegates all working-tree review execution to the standalone `sdw-code-r
 - **Fix Iteration:** While blocking findings remain and fixable findings exist (up to 3 iterations): run with `--fix`, gate via `sdw-security-checks`, commit only fixer-touched files (`fix(<slug>): apply automated review fixes (iteration N)`), re-verify without `--fix`.
 - **Outcome:** `passed` advances to Step 8; residual blocking records `review_failed` and halts; artifact path recorded in `state.steps[7].artifact`.
 
-## 10. Dry Run & Sandbox Isolation (Spec 029)
+## 9. Dry Run & Sandbox Isolation (Spec 029)
 
 `--dry-run` and `--sandbox` answer two different questions and are mutually exclusive.
 
 ### Plan-Only Dry Run (`--dry-run`)
 - `run <specPath> --dry-run` validates the specification in authoring mode and prints the plan: spec path and slug, target root, scoring/delivery/branch settings, the eight step names, and `No steps executed (--dry-run).`
 - It creates no run state, no artifacts, no branches, no worktrees, and no clones. Exit code `0` when the spec validates, `1` when it does not.
-- Batch `--dry-run` keeps the same contract (spec 005 AC9): validate every queued spec and print the plan.
 
 ### Sandbox Execution (`--sandbox`)
 - **Layout:** `{sandboxDir}/{runId}/repo` (clone), `sandbox.json` (metadata), `report.md` (report). `sandboxDir` comes from `.sdw/config.json` (default `{projectRoot}/.sdw/sandbox`, tokens `{projectRoot}`, `{skillsRoot}`, `{temp}`); a custom value must resolve outside the project root and is validated by `sdw-config check`. The clone contains `.sdw/sandbox/.sandbox-marker.json` pointing back to the source root.

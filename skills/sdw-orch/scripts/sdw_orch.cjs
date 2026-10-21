@@ -10,7 +10,6 @@ const specDerivation = require('./spec_derivation.cjs');
 const specGrilling = require('./spec_grilling.cjs');
 const dagPlanner = require('./dag_planner.cjs');
 const scoreEvaluator = require('./score_evaluator.cjs');
-const batchRunner = require('./batch_runner.cjs');
 const artifactWriter = require('./artifact_writer.cjs');
 const implementationRunner = require('./implementation_runner.cjs');
 const evidenceValidator = require('./evidence_validator.cjs');
@@ -76,10 +75,7 @@ function parseArgs(args) {
     subcommand: null,
     specPath: null,
     specPaths: [],
-    batchId: null,
-    continueOnError: false,
     dryRun: false,
-    noSync: false,
     runId: null,
     root: null,
     minScore: undefined,
@@ -129,12 +125,8 @@ function parseArgs(args) {
     else if (arg === '--force') result.force = true;
     else if (arg === '--allow-archived') result.allowArchived = true;
     else if (arg === '--latest') result.latest = true;
-    else if (arg === '--continue-on-error') result.continueOnError = true;
     else if (arg === '--dry-run') result.dryRun = true;
     else if (arg === '--sandbox') result.sandbox = true;
-    else if (arg === '--no-sync') result.noSync = true;
-    else if (arg === '--batch-id') result.batchId = args[++i];
-    else if (arg.startsWith('--batch-id=')) result.batchId = arg.slice(11);
     else if (arg === '--root') result.root = args[++i];
     else if (arg.startsWith('--root=')) result.root = arg.slice(7);
     else if (arg === '--skills-root') result.skillsRoot = args[++i];
@@ -187,10 +179,6 @@ function parseArgs(args) {
     result.subcommand = positional[0] || null;
     result.specPaths = positional.slice(1);
     result.specPath = positional[1] || null;
-  }
-
-  if (result.subcommand === 'resume-batch') {
-    result.batchId = result.batchId || positional[1] || null;
   }
 
   return result;
@@ -2859,31 +2847,6 @@ function cmdStatus(options) {
   return 0;
 }
 
-function cmdBatchRun(options) {
-  if (options.sandbox) {
-    console.error('[sdw-orch] Error: --sandbox is not supported for batch execution. Run one specification per sandbox.');
-    return 1;
-  }
-  const specs = options.specPaths && options.specPaths.length > 0
-    ? options.specPaths
-    : (options.specPath ? [options.specPath] : []);
-  const batchOpts = {
-    ...options,
-    unattended: options.unattended !== false,
-    autoResolveGaps: true
-  };
-  return batchRunner.runBatch(specs, batchOpts, cmdRun);
-}
-
-function cmdResumeBatch(options) {
-  const batchOpts = {
-    ...options,
-    unattended: options.unattended !== false,
-    autoResolveGaps: true
-  };
-  return batchRunner.resumeBatch(options.batchId, batchOpts, cmdRun);
-}
-
 function cmdScoreSubmit(options) {
   const targetRoot = options.root ? path.resolve(options.root) : process.cwd();
   let state = null;
@@ -3059,12 +3022,11 @@ function cmdSandbox(options) {
 }
 
 function showHelp() {
-  console.log(`Usage: node sdw_orch.cjs <subcommand> [specPath...] [options]
+  console.log(`Usage: node sdw_orch.cjs <subcommand> [specPath] [options]
 
 Subcommands:
-  run <specPath...>      Execute orchestration workflow for single spec or batch queue
+  run <specPath>         Execute the orchestration workflow for one specification
   resume                 Resume paused or incomplete execution run from state file
-  resume-batch [batchId] Resume paused or incomplete multi-spec batch execution
   task next              Dispatch the next ready DAG task to one worker (subagent mode)
   task finish            Submit accepted evidence for the dispatched DAG task
   task abandon           Return the dispatched DAG task to the queue
@@ -3082,12 +3044,9 @@ Options:
   --reason <text>        Why the dispatched task is being abandoned
   --verdict <path>       Path to judge verdict JSON file for score submit
   --mode <mode>          Implementation mode (subagent | command)
-  --batch-id <id>        Explicit batch identifier for resume-batch
-  --continue-on-error    Continue queue execution when a batch item fails
   --dry-run              Print the execution plan and validate the spec; execute nothing
   --sandbox              Execute the whole pipeline in an isolated local clone; never pushes
-  --no-sync              Skip automatic sdw-spec sync between batch queue items
-  --unattended           Execute without interruption, auto-resolving grilling gaps (default in batch)
+  --unattended           Execute without interruption, auto-resolving grilling gaps
   --interactive          Require manual confirmation at decision gates
   --root <path>          Target workspace project root directory
   --step <n>             Start or run specific step (1-8)
@@ -3124,13 +3083,11 @@ function main() {
   switch (options.subcommand) {
     case 'run':
       if (options.specPaths && options.specPaths.length > 1) {
-        code = cmdBatchRun(options);
+        console.error('[sdw-orch] Error: "run" executes exactly one specification. Use "sdw-batch run <spec...>" for a queue of specifications.');
+        code = 1;
       } else {
         code = cmdRun(options);
       }
-      break;
-    case 'resume-batch':
-      code = cmdResumeBatch(options);
       break;
     case 'resume':
       code = cmdResume(options);
@@ -3173,8 +3130,6 @@ if (require.main === module) {
 
 module.exports = {
   cmdRun,
-  cmdBatchRun,
-  cmdResumeBatch,
   cmdResume,
   cmdStatus,
   cmdTaskNext,
