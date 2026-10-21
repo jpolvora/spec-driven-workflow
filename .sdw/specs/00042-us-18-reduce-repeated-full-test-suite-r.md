@@ -3,7 +3,7 @@ id: "18"
 slug: 00042-us-18-reduce-repeated-full-test-suite-r
 title: "Reduce repeated full test suite runs during task implementation"
 source: github
-status: draft
+status: ready-to-implement
 specDate: 2026-10-21
 ---
 
@@ -51,10 +51,11 @@ Reviewed existing workspace implementations and tracker references prior to spec
 
 ## Acceptance Criteria
 
-- AC1: The system shall single file fix shows focused test per iteration plus at most one full run in evidence.
-- AC2: The system shall multi file or shared helper change still triggers full suite with reason noted.
-- AC3: The system shall `npm test` passes.
-- AC4: The system shall docs updated: `orchestrator_protocol.md` only, no duplicate in `AGENTS.md`.
+- AC1: While a task worker iterates on a change confined to one file, the system shall direct it to run only the focused test for that file instead of the full suite.
+- AC2: When a change touches a shared helper, spans several tasks in the same area, or fixes a gate failure outside the task scope, the system shall direct the worker to run the full suite and record the reason in evidence `tests`.
+- AC3: When a task is ready to report, the system shall direct the worker to run the full suite once and record that run in evidence `tests`.
+- AC4: The system shall keep the instruction `Do not record a test you did not execute` in the dispatch prompt.
+- AC5: The system shall document the focused-first, full-last rule in the `orchestrator_protocol.md` Step 4 verification section and shall not duplicate it in `AGENTS.md`.
 
 ## Notes
 
