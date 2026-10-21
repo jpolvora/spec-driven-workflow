@@ -1045,12 +1045,25 @@ function cmdRun(options) {
         const workBranchSet = typeof workBranch === 'string' && workBranch.trim().length > 0;
         const fromWorkLane = workBranchSet && workBranch !== branching.integrationBranch;
         const workLaneCheckedOut = workBranchSet && currentBranch === workBranch;
+        const treeIsDirty = () => {
+          try {
+            return String(git(targetRoot, ['status', '--porcelain'], { stdio: ['ignore', 'pipe', 'ignore'] }) || '').trim().length > 0;
+          } catch (e) {
+            return false;
+          }
+        };
         if ((fromWorkLane || workLaneCheckedOut) && branching.updateWorkBranch) {
           try {
             if (workLaneCheckedOut) {
               // A checked-out lane is updated in place: git refuses to fetch into it.
               git(targetRoot, ['fetch', 'origin'], { stdio: 'ignore' });
-              git(targetRoot, ['merge', '--ff-only', `origin/${workBranch}`], { stdio: 'ignore' });
+              try {
+                git(targetRoot, ['merge', '--ff-only', `origin/${workBranch}`], { stdio: 'ignore' });
+              } catch (mergeErr) {
+                // Product guarantee: a dirty tree never blocks activation.
+                if (!treeIsDirty()) throw mergeErr;
+                console.warn(`[Branch Activation] ${branching.strategy}: skipped the update of "${workBranch}" over dirty files; continuing from the current HEAD.`);
+              }
             } else {
               // Update the lane ref without checking it out, so a dirty tree never blocks.
               git(targetRoot, ['fetch', 'origin', `${workBranch}:${workBranch}`], { stdio: 'ignore' });
@@ -1062,7 +1075,16 @@ function cmdRun(options) {
             return 1;
           }
         }
-        // AC6: Create and switch to new feature branch from the work lane
+        // AC6: Create and switch to new feature branch from the work lane.
+        if (fromWorkLane) {
+          const laneRef = spawnSync('git', ['rev-parse', '--verify', '--quiet', `refs/heads/${workBranch}`], { cwd: targetRoot });
+          if (laneRef.status !== 0) {
+            const message = `Work branch "${workBranch}" does not exist locally; cannot start the feature branch.`;
+            console.error(`[Branch Activation] ${message}`);
+            options._runResult = { error: message };
+            return 1;
+          }
+        }
         const createArgs = fromWorkLane
           ? ['switch', '-c', targetBranch, workBranch]
           : ['switch', '-c', targetBranch];
@@ -1079,7 +1101,8 @@ function cmdRun(options) {
         } catch (createErr) {
           // Product guarantee: a dirty tree never blocks activation. When the work
           // lane checkout would overwrite dirty files, start from the current branch.
-          if (fromWorkLane) {
+          // Any other creation failure (missing ref, invalid state) is a real error.
+          if (fromWorkLane && treeIsDirty()) {
             try {
               git(targetRoot, ['switch', '-c', targetBranch], { stdio: 'ignore' });
               branchReused = false;
