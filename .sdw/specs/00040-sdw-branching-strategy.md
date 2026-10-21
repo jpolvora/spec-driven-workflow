@@ -50,7 +50,7 @@ Presets name common relationships (`trunk`, `github`, `develop`, `gitflow`, `git
   | `trunk` (default) | `null` (current branch) | auto | `false` | `false` |
   | `github` | same as `integrationBranch` | auto | `true` | `true` |
   | `develop` | `develop` | auto (usually `master`) | `true` | `true` |
-  | `gitflow` | `develop` | `develop` | `true` | `false` (same lane) |
+  | `gitflow` | `develop` | `develop` | `true` | `true` (same-lane fast-forward) |
   | `gitlab` | same as `integrationBranch` | auto | `true` | `true` (promotion lanes manual) |
 
 - Other defaults: `featurePrefix` = `feature/`, `pushSyncedWorkBranch` = `false`, `useFeatureBranches` remains the master switch.
