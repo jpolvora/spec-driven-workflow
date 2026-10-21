@@ -167,6 +167,7 @@ Step 4 turns each DAG task into a dispatched worker. Exactly one task is in flig
 - **Second pass excluded:** `--second-pass` runs keep a single `refine({slug}): second pass refinement` Step 6 commit, so `deliveryCommitCreated` still describes the refinement save.
 - **Opt out:** `--no-task-checkpoint` skips the checkpoint commit and tag; the Step 6 delivery commit then remains the only save and `commitSha` records `HEAD` at acceptance.
 - **Fail closed:** a git failure creating the commit or tag rejects the task (`task finish` exits `1` with the git error) and leaves it dispatched for retry.
+- **Security gate first:** the same pre-commit secret scan as Step 6 runs before the checkpoint commit when `securityChecksEnabled` is on (and `--skip-security` is absent). A finding rejects the task with the scanner's exit code, creates no commit and no tag, records `steps[4].securityGate`, and leaves the task dispatched so the worker can remove the secret.
 - Worker prompts still forbid git mutation: the orchestrator owns this save, as it owns Step 6.
 
 ### Dispatch Prompt Contract

@@ -3067,6 +3067,24 @@ function cmdTaskFinish(options) {
   // Second-pass runs are excluded: their explicit `refine(...)` Step 6 commit is
   // the save, and `deliveryCommitCreated` must still describe it.
   if (!options.noTaskCheckpoint && !state.refineMode) {
+    // PR #34 review finding: the checkpoint must not bypass the Step 6 pre-commit
+    // secret scan. Scan before committing, fail closed, and leave the task
+    // dispatched so the worker can remove the secret before a retry.
+    if (config.securityChecksEnabled && !options.skipSecurity) {
+      const scanResult = runSecurityGate(targetRoot, { staged: false });
+      if (scanResult.exitCode !== 0) {
+        console.error(`Error: Task "${taskId}" blocked by pre-commit security checks (exit code ${scanResult.exitCode}). No checkpoint commit or tag was created.`);
+        state.steps[4].securityGate = {
+          bypassed: false,
+          taskId,
+          exitCode: scanResult.exitCode,
+          severityCounts: scanResult.severityCounts,
+          findings: scanResult.findings
+        };
+        stateManager.saveRunState(targetRoot, state);
+        return scanResult.exitCode;
+      }
+    }
     try {
       const checkpoint = checkpointTask(targetRoot, {
         specSlug: state.specSlug,

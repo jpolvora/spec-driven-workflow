@@ -190,6 +190,40 @@ test('AC3: --no-task-checkpoint leaves the accepted task uncommitted and untagge
   }
 });
 
+test('AC3: the checkpoint refuses to save a task whose files fail the pre-commit secret scan', () => {
+  const root = setupRepo();
+  try {
+    fs.writeFileSync(path.join(root, '.sdw', 'config.json'), JSON.stringify({ securityChecksEnabled: true }, null, 2), 'utf8');
+    assert.equal(pauseAtDispatch(root), 4);
+    const state = stateManager.findLatestRunState(root);
+    const taskId = state.steps[4].dispatch.activeTaskId;
+    const head = gitOut(root, 'rev-parse HEAD');
+
+    fs.appendFileSync(path.join(root, 'app.cjs'), 'const key = "AKIAJ7X4QZX2LMNOPQRS";\n');
+    const evidence = {
+      taskId,
+      status: 'success',
+      acIds: [state.dagTasks[0].coveredAcs[0]],
+      filesChanged: ['app.cjs'],
+      tests: [],
+      summary: 'wrote a credential'
+    };
+    const evidencePath = path.join(root, 'secret.evidence.json');
+    fs.writeFileSync(evidencePath, JSON.stringify(evidence, null, 2), 'utf8');
+
+    assert.notEqual(sdwOrch.cmdTaskFinish({ root, runId: state.runId, taskId, evidencePath }), 0, 'The security gate rejects the task');
+    assert.equal(gitOut(root, 'rev-parse HEAD'), head, 'No checkpoint commit is created');
+    assert.equal(gitOut(root, 'tag --list'), '', 'No checkpoint tag is created');
+
+    const after = stateManager.loadRunState(root, state.runId);
+    assert.equal(after.steps[4].dispatch.activeTaskId, taskId, 'The task stays dispatched for retry');
+    assert.notEqual((after.steps[4].tasks[taskId] || {}).status, 'completed', 'The task is not accepted');
+    assert.equal((after.steps[4].securityGate || {}).taskId, taskId, 'The rejection is recorded on Step 4');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('AC9-AC10: task finish rejects a non-dispatched task and names the active one', () => {
   const root = setupRepo();
   try {
