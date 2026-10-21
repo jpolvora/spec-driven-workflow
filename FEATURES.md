@@ -43,9 +43,12 @@
 *From back-of-the-napkin ideas to crystal-clear, machine-executable specifications.*
 
 - **EARS Acceptance Criteria Standard:** Enforces Easy Approach to Requirements Syntax (EARS) patterns (*Ubiquitous, Event-driven, State-driven, Optional-feature, Unwanted-behavior*) for bulletproof criteria.
-- **Free-Text Spec Synthesis (`new`):** Transforms conversational human requirements into canonical, structured specifications with automatic 3-digit numbering (`NNN-{slug}.md`).
+- **Free-Text Spec Synthesis (`new`):** Transforms conversational human requirements into canonical, structured specifications with automatic 5-digit numbering (`NNNNN-{slug}.md`).
 - **Unified SCM Tracker Importer (`import`):** Directly pulls issues and work items from GitHub Issues and Azure DevOps Boards via an agnostic SCM provider contract.
 - **Central PRD Registry (`index.specs.md`):** Maintains a synchronized ledger of all project specifications, tracking lifecycle status (`pending`, `completed`, `archived`) and validation health.
+- **Spec Header Status:** Every spec carries an authoring status (`draft`, `awaiting-approval`, `ready-to-implement`, `implemented`, `abandoned`) enforced by the validator and moved through `status` with a transition map.
+- **Round-Based Grilling (`grilling.md`):** Optional interview that asks the whole frontier of questions whose prerequisites are settled, never ahead of them, and stops when no assumption is left unstated.
+- **Focus & Split Rule:** One feature per spec by default; multi-domain drafts prompt a split by feature before behaviour criteria are written.
 - **Automated Validation Gates (`validate`):** Authoring-mode validator enforces YAML frontmatter, strict section hierarchy, and negative failure scenario requirements.
 - **Live State Reconciliation (`sync`):** Automatically reconciles `index.specs.md` with active on-disk specifications and orchestrator run states.
 - **Lifecycle Archiving (`archive`):** Safely retires completed specifications while guarding against unauthorized execution of legacy features.
@@ -199,6 +202,18 @@
 - **Executable Report Contract:** Emits a Markdown fix plan (header, findings table, detailed hunks, ordered checklist) plus structured JSON (`passed`, `errorCount`, `warningCount`, `suggestionCount`, `findings` with stable `CR-001` IDs, severity, `file:line`, rule, and fix prescription).
 - **Surgical Auto-Fix & Dry-Run:** Applies minimal fixes (debugger removal) up to the iteration ceiling (default 3); `--dry-run` reports planned fixes without touching disk; blocking residuals exit non-zero.
 - **Orchestrator Delegation:** `sdw-orch` Step 7 holds no duplicated review logic — it dispatches the CLI, parses JSON, gates fix commits through `sdw-security-checks`, and persists `{slug}-step-7.md`.
+
+### 13. 🩺 `sdw-doctor` — Installation & Workspace Health Checker
+
+*Read-only doctor that proves an installation is complete before any other skill runs.*
+
+- **Four Installation Modes:** Detects `upstream` (canonical `skills/` plus the `.sdw/` template), `consumer-local` (`.agents/skills`), `consumer-global`, and `hybrid` (global skills with a local `.sdw/`), and reports the resolved roots.
+- **Full Structural Audit:** Every expected skill folder, `SKILL.md` frontmatter, load announcement, line budget, `sdw-rules` pointer, relative links, `node --check` syntax, and zero external requires.
+- **Workspace Validation:** `.sdw/config.json` against the schema, `.sdw/config.schema.json`, `.sdw/directory-structure.md`, registry rows versus spec files, and authoring-mode validation of every specification.
+- **Global Quick Check:** In hybrid and global modes, verifies the global installation exposes every core skill with a readable manifest.
+- **Remediate and Stop:** Installation errors print `npx skills add ...` / `npx skills update`; config errors print `sdw-config init` / `check`; spec errors print `sdw-spec sync` / `validate`; any error halts with exit `1`. Upstream mode never suggests `npx`.
+- **Sandbox Smoke Test (`test`):** Generates a throwaway project with a one-AC fake specification, commits it, and runs `sdw-orch run --sandbox` end to end. Passes only when all eight steps resolve and the run state completes; failures capture structured errors, print suggested fixes, and can open an upstream GitHub issue with `--open-issue`.
+- **Structured Output:** `--json` emits mode, roots, present and expected skills, findings with stable codes, and the remediation array for CI.
 
 ---
 

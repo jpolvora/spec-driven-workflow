@@ -26,7 +26,8 @@ Always-autoloaded entrypoint and traffic controller routing agent tasks across a
 | Intent / Keywords | Routed Skill | Description |
 |---|---|---|
 | Project configuration, environment check, `.sdw/config.json`, dry-run | `sdw-config` | Workspace initialization and settings management |
-| Spec authoring, EARS formatting, PRD index, validation, sync, archiving | `sdw-spec` | Specification lifecycle and quality gates |
+| Spec authoring, grilling, EARS formatting, PRD index, validation, sync, archiving | `sdw-spec` | Specification lifecycle and quality gates |
+| Installation health, missing skill, hybrid/global install check, workspace doctor | `sdw-doctor` | Read-only installation and workspace audit |
 | Spec implementation, orchestration, DAG tasks, scoring, review, PR | `sdw-orch` | End-to-end implementation and delivery pipeline |
 | Behavioral rules, simplicity, YAGNI, anti-overengineering, trap log | `sdw-rules` | Shared engineering principles, simplicity, and traps |
 | Secret scanning, credentials leak check, pre-commit leak gate | `sdw-security-checks` | Pre-commit secrets and credentials leak scanner |

@@ -463,18 +463,18 @@ test('AC1, AC2, AC3 & AC11: Multi-Spec Batch Execution & Manifest Lifecycle', ()
     const specsDir = path.join(tmpDir, '.sdw', 'specs');
     fs.mkdirSync(specsDir, { recursive: true });
 
-    const specA = path.join(specsDir, '001-feature-a.md');
+    const specA = path.join(specsDir, '00001-feature-a.md');
     fs.writeFileSync(specA, `---
-slug: 001-feature-a
+slug: 00001-feature-a
 ---
 # Feature A
 ## Acceptance Criteria
 - AC1: The system shall execute batch item A.
 `);
 
-    const specB = path.join(specsDir, '002-feature-b.md');
+    const specB = path.join(specsDir, '00002-feature-b.md');
     fs.writeFileSync(specB, `---
-slug: 002-feature-b
+slug: 00002-feature-b
 ---
 # Feature B
 ## Acceptance Criteria
@@ -514,8 +514,8 @@ slug: 002-feature-b
 
     const stateA = stateManager.loadRunState(tmpDir, manifest.queue[0].runId);
     const stateB = stateManager.loadRunState(tmpDir, manifest.queue[1].runId);
-    assert.equal(stateA.specSlug, '001-feature-a');
-    assert.equal(stateB.specSlug, '002-feature-b');
+    assert.equal(stateA.specSlug, '00001-feature-a');
+    assert.equal(stateB.specSlug, '00002-feature-b');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
@@ -527,18 +527,18 @@ test('AC5: Default Halt-on-Error Policy', () => {
     const specsDir = path.join(tmpDir, '.sdw', 'specs');
     fs.mkdirSync(specsDir, { recursive: true });
 
-    const spec1 = path.join(specsDir, '001-fail.md');
+    const spec1 = path.join(specsDir, '00001-fail.md');
     fs.writeFileSync(spec1, `---
-slug: 001-fail
+slug: 00001-fail
 ---
 # Fail Spec
 ## Acceptance Criteria
 - AC1: The system shall fail in testing.
 `);
 
-    const spec2 = path.join(specsDir, '002-unreached.md');
+    const spec2 = path.join(specsDir, '00002-unreached.md');
     fs.writeFileSync(spec2, `---
-slug: 002-unreached
+slug: 00002-unreached
 ---
 # Unreached Spec
 ## Acceptance Criteria
@@ -570,18 +570,18 @@ test('AC6: Continue-on-Error Policy (--continue-on-error)', () => {
     const specsDir = path.join(tmpDir, '.sdw', 'specs');
     fs.mkdirSync(specsDir, { recursive: true });
 
-    const spec1 = path.join(specsDir, '001-fail.md');
+    const spec1 = path.join(specsDir, '00001-fail.md');
     fs.writeFileSync(spec1, `---
-slug: 001-fail
+slug: 00001-fail
 ---
 # Fail Spec
 ## Acceptance Criteria
 - AC1: The system shall fail in testing.
 `);
 
-    const spec2 = path.join(specsDir, '002-fail-too.md');
+    const spec2 = path.join(specsDir, '00002-fail-too.md');
     fs.writeFileSync(spec2, `---
-slug: 002-fail-too
+slug: 00002-fail-too
 ---
 # Fail Spec Too
 ## Acceptance Criteria
@@ -613,18 +613,18 @@ test('AC7: Batch Resumption via resume-batch', () => {
     const specsDir = path.join(tmpDir, '.sdw', 'specs');
     fs.mkdirSync(specsDir, { recursive: true });
 
-    const spec1 = path.join(specsDir, '001-done.md');
+    const spec1 = path.join(specsDir, '00001-done.md');
     fs.writeFileSync(spec1, `---
-slug: 001-done
+slug: 00001-done
 ---
 # Done Spec
 ## Acceptance Criteria
 - AC1: The system shall finish.
 `);
 
-    const spec2 = path.join(specsDir, '002-todo.md');
+    const spec2 = path.join(specsDir, '00002-todo.md');
     fs.writeFileSync(spec2, `---
-slug: 002-todo
+slug: 00002-todo
 ---
 # Todo Spec
 ## Acceptance Criteria
@@ -672,7 +672,7 @@ test('AC8: Pre-flight Missing Specification Rejection', () => {
     const specsDir = path.join(tmpDir, '.sdw', 'specs');
     fs.mkdirSync(specsDir, { recursive: true });
 
-    const validSpec = path.join(specsDir, '001-valid.md');
+    const validSpec = path.join(specsDir, '00001-valid.md');
     fs.writeFileSync(validSpec, `# Valid\n## Acceptance Criteria\n- AC1: The system shall exist.`);
 
     const exitCode = sdwOrch.cmdBatchRun({
@@ -696,9 +696,9 @@ test('AC9: Side-Effect-Free Dry-Run (--dry-run)', () => {
     const specsDir = path.join(tmpDir, '.sdw', 'specs');
     fs.mkdirSync(specsDir, { recursive: true });
 
-    const spec1 = path.join(specsDir, '001-a.md');
+    const spec1 = path.join(specsDir, '00001-a.md');
     fs.writeFileSync(spec1, `# A\n## Acceptance Criteria\n- AC1: The system shall run.`);
-    const spec2 = path.join(specsDir, '002-b.md');
+    const spec2 = path.join(specsDir, '00002-b.md');
     fs.writeFileSync(spec2, `# B\n## Acceptance Criteria\n- AC1: The system shall run.`);
 
     const exitCode = sdwOrch.cmdBatchRun({
@@ -724,17 +724,17 @@ test('Multi-Spec Batch Unattended Execution: executes continuously without gate 
     fs.mkdirSync(specsDir, { recursive: true });
 
     // Create 2 specifications with decision gaps
-    const spec1 = path.join(specsDir, '001-feature-x.md');
+    const spec1 = path.join(specsDir, '00001-feature-x.md');
     fs.writeFileSync(spec1, `---
-slug: 001-feature-x
+slug: 00001-feature-x
 ---
 # Feature X
 ## Acceptance Criteria
 - AC1: The system shall run unattended.`);
 
-    const spec2 = path.join(specsDir, '002-feature-y.md');
+    const spec2 = path.join(specsDir, '00002-feature-y.md');
     fs.writeFileSync(spec2, `---
-slug: 002-feature-y
+slug: 00002-feature-y
 ---
 # Feature Y
 ## Acceptance Criteria

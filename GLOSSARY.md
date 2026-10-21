@@ -11,13 +11,14 @@ Spec-Driven Workflow is **opinionated**: the words below mean what this project 
 | Term | SDW meaning | Also called / not to be confused with |
 |---|---|---|
 | **Spec-Driven Workflow (SDW)** | This framework: skills, specifications, deterministic tooling, and the 8-step orchestrator that turn written requirements into delivered code. | *SDW*. Not a generic "AI workflow" and not a ticket system. |
-| **Specification (spec)** | A single canonical Markdown file at `.sdw/specs/NNN-<slug>.md` containing YAML frontmatter, Description, Design Intent, EARS acceptance criteria, Notes, Out of Scope, Assumptions, Definition of Ready, and Validation notes. | *Spec*, *feature spec*. Not a user story, not an issue, not a PRD page in a wiki. |
-| **Spec slug** | The stable identifier `NNN-kebab-case-name` used in the file name, index row, run state, and branch names. | *Slug*, *spec id*. Not a ticket number. |
-| **Spec prefix** | The zero-padded three-digit number (`001`, `002`, …) that orders specs and prefixes the slug. | *Number*, *NNN*. |
+| **Specification (spec)** | A single canonical Markdown file at `.sdw/specs/NNNNN-<slug>.md` containing YAML frontmatter, Description, Design Intent, EARS acceptance criteria, Notes, Out of Scope, Assumptions, Definition of Ready, and Validation notes. | *Spec*, *feature spec*. Not a user story, not an issue, not a PRD page in a wiki. |
+| **Spec slug** | The stable identifier `NNNNN-kebab-case-name` used in the file name, index row, run state, and branch names. | *Slug*, *spec id*. Not a ticket number. |
+| **Spec prefix** | The zero-padded five-digit number (`00001`, `00002`, …) that orders specs and prefixes the slug. | *Number*, *NNNNN*. |
 | **Backlog (SDW)** | **The specification registry file** `.sdw/specs/index.specs.md`. It keeps every spec stored on the filesystem and its metadata: slug, title, status, source, spec date, validation health, archival date. | *Spec index*, *registry*, *catalog*, *spec ledger*. **Not** a product backlog, sprint backlog, or prioritized work queue — SDW has no sprint, capacity, or priority model. |
 | **In the backlog / registered** | The spec file exists on disk **and** has a row in the registry. Registering is a filing action: it schedules nothing and authorizes nothing. | *Registered*, *indexed*, *filed*. Not "queued for delivery". |
 | **Deferred spec** | A registered spec the maintainer does not intend to implement now. Deferral is expressed in prose or in the spec's Notes; it is not a lifecycle status. | *Parked*, *backlog idea*, *tracked but not scheduled*. Not "cancelled". |
-| **Status** | The lifecycle value in the registry row. Supported values are `pending` (authored, not delivered), `completed` (implemented, verified, PR prepared), and `archived` (retired). | *State*, *lifecycle state*. Not a priority and not an authorization. |
+| **Registry status** | The lifecycle value in the registry row. Supported values are `pending` (authored, not delivered), `completed` (implemented, verified, PR prepared), and `archived` (retired). | *Index status*, *lifecycle state*. Not a priority, not an authorization, and not the spec header status. |
+| **Spec status** | The `status:` value in a spec's YAML frontmatter: `draft` (needs refinement), `awaiting-approval` (grilled, awaiting sign-off), `ready-to-implement` (approved, may be ordered), `implemented` (delivered), `abandoned` (dropped but kept). | *Header status*, *authoring status*. Not the registry status and never an implementation authorization. |
 | **Archived spec** | A completed spec retired from active development. It stays on disk and in the registry but `sdw-orch run` refuses it unless overridden. | *Retired*. Not deleted and not "done twice". |
 | **Acceptance Criterion (AC)** | One atomic, testable requirement written in EARS form (`AC1`, `AC2`, …). The AC list is the contract the orchestrator scores and the reviewer checks. | *AC*, *criterion*, *requirement*. Not an "acceptance test" (the test is the evidence, the AC is the promise). |
 | **EARS** | Easy Approach to Requirements Syntax: the five allowed sentence patterns for ACs — ubiquitous, event-driven, state-driven, optional-feature, unwanted-behavior. | *EARS syntax*. Not plain prose requirements. |
@@ -76,7 +77,9 @@ Spec-Driven Workflow is **opinionated**: the words below mean what this project 
 
 | Term | SDW meaning | Also called / not to be confused with |
 |---|---|---|
+| **Product** | Everything this project ships under `skills/` — the skills, their `references/`, and their deterministic `scripts/` — as installed by consumers. Product code serves consumers on any harness and must not depend on this repository's development environment. | *SDW product*, *shipped skills*. Not the development harness (`.agents/skills/`, `AGENTS.md`, repository-root docs) and not a consumer's local `.sdw/` workspace. |
 | **Canonical repository** | This project's checkout, where `skills/` is the source of truth and `.sdw/` is the consumer template. | *SDW repo*, *upstream*. Not a consumer workspace. |
+| **Upstream** | This repository as the canonical SDW source: where skills are authored, validated, and released from. `sdw-doctor` reports `upstream` mode when it runs here. | *Main repo*, *source of truth*, *canonical checkout*. Not a consumer project, not the global install, and not a published release. |
 | **Consumer project** | Any repository that installs SDW skills and owns its `.sdw/` workspace. | *Consumer*, *target repo*. Not the canonical repo. |
 | **Skills root** | The directory where skills are installed: `{projectRoot}/skills` (canonical), `{projectRoot}/.agents/skills` (project-local), or `$HOME/.agents/skills` (shared). | *Install root*, *skills directory*. |
 | **Hybrid mode** | Skills installed once globally under `$HOME/.agents/skills` and shared across projects, while each project keeps its own `.sdw/`. | *Global install*. Not a remote service. |
@@ -114,6 +117,7 @@ Spec-Driven Workflow is **opinionated**: the words below mean what this project 
 | **Gate** | A human approval checkpoint | A deterministic check (build/test/secret scan/evidence) |
 | **Evidence** | Any supporting material | A structured JSON report corroborated against a dispatch baseline |
 | **Sandbox** | A security boundary or disposable environment | A shallow git clone that keeps the source checkout and remote untouched |
+| **Status** | A generic workflow state | Either the registry lifecycle value or the spec header authoring value; neither is an authorization |
 | **Worker** | A person or process | An agent instance executing exactly one dispatched task |
 | **Ledger** | Accounting book | (Planned, not implemented) an acceptance-criteria evidence record per run |
 

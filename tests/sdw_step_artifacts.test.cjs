@@ -43,6 +43,8 @@ id: null
 slug: ${slug}
 title: "Step Artifacts Test ${slug}"
 source: local
+
+status: draft
 specDate: 2026-10-19
 ---
 

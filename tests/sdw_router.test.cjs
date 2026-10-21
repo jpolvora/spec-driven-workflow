@@ -49,7 +49,7 @@ test('AC4: Route specification authoring, formatting, listing, and archiving to 
     'Author a new specification for customer invoicing',
     'Validate spec against EARS syntax rules',
     'List all specs registered in index.specs.md',
-    'Archive completed specification 001-sdw-implement-initial-version'
+    'Archive completed specification 00001-sdw-implement-initial-version'
   ];
 
   for (const p of prompts) {
@@ -61,7 +61,7 @@ test('AC4: Route specification authoring, formatting, listing, and archiving to 
 
 test('AC5: Route specification implementation, orchestration, and resumption to sdw-orch', () => {
   const prompts = [
-    'Start workflow to implement spec 003-sdw-router-skill',
+    'Start workflow to implement spec 00003-sdw-router-skill',
     'Resume orchestrator execution for run-1792396125490',
     'Check orch status and conformance score of active delivery'
   ];

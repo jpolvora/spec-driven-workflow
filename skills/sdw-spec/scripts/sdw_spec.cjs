@@ -7,7 +7,15 @@ const path = require('path');
 const { initIndex, listIndex, archiveSpec, resolvePaths } = require('./spec_index.cjs');
 const { createNewSpec, importRemoteSpec } = require('./spec_creator.cjs');
 const { syncIndex } = require('./spec_sync.cjs');
-const { validateFile } = require('./validate_spec.cjs');
+const { validateFile, SPEC_STATUSES } = require('./validate_spec.cjs');
+
+const SPEC_STATUS_TRANSITIONS = {
+  draft: ['awaiting-approval', 'abandoned'],
+  'awaiting-approval': ['ready-to-implement', 'draft', 'abandoned'],
+  'ready-to-implement': ['implemented', 'awaiting-approval', 'abandoned'],
+  implemented: [],
+  abandoned: ['draft']
+};
 
 function parseArgs(args) {
   const result = {
@@ -63,8 +71,12 @@ Subcommands:
   import                   Import remote tracker item from GitHub or Azure DevOps
   sync                     Reconcile index.specs.md against on-disk files and orchestrator run states
   validate <specPath>      Validate frontmatter, section hierarchy, and strict EARS syntax
+  status <slug> <status>   Change the spec header status with defined transitions
   archive <slug>           Transition completed specification to archived in index.specs.md
   help                     Show this help documentation
+
+Spec statuses:
+  draft | awaiting-approval | ready-to-implement | implemented | abandoned
 
 Options:
   --root <path>            Target project workspace root directory
@@ -151,7 +163,7 @@ function cmdNew(options) {
       console.log(`  File:   ${created.filePath}`);
       console.log(`  Prefix: ${created.prefix}`);
       console.log(`  Title:  ${created.title}`);
-      console.log(`  Status: pending (registered in index.specs.md)`);
+      console.log(`  Status: draft (registered as pending in index.specs.md)`);
     }
     return 0;
   } catch (err) {
@@ -175,7 +187,7 @@ async function cmdImport(options) {
       console.log(`  Prefix: ${imported.prefix}`);
       console.log(`  Slug:   ${imported.slug}`);
       console.log(`  Title:  ${imported.title}`);
-      console.log(`  Status: pending (registered in index.specs.md)`);
+      console.log(`  Status: draft (registered as pending in index.specs.md)`);
     }
     return 0;
   } catch (err) {
@@ -280,6 +292,74 @@ function cmdArchive(options) {
   }
 }
 
+function findSpecFile(specsDir, key) {
+  const direct = path.join(specsDir, `${key}.md`);
+  if (fs.existsSync(direct)) return direct;
+  if (!fs.existsSync(specsDir)) return null;
+  const files = fs.readdirSync(specsDir).filter(name => /^\d{5}-.*\.md$/.test(name));
+  const match = files.find(name => {
+    const base = name.replace(/\.md$/, '');
+    return base === key || base.startsWith(`${key}-`) || base.includes(key);
+  });
+  return match ? path.join(specsDir, match) : null;
+}
+
+function cmdStatus(options) {
+  const parts = String(options.target || '').trim().split(/\s+/).filter(Boolean);
+  if (parts.length !== 2) {
+    console.error('Error: usage is "status <slug> <status>".');
+    console.error(`  Allowed statuses: ${SPEC_STATUSES.join(', ')}`);
+    return 1;
+  }
+  const [key, nextStatus] = parts;
+  if (!SPEC_STATUSES.includes(nextStatus)) {
+    console.error(`Error: unknown status "${nextStatus}". Allowed: ${SPEC_STATUSES.join(', ')}.`);
+    return 1;
+  }
+
+  const { root, specsDir } = resolvePaths(options.root);
+  const specFile = findSpecFile(specsDir, key);
+  if (!specFile) {
+    console.error(`Error: specification not found for "${key}" under ${specsDir}.`);
+    return 1;
+  }
+
+  const content = fs.readFileSync(specFile, 'utf8');
+  const fmMatch = content.match(/^---\s*\n([\s\S]*?)\n---\s*\n?/);
+  if (!fmMatch) {
+    console.error(`Error: ${path.basename(specFile)} has no YAML frontmatter.`);
+    return 1;
+  }
+
+  const currentMatch = fmMatch[1].match(/^status:\s*(.*)$/m);
+  const currentStatus = currentMatch ? currentMatch[1].trim() : null;
+  if (currentStatus === nextStatus) {
+    console.log(`[sdw-spec status] ${path.basename(specFile)} is already ${nextStatus}.`);
+    return 0;
+  }
+
+  const allowed = currentStatus ? (SPEC_STATUS_TRANSITIONS[currentStatus] || []) : SPEC_STATUSES;
+  if (!options.force && currentStatus && !allowed.includes(nextStatus)) {
+    console.error(`[sdw-spec status] Refused: ${currentStatus} -> ${nextStatus} is not a defined transition.`);
+    console.error(`  Allowed from ${currentStatus}: ${allowed.length > 0 ? allowed.join(', ') : '(none)'}. Use --force to override.`);
+    return 1;
+  }
+
+  const nextBlock = currentMatch
+    ? fmMatch[1].replace(/^status:\s*.*$/m, `status: ${nextStatus}`)
+    : fmMatch[1].replace(/^(source:\s*.*)$/m, `$1\nstatus: ${nextStatus}`);
+  const updated = content.replace(fmMatch[0], `---\n${nextBlock}\n---\n`);
+  fs.writeFileSync(specFile, updated, 'utf8');
+
+  const rel = path.relative(root, specFile).replace(/\\/g, '/');
+  if (options.json) {
+    console.log(JSON.stringify({ status: 'ok', file: rel, from: currentStatus, to: nextStatus }, null, 2));
+  } else {
+    console.log(`[sdw-spec status] ${rel}: ${currentStatus || '(none)'} -> ${nextStatus}`);
+  }
+  return 0;
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const options = parseArgs(args);
@@ -312,6 +392,9 @@ async function main() {
     case 'archive':
       code = cmdArchive(options);
       break;
+    case 'status':
+      code = cmdStatus(options);
+      break;
     default:
       console.error(`Unknown subcommand: "${options.subcommand}". Run with --help for usage.`);
       code = 1;
@@ -333,5 +416,7 @@ module.exports = {
   cmdImport,
   cmdSync,
   cmdValidate,
-  cmdArchive
+  cmdArchive,
+  cmdStatus,
+  SPEC_STATUS_TRANSITIONS
 };

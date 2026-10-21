@@ -122,7 +122,7 @@ test('sdw-orch branch & worktree - AC18: .gitignore and directory-structure.md d
 test('sdw-orch branch & worktree - AC5: Default execution stays on current branch', () => {
   const tmpDir = setupTestRepo();
   try {
-    const specPath = createDummySpec(tmpDir, '001-default-branch');
+    const specPath = createDummySpec(tmpDir, '00001-default-branch');
     const curBranchBefore = execSync('git rev-parse --abbrev-ref HEAD', { cwd: tmpDir, encoding: 'utf8' }).trim();
 
     const code = sdwOrch.cmdRun({
@@ -144,7 +144,7 @@ test('sdw-orch branch & worktree - AC5: Default execution stays on current branc
 test('sdw-orch branch & worktree - AC6, AC8, AC9, AC10: Feature branch creation, reuse, and state recording', () => {
   const tmpDir = setupTestRepo();
   try {
-    const slug = '002-feature-branch-test';
+    const slug = '00002-feature-branch-test';
     const specPath = createDummySpec(tmpDir, slug);
 
     // Enable useFeatureBranches in config.json
@@ -203,7 +203,7 @@ test('sdw-orch branch & worktree - AC6, AC8, AC9, AC10: Feature branch creation,
 test('sdw-orch branch & worktree - AC7: Dirty tree never blocks; delivery commits only tracked spec files', () => {
   const tmpDir = setupTestRepo();
   try {
-    const slug = '003-dirty-tree-test';
+    const slug = '00003-dirty-tree-test';
     const specPath = createDummySpec(tmpDir, slug);
 
     // Unrelated dirty file must be left alone by scoped commits
@@ -233,7 +233,7 @@ test('sdw-orch branch & worktree - AC7: Dirty tree never blocks; delivery commit
 test('sdw-orch branch & worktree - AC13: Single low-complexity task skips worktree creation', () => {
   const tmpDir = setupTestRepo();
   try {
-    const slug = '004-single-low-skip';
+    const slug = '00004-single-low-skip';
     const specPath = createDummySpec(tmpDir, slug, 'simple', 1);
 
     const runId = `run-${Date.now()}-${slug}`;
@@ -259,7 +259,7 @@ test('sdw-orch branch & worktree - AC13: Single low-complexity task skips worktr
 test('sdw-orch branch & worktree - AC12, AC14, AC15, AC17: Multi-task worktree lifecycle and cherry-pick integration', () => {
   const tmpDir = setupTestRepo();
   try {
-    const slug = '005-multi-worktree-test';
+    const slug = '00005-multi-worktree-test';
     // 8 ACs produces complex multi-task plan in DAG generator
     const specPath = createDummySpec(tmpDir, slug, 'complex', 8);
     execSync('git add -A && git commit -m "add multi-task spec"', { cwd: tmpDir, stdio: 'ignore' });
@@ -296,7 +296,7 @@ test('sdw-orch branch & worktree - AC12, AC14, AC15, AC17: Multi-task worktree l
 test('sdw-orch branch & worktree - AC21: Runtime overrides (--no-worktrees, --no-feature-branch)', () => {
   const tmpDir = setupTestRepo();
   try {
-    const slug = '006-overrides-test';
+    const slug = '00006-overrides-test';
     const specPath = createDummySpec(tmpDir, slug);
 
     // Enable both in config.json
@@ -339,7 +339,7 @@ test('sdw-orch branch & worktree - AC21: Runtime overrides (--no-worktrees, --no
 test('sdw-orch branch & worktree - AC22: status subcommand displays branch and worktrees', () => {
   const tmpDir = setupTestRepo();
   try {
-    const slug = '007-status-test';
+    const slug = '00007-status-test';
     const specPath = createDummySpec(tmpDir, slug, 'complex', 8);
     execSync('git add -A && git commit -m "add test spec"', { cwd: tmpDir, stdio: 'ignore' });
 

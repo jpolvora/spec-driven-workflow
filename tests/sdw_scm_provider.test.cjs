@@ -276,7 +276,7 @@ test('sdw-scm-provider - resolution guard strips the internal marker before vali
 test('sdw-scm-provider - AC14, AC15, AC17, AC20: Orchestrator Step 8 skips polling when scmProvider is none and records in state', () => {
   const tmpDir = setupTestRepo();
   try {
-    const slug = '001-scm-none-test';
+    const slug = '00001-scm-none-test';
     const specPath = path.join(tmpDir, '.sdw', 'specs', `${slug}.md`);
     fs.writeFileSync(specPath, `---
 slug: ${slug}

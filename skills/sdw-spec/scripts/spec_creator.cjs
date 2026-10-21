@@ -8,25 +8,25 @@ const { validateFile } = require('./validate_spec.cjs');
 
 function getNextPrefix(specsDir) {
   if (!fs.existsSync(specsDir)) {
-    return '001';
+    return '00001';
   }
 
   const files = fs.readdirSync(specsDir);
   const prefixes = [];
 
   for (const f of files) {
-    const m = f.match(/^(\d{3})-.*\.md$/);
+    const m = f.match(/^(\d{5})-.*\.md$/);
     if (m) {
       prefixes.push(parseInt(m[1], 10));
     }
   }
 
   if (prefixes.length === 0) {
-    return '001';
+    return '00001';
   }
 
   const highest = Math.max(...prefixes);
-  return String(highest + 1).padStart(3, '0');
+  return String(highest + 1).padStart(5, '0');
 }
 
 function slugify(text) {
@@ -103,6 +103,7 @@ id: ${id !== null ? JSON.stringify(id) : 'null'}
 slug: ${slug}
 title: ${JSON.stringify(title)}
 source: ${source}
+status: draft
 specDate: ${specDate}
 ---
 
@@ -173,7 +174,7 @@ function createNewSpec(inputText, options = {}) {
   const firstLine = text.split('\n')[0].replace(/^#+\s*/, '').trim();
   const title = options.title || firstLine || `Feature ${prefix}`;
   const rawSlug = options.slug || slugify(title);
-  const slug = `${prefix}-${rawSlug.replace(/^\d{3}-/, '')}`;
+  const slug = `${prefix}-${rawSlug.replace(/^\d{5}-/, '')}`;
 
   // Extract raw criteria or bullets if present
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean);

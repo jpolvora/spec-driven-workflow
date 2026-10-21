@@ -89,7 +89,7 @@ test('AC8: Deterministic Command-Line Helper Script Subcommands (doctor, audit-s
   assert.equal(docRes.violationsCount, 0, 'doctor must report 0 violations');
 
   // Test audit-spec on valid spec
-  const auditRes = sdwRules.cmdAuditSpec('.sdw/specs/008-sdw-rules-skill.md', { root: repoRoot });
+  const auditRes = sdwRules.cmdAuditSpec('.sdw/specs/00008-sdw-rules-skill.md', { root: repoRoot });
   assert.equal(auditRes.passed, true, 'audit-spec must pass on 008 spec');
 
   // Test CLI execution via child_process

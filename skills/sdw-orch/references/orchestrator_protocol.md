@@ -143,8 +143,8 @@ Configurable feature branch activation and per-task isolated git worktrees:
 Intermediate outputs of human-auditable steps (2, 3, 5) are persisted as human-readable Markdown files:
 
 ### Directory Layout & Filename Convention
-- **Directory:** `{stateDir}/{slug}/{runId}/` (e.g. `.sdw/state/014-sdw-orch-step-artifacts-persistence/run-1792400000000-014-sdw-orch-step-artifacts-pe/`)
-- **Naming:** `{slug}-step-{N}.md` (e.g. `014-sdw-orch-step-artifacts-persistence-step-2.md`, `...-step-3.md`, `...-step-5.md`)
+- **Directory:** `{stateDir}/{slug}/{runId}/` (e.g. `.sdw/state/00014-sdw-orch-step-artifacts-persistence/run-1792400000000-00014-sdw-orch-step-artifacts-pe/`)
+- **Naming:** `{slug}-step-{N}.md` (e.g. `00014-sdw-orch-step-artifacts-persistence-step-2.md`, `...-step-3.md`, `...-step-5.md`)
 - **State Linkage:** Run state records `state.artifactsDir` and `state.steps[N].artifact` with forward slashes relative to project root.
 
 ### Scope & In-Scope Steps

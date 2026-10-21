@@ -145,10 +145,15 @@ const INTENT_RULES = {
     secondaryKeywords: ['init', 'check', 'parse', 'setup', 'settings', 'dry-run', 'scaffold'],
     recommendedOption: 'Initialize or verify workspace configuration using sdw-config'
   },
+  'sdw-doctor': {
+    primaryKeywords: ['sdw-doctor', 'installation health', 'install check', 'workspace health'],
+    secondaryKeywords: ['doctor check', 'missing skill', 'skill not found', 'hybrid install', 'global install check', 'broken install', 'npx reinstall', 'check skills'],
+    recommendedOption: 'Audit the SDW installation and workspace health using sdw-doctor'
+  },
   'sdw-spec': {
-    primaryKeywords: ['spec', 'specification', 'index.specs.md', 'prd index', 'ears', 'authoring'],
-    secondaryKeywords: ['new spec', 'import spec', 'list specs', 'sync specs', 'validate spec', 'archive spec', 'formatting', 'acceptance criteria', 'format spec'],
-    recommendedOption: 'Author, validate, or synchronize specifications using sdw-spec'
+    primaryKeywords: ['spec', 'specification', 'index.specs.md', 'prd index', 'ears', 'authoring', 'grill'],
+    secondaryKeywords: ['new spec', 'import spec', 'list specs', 'sync specs', 'validate spec', 'archive spec', 'formatting', 'acceptance criteria', 'format spec', 'grill me', 'refine spec', 'spec status', 'awaiting-approval'],
+    recommendedOption: 'Author, grill, validate, or synchronize specifications using sdw-spec'
   },
   'sdw-orch': {
     primaryKeywords: ['orch', 'orchestrator', 'orchestration', 'implement spec', 'specification implementation', 'workflow execution'],
@@ -252,7 +257,7 @@ function routePrompt(prompt, options) {
     }
   }
 
-  const knownExplicitSkills = ['sdw-config', 'sdw-spec', 'sdw-orch', 'sdw-router', 'sdw-rules', 'sdw-security-checks', 'sdw-ship-pr', 'sdw-code-review'];
+  const knownExplicitSkills = ['sdw-config', 'sdw-doctor', 'sdw-spec', 'sdw-orch', 'sdw-router', 'sdw-rules', 'sdw-security-checks', 'sdw-ship-pr', 'sdw-code-review'];
   for (const s of knownExplicitSkills) {
     if (new RegExp(`(?:^|\\s)[/@]?${s}\\b`, 'i').test(lower)) {
       // It was explicitly requested but might be missing on disk
