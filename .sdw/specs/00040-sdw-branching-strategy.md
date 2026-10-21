@@ -63,6 +63,15 @@ Presets name common relationships (`trunk`, `github`, `develop`, `gitflow`, `git
 - A diverged work branch is never reset or rebased automatically; it is reported as `blocked` with the remediation command.
 - Run state fields: `branching` with the resolved strategy, source, and lane names; `branchingSync` with `{ status, reason, integrationBranch, workBranch, at }`.
 
+### Acceptance Criteria Amendments
+
+Two criteria were amended during delivery, with the maintainer's direction to follow the documented gitflow contract:
+
+- **AC10** originally kept the trunk fallback when `workBranch` equaled `integrationBranch`. That made a gitflow run started on another branch create the feature branch from that branch instead of `develop`, which contradicts the gitflow preset contract in `config_spec.md` §2.4. AC10 now limits the trunk fallback to the case where no work lane is configured; a configured lane is always the start point.
+- **AC15** originally forbade any git command during `--dry-run`. Resolving an `auto` lane requires a read-only `origin/HEAD` lookup, otherwise the plan reports trunk behavior for the `github` and `gitlab` presets. AC15 now requires no repository mutation, and the read-only lookup is allowed.
+
+Both amendments are recorded here so the contract change is visible rather than implied by the code.
+
 ## Out of Scope
 
 | Feature | Reason |
