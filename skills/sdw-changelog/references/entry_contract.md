@@ -34,7 +34,7 @@ Read from `{projectRoot}/.sdw/config.json`:
 | Key | Type | Default | Behavior |
 |-----|------|---------|----------|
 | `changelogEnabled` | boolean | `true` | `false` skips the append and exits `0` without touching files. |
-| `changelogFile` | string | `{projectRoot}/CHANGELOG.md` | Target file; relative paths resolve from the project root. |
+| `changelogFile` | string | `{projectRoot}/CHANGELOG.md` | Target file; the resolved path must stay inside the project root, so absolute and escaping paths exit `1`. |
 
 The changelog is project history. The helper never writes to an external memory vault.
 
@@ -44,6 +44,7 @@ The changelog is project history. The helper never writes to an external memory 
 |-----------|--------|------|
 | Append succeeded | `changelog: appended to <resolved path>` | `0` |
 | Disabled | `changelog: skipped: disabled` | `0` |
+| Identical Prompt/Done/Result block already present | `changelog: skipped: duplicate-block` | `0` |
 | Usage error | `ERROR: …` plus the usage line | `1` |
 
-With `--json`, the result is `{"ok":true,"file":"<resolved path>"}` or `{"ok":true,"skipped":"disabled"}`.
+With `--json`, the result is `{"ok":true,"file":"<resolved path>"}` or `{"ok":true,"skipped":"disabled"}` / `{"ok":true,"skipped":"duplicate-block"}`.

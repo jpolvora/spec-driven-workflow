@@ -51,6 +51,26 @@ test('append: creates the configured file below # Changelog and reports the path
   assert.ok(result.stdout.includes(file), 'status line names the resolved path');
 });
 
+test('AC2: --json prints a structured append result and the default entry uses the local timestamp', (t) => {
+  const root = makeProject(t);
+  writeConfig(root, {});
+
+  const result = run(root, [...ENTRY_ARGS, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.ok, true);
+  const file = path.join(root, 'CHANGELOG.md');
+  assert.equal(parsed.file, file, 'JSON result names the resolved path');
+
+  const content = fs.readFileSync(file, 'utf8');
+  assert.match(
+    content,
+    /^# Changelog\n\n### \[\d{4}-\d{2}-\d{2} \d{2}:\d{2}\] Agent: agent\n/,
+    'omitted --date falls back to a local YYYY-MM-DD HH:MM stamp'
+  );
+});
+
 test('AC8: appending preserves every existing entry byte-identical', (t) => {
   const root = makeProject(t);
   writeConfig(root, {});

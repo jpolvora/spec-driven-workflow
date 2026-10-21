@@ -20,6 +20,7 @@ Appends an append-only delivery record for a completed task to the project chang
 - `changelogFile` selects the target path; when absent, the target is `{projectRoot}/CHANGELOG.md`.
 - Creates the changelog file and any missing parent directory.
 - Inserts the new entry directly below `# Changelog`; existing entries stay byte-identical.
+- Skips an identical Prompt/Done/Result block and reports `skipped: duplicate-block`.
 
 ## Steps
 
