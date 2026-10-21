@@ -20,7 +20,7 @@
   "autoResolveGaps": true,
   "securityChecksEnabled": true,
   "useWorktrees": false,
-  "useFeatureBranches": false,
+  "useFeatureBranches": true,
   "scmProvider": "github",
   "implementation": {
     "mode": "subagent",
