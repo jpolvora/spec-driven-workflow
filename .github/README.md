@@ -73,6 +73,8 @@ gh workflow run sync-rulesets.yml -f ruleset=all
 
 The workflow needs a repository secret `RULESET_SYNC_TOKEN` with administration write access; the default `GITHUB_TOKEN` cannot manage rulesets. Rulesets and classic branch protection coexist, so after the rulesets are active, delete the classic rules (`gh api -X DELETE repos/{owner}/{repo}/branches/develop/protection`) to keep one source of truth.
 
+`master` requires 0 approving reviews on purpose: the repository has a single maintainer and GitHub does not count self-approval, so a required human approval would block every production promotion. Promotion is still gated by the `review` and `test` checks, conversation resolution, and `promotion-guard` (once it lands on `master`). Raise the count to 1 after adding a second collaborator.
+
 The unresolved-thread check in `agentic-code-review.yml` blocks merge until every reviewer comment is addressed or resolved, so conversation resolution must stay enabled.
 
 ---
