@@ -313,6 +313,30 @@ class GitHubProvider extends ScmProvider {
     }
   }
 
+  // Native capability: `gh pr checks --watch` blocks until the PR checks settle.
+  // Probed once from the CLI help so an older gh falls back to caller polling.
+  supportsNativeWatch() {
+    if (this._nativeWatchSupport !== undefined) return this._nativeWatchSupport;
+    try {
+      const help = String(this.executor('gh pr checks --help') || '');
+      this._nativeWatchSupport = help.includes('--watch');
+    } catch (e) {
+      this._nativeWatchSupport = false;
+    }
+    return this._nativeWatchSupport;
+  }
+
+  async watchPrChecks(prIdentifier, options = {}) {
+    if (!prIdentifier) {
+      throw new Error('prIdentifier is required for GitHub watchPrChecks.');
+    }
+    if (!this.supportsNativeWatch()) {
+      throw new Error('GitHub CLI does not support native check watch.');
+    }
+    const seconds = Math.max(1, Number(options.intervalSeconds) || 10);
+    return this.executor(`gh pr checks ${prIdentifier} --watch --interval ${seconds}`);
+  }
+
   async listReviewThreads(prIdentifier) {
     if (!prIdentifier) {
       throw new Error('prIdentifier is required for GitHub listReviewThreads.');

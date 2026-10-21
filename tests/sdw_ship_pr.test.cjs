@@ -391,6 +391,9 @@ function setupPreemptionWorkspace(checkScript) {
   const calls = [];
   const fakeExecutor = (cmd) => {
     calls.push(cmd);
+    if (cmd.includes('pr checks --help')) {
+      return '';
+    }
     if (cmd.includes('pr checks')) {
       return JSON.stringify(checkScript());
     }
@@ -1048,4 +1051,27 @@ test('sdw-ship-pr - merge keeps an audit record when the delivery fails before t
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
+});
+
+test('sdw-ship-pr - native watch: providers expose the capability and the probe is cached', () => {
+  let probes = 0;
+  const gh = createScmProvider('github', {
+    executor: (cmd) => {
+      probes++;
+      return cmd.includes('gh pr checks --help') ? 'FLAGS\n      --watch   Watch checks until they finish' : '';
+    }
+  });
+  assert.strictEqual(gh.supportsNativeWatch(), true);
+  assert.strictEqual(gh.supportsNativeWatch(), true);
+  assert.strictEqual(probes, 1, 'The capability probe is cached after the first call');
+
+  const oldGh = createScmProvider('github', { executor: () => 'usage: gh pr checks' });
+  assert.strictEqual(oldGh.supportsNativeWatch(), false, 'Older gh CLIs without --watch fall back to polling');
+
+  const ado = createScmProvider('ado', { executor: () => '' });
+  assert.strictEqual(ado.supportsNativeWatch(), false, 'Azure DevOps has no native check watch');
+
+  assert.strictEqual(sdwShipPr.parseArgs(['--no-native-watch']).nativeWatch, false);
+  assert.strictEqual(sdwShipPr.parseArgs(['--native-watch']).nativeWatch, true);
+  assert.strictEqual(sdwShipPr.parseArgs([]).nativeWatch, true);
 });

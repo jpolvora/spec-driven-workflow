@@ -42,6 +42,16 @@ class ScmProvider {
     throw new Error('findActivePullRequest must be implemented by provider.');
   }
 
+  // Native watch capability: providers that can block until pull-request checks
+  // settle override this instead of relying on caller-side timer polling.
+  supportsNativeWatch() {
+    return false;
+  }
+
+  async watchPrChecks(prNumber, options = {}) {
+    throw new Error(`Native check watch is not supported by ${this.constructor.name} for PR ${prNumber}.`);
+  }
+
   async updatePullRequest(options = {}) {
     throw new Error('updatePullRequest must be implemented by provider.');
   }

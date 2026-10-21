@@ -37,7 +37,8 @@ Parameters:
 - `--poll-pr`: Enable post-PR review polling and convergence loop.
 - `--merge` / `--allow-merge`: After review convergence, ask the SCM CLI to merge the pull request (`gh pr merge <n> --merge` or `az repos pr update --id <n> --status completed`). Fire and forget: the outcome is recorded but never fails the delivery, because permissions, pending approvals, and branch rules are outside this skill's contract. Default: off.
 - `--max-iterations <n>`: Review convergence ceiling (default `3`).
-- `--poll-interval <ms>`: Wait between convergence rounds (default `20000`).
+- `--poll-interval <ms>`: Fallback wait between convergence rounds when native watch is unavailable (default `20000`).
+- `--no-native-watch`: Disable the provider's native check watch (`gh pr checks --watch`) and always use interval polling.
 - `--max-preemptions <n>`: Concurrent-push adaptation budget (default `3`).
 - `--dry-run`: Simulate pre-PR checks, branch push, PR creation, and review polling without remote mutations.
 - `--json`: Output structured JSON execution report.

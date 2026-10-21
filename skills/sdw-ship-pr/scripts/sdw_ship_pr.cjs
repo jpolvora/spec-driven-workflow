@@ -256,7 +256,8 @@ function parseArgs(args) {
     json: false,
     maxIterations: 3,
     pollIntervalMs: 20000,
-    maxPreemptions: null
+    maxPreemptions: null,
+    nativeWatch: true
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -289,6 +290,10 @@ function parseArgs(args) {
       options.pollPr = true;
     } else if (arg === '--merge' || arg === '--allow-merge') {
       options.merge = true;
+    } else if (arg === '--no-native-watch') {
+      options.nativeWatch = false;
+    } else if (arg === '--native-watch') {
+      options.nativeWatch = true;
     } else if (arg === '--dry-run') {
       options.dryRun = true;
     } else if (arg === '--json') {
@@ -818,6 +823,25 @@ async function runShipPr(options = {}, customExecutor = null) {
         const pollIntervalMs = options.pollIntervalMs === undefined
           ? 20000
           : Math.max(0, Number(options.pollIntervalMs) || 0);
+        // Native SCM wait first: a provider that supports watch blocks until the
+        // checks settle, so no shell timer is needed. Otherwise interval polling.
+        const nativeWatch = pollIntervalMs > 0
+          && !dryRun
+          && options.nativeWatch !== false
+          && Boolean(provider && typeof provider.supportsNativeWatch === 'function' && provider.supportsNativeWatch());
+        const waitForNextRound = async () => {
+          if (nativeWatch && prResult.number) {
+            try {
+              const seconds = Math.max(1, Math.ceil(pollIntervalMs / 1000) || 10);
+              log(`[sdw-ship-pr] Waiting with native check watch (${scmProviderName} PR #${prResult.number}).`);
+              await provider.watchPrChecks(prResult.number, { intervalSeconds: seconds });
+            } catch (watchErr) {
+              warn(`[sdw-ship-pr] Native check watch ended (${watchErr.message}); re-reading state.`);
+            }
+            return;
+          }
+          if (pollIntervalMs > 0) await new Promise(r => setTimeout(r, pollIntervalMs));
+        };
         const reviewFixCommand = options.reviewFixCommand || config.reviewFixCommand || null;
         const testCommand = config.testCommand || (config.verification && config.verification.testCommand) || 'npm test';
         const runReviewSecurityGate = () => {
@@ -927,7 +951,7 @@ async function runShipPr(options = {}, customExecutor = null) {
               report.reviewConvergence.preemptions = preemptions;
               log(`[sdw-ship-pr] Detected superseded CI run replaced by a newer run (preemption ${preemptions}/${maxPreemptions}). Adapting: resetting convergence window.`);
               round = 0;
-              if (pollIntervalMs > 0) await new Promise(r => setTimeout(r, pollIntervalMs));
+              await waitForNextRound();
               continue;
             }
             warn(`[sdw-ship-pr] Preemption budget exhausted (${maxPreemptions}); continuing with latest status.`);
@@ -949,7 +973,7 @@ async function runShipPr(options = {}, customExecutor = null) {
               if (changed.length > 0) {
                 executor('git commit -m "fix(review): address failing checks"');
                 executor(`git push origin ${head}`);
-                if (pollIntervalMs > 0) await new Promise(r => setTimeout(r, pollIntervalMs));
+                await waitForNextRound();
                 continue;
               }
               warn('[sdw-ship-pr] reviewFixCommand produced no changes for the failing checks.');
@@ -964,7 +988,7 @@ async function runShipPr(options = {}, customExecutor = null) {
               });
               if (fixResult && fixResult.fixed === true) {
                 runReviewSecurityGate();
-                if (pollIntervalMs > 0) await new Promise(r => setTimeout(r, pollIntervalMs));
+                await waitForNextRound();
                 continue;
               }
               warn('[sdw-ship-pr] threadFixer did not confirm a fix for the failing checks.');
