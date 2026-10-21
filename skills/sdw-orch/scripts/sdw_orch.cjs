@@ -241,6 +241,17 @@ function orchCommandPath() {
   return __filename.replace(/\\/g, '/');
 }
 
+// Spec 00037 AC15: a successful delivery records the exact advisory retro
+// command. sdw-orch never runs it; the operator decides whether to review.
+function retroScriptPath(targetRoot) {
+  return resolveSkillScript(targetRoot, 'sdw-retro', path.join('scripts', 'retro.cjs'))
+    || path.resolve(__dirname, '../../sdw-retro/scripts/retro.cjs');
+}
+
+function retroCommandFor(targetRoot, runId) {
+  return `node "${normalizePath(retroScriptPath(targetRoot))}" run --run-id ${runId} --root "${normalizePath(targetRoot)}"`;
+}
+
 function isScopedExcluded(rel) {
   const n = normalizeRel(rel);
   return n.startsWith('.sdw/state/') || n === '.sdw/state'
@@ -2129,8 +2140,11 @@ function cmdRun(options) {
 
   state.status = 'completed';
   state.currentStep = 8;
+  state.retroCommand = retroCommandFor(targetRoot, state.runId);
   state = stateManager.saveRunState(targetRoot, state);
   console.log(`\n[sdw-orch] Workflow completed successfully for run "${state.runId}".`);
+  console.log(`[sdw-retro] Review this delivery with (advisory, run manually):`);
+  console.log(`  ${state.retroCommand}`);
 
   options._runResult = {
     runId: state.runId,
