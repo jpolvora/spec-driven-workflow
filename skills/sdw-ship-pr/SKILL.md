@@ -38,7 +38,7 @@ Parameters:
 - `--merge` / `--allow-merge`: After review convergence, ask the SCM CLI to merge the pull request (`gh pr merge <n> --merge` or `az repos pr update --id <n> --status completed`). Fire and forget: the outcome is recorded but never fails the delivery, because permissions, pending approvals, and branch rules are outside this skill's contract. Default: off.
 - `--max-iterations <n>`: Review convergence ceiling (default `3`).
 - `--poll-interval <ms>`: Fallback wait between convergence rounds when native watch is unavailable (default `20000`).
-- `--no-native-watch`: Disable the provider's native check watch (`gh pr checks --watch`) and always use interval polling.
+- `--no-native-watch`: Disable the provider's native run watch (`gh run watch <run-id> --exit-status`) and always use interval polling.
 - `--max-preemptions <n>`: Concurrent-push adaptation budget (default `3`).
 - `--dry-run`: Simulate pre-PR checks, branch push, PR creation, and review polling without remote mutations.
 - `--json`: Output structured JSON execution report.
@@ -104,3 +104,4 @@ Detailed protocol: [`references/ship_protocol.md`](references/ship_protocol.md).
 2. If `--run-id` is provided, persist delivery metadata into `.sdw/state/{runId}.state.json` under `steps[8]`.
 3. Output markdown summary or structured JSON.
 - Done when: State file updated (if runId provided) and execution report emitted to stdout.
+

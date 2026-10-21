@@ -29,6 +29,12 @@ interface ScmProvider {
    * Rejects with a descriptive error when the capability is unavailable.
    */
   watchPrChecks(prNumber: string | number, options?: { intervalSeconds?: number }): Promise<string>;
+
+  /**
+   * Reports whether the pull request actually reached the MERGED/completed
+   * state. An accepted merge command is not proof of a merge.
+   */
+  isPullRequestMerged(prNumber: string | number): Promise<boolean>;
 }
 ```
 

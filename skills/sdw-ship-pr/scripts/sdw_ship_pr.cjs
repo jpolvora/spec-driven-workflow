@@ -369,28 +369,6 @@ function locateStateFile(projectRoot, runId, specSlug = null, config = {}) {
 }
 
 /**
- * Confirms that the pull request is actually MERGED. A merge command that was
- * only accepted (queued, auto-merge pending, or blocked by branch rules) must
- * not trigger the post-merge synchronization.
- */
-function confirmPullRequestMerged(executor, providerName, prNumber) {
-  if (!prNumber || providerName === 'none' || !providerName) return false;
-  try {
-    if (providerName === 'github') {
-      const out = executor(`gh pr view ${prNumber} --json state --jq .state`);
-      return String(out || '').trim().toUpperCase() === 'MERGED';
-    }
-    if (providerName === 'ado' || providerName === 'azure-devops') {
-      const out = executor(`az repos pr show --id ${prNumber} --query status -o tsv`);
-      return String(out || '').trim().toLowerCase() === 'completed';
-    }
-  } catch (e) {
-    return false;
-  }
-  return false;
-}
-
-/**
  * Post-merge work-lane synchronization (spec 00040 AC12/AC13).
  * Fast-forwards the work lane to the integration lane and optionally pushes it.
  * Any failure is reported as `blocked` and never fails the completed delivery.
@@ -1222,8 +1200,22 @@ async function runShipPr(options = {}, customExecutor = null) {
     // Runs only after the pull request is observed as MERGED, not merely after
     // the merge command was accepted, and never changes the delivery result.
     const mergeAccepted = Boolean(report.merge && report.merge.ok === true);
+    let mergeObserver = null;
+    if (mergeAccepted && !dryRun) {
+      try {
+        mergeObserver = providerEarly || (scmContract && scmContract.createScmProvider
+          ? scmContract.createScmProvider(scmProviderName, { executor })
+          : null);
+      } catch (observerErr) {
+        mergeObserver = null;
+      }
+    }
     const prMerged = mergeAccepted
-      ? (dryRun ? true : confirmPullRequestMerged(executor, scmProviderName, report.pullRequest && report.pullRequest.number))
+      ? (dryRun ? true : Boolean(
+        mergeObserver
+        && typeof mergeObserver.isPullRequestMerged === 'function'
+        && await mergeObserver.isPullRequestMerged(report.pullRequest && report.pullRequest.number)
+      ))
       : false;
     if (mergeAccepted && !prMerged && branching && branching.syncWorkBranchAfterMerge) {
       report.branchingSync = {

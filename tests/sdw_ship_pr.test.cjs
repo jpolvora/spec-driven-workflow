@@ -1058,14 +1058,14 @@ test('sdw-ship-pr - native watch: providers expose the capability and the probe 
   const gh = createScmProvider('github', {
     executor: (cmd) => {
       probes++;
-      return cmd.includes('gh pr checks --help') ? 'FLAGS\n      --watch   Watch checks until they finish' : '';
+      return cmd.includes('gh run watch --help') ? 'FLAGS\n      --exit-status   Exit with non-zero status if run fails' : '';
     }
   });
   assert.strictEqual(gh.supportsNativeWatch(), true);
   assert.strictEqual(gh.supportsNativeWatch(), true);
   assert.strictEqual(probes, 1, 'The capability probe is cached after the first call');
 
-  const oldGh = createScmProvider('github', { executor: () => 'usage: gh pr checks' });
+  const oldGh = createScmProvider('github', { executor: () => 'usage: gh run watch' });
   assert.strictEqual(oldGh.supportsNativeWatch(), false, 'Older gh CLIs without --watch fall back to polling');
 
   const ado = createScmProvider('ado', { executor: () => '' });
@@ -1085,8 +1085,11 @@ test('sdw-ship-pr - native watch: the convergence loop blocks natively while che
   let checkCalls = 0;
   const fakeExecutor = (cmd) => {
     calls.push(cmd);
-    if (cmd.includes('pr checks --help')) return 'FLAGS\n      --watch   Watch checks until they finish';
-    if (cmd.includes('gh pr checks') && cmd.includes('--watch')) return '';
+    if (cmd.includes('gh run watch --help')) return 'FLAGS\n      --exit-status   Exit with non-zero status if run fails';
+    if (cmd.includes('gh run watch')) return '';
+    if (cmd.includes('gh pr checks') && cmd.includes('--json name,state,link') && !cmd.includes('bucket')) {
+      return JSON.stringify([{ name: 'ci/build', state: 'pending', link: 'https://github.com/fake-owner/fake-repo/actions/runs/123/job/456' }]);
+    }
     if (cmd.includes('gh pr checks')) {
       checkCalls += 1;
       return JSON.stringify(checkCalls === 1
@@ -1114,7 +1117,7 @@ test('sdw-ship-pr - native watch: the convergence loop blocks natively while che
       pollIntervalMs: 10000
     }, fakeExecutor);
 
-    assert.ok(calls.some(c => c.includes('gh pr checks') && c.includes('--watch')), 'The native watch command is consumed while checks are pending');
+    assert.ok(calls.some(c => c.includes('gh run watch') && c.includes('--exit-status')), 'The native Actions run watch is consumed while checks are pending');
     assert.strictEqual(report.reviewConvergence.converged, true, 'The loop re-polls after the native watch and converges');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -1128,8 +1131,8 @@ test('sdw-ship-pr - native watch: a watch failure falls back to the poll interva
   config.runAllTests = false;
   let checkCalls = 0;
   const fakeExecutor = (cmd) => {
-    if (cmd.includes('pr checks --help')) return 'FLAGS --watch';
-    if (cmd.includes('gh pr checks') && cmd.includes('--watch')) throw new Error('no checks reported on the branch');
+    if (cmd.includes('gh run watch --help')) return 'FLAGS --exit-status';
+    if (cmd.includes('gh pr checks') && cmd.includes('--json name,state,link') && !cmd.includes('bucket')) return JSON.stringify([]);
     if (cmd.includes('gh pr checks')) {
       checkCalls += 1;
       return JSON.stringify(checkCalls === 1
@@ -1163,3 +1166,4 @@ test('sdw-ship-pr - native watch: a watch failure falls back to the poll interva
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+

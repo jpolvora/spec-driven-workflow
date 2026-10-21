@@ -308,6 +308,18 @@ class AzureDevOpsProvider extends ScmProvider {
     }
   }
 
+  // Merge observation: an accepted merge command is not proof that the pull
+  // request completed, so the caller re-reads the provider state.
+  async isPullRequestMerged(prIdentifier) {
+    if (!prIdentifier) return false;
+    try {
+      const status = String(this.executor(`az repos pr show --id ${prIdentifier} --query status -o tsv`) || '').trim();
+      return status.toLowerCase() === 'completed';
+    } catch (e) {
+      return false;
+    }
+  }
+
   async listReviewThreads(prIdentifier) {
     if (!prIdentifier) {
       throw new Error('prIdentifier is required for Azure DevOps listReviewThreads.');
