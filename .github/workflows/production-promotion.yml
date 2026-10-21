@@ -1,0 +1,32 @@
+name: Production Promotion Guard
+
+# Gitflow guard. Feature branches integrate into develop; master receives
+# promotions only from develop (or an explicit release/hotfix lane).
+
+on:
+  pull_request:
+    branches: [master]
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  promotion-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the promotion source
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          echo "Promotion source: ${HEAD_REF}"
+          case "${HEAD_REF}" in
+            develop|release/*|hotfix/*)
+              echo "::notice::${HEAD_REF} may merge into master."
+              ;;
+            *)
+              echo "::error::Only develop, release/*, or hotfix/* may target master. Open this pull request against develop."
+              exit 1
+              ;;
+          esac

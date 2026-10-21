@@ -222,3 +222,32 @@ test('sdw-fixer - learn honors --no-learn and failed verification', () => {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('sdw-fixer - emits resolution comments, an amendment log, and a markdown report', () => {
+  const root = setupRoot(true);
+  try {
+    const findings = path.join(root, 'findings.json');
+    fs.writeFileSync(findings, JSON.stringify({
+      batchId: 'collab-batch',
+      findings: [
+        { file: 'buggy.js', line: 2, rule: 'no_debugger_statements', evidence: 'thread', threadId: 'PRRT_1', severityHint: 'high' },
+        { file: 'buggy.js', line: 3, rule: 'custom_rule', evidence: 'thread', threadId: 'PRRT_2', severityHint: 'low' }
+      ]
+    }), 'utf8');
+    const reportPath = path.join(root, 'result.json');
+    const markdownPath = path.join(root, 'round.md');
+    const res = fixer.cmdRun({ findings, report: reportPath, markdown: markdownPath, root, learn: false });
+    assert.strictEqual(res.exit, 0);
+
+    const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+    assert.strictEqual(report.comments.length, 1, 'one comment per fixed thread');
+    assert.strictEqual(report.comments[0].threadId, 'PRRT_1', 'the comment keeps the thread mapping');
+    assert.match(report.comments[0].comment, /resolution-reply/);
+    assert.match(report.comments[0].comment, /buggy\.js:2/);
+    assert.ok(report.amendments.some(a => a.to === 'skipped' && a.rule === 'custom_rule'), 'skips are recorded as amendments');
+    assert.ok(fs.existsSync(markdownPath), 'the markdown round report exists');
+    assert.strictEqual(report.markdownPath, 'round.md');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

@@ -50,7 +50,7 @@ function findProjectRoot(startDir) {
 }
 
 function parseArgs(args) {
-  const o = { subcommand: null, findings: null, report: null, dryRun: false, json: false, verify: null, root: null, learn: true };
+  const o = { subcommand: null, findings: null, report: null, markdown: null, dryRun: false, json: false, verify: null, root: null, learn: true };
   const positional = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -60,6 +60,8 @@ function parseArgs(args) {
     else if (a.startsWith('--findings=')) o.findings = a.slice(11);
     else if (a === '--report') o.report = args[++i];
     else if (a.startsWith('--report=')) o.report = a.slice(9);
+    else if (a === '--markdown') o.markdown = args[++i];
+    else if (a.startsWith('--markdown=')) o.markdown = a.slice(11);
     else if (a === '--verify') o.verify = args[++i];
     else if (a.startsWith('--verify=')) o.verify = a.slice(9);
     else if (a === '--root') o.root = args[++i];
@@ -306,6 +308,21 @@ function cmdRun(options) {
   const details = [];
   const knowledgeCache = new Map();
   const handled = new Set(); // file:line keys already patched in this batch
+  // Structured deviations from the scored plan (adapted from the ws-fix-pr
+  // amendment log): recorded when evidence changes a finding's planned action.
+  const amendments = [];
+  const amend = (finding, from, to, reason, evidence) => {
+    amendments.push({
+      at: new Date().toISOString(),
+      file: finding.file.trim(),
+      line: finding.line || null,
+      rule: finding.rule.trim(),
+      from,
+      to,
+      reason,
+      evidence
+    });
+  };
 
   for (const { finding, score } of scored) {
     const file = finding.file.trim();
@@ -321,6 +338,7 @@ function cmdRun(options) {
     const hits = rawHits.filter(h => !ownFiles.has(h.file));
     if (truncated) {
       skipped.push({ file, reason: `sibling sweep truncated at ${MAX_HITS} hits; remaining occurrences unverified` });
+      amend(finding, 'fix', 'partial', 'sibling sweep truncated; remaining class occurrences unverified', `max-hits:${MAX_HITS}`);
     }
     let cached = knowledgeCache.get(rule);
     if (!cached) {
@@ -355,8 +373,17 @@ function cmdRun(options) {
     if (outcome.status === 'covered') {
       covered.push({ file, line: finding.line, defectClass: finding.rule.trim() });
       detail.coveredBy = [{ file, line: finding.line }];
+      amend(finding, 'fix', 'covered', 'the same line was already patched by this batch', 'duplicate-line');
     } else if (outcome.status === 'fixed') {
-      for (const f of outcome.fixed) { fixed.push({ file: f.file, line: f.line, defectClass: finding.rule.trim() }); handled.add(`${norm(f.file)}:${f.line}`); }
+      for (const f of outcome.fixed) {
+        fixed.push({
+          file: f.file,
+          line: f.line,
+          defectClass: finding.rule.trim(),
+          threadId: finding.threadId || null
+        });
+        handled.add(`${norm(f.file)}:${f.line}`);
+      }
       for (const s of outcome.skippedFiles || []) skipped.push({ file: s.file, reason: s.reason });
       detail.fixedFiles = outcome.fixed;
     } else if (outcome.status === 'simulated') {
@@ -365,6 +392,7 @@ function cmdRun(options) {
       detail.simulatedFiles = outcome.fixed;
     } else {
       skipped.push({ file, reason: outcome.reason });
+      amend(finding, 'fix', 'skipped', outcome.reason, 'scope-gate');
       for (const s of outcome.skippedFiles || []) {
         if (s.file !== file) skipped.push({ file: s.file, reason: s.reason });
       }
@@ -372,6 +400,16 @@ function cmdRun(options) {
     }
     details.push(detail);
   }
+
+  // Resolution comments ready for the caller to post on the matching review
+  // threads (adapted from the ws-fix-pr resolution-reply contract).
+  const comments = fixed.map(f => ({
+    threadId: f.threadId,
+    file: f.file,
+    line: f.line,
+    defectClass: f.defectClass,
+    comment: `<!-- resolution-reply -->\nResolved review issue: fixed ${f.defectClass} at ${f.file}:${f.line}.\n\nSummary: deterministic ${f.defectClass} patch applied to the anchored line and verified sibling lines.`
+  }));
 
   const verification = runVerification(root, options.verify);
   const learned = [];
@@ -398,6 +436,8 @@ function cmdRun(options) {
     skipped,
     wouldFix,
     covered,
+    comments,
+    amendments,
     learned,
     verification: { exitCode: verification.exitCode, status: verification.status,
       ...(verification.reason ? { reason: verification.reason } : {}),
@@ -409,6 +449,40 @@ function cmdRun(options) {
   fs.mkdirSync(path.dirname(reportAbs), { recursive: true });
   fs.writeFileSync(reportAbs, JSON.stringify(report, null, 2) + '\n', 'utf8');
   console.log(`[sdw-fixer] Report written to ${norm(path.relative(root, reportAbs))}`);
+
+  // Optional human-readable round report (adapted from the ws-fix-pr round report).
+  if (options.markdown) {
+    const mdAbs = path.isAbsolute(options.markdown) ? options.markdown : path.resolve(root, options.markdown);
+    const lines = [];
+    lines.push(`# sdw-fixer batch ${report.batchId}`);
+    lines.push('');
+    lines.push(`- Status: ${report.status}`);
+    lines.push(`- Fixed: ${fixed.length}`);
+    lines.push(`- Covered: ${covered.length}`);
+    lines.push(`- Skipped: ${skipped.length}`);
+    lines.push(`- Would fix (dry-run): ${wouldFix.length}`);
+    lines.push(`- Verification: ${verification.status}`);
+    lines.push('');
+    lines.push('| File | Line | Defect class | Score | Outcome |');
+    lines.push('|---|---|---|---|---|');
+    for (const d of details) {
+      lines.push(`| ${d.file} | ${d.line || ''} | ${d.rule} | ${d.score} | ${d.outcome} |`);
+    }
+    if (skipped.length > 0) {
+      lines.push('');
+      lines.push('## Skipped');
+      for (const s of skipped) lines.push(`- ${s.file}: ${s.reason}`);
+    }
+    if (amendments.length > 0) {
+      lines.push('');
+      lines.push('## Amendments');
+      for (const a of amendments) lines.push(`- ${a.file}:${a.line || ''} (${a.rule}): ${a.from} -> ${a.to}; ${a.reason}`);
+    }
+    fs.mkdirSync(path.dirname(mdAbs), { recursive: true });
+    fs.writeFileSync(mdAbs, lines.join('\n') + '\n', 'utf8');
+    report.markdownPath = norm(path.relative(root, mdAbs));
+    fs.writeFileSync(reportAbs, JSON.stringify(report, null, 2) + '\n', 'utf8');
+  }
 
   if (options.json) console.log(JSON.stringify({ batchId: report.batchId, status, fixed, skipped, wouldFix, covered, verification: report.verification }, null, 2));
   else console.log(`[sdw-fixer] Batch ${report.batchId}: ${fixed.length} fixed, ${covered.length} already-covered, ${skipped.length} skipped${options.dryRun ? `, ${wouldFix.length} would-fix (dry-run)` : ''}, verification ${verification.status}`);

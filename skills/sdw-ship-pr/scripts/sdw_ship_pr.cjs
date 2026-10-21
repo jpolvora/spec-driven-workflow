@@ -16,6 +16,14 @@ try {
   }
 }
 
+// Branching configuration helper from sdw-config (spec 00040).
+let sdwConfig;
+try {
+  sdwConfig = require('../../sdw-config/scripts/sdw_config.cjs');
+} catch (e) {
+  sdwConfig = null;
+}
+
 function assertSafeSlug(specSlug) {
   if (!/^[a-z0-9][a-z0-9-]*$/.test(String(specSlug))) {
     throw new Error(
@@ -161,6 +169,7 @@ function buildDefaultFixerCommand(projectRoot, activeList) {
     const firstComment = t.comments && t.comments[0] ? String(t.comments[0].body || '') : '';
     const evidence = (firstComment.trim() || 'Review feedback').slice(0, 500) || 'Review feedback';
     return {
+      threadId: t.id || null,
       file: safe ? rawPath : 'REVIEW_THREADS.md',
       line: Number.isInteger(t.line) && t.line > 0 ? t.line : 1,
       rule: 'review_thread_feedback',
@@ -197,20 +206,11 @@ function resolveStateDir(projectRoot, config = {}) {
 function listChangedPaths(executor) {
   let out = '';
   try {
-    out = String(executor('git status --porcelain -uall') || '');
+    out = String(executor('git status --porcelain -z -uall') || '');
   } catch (e) {
     return new Set();
   }
-  const paths = new Set();
-  for (const line of out.split(/\r?\n/)) {
-    if (!line.trim()) continue;
-    let file = line.slice(3).trim();
-    const arrow = file.indexOf(' -> ');
-    if (arrow !== -1) file = file.slice(arrow + 4);
-    file = file.replace(/^"(.*)"$/, '$1');
-    if (file) paths.add(file);
-  }
-  return paths;
+  return new Set(parsePorcelain(out).map(entry => entry.path));
 }
 
 function stageChangedSince(executor, before, projectRoot) {
@@ -248,12 +248,15 @@ function parseArgs(args) {
     json: false,
     maxIterations: 3,
     pollIntervalMs: 20000,
-    maxPreemptions: null
+    checksStartTimeoutMs: 30000,
+    checksStartIntervalMs: 5000,
+    maxPreemptions: null,
+    nativeWatch: true
   };
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (arg === 'list-threads' || arg === 'resolve-thread' || arg === 'check-status') {
+    if (arg === 'list-threads' || arg === 'resolve-thread' || arg === 'check-status' || arg === 'dirty-plan') {
       options.subcommand = arg;
     } else if ((arg === '--pr' || arg === '--pr-number') && args[i + 1]) {
       options.pr = args[++i];
@@ -281,6 +284,14 @@ function parseArgs(args) {
       options.pollPr = true;
     } else if (arg === '--merge' || arg === '--allow-merge') {
       options.merge = true;
+    } else if (arg === '--dirty-files') {
+      options.dirtyFilesPath = args[++i];
+    } else if (arg.startsWith('--dirty-files=')) {
+      options.dirtyFilesPath = arg.slice(14);
+    } else if (arg === '--no-native-watch') {
+      options.nativeWatch = false;
+    } else if (arg === '--native-watch') {
+      options.nativeWatch = true;
     } else if (arg === '--dry-run') {
       options.dryRun = true;
     } else if (arg === '--json') {
@@ -290,6 +301,12 @@ function parseArgs(args) {
     } else if (arg === '--poll-interval' && args[i + 1]) {
       const parsedInterval = parseInt(args[++i], 10);
       options.pollIntervalMs = Number.isFinite(parsedInterval) && parsedInterval >= 0 ? parsedInterval : 20000;
+    } else if (arg === '--checks-start-timeout' && args[i + 1]) {
+      const parsedTimeout = parseInt(args[++i], 10);
+      options.checksStartTimeoutMs = Number.isFinite(parsedTimeout) && parsedTimeout >= 0 ? parsedTimeout : 30000;
+    } else if (arg === '--checks-start-interval' && args[i + 1]) {
+      const parsedStartInterval = parseInt(args[++i], 10);
+      options.checksStartIntervalMs = Number.isFinite(parsedStartInterval) && parsedStartInterval >= 0 ? parsedStartInterval : 5000;
     } else if (arg === '--max-preemptions' && args[i + 1]) {
       const parsedPreemptions = parseInt(args[++i], 10);
       options.maxPreemptions = Number.isFinite(parsedPreemptions) && parsedPreemptions >= 0 ? parsedPreemptions : 3;
@@ -356,6 +373,246 @@ function locateStateFile(projectRoot, runId, specSlug = null, config = {}) {
 }
 
 /**
+ * Commits a dirty working tree before publishing (adapted from the ws-fix-pr /
+ * ws-goal-fix-pr auto-commit posture). Returns null when the tree is clean.
+ */
+function shellQuote(value) {
+  const text = String(value);
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(text)) return text;
+  // cmd.exe does not treat single quotes as quoting, so Windows needs double
+  // quotes; POSIX shells get the safer single-quoted form.
+  if (process.platform === 'win32') return `"${text.replace(/"/g, '""')}"`;
+  return `'${text.replace(/'/g, `'\\''`)}'`;
+}
+
+// Parses `git status --porcelain` output. With -z the entries are NUL
+// terminated, which keeps quoted, non-ASCII, and renamed paths intact.
+function parsePorcelain(statusText) {
+  const text = String(statusText || '');
+  const entries = [];
+  if (text.includes('\0')) {
+    const tokens = text.split('\0');
+    for (let i = 0; i < tokens.length; i += 1) {
+      const token = tokens[i];
+      if (!token.trim()) continue;
+      const status = token.slice(0, 2).trim();
+      entries.push({ status, path: token.slice(3).trim().replace(/\\/g, '/') });
+      // Rename/copy entries carry the original path in the next NUL token.
+      if (status.startsWith('R') || status.startsWith('C')) i += 1;
+    }
+    return entries.filter(entry => entry.path);
+  }
+  return text
+    .split('\n')
+    .filter(line => line.trim())
+    .map(line => ({ status: line.slice(0, 2).trim(), path: line.slice(3).trim().replace(/\\/g, '/') }))
+    .filter(entry => entry.path);
+}
+
+function selectDirtyFiles(statusText, options = {}) {
+  const normalize = p => String(p || '').trim().replace(/\\/g, '/');
+  const entries = parsePorcelain(statusText);
+  const approved = Array.isArray(options.approved) && options.approved.length > 0
+    ? new Set(options.approved.map(normalize))
+    : null;
+  const runFiles = new Set((Array.isArray(options.runFiles) ? options.runFiles : []).map(normalize));
+  const selected = approved
+    ? entries.filter(entry => approved.has(entry.path))
+    : entries.filter(entry => runFiles.has(entry.path));
+  const excluded = entries.filter(entry => !selected.includes(entry));
+  return {
+    entries,
+    selected,
+    excluded,
+    mode: approved ? 'approved-list' : (runFiles.size > 0 ? 'run-scope' : 'none')
+  };
+}
+
+function commitDirtyWorktree(executor, projectRoot, options = {}) {
+  const dryRun = Boolean(options.dryRun);
+  let status = '';
+  try {
+    status = String(executor('git status --porcelain -z -uall') || '');
+  } catch (e) {
+    return null;
+  }
+  if (!status.trim()) return null;
+  const selection = selectDirtyFiles(status, {
+    approved: options.approved,
+    runFiles: options.runFiles
+  });
+  const excluded = selection.excluded.map(entry => entry.path);
+  if (selection.selected.length === 0) {
+    return {
+      skipped: true,
+      mode: selection.mode,
+      reason: selection.mode === 'none'
+        ? 'no approved or run-scoped files; refusing to commit unrelated working-tree changes'
+        : 'no approved or run-scoped file is currently dirty',
+      excluded
+    };
+  }
+  const files = selection.selected.map(entry => entry.path);
+  if (dryRun) return { simulated: true, mode: selection.mode, files, excluded };
+  const message = options.message || 'chore(delivery): include pending working-tree changes';
+  try {
+    for (const file of files) executor(`git add -A -- ${shellQuote(file)}`);
+    // A plain `git commit` would commit the whole index, including files the
+    // caller staged before this run. The pathspec limits the commit to the
+    // approved selection and leaves everything else staged but uncommitted.
+    executor(`git commit -m ${shellQuote(message)} -- ${files.map(shellQuote).join(' ')}`);
+    const sha = String(executor('git rev-parse --short HEAD') || '').trim();
+    return { sha, mode: selection.mode, files, excluded, message };
+  } catch (e) {
+    return { error: e.message, mode: selection.mode, files, excluded };
+  }
+}
+
+// Reads an approved dirty-file list: a JSON file (`["a","b"]` or
+// `{"files":[...]}`) or a comma-separated argument value.
+function resolveApprovedDirtyFiles(value) {
+  if (!value) return null;
+  try {
+    if (fs.existsSync(value)) {
+      const data = JSON.parse(fs.readFileSync(value, 'utf8'));
+      const list = Array.isArray(data) ? data : (Array.isArray(data.files) ? data.files : null);
+      return list ? list.map(String) : null;
+    }
+  } catch (e) {
+    return null;
+  }
+  return String(value).split(',').map(item => item.trim()).filter(Boolean);
+}
+
+// Files the current run actually produced, used as the conservative default
+// when the host agent has not produced an approved dirty-file list.
+function collectRunFiles(projectRoot, options = {}, config = {}) {
+  try {
+    const specSlug = options.spec || options.specSlug || null;
+    const statePath = locateStateFile(projectRoot, options.runId, specSlug, config);
+    if (!statePath || !fs.existsSync(statePath)) return [];
+    const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    const files = new Set();
+    const tasks = (state.steps && state.steps[4] && state.steps[4].tasks) || {};
+    for (const task of Object.values(tasks)) {
+      for (const file of task.filesChanged || []) files.add(String(file).replace(/\\/g, '/'));
+    }
+    if (state.specPath) files.add(String(state.specPath).replace(/\\/g, '/'));
+    return [...files];
+  } catch (e) {
+    return [];
+  }
+}
+
+/**
+ * Post-merge work-lane synchronization (spec 00040 AC12/AC13).
+ * Fast-forwards the work lane to the integration lane and optionally pushes it.
+ * Any failure is reported as `blocked` and never fails the completed delivery.
+ */
+function syncWorkBranchAfterMerge(options = {}) {
+  const executor = options.executor;
+  const branching = options.branching || {};
+  const integrationBranch = options.integrationBranch || null;
+  const result = {
+    status: 'skipped',
+    reason: null,
+    integrationBranch: null,
+    workBranch: null,
+    at: new Date().toISOString()
+  };
+
+  if (options.dryRun) {
+    result.reason = 'dry-run';
+    return result;
+  }
+  if (!branching.syncWorkBranchAfterMerge) {
+    result.reason = 'syncWorkBranchAfterMerge disabled';
+    return result;
+  }
+  const workBranch = typeof branching.workBranch === 'string' && branching.workBranch.trim()
+    ? branching.workBranch.trim()
+    : null;
+  if (!workBranch) {
+    result.reason = 'no work branch configured';
+    return result;
+  }
+
+  const integration = integrationBranch || workBranch;
+  result.workBranch = workBranch;
+  result.integrationBranch = integration;
+
+  let originalBranch = '';
+  try {
+    originalBranch = String(executor('git rev-parse --abbrev-ref HEAD') || '').trim();
+  } catch (e) {
+    originalBranch = '';
+  }
+
+  // AC13: a dirty working tree blocks the synchronization before any switch.
+  let dirty = '';
+  try {
+    dirty = String(executor('git status --porcelain') || '').trim();
+  } catch (statusErr) {
+    result.status = 'blocked';
+    result.reason = `unable to inspect the working tree: ${statusErr.message}`;
+    return result;
+  }
+  if (dirty) {
+    result.status = 'blocked';
+    result.reason = 'working tree is dirty';
+    return result;
+  }
+
+  const sameLane = workBranch === integration;
+  const remediation = sameLane
+    ? `git switch ${workBranch} && git fetch origin && git merge --ff-only origin/${integration}`
+    : `git switch ${workBranch} && git fetch origin +refs/heads/${integration}:refs/remotes/origin/${integration} && git merge --ff-only origin/${integration}`;
+
+  try {
+    executor(`git switch ${workBranch}`);
+  } catch (switchErr) {
+    result.status = 'blocked';
+    result.reason = `cannot switch to work branch "${workBranch}": ${switchErr.message}`;
+    return result;
+  }
+
+  try {
+    if (sameLane) {
+      executor('git fetch origin');
+      executor(`git merge --ff-only origin/${integration}`);
+    } else {
+      // AC13: write only the remote-tracking ref, so a failed fast-forward cannot
+      // move the local integration branch and a narrowed fetch refspec cannot
+      // leave origin/<integration> missing or stale.
+      executor(`git fetch origin +refs/heads/${integration}:refs/remotes/origin/${integration}`);
+      executor(`git merge --ff-only origin/${integration}`);
+    }
+  } catch (syncErr) {
+    // AC13: never leave the repository on a half-synchronized branch.
+    if (originalBranch) {
+      try { executor(`git switch ${originalBranch}`); } catch (rollbackErr) {}
+    }
+    result.status = 'blocked';
+    result.reason = `fast-forward to "${integration}" failed: ${syncErr.message}; resolve manually with: ${remediation}`;
+    return result;
+  }
+
+  if (branching.pushSyncedWorkBranch) {
+    try {
+      executor(`git push origin ${workBranch}`);
+    } catch (pushErr) {
+      result.status = 'blocked';
+      result.reason = `fast-forward applied but push failed: ${pushErr.message}`;
+      return result;
+    }
+  }
+
+  result.status = 'synced';
+  result.reason = null;
+  return result;
+}
+
+/**
  * Core PR Shipping execution
  */
 async function runShipPr(options = {}, customExecutor = null) {
@@ -378,8 +635,22 @@ async function runShipPr(options = {}, customExecutor = null) {
     }
   }
 
-  let base = options.base || config.baseBranch || 'master';
-  if (!options.base && !config.baseBranch) {
+  // AC11: the pull request base is the configured integration lane; explicit
+  // --base and the legacy fallbacks keep lower priority.
+  let branching = null;
+  if (sdwConfig && typeof sdwConfig.resolveBranching === 'function') {
+    try {
+      branching = sdwConfig.resolveBranching(config);
+    } catch (branchConfigErr) {
+      branching = null;
+    }
+  }
+  const integrationBranch = branching && typeof branching.integrationBranch === 'string' && branching.integrationBranch.trim()
+    ? branching.integrationBranch.trim()
+    : null;
+
+  let base = options.base || integrationBranch || config.baseBranch || 'master';
+  if (!options.base && !integrationBranch && !config.baseBranch) {
     try {
       const remotes = executor('git remote').trim();
       if (remotes) {
@@ -391,6 +662,15 @@ async function runShipPr(options = {}, customExecutor = null) {
       }
     } catch (e) {
       base = 'master';
+    }
+  }
+
+  // AC2: `auto` integration lanes resolve to the detected base, so mirror
+  // presets (github, gitlab) get a concrete work lane for post-merge sync.
+  if (branching && (!branching.integrationBranch || !String(branching.integrationBranch).trim())) {
+    branching.integrationBranch = base;
+    if (branching.mirrorWorkToIntegration && (!branching.workBranch || !String(branching.workBranch).trim())) {
+      branching.workBranch = base;
     }
   }
 
@@ -425,6 +705,7 @@ async function runShipPr(options = {}, customExecutor = null) {
     merge: options.merge
       ? { requested: true, attempted: false, ok: null, reason: 'delivery did not reach merge step' }
       : null,
+    branchingSync: null,
     reviewConvergence: {
       enabled: scmCodeReviewEnabled,
       converged: false,
@@ -433,6 +714,7 @@ async function runShipPr(options = {}, customExecutor = null) {
       activeThreads: 0,
       pendingThreads: [],
       failingChecks: [],
+      checksStart: null,
       issuesFixed: []
     },
     shipStatus: 'pending',
@@ -572,6 +854,25 @@ async function runShipPr(options = {}, customExecutor = null) {
         if (!hasRemote) {
           log('[sdw-ship-pr] Remote push skipped: no git remote configured.');
         } else {
+          const approvedFiles = resolveApprovedDirtyFiles(options.dirtyFilesPath);
+          const runFiles = collectRunFiles(projectRoot, options, config);
+          const dirtyCommit = commitDirtyWorktree(executor, projectRoot, {
+            approved: approvedFiles,
+            runFiles,
+            message: options.dirtyCommitMessage || config.dirtyCommitMessage
+          });
+          if (dirtyCommit) {
+            report.dirtyCommit = dirtyCommit;
+            if (dirtyCommit.skipped) {
+              warn(`[sdw-ship-pr] Working tree is dirty; commit skipped (${dirtyCommit.reason}).`);
+            } else if (dirtyCommit.error) {
+              // A selected commit that fails means the push would publish a branch
+              // without the delivered work. Fail closed instead of shipping it.
+              throw new Error(`Selected working-tree changes could not be committed before push: ${dirtyCommit.error}`);
+            } else {
+              log(`[sdw-ship-pr] Committed ${dirtyCommit.files.length} ${dirtyCommit.mode} file(s) as ${dirtyCommit.sha} before pushing${dirtyCommit.excluded.length ? `; ${dirtyCommit.excluded.length} unrelated file(s) left dirty` : ''}.`);
+            }
+          }
           log(`[sdw-ship-pr] Pushing branch ${head} to remote origin${activePrEarly ? ` (complementing active PR #${activePrEarly.number})` : ''}...`);
           try {
             executor(`git push -u origin ${head}`);
@@ -659,6 +960,63 @@ async function runShipPr(options = {}, customExecutor = null) {
         const pollIntervalMs = options.pollIntervalMs === undefined
           ? 20000
           : Math.max(0, Number(options.pollIntervalMs) || 0);
+        // Native SCM wait first: a provider that supports watch blocks until the
+        // checks settle, so no shell timer is needed. Otherwise interval polling.
+        const nativeWatch = pollIntervalMs > 0
+          && !dryRun
+          && options.nativeWatch !== false
+          && Boolean(provider && typeof provider.supportsNativeWatch === 'function' && provider.supportsNativeWatch());
+        const checksStartTimeoutMs = options.checksStartTimeoutMs === undefined
+          ? 30000
+          : (Number.isFinite(Number(options.checksStartTimeoutMs)) ? Math.max(0, Number(options.checksStartTimeoutMs)) : 30000);
+        const checksStartIntervalMs = options.checksStartIntervalMs === undefined
+          ? 5000
+          : (Number.isFinite(Number(options.checksStartIntervalMs)) ? Math.max(10, Number(options.checksStartIntervalMs)) : 5000);
+        const awaitChecksToStart = async () => {
+          if (dryRun || pollIntervalMs <= 0 || checksStartTimeoutMs <= 0 || !prResult.number) return;
+          const startedAt = Date.now();
+          let polls = 0;
+          while (true) {
+            polls += 1;
+            let observed = 0;
+            try {
+              const snapshot = await provider.checkPrStatus(prResult.number);
+              observed = snapshot && Array.isArray(snapshot.checks) ? snapshot.checks.length : 0;
+            } catch (e) {
+              observed = 0;
+            }
+            const waitedMs = Date.now() - startedAt;
+            if (observed > 0) {
+              report.reviewConvergence.checksStart = { detected: true, waitedMs, polls };
+              if (waitedMs >= 1000) {
+                log(`[sdw-ship-pr] ${observed} check(s) reported after ${waitedMs}ms; watching the pipeline.`);
+              }
+              return;
+            }
+            if (waitedMs + checksStartIntervalMs > checksStartTimeoutMs) {
+              report.reviewConvergence.checksStart = { detected: false, waitedMs, polls };
+              warn(`[sdw-ship-pr] No check run started within ${checksStartTimeoutMs}ms; continuing with ${nativeWatch ? 'the native check watch' : 'the poll interval'}.`);
+              return;
+            }
+            await new Promise(r => setTimeout(r, checksStartIntervalMs));
+          }
+        };
+        const waitForNextRound = async () => {
+          await awaitChecksToStart();
+          if (nativeWatch && prResult.number) {
+            try {
+              const seconds = Math.max(1, Math.ceil(pollIntervalMs / 1000) || 10);
+              log(`[sdw-ship-pr] Waiting with native check watch (${scmProviderName} PR #${prResult.number}).`);
+              await provider.watchPrChecks(prResult.number, { intervalSeconds: seconds });
+              return;
+            } catch (watchErr) {
+              // The watch can end early (no checks registered yet, runner errors).
+              // Fall through to the interval fallback so the settle period is kept.
+              warn(`[sdw-ship-pr] Native check watch ended (${watchErr.message}); falling back to the poll interval.`);
+            }
+          }
+          if (pollIntervalMs > 0) await new Promise(r => setTimeout(r, pollIntervalMs));
+        };
         const reviewFixCommand = options.reviewFixCommand || config.reviewFixCommand || null;
         const testCommand = config.testCommand || (config.verification && config.verification.testCommand) || 'npm test';
         const runReviewSecurityGate = () => {
@@ -768,7 +1126,7 @@ async function runShipPr(options = {}, customExecutor = null) {
               report.reviewConvergence.preemptions = preemptions;
               log(`[sdw-ship-pr] Detected superseded CI run replaced by a newer run (preemption ${preemptions}/${maxPreemptions}). Adapting: resetting convergence window.`);
               round = 0;
-              if (pollIntervalMs > 0) await new Promise(r => setTimeout(r, pollIntervalMs));
+              await waitForNextRound();
               continue;
             }
             warn(`[sdw-ship-pr] Preemption budget exhausted (${maxPreemptions}); continuing with latest status.`);
@@ -790,7 +1148,7 @@ async function runShipPr(options = {}, customExecutor = null) {
               if (changed.length > 0) {
                 executor('git commit -m "fix(review): address failing checks"');
                 executor(`git push origin ${head}`);
-                if (pollIntervalMs > 0) await new Promise(r => setTimeout(r, pollIntervalMs));
+                await waitForNextRound();
                 continue;
               }
               warn('[sdw-ship-pr] reviewFixCommand produced no changes for the failing checks.');
@@ -805,7 +1163,7 @@ async function runShipPr(options = {}, customExecutor = null) {
               });
               if (fixResult && fixResult.fixed === true) {
                 runReviewSecurityGate();
-                if (pollIntervalMs > 0) await new Promise(r => setTimeout(r, pollIntervalMs));
+                await waitForNextRound();
                 continue;
               }
               warn('[sdw-ship-pr] threadFixer did not confirm a fix for the failing checks.');
@@ -828,6 +1186,10 @@ async function runShipPr(options = {}, customExecutor = null) {
             let fixSummary = 'Applied and verified the requested review fix.';
             let canResolve = false;
             let fixResult = null;
+            // Structured sdw-fixer output, consumed collaboratively: fixed
+            // threads get the fixer's own resolution comment, skipped threads
+            // stay open with the recorded reason.
+            let fixerReport = null;
             // Delegate to sdw-fixer when no explicit reviewFixCommand is set (AC13).
             // Non-catalog rules record skipped entries with status no-op, so the
             // delegation is observable and never misread as completed work.
@@ -871,13 +1233,26 @@ async function runShipPr(options = {}, customExecutor = null) {
               try {
                 const fixerReportPath = defaultFixer && defaultFixer.reportPath;
                 if (fixerReportPath && fs.existsSync(fixerReportPath)) {
-                  const fixerReport = JSON.parse(fs.readFileSync(fixerReportPath, 'utf8'));
+                  fixerReport = JSON.parse(fs.readFileSync(fixerReportPath, 'utf8'));
                   if (fixerReport && fixerReport.status === 'no-op') {
                     warn('[sdw-ship-pr] sdw-fixer reported no-op: no deterministic fix applies to these threads; manual agent remediation required (see cooperative protocol above).');
+                  }
+                  if (fixerReport && Array.isArray(fixerReport.amendments) && fixerReport.amendments.length > 0) {
+                    log(`[sdw-ship-pr] sdw-fixer recorded ${fixerReport.amendments.length} amendment(s) while applying the batch.`);
                   }
                 }
               } catch (e) {}
               if (changed.length === 0) {
+                // Nothing deterministic to apply. If CI is still settling, consume
+                // the native watch (or interval fallback) and re-read the PR state
+                // instead of ending on a stale snapshot.
+                const checksStillSettling = !status || !Array.isArray(status.checks) || status.checks.length === 0
+                  || status.checks.some(c => PENDING_CHECK_STATES.has(stateOf(c)) || PENDING_CHECK_STATES.has(bucketOf(c)));
+                if (checksStillSettling) {
+                  warn('[sdw-ship-pr] reviewFixCommand produced no changes; waiting for checks to settle before re-polling.');
+                  await waitForNextRound();
+                  continue;
+                }
                 warn('[sdw-ship-pr] reviewFixCommand produced no changes; refusing to resolve review threads.');
                 report.reviewConvergence.pendingThreads = pendingThreads;
                 break;
@@ -906,11 +1281,32 @@ async function runShipPr(options = {}, customExecutor = null) {
                 commitSha = executor('git rev-parse --short HEAD').toString().trim();
               } catch (e) {}
 
+              // Consume the fixer report: only threads the fixer actually fixed
+              // are resolved, each with the fixer's own resolution comment.
+              const fixerComments = new Map();
+              if (fixerReport && Array.isArray(fixerReport.comments)) {
+                for (const c of fixerReport.comments) {
+                  if (c && c.threadId) fixerComments.set(c.threadId, c.comment);
+                }
+              }
+              const fixerDelegated = Boolean(defaultFixer);
+              if (fixerDelegated && fixerComments.size === 0) {
+                warn('[sdw-ship-pr] sdw-fixer produced no readable report; leaving every review thread open.');
+              }
               for (const thread of activeList) {
-                const perThreadSummary = (fixResult && fixResult.resolutions && fixResult.resolutions[thread.id])
+                if (fixerDelegated && fixerComments.size === 0) continue;
+                if (fixerComments.size > 0 && !fixerComments.has(thread.id)) {
+                  warn(`[sdw-ship-pr] sdw-fixer left thread ${thread.id} open: no deterministic fix applied.`);
+                  continue;
+                }
+                const fixerNote = fixerComments.get(thread.id);
+                const perThreadSummary = fixerNote
+                  || (fixResult && fixResult.resolutions && fixResult.resolutions[thread.id])
                   || fixSummary;
                 const commitLine = commitSha ? `Fixed in commit ${commitSha}.\n\n` : '';
-                const summaryNote = `<!-- resolution-reply -->\nResolved review issue: applied fix and verified acceptance criteria.\n\n${commitLine}Summary: ${perThreadSummary}`;
+                const summaryNote = fixerNote
+                  ? `${fixerNote}\n\n${commitLine}`.trim()
+                  : `<!-- resolution-reply -->\nResolved review issue: applied fix and verified acceptance criteria.\n\n${commitLine}Summary: ${perThreadSummary}`;
 
                 const resolveRes = await provider.resolveReviewThread({
                   prNumber: prResult.number,
@@ -947,8 +1343,10 @@ async function runShipPr(options = {}, customExecutor = null) {
 
           if (round >= maxRounds && !converged) {
             warn(`[sdw-ship-pr] Reached maximum review convergence rounds (${maxRounds}) with residual active threads.`);
-          } else if (!converged && pollIntervalMs > 0) {
-            await new Promise(r => setTimeout(r, pollIntervalMs));
+          } else if (!converged) {
+            // Primary settle point: block on the provider's native watch when
+            // available, otherwise fall back to the configured poll interval.
+            await waitForNextRound();
           }
         }
 
@@ -1021,6 +1419,54 @@ async function runShipPr(options = {}, customExecutor = null) {
       }
     }
 
+    // Step 4.6: Post-merge work-lane synchronization (spec 00040 AC12/AC13).
+    // Runs only after the pull request is observed as MERGED, not merely after
+    // the merge command was accepted, and never changes the delivery result.
+    // The sync is driven by the observed pull-request state, not by whether this
+    // run issued the merge: a maintainer merging later still closes the loop.
+    const mergeAccepted = Boolean(report.merge && report.merge.ok === true);
+    const syncEnabled = Boolean(branching && branching.syncWorkBranchAfterMerge);
+    const prNumberForSync = report.pullRequest && report.pullRequest.number;
+    let mergeObserver = null;
+    if (syncEnabled && !dryRun) {
+      try {
+        mergeObserver = providerEarly || (scmContract && scmContract.createScmProvider
+          ? scmContract.createScmProvider(scmProviderName, { executor })
+          : null);
+      } catch (observerErr) {
+        mergeObserver = null;
+      }
+    }
+    const observedMerged = mergeObserver && typeof mergeObserver.isPullRequestMerged === 'function'
+      ? Boolean(await mergeObserver.isPullRequestMerged(prNumberForSync))
+      : false;
+    const prMerged = dryRun ? mergeAccepted : observedMerged;
+    if (!prMerged && syncEnabled) {
+      report.branchingSync = {
+        status: 'skipped',
+        reason: 'pull request not observed as MERGED',
+        integrationBranch: integrationBranch || base,
+        workBranch: branching.workBranch || null,
+        at: new Date().toISOString()
+      };
+      log('[Branch Sync] skipped: the pull request is not MERGED yet.');
+    }
+    if (prMerged && syncEnabled) {
+      report.branchingSync = syncWorkBranchAfterMerge({
+        executor,
+        branching,
+        integrationBranch: integrationBranch || base,
+        dryRun
+      });
+      if (report.branchingSync.status === 'synced') {
+        let syncSha = '';
+        try { syncSha = String(executor('git rev-parse --short HEAD') || '').trim(); } catch (e) {}
+        log(`[Branch Sync] ${branching.strategy}: fast-forwarded ${report.branchingSync.workBranch} to ${report.branchingSync.integrationBranch}${syncSha ? ` at ${syncSha}` : ''}.`);
+      } else if (report.branchingSync.status === 'blocked') {
+        warn(`[Branch Sync] blocked: ${report.branchingSync.reason}`);
+      }
+    }
+
     // Step 5: State Persistence
     if (options.runId) {
       const stateFilePath = locateStateFile(projectRoot, options.runId, specSlug, config);
@@ -1046,12 +1492,14 @@ async function runShipPr(options = {}, customExecutor = null) {
               adaptedActivePr: Boolean(report.adaptedActivePr),
               pushedBranch: report.pushed ? head : null,
               merge: report.merge || null,
+              branchingSync: report.branchingSync || null,
               reviewConvergence: report.reviewConvergence
             }
           };
 
           stateData.pullRequest = report.pullRequest;
           stateData.shipStatus = report.shipStatus;
+          if (report.branchingSync) stateData.branchingSync = report.branchingSync;
           fs.writeFileSync(stateFilePath, JSON.stringify(stateData, null, 2), 'utf8');
           log(`[sdw-ship-pr] Updated run state at ${stateFilePath}`);
         } catch (saveErr) {
@@ -1173,10 +1621,53 @@ async function cmdCheckStatus(options, customExecutor) {
   return await provider.checkPrStatus(prNumber);
 }
 
+/**
+ * Plans the dirty-worktree commit: lists the candidates plus the files the
+ * current run actually produced, so the host agent (LLM) can decide which
+ * changes belong to this session before ship-pr stages anything.
+ */
+function cmdDirtyPlan(options = {}) {
+  const projectRoot = options.projectRoot || process.cwd();
+  const config = loadConfig(projectRoot);
+  let status = '';
+  try {
+    status = String(execSync('git status --porcelain -uall', {
+      cwd: projectRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore']
+    }) || '');
+  } catch (e) {
+    status = '';
+  }
+  const runFiles = collectRunFiles(projectRoot, options, config);
+  const selection = selectDirtyFiles(status, { runFiles });
+  let statePath = null;
+  try {
+    statePath = locateStateFile(projectRoot, options.runId, options.spec || options.specSlug, config);
+  } catch (e) {
+    statePath = null;
+  }
+  return {
+    projectRoot,
+    runId: options.runId || null,
+    specSlug: options.spec || options.specSlug || null,
+    statePath,
+    mode: selection.mode,
+    runFiles,
+    candidates: selection.entries,
+    suggested: selection.selected.map(entry => entry.path),
+    excluded: selection.excluded.map(entry => entry.path),
+    instructions: 'Review every candidate against the current session tasks, prompts, and dependencies; write the approved project-relative paths as a JSON array to .sdw/state/<runId>/dirty-files.json, then run sdw-ship-pr with --dirty-files <path>.'
+  };
+}
+
 // CLI Execution entrypoint
 if (require.main === module) {
   const args = process.argv.slice(2);
   const options = parseArgs(args);
+
+  if (options.subcommand === 'dirty-plan') {
+    process.stdout.write(JSON.stringify(cmdDirtyPlan(options), null, 2) + '\n');
+    process.exit(0);
+  }
 
   let runnerPromise;
   if (options.subcommand === 'list-threads') {
@@ -1246,5 +1737,9 @@ module.exports = {
   getSpecTitle,
   buildPrTitle,
   buildPrBody,
-  buildDefaultFixerCommand
+  buildDefaultFixerCommand,
+  syncWorkBranchAfterMerge,
+  selectDirtyFiles,
+  commitDirtyWorktree,
+  cmdDirtyPlan
 };

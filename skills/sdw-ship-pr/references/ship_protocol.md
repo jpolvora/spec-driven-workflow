@@ -70,7 +70,9 @@ When `scmCodeReviewEnabled: true` or `--poll-pr` is active, `sdw-ship-pr` execut
 > **Explain before Closing:** A thread must NEVER be closed without an informative resolution comment detailing what was fixed and why it resolves the defect. Hash-only or empty comments are forbidden.
 
 ### 4.2 Settle Period & Status Polling
-- Waits `--poll-interval` milliseconds between rounds (default `20000`).
+- Waits for the pipeline to exist before waiting on it: after a push or a fresh PR, providers can leave the run queued with no check reported. Before each settle period, `provider.checkPrStatus(prNumber)` is polled until at least one check appears, bounded by `--checks-start-timeout` (default `30000`, `0` disables) and spaced by `--checks-start-interval` (default `5000`). The outcome is recorded as `reviewConvergence.checksStart = { detected, waitedMs, polls }`; a timeout only warns and hands the wait to the native watch or the poll interval.
+- Waits between rounds with the provider's native capability first: `provider.supportsNativeWatch()` selects `provider.watchPrChecks(prNumber, { intervalSeconds })` (GitHub runs `gh run watch <run-id> --exit-status` on the Actions runs behind the checks), which blocks until the runs finish instead of firing a shell timer. `--no-native-watch` disables it.
+- Falls back to waiting `--poll-interval` milliseconds between rounds (default `20000`) when the provider, the CLI, or the flag is unavailable.
 - Runs up to `--max-iterations` convergence rounds (default `3`).
 - Polls `provider.checkPrStatus(prNumber)` and `provider.listReviewThreads(prNumber)`.
 - If all checks pass and `activeCount === 0`, marks review converged.
@@ -88,7 +90,9 @@ When active review threads or failing checks are detected:
 3. **Surgical Scope Enclosure:** Apply minimal fixes satisfying acceptance criteria and `sdw-rules` simplicity first. Avoid drive-by refactorings or speculative abstractions.
 4. **Execution Methods:**
    - **Agent / Subagent Mode:** When an AI agent executes `sdw-ship-pr` (standalone or via `sdw-orch`), the agent directly performs the cooperative fix cycle, verifies with tests, commits, pushes, and calls `resolve-thread`.
-   - **Command Mode:** In automated pipelines, `reviewFixCommand` (or `--review-fix-command`) executes the fix command, runs tests, commits, pushes, and resolves threads.
+   - **Dirty Working Tree (LLM-selected):** before publishing, the host agent plans the selection with `dirty-plan` (candidates, run files, state path) and analyzes each candidate against this session's tasks, prompts, and dependencies. It writes the approved project-relative paths to `.sdw/state/<runId>/dirty-files.json` and ship-pr stages only those paths (`git add -A -- <path>`), commits with a pathspec limited to them (`chore(delivery): include pending working-tree changes`), then pushes; anything already staged outside the list stays staged and uncommitted. Without an approved list, ship-pr falls back to the run evidence files; when neither exists it refuses to commit and leaves the tree untouched. A selected commit that fails aborts the run before the push, so the branch never publishes without the delivered work. The outcome is recorded as `report.dirtyCommit` (`mode`, `sha`, `files`, `excluded`); dry-run only reports them. Configure the message with `dirtyCommitMessage` in `.sdw/config.json`.
+- **Command Mode:** In automated pipelines, `reviewFixCommand` (or `--review-fix-command`) executes the fix command, runs tests, commits, pushes, and resolves threads.
+   - **Fixer Delegation:** When `reviewFixCommand` is unset and `skills/sdw-fixer` is present, ship-pr builds a findings batch that carries each `threadId` and runs `sdw_fixer.cjs`. It then consumes the structured report collaboratively: threads listed in `report.comments` are resolved with the fixer's own resolution comment, threads the fixer skipped stay open with the recorded reason, and `report.amendments` is surfaced in the log. The convergence loop never resolves a thread the fixer did not close.
    - **Programmatic Mode:** `options.threadFixer` allows custom runners to supply fixes and per-thread resolution notes.
 
 ### 4.4 Thread Resolution Comment Contract
@@ -134,6 +138,7 @@ When invoked with `--json`, `sdw-ship-pr` emits JSON with the following structur
     "activeThreads": 0,
     "pendingThreads": [],
     "preemptions": 0,
+    "checksStart": { "detected": true, "waitedMs": 4200, "polls": 2 },
     "supersededChecks": [],
     "issuesFixed": [
       {
@@ -145,3 +150,4 @@ When invoked with `--json`, `sdw-ship-pr` emits JSON with the following structur
   "shipStatus": "delivered"
 }
 ```
+

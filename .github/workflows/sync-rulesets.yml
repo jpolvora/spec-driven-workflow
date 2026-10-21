@@ -1,0 +1,61 @@
+name: Sync Repository Rulesets
+
+# Applies the ruleset definitions stored in .github/rulesets/*.json.
+#
+# Rulesets cannot be declared in workflow YAML and the default GITHUB_TOKEN
+# cannot manage them (it has no administration permission). Configure a
+# repository secret RULESET_SYNC_TOKEN with administration write access
+# (classic PAT scope `repo`, or a fine-grained PAT with
+# "Administration: Read and write") before dispatching this workflow.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ruleset:
+        description: "Ruleset file to apply (e.g. develop.json), or all"
+        required: false
+        default: all
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify the administration token
+        env:
+          RULESET_TOKEN: ${{ secrets.RULESET_SYNC_TOKEN }}
+        run: |
+          if [ -z "${RULESET_TOKEN}" ]; then
+            echo "::error::RULESET_SYNC_TOKEN is not configured. The default GITHUB_TOKEN cannot manage rulesets."
+            exit 1
+          fi
+
+      - name: Apply rulesets
+        env:
+          GH_TOKEN: ${{ secrets.RULESET_SYNC_TOKEN }}
+          TARGET: ${{ inputs.ruleset }}
+        run: |
+          set -euo pipefail
+          for file in .github/rulesets/*.json; do
+            name=$(basename "$file")
+            if [ "${TARGET}" != "all" ] && [ "${TARGET}" != "${name}" ]; then
+              continue
+            fi
+            rule_name=$(node -e "process.stdout.write(require('./$file').name)")
+            echo "Resolving ruleset \"${rule_name}\""
+            id=$(gh api "repos/${GITHUB_REPOSITORY}/rulesets" --jq ".[] | select(.name == \"${rule_name}\") | .id" | head -n1)
+            if [ -n "${id}" ]; then
+              echo "Updating ruleset \"${rule_name}\" (id ${id})"
+              gh api -X PUT "repos/${GITHUB_REPOSITORY}/rulesets/${id}" --input "$file" > /dev/null
+            else
+              echo "Creating ruleset \"${rule_name}\""
+              gh api -X POST "repos/${GITHUB_REPOSITORY}/rulesets" --input "$file" > /dev/null
+            fi
+          done
+          echo "Rulesets synchronized."

@@ -391,6 +391,9 @@ function setupPreemptionWorkspace(checkScript) {
   const calls = [];
   const fakeExecutor = (cmd) => {
     calls.push(cmd);
+    if (cmd.includes('pr checks --help')) {
+      return '';
+    }
     if (cmd.includes('pr checks')) {
       return JSON.stringify(checkScript());
     }
@@ -512,6 +515,60 @@ test('sdw-ship-pr - preemption budget cap falls back to review_pending', async (
     assert.strictEqual(report.reviewConvergence.preemptions, 0, 'no adaptation allowed when budget is zero');
     assert.strictEqual(report.shipStatus, 'review_pending');
     assert.strictEqual(report.success, false);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('sdw-ship-pr - waits for a queued check run to start before watching', async () => {
+  const scripted = [
+    [],
+    [],
+    [{ name: 'review', state: 'pending', bucket: 'pending' }],
+    [{ name: 'review', state: 'pass', bucket: 'pass' }]
+  ];
+  let call = 0;
+  const { tmpDir, config, fakeExecutor } = setupPreemptionWorkspace(() => scripted[Math.min(call++, scripted.length - 1)]);
+  try {
+    const report = await sdwShipPr.runShipPr({
+      projectRoot: tmpDir,
+      config,
+      head: 'develop',
+      base: 'master',
+      maxIterations: 2,
+      pollIntervalMs: 1,
+      checksStartTimeoutMs: 500,
+      checksStartIntervalMs: 20
+    }, fakeExecutor);
+
+    assert.strictEqual(report.reviewConvergence.checksStart.detected, true, 'A queued run must be detected once it starts');
+    assert.ok(report.reviewConvergence.checksStart.polls >= 2, 'Detection must poll until the provider reports a check');
+    assert.strictEqual(report.reviewConvergence.converged, true, 'The loop converges on the run that started');
+    assert.strictEqual(report.shipStatus, 'delivered');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('sdw-ship-pr - a pipeline that never starts is bounded by the start timeout', async () => {
+  const { tmpDir, config, fakeExecutor } = setupPreemptionWorkspace(() => []);
+  try {
+    const report = await sdwShipPr.runShipPr({
+      projectRoot: tmpDir,
+      config,
+      head: 'develop',
+      base: 'master',
+      maxIterations: 2,
+      pollIntervalMs: 1,
+      checksStartTimeoutMs: 120,
+      checksStartIntervalMs: 30
+    }, fakeExecutor);
+
+    assert.strictEqual(report.reviewConvergence.checksStart.detected, false, 'A pipeline that never starts must time out');
+    assert.ok(report.reviewConvergence.checksStart.polls >= 2, 'Detection polls more than once before giving up');
+    assert.ok(report.reviewConvergence.checksStart.waitedMs >= 20, 'The start wait must actually elapse before falling back');
+    assert.strictEqual(report.reviewConvergence.converged, false);
+    assert.strictEqual(report.shipStatus, 'review_pending');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
@@ -1045,6 +1102,206 @@ test('sdw-ship-pr - merge keeps an audit record when the delivery fails before t
     assert.strictEqual(captured.report.merge.requested, true, 'Merge request is still audited');
     assert.strictEqual(captured.report.merge.attempted, false);
     assert.strictEqual(captured.report.merge.reason, 'delivery did not reach merge step');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('sdw-ship-pr - native watch: providers expose the capability and the probe is cached', () => {
+  let probes = 0;
+  const gh = createScmProvider('github', {
+    executor: (cmd) => {
+      probes++;
+      return cmd.includes('gh run watch --help') ? 'FLAGS\n      --exit-status   Exit with non-zero status if run fails' : '';
+    }
+  });
+  assert.strictEqual(gh.supportsNativeWatch(), true);
+  assert.strictEqual(gh.supportsNativeWatch(), true);
+  assert.strictEqual(probes, 1, 'The capability probe is cached after the first call');
+
+  const oldGh = createScmProvider('github', { executor: () => 'usage: gh run watch' });
+  assert.strictEqual(oldGh.supportsNativeWatch(), false, 'Older gh CLIs without --watch fall back to polling');
+
+  const ado = createScmProvider('ado', { executor: () => '' });
+  assert.strictEqual(ado.supportsNativeWatch(), false, 'Azure DevOps has no native check watch');
+
+  assert.strictEqual(sdwShipPr.parseArgs(['--no-native-watch']).nativeWatch, false);
+  assert.strictEqual(sdwShipPr.parseArgs(['--native-watch']).nativeWatch, true);
+  assert.strictEqual(sdwShipPr.parseArgs([]).nativeWatch, true);
+});
+
+test('sdw-ship-pr - native watch: the convergence loop blocks natively while checks are pending', async () => {
+  const { tmpDir, config } = setupTestWorkspace();
+  config.scmProvider = 'github';
+  config.scmCodeReviewEnabled = true;
+  config.runAllTests = false;
+  const calls = [];
+  let checkCalls = 0;
+  const fakeExecutor = (cmd) => {
+    calls.push(cmd);
+    if (cmd.includes('gh run watch --help')) return 'FLAGS\n      --exit-status   Exit with non-zero status if run fails';
+    if (cmd.includes('gh run watch')) return '';
+    if (cmd.includes('gh pr checks') && cmd.includes('--json name,state,link') && !cmd.includes('bucket')) {
+      return JSON.stringify([{ name: 'ci/build', state: 'pending', link: 'https://github.com/fake-owner/fake-repo/actions/runs/123/job/456' }]);
+    }
+    if (cmd.includes('gh pr checks')) {
+      checkCalls += 1;
+      return JSON.stringify(checkCalls === 1
+        ? [{ name: 'ci/build', state: 'pending', bucket: 'pending' }]
+        : [{ name: 'ci/build', state: 'pass', bucket: 'pass' }]);
+    }
+    if (cmd.includes('reviewThreads')) {
+      return JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } });
+    }
+    if (cmd.includes('where gh') || cmd.includes('command -v gh')) return '/usr/bin/gh';
+    if (cmd.includes('gh auth status')) return 'Logged in';
+    if (cmd.includes('gh repo view')) return JSON.stringify({ owner: { login: 'fake-owner' }, name: 'fake-repo' });
+    if (cmd.includes('gh pr list')) {
+      return JSON.stringify([{ number: 42, url: 'https://github.com/fake-owner/fake-repo/pull/42', headRefName: 'develop', baseRefName: 'master' }]);
+    }
+    return '';
+  };
+  try {
+    const report = await sdwShipPr.runShipPr({
+      projectRoot: tmpDir,
+      config,
+      head: 'develop',
+      base: 'master',
+      maxIterations: 2,
+      pollIntervalMs: 10000
+    }, fakeExecutor);
+
+    assert.ok(calls.some(c => c.includes('gh run watch') && c.includes('--exit-status')), 'The native Actions run watch is consumed while checks are pending');
+    assert.strictEqual(report.reviewConvergence.converged, true, 'The loop re-polls after the native watch and converges');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('sdw-ship-pr - native watch: a watch failure falls back to the poll interval', async () => {
+  const { tmpDir, config } = setupTestWorkspace();
+  config.scmProvider = 'github';
+  config.scmCodeReviewEnabled = true;
+  config.runAllTests = false;
+  let checkCalls = 0;
+  const fakeExecutor = (cmd) => {
+    if (cmd.includes('gh run watch --help')) return 'FLAGS --exit-status';
+    if (cmd.includes('gh pr checks') && cmd.includes('--json name,state,link') && !cmd.includes('bucket')) return JSON.stringify([]);
+    if (cmd.includes('gh pr checks')) {
+      checkCalls += 1;
+      return JSON.stringify(checkCalls === 1
+        ? [{ name: 'ci/build', state: 'pending', bucket: 'pending' }]
+        : [{ name: 'ci/build', state: 'pass', bucket: 'pass' }]);
+    }
+    if (cmd.includes('reviewThreads')) {
+      return JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } });
+    }
+    if (cmd.includes('where gh') || cmd.includes('command -v gh')) return '/usr/bin/gh';
+    if (cmd.includes('gh auth status')) return 'Logged in';
+    if (cmd.includes('gh repo view')) return JSON.stringify({ owner: { login: 'fake-owner' }, name: 'fake-repo' });
+    if (cmd.includes('gh pr list')) {
+      return JSON.stringify([{ number: 42, url: 'https://github.com/fake-owner/fake-repo/pull/42', headRefName: 'develop', baseRefName: 'master' }]);
+    }
+    return '';
+  };
+  try {
+    const report = await sdwShipPr.runShipPr({
+      projectRoot: tmpDir,
+      config,
+      head: 'develop',
+      base: 'master',
+      maxIterations: 2,
+      pollIntervalMs: 5
+    }, fakeExecutor);
+
+    assert.ok(checkCalls >= 2, 'The loop re-polls after the fallback interval');
+    assert.strictEqual(report.reviewConvergence.converged, true, 'The fallback keeps the settle period and converges');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+
+test('sdw-ship-pr - dirty selection honors an approved list, run scope, and refuses unknowns', () => {
+  const status = ' M a.js\n?? b.js\n M c.js\n';
+  const approved = sdwShipPr.selectDirtyFiles(status, { approved: ['a.js', 'c.js'] });
+  assert.strictEqual(approved.mode, 'approved-list');
+  assert.deepStrictEqual(approved.selected.map(e => e.path), ['a.js', 'c.js']);
+  assert.deepStrictEqual(approved.excluded.map(e => e.path), ['b.js']);
+
+  const runScope = sdwShipPr.selectDirtyFiles(status, { runFiles: ['b.js'] });
+  assert.strictEqual(runScope.mode, 'run-scope');
+  assert.deepStrictEqual(runScope.selected.map(e => e.path), ['b.js']);
+  assert.deepStrictEqual(runScope.excluded.map(e => e.path), ['a.js', 'c.js']);
+
+  const none = sdwShipPr.selectDirtyFiles(status, {});
+  assert.strictEqual(none.mode, 'none');
+  assert.strictEqual(none.selected.length, 0);
+});
+
+test('sdw-ship-pr - the dirty commit never sweeps files staged outside the approved list', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-dirty-commit-'));
+  const exec = (cmd) => execSync(cmd, { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  try {
+    exec('git init');
+    exec('git config user.name "SDW Tester"');
+    exec('git config user.email "tester@sdw.org"');
+    fs.writeFileSync(path.join(dir, 'approved.txt'), 'base\n', 'utf8');
+    fs.writeFileSync(path.join(dir, 'staged-elsewhere.txt'), 'base\n', 'utf8');
+    exec('git add -A');
+    exec('git commit -m "baseline"');
+
+    fs.writeFileSync(path.join(dir, 'approved.txt'), 'session change\n', 'utf8');
+    fs.writeFileSync(path.join(dir, 'staged-elsewhere.txt'), 'outside change\n', 'utf8');
+    exec('git add -- staged-elsewhere.txt');
+
+    const result = sdwShipPr.commitDirtyWorktree(exec, dir, {
+      approved: ['approved.txt']
+    });
+
+    assert.ok(result.sha, 'The approved file is committed');
+    const committed = exec('git show --name-only --pretty=format: HEAD').split('\n').map(l => l.trim()).filter(Boolean);
+    assert.deepStrictEqual(committed, ['approved.txt'], 'Only the approved path enters the delivery commit');
+    const staged = exec('git diff --cached --name-only').split('\n').map(l => l.trim()).filter(Boolean);
+    assert.deepStrictEqual(staged, ['staged-elsewhere.txt'], 'Unrelated staged work stays staged and uncommitted');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('sdw-ship-pr - a failed dirty commit aborts before publishing the branch', async () => {
+  const { tmpDir, config } = setupTestWorkspace();
+  config.scmProvider = 'github';
+  const calls = [];
+  const fakeExecutor = (cmd) => {
+    calls.push(cmd);
+    if (cmd.includes('git status --porcelain')) return ' M feature.js\u0000';
+    if (cmd.startsWith('git remote')) return 'origin';
+    if (cmd.startsWith('git add')) return '';
+    if (cmd.startsWith('git commit')) throw new Error('pre-commit hook rejected the change');
+    if (cmd.includes('where gh') || cmd.includes('command -v gh')) return '/usr/bin/gh';
+    if (cmd.includes('gh auth status')) return 'Logged in';
+    if (cmd.includes('gh repo view')) return JSON.stringify({ owner: { login: 'o' }, name: 'r' });
+    if (cmd.includes('gh pr list')) return '[]';
+    return '';
+  };
+  try {
+    await assert.rejects(
+      async () => sdwShipPr.runShipPr({
+        projectRoot: tmpDir,
+        config,
+        head: 'develop',
+        base: 'master',
+        push: true,
+        dirtyFilesPath: 'feature.js'
+      }, fakeExecutor),
+      /could not be committed before push/
+    );
+    assert.strictEqual(
+      calls.some(c => c.startsWith('git push')),
+      false,
+      'No push may follow a failed delivery commit'
+    );
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
