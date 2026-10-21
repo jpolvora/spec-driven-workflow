@@ -520,6 +520,60 @@ test('sdw-ship-pr - preemption budget cap falls back to review_pending', async (
   }
 });
 
+test('sdw-ship-pr - waits for a queued check run to start before watching', async () => {
+  const scripted = [
+    [],
+    [],
+    [{ name: 'review', state: 'pending', bucket: 'pending' }],
+    [{ name: 'review', state: 'pass', bucket: 'pass' }]
+  ];
+  let call = 0;
+  const { tmpDir, config, fakeExecutor } = setupPreemptionWorkspace(() => scripted[Math.min(call++, scripted.length - 1)]);
+  try {
+    const report = await sdwShipPr.runShipPr({
+      projectRoot: tmpDir,
+      config,
+      head: 'develop',
+      base: 'master',
+      maxIterations: 2,
+      pollIntervalMs: 1,
+      checksStartTimeoutMs: 500,
+      checksStartIntervalMs: 20
+    }, fakeExecutor);
+
+    assert.strictEqual(report.reviewConvergence.checksStart.detected, true, 'A queued run must be detected once it starts');
+    assert.ok(report.reviewConvergence.checksStart.polls >= 2, 'Detection must poll until the provider reports a check');
+    assert.strictEqual(report.reviewConvergence.converged, true, 'The loop converges on the run that started');
+    assert.strictEqual(report.shipStatus, 'delivered');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('sdw-ship-pr - a pipeline that never starts is bounded by the start timeout', async () => {
+  const { tmpDir, config, fakeExecutor } = setupPreemptionWorkspace(() => []);
+  try {
+    const report = await sdwShipPr.runShipPr({
+      projectRoot: tmpDir,
+      config,
+      head: 'develop',
+      base: 'master',
+      maxIterations: 2,
+      pollIntervalMs: 1,
+      checksStartTimeoutMs: 120,
+      checksStartIntervalMs: 30
+    }, fakeExecutor);
+
+    assert.strictEqual(report.reviewConvergence.checksStart.detected, false, 'A pipeline that never starts must time out');
+    assert.ok(report.reviewConvergence.checksStart.polls >= 2, 'Detection polls more than once before giving up');
+    assert.ok(report.reviewConvergence.checksStart.waitedMs >= 20, 'The start wait must actually elapse before falling back');
+    assert.strictEqual(report.reviewConvergence.converged, false);
+    assert.strictEqual(report.shipStatus, 'review_pending');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test('sdw-ship-pr - locateStateFile honors the configured stateDir token', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-state-dir-'));
   try {
