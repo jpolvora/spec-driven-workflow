@@ -313,6 +313,46 @@ test('resume: --no-sync and --continue-on-error override the preserved manifest 
   }
 });
 
+test('review: a custom --batch-id is normalized to the batch- prefix and stays discoverable', () => {
+  const { root, specs } = setup();
+  try {
+    const config = queue.loadConfig(root);
+    const manifest = queue.createManifest({ specs, options: { batchId: 'nightly' }, config });
+    assert.equal(manifest.batchId, 'batch-nightly', 'the custom id gains the discovery prefix');
+    assert.ok(fs.existsSync(queue.manifestFilePath(config, 'batch-nightly')), 'the manifest uses the prefixed file name');
+
+    assert.equal(queue.loadManifest(config).batchId, 'batch-nightly', 'resume without an id discovers the custom batch');
+    assert.equal(queue.loadManifest(config, 'nightly').batchId, 'batch-nightly', 'resume with the raw id still finds it');
+    assert.equal(
+      queue.createManifest({ specs, options: { batchId: 'batch-manual' }, config }).batchId,
+      'batch-manual',
+      'an already-prefixed id is left untouched'
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('review: a failed spec index sync warns the operator instead of failing silently', () => {
+  const { root } = setup();
+  const specSync = require('../skills/sdw-spec/scripts/spec_sync.cjs');
+  const originalSyncIndex = specSync.syncIndex;
+  const originalWarn = console.warn;
+  const warnings = [];
+  try {
+    const config = queue.loadConfig(root);
+    specSync.syncIndex = () => { throw new Error('index unavailable'); };
+    console.warn = (...args) => warnings.push(args.join(' '));
+    assert.equal(queue.triggerSpecSync(config), false, 'the sync stays non-fatal for the queue');
+    assert.equal(warnings.length, 1, 'exactly one warning reaches the operator');
+    assert.match(warnings[0], /spec index sync failed: index unavailable/);
+  } finally {
+    specSync.syncIndex = originalSyncIndex;
+    console.warn = originalWarn;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('cli: run parses a specification list and batch options', () => {
   const options = cli.parseArgs(['run', 'a.md', 'b.md', '--continue-on-error', '--no-sync', '--batch-id', 'batch-x']);
   assert.deepEqual(options.specPaths, ['a.md', 'b.md']);

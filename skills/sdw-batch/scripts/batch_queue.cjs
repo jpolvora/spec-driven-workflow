@@ -75,7 +75,10 @@ function manifestFilePath(config, batchId) {
 }
 
 function createManifest({ specs, options, config }) {
-  const batchId = options.batchId || `batch-${Date.now()}`;
+  // Discovery without an explicit id only scans `batch-*.json`, so every batch
+  // id is normalized to that prefix; a custom id stays resumable by itself.
+  const requested = options.batchId ? String(options.batchId) : `batch-${Date.now()}`;
+  const batchId = requested.startsWith('batch-') ? requested : `batch-${requested}`;
   const now = new Date().toISOString();
   const queue = specs.map((specInput, index) => {
     const resolved = resolveSpec(specInput, config);
@@ -152,7 +155,9 @@ function triggerSpecSync(config) {
       return true;
     }
   } catch (e) {
-    // Index sync is best effort; the manifest outcome is authoritative.
+    // Index sync is best effort; the manifest outcome stays authoritative, but
+    // the failure must reach the operator instead of leaving a stale registry.
+    console.warn(`[sdw-batch] WARNING: spec index sync failed: ${e.message}`);
   }
   return false;
 }

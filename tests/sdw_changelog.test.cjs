@@ -161,6 +161,36 @@ test('AC11: absolute or escaping changelog paths exit 1 without writing', (t) =>
   assert.equal(fs.existsSync(path.join(outer, 'escaped.md')), false, 'escaping target is not created');
 });
 
+test('review: a block that only prefixes a longer existing line is appended, not skipped as duplicate', (t) => {
+  const root = makeProject(t);
+  writeConfig(root, {});
+
+  const file = path.join(root, 'CHANGELOG.md');
+  const longerEntry = '### [2025-12-31 23:59] Agent: legacy\n'
+    + '- **Prompt**: Record the delivery\n'
+    + '- **Done**: Wrote the record\n'
+    + '- **Result**: Changelog updated (rerun with more detail)\n';
+  fs.writeFileSync(file, `# Changelog\n\n${longerEntry}`, 'utf8');
+
+  const result = run(root, [...ENTRY_ARGS, '--date', '2026-05-06 07:08']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /changelog: appended to /, 'a prefix match is not a duplicate record');
+
+  const updated = fs.readFileSync(file, 'utf8');
+  assert.ok(updated.includes(longerEntry), 'the longer existing entry survives unchanged');
+  assert.equal(updated.split('- **Result**: Changelog updated\n').length - 1, 1, 'the new record is written once');
+});
+
+test('review: a malformed .sdw/config.json exits 1 instead of falling back to enabled', (t) => {
+  const root = makeProject(t);
+  fs.writeFileSync(path.join(root, '.sdw', 'config.json'), '{"changelogEnabled": false,', 'utf8');
+
+  const result = run(root, [...ENTRY_ARGS]);
+  assert.equal(result.status, 1, 'a broken config stops the command');
+  assert.match(result.stderr, /invalid \.sdw\/config\.json/);
+  assert.equal(fs.existsSync(path.join(root, 'CHANGELOG.md')), false, 'the write never bypasses the intended disable switch');
+});
+
 test('AC12: changelogEnabled and changelogFile are documented in the config schema, config, and reference', () => {
   const schema = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, '.sdw', 'config.schema.json'), 'utf8'));
   assert.equal(schema.properties.changelogEnabled.type, 'boolean');
