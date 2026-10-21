@@ -30,9 +30,9 @@ Presets name common relationships (`trunk`, `github`, `develop`, `gitflow`, `git
 - AC3: Where an explicit `branching` key is present, the system shall resolve that key over the preset default.
 - AC4: The system shall document every `branching` key and preset in `.sdw/config.schema.json` and `skills/sdw-config/references/config_spec.md`.
 - AC5: The system shall validate every `branching` key in `sdw_config.cjs` and report an error naming the invalid key, its expected type, or the unknown strategy value.
-- AC6: Where the resolved `workBranch` is a non-empty string, the system shall create the feature branch from that work branch instead of the checked-out branch.
+- AC6: Where the resolved `workBranch` is a non-empty string, the system shall create the feature branch from that work branch instead of the checked-out branch. When local edits prevent checking out the work branch, the system shall create the branch from the checked-out branch with a warning, because a dirty working tree never blocks activation.
 - AC7: While `updateWorkBranch` is `true`, the system shall fetch the work branch from `origin` and fast-forward it before creating the feature branch.
-- AC8: If updating the work branch fails, then the system shall exit `1` before creating the feature branch and leave the working tree unchanged.
+- AC8: If updating the work branch fails for a reason other than a dirty working tree, then the system shall exit `1` before creating the feature branch and leave the working tree unchanged. A dirty working tree skips the update, warns, and continues from the work branch as it stands, because a dirty tree never blocks activation.
 - AC9: The system shall name the feature branch `{branching.featurePrefix}{specSlug}`.
 - AC10: Where `workBranch` is absent, the system shall create the feature branch from the checked-out branch, preserving the trunk behavior.
 - AC11: The system shall resolve the `sdw-ship-pr` pull request base branch and the `sdw-code-review` review base from `branching.integrationBranch`.
@@ -55,8 +55,8 @@ Presets name common relationships (`trunk`, `github`, `develop`, `gitflow`, `git
 
 - Other defaults: `featurePrefix` = `feature/`, `pushSyncedWorkBranch` = `false`, `useFeatureBranches` remains the master switch.
 - Any lane name works through overrides. A release run sets `integrationBranch` to `release/1.4`; a maintenance run sets `workBranch` to `maintenance/2.x`; a GitLab promotion reuses the post-merge sequence with `workBranch` = `main` and `integrationBranch` = `staging`.
-- Update sequence: `git switch <workBranch>`, `git fetch origin`, `git merge --ff-only origin/<workBranch>`.
-- Feature creation: `git switch -c <featurePrefix><slug> <workBranch>`.
+- Update sequence: `git switch <workBranch>`, `git fetch origin`, `git merge --ff-only origin/<workBranch>`; a dirty working tree skips the update with a warning instead of exiting.
+- Feature creation: `git switch -c <featurePrefix><slug> <workBranch>`; when the checkout is refused by local edits, fall back to `git switch -c <featurePrefix><slug>` from the checked-out branch with a warning.
 - Post-merge sequence: `git switch <workBranch>`; when the work lane equals the integration lane, `git fetch origin` then `git merge --ff-only origin/<integrationBranch>`; otherwise `git fetch origin +refs/heads/<integrationBranch>:refs/remotes/origin/<integrationBranch>` then `git merge --ff-only origin/<integrationBranch>` (the fetch writes only the remote-tracking ref, so a blocked fast-forward leaves every local branch untouched and a narrowed fetch refspec cannot leave the tracking ref stale); then optional `git push origin <workBranch>`.
 - The undocumented top-level `baseBranch` key is replaced by `branching.integrationBranch`; no compatibility shim is added.
 - The post-merge synchronization runs inside `sdw-ship-pr` when the convergence loop observes `MERGED`. When the merge is observed by a later run instead, AC7's pre-start update repairs the work branch.
@@ -65,12 +65,13 @@ Presets name common relationships (`trunk`, `github`, `develop`, `gitflow`, `git
 
 ### Acceptance Criteria Amendments
 
-Two criteria were amended during delivery, with the maintainer's direction to follow the documented gitflow contract:
+Three criteria were amended during delivery, with the maintainer's direction to follow the documented gitflow contract:
 
 - **AC10** originally kept the trunk fallback when `workBranch` equaled `integrationBranch`. That made a gitflow run started on another branch create the feature branch from that branch instead of `develop`, which contradicts the gitflow preset contract in `config_spec.md` §2.4. AC10 now limits the trunk fallback to the case where no work lane is configured; a configured lane is always the start point.
 - **AC15** originally forbade any git command during `--dry-run`. Resolving an `auto` lane requires a read-only `origin/HEAD` lookup, otherwise the plan reports trunk behavior for the `github` and `gitlab` presets. AC15 now requires no repository mutation, and the read-only lookup is allowed.
+- **AC6 and AC8** originally required the work lane start point and a hard exit on any update failure. That conflicts with the product guarantee that a dirty working tree never blocks branch activation. The precedence is now explicit: a dirty tree skips the update and continues from the work lane as it stands, and when local edits prevent the work-lane checkout the feature branch starts from the checked-out branch with a warning. Tightening either behavior again requires relaxing that guarantee first.
 
-Both amendments are recorded here so the contract change is visible rather than implied by the code.
+All amendments are recorded here so the contract change is visible rather than implied by the code.
 
 ## Out of Scope
 
