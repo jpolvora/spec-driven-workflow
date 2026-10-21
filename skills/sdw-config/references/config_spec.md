@@ -358,7 +358,7 @@ Git sequences:
 
 - Pre-start update (when `updateWorkBranch` is `true`): `git switch <workBranch>`, `git fetch origin`, `git merge --ff-only origin/<workBranch>`.
 - Feature creation: `git switch -c <featurePrefix><specSlug> <workBranch>`.
-- Post-merge synchronization (when `syncWorkBranchAfterMerge` is `true`): `git switch <workBranch>`; when the work lane equals the integration lane, `git fetch origin` then `git merge --ff-only origin/<integrationBranch>`; otherwise `git fetch origin <integrationBranch>` then `git merge --ff-only origin/<integrationBranch>`; then `git push origin <workBranch>` when `pushSyncedWorkBranch` is `true`.
+- Post-merge synchronization (when `syncWorkBranchAfterMerge` is `true`): `git switch <workBranch>`; when the work lane equals the integration lane, `git fetch origin` then `git merge --ff-only origin/<integrationBranch>`; otherwise `git fetch origin +refs/heads/<integrationBranch>:refs/remotes/origin/<integrationBranch>` then `git merge --ff-only origin/<integrationBranch>`; then `git push origin <workBranch>` when `pushSyncedWorkBranch` is `true`.
 
 ---
 

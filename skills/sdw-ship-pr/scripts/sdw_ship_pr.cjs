@@ -552,7 +552,7 @@ function syncWorkBranchAfterMerge(options = {}) {
   const sameLane = workBranch === integration;
   const remediation = sameLane
     ? `git switch ${workBranch} && git fetch origin && git merge --ff-only origin/${integration}`
-    : `git switch ${workBranch} && git fetch origin ${integration} && git merge --ff-only origin/${integration}`;
+    : `git switch ${workBranch} && git fetch origin +refs/heads/${integration}:refs/remotes/origin/${integration} && git merge --ff-only origin/${integration}`;
 
   try {
     executor(`git switch ${workBranch}`);
@@ -567,9 +567,10 @@ function syncWorkBranchAfterMerge(options = {}) {
       executor('git fetch origin');
       executor(`git merge --ff-only origin/${integration}`);
     } else {
-      // AC13: merge the remote-tracking ref so a failed fast-forward cannot move
-      // the local integration branch before the block is reported.
-      executor(`git fetch origin ${integration}`);
+      // AC13: write only the remote-tracking ref, so a failed fast-forward cannot
+      // move the local integration branch and a narrowed fetch refspec cannot
+      // leave origin/<integration> missing or stale.
+      executor(`git fetch origin +refs/heads/${integration}:refs/remotes/origin/${integration}`);
       executor(`git merge --ff-only origin/${integration}`);
     }
   } catch (syncErr) {
