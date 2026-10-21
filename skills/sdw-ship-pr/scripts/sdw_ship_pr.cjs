@@ -835,10 +835,12 @@ async function runShipPr(options = {}, customExecutor = null) {
               const seconds = Math.max(1, Math.ceil(pollIntervalMs / 1000) || 10);
               log(`[sdw-ship-pr] Waiting with native check watch (${scmProviderName} PR #${prResult.number}).`);
               await provider.watchPrChecks(prResult.number, { intervalSeconds: seconds });
+              return;
             } catch (watchErr) {
-              warn(`[sdw-ship-pr] Native check watch ended (${watchErr.message}); re-reading state.`);
+              // The watch can end early (no checks registered yet, runner errors).
+              // Fall through to the interval fallback so the settle period is kept.
+              warn(`[sdw-ship-pr] Native check watch ended (${watchErr.message}); falling back to the poll interval.`);
             }
-            return;
           }
           if (pollIntervalMs > 0) await new Promise(r => setTimeout(r, pollIntervalMs));
         };
@@ -1061,6 +1063,16 @@ async function runShipPr(options = {}, customExecutor = null) {
                 }
               } catch (e) {}
               if (changed.length === 0) {
+                // Nothing deterministic to apply. If CI is still settling, consume
+                // the native watch (or interval fallback) and re-read the PR state
+                // instead of ending on a stale snapshot.
+                const checksStillSettling = !status || !Array.isArray(status.checks) || status.checks.length === 0
+                  || status.checks.some(c => PENDING_CHECK_STATES.has(stateOf(c)) || PENDING_CHECK_STATES.has(bucketOf(c)));
+                if (checksStillSettling) {
+                  warn('[sdw-ship-pr] reviewFixCommand produced no changes; waiting for checks to settle before re-polling.');
+                  await waitForNextRound();
+                  continue;
+                }
                 warn('[sdw-ship-pr] reviewFixCommand produced no changes; refusing to resolve review threads.');
                 report.reviewConvergence.pendingThreads = pendingThreads;
                 break;
@@ -1130,8 +1142,10 @@ async function runShipPr(options = {}, customExecutor = null) {
 
           if (round >= maxRounds && !converged) {
             warn(`[sdw-ship-pr] Reached maximum review convergence rounds (${maxRounds}) with residual active threads.`);
-          } else if (!converged && pollIntervalMs > 0) {
-            await new Promise(r => setTimeout(r, pollIntervalMs));
+          } else if (!converged) {
+            // Primary settle point: block on the provider's native watch when
+            // available, otherwise fall back to the configured poll interval.
+            await waitForNextRound();
           }
         }
 

@@ -1075,3 +1075,91 @@ test('sdw-ship-pr - native watch: providers expose the capability and the probe 
   assert.strictEqual(sdwShipPr.parseArgs(['--native-watch']).nativeWatch, true);
   assert.strictEqual(sdwShipPr.parseArgs([]).nativeWatch, true);
 });
+
+test('sdw-ship-pr - native watch: the convergence loop blocks natively while checks are pending', async () => {
+  const { tmpDir, config } = setupTestWorkspace();
+  config.scmProvider = 'github';
+  config.scmCodeReviewEnabled = true;
+  config.runAllTests = false;
+  const calls = [];
+  let checkCalls = 0;
+  const fakeExecutor = (cmd) => {
+    calls.push(cmd);
+    if (cmd.includes('pr checks --help')) return 'FLAGS\n      --watch   Watch checks until they finish';
+    if (cmd.includes('gh pr checks') && cmd.includes('--watch')) return '';
+    if (cmd.includes('gh pr checks')) {
+      checkCalls += 1;
+      return JSON.stringify(checkCalls === 1
+        ? [{ name: 'ci/build', state: 'pending', bucket: 'pending' }]
+        : [{ name: 'ci/build', state: 'pass', bucket: 'pass' }]);
+    }
+    if (cmd.includes('reviewThreads')) {
+      return JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } });
+    }
+    if (cmd.includes('where gh') || cmd.includes('command -v gh')) return '/usr/bin/gh';
+    if (cmd.includes('gh auth status')) return 'Logged in';
+    if (cmd.includes('gh repo view')) return JSON.stringify({ owner: { login: 'fake-owner' }, name: 'fake-repo' });
+    if (cmd.includes('gh pr list')) {
+      return JSON.stringify([{ number: 42, url: 'https://github.com/fake-owner/fake-repo/pull/42', headRefName: 'develop', baseRefName: 'master' }]);
+    }
+    return '';
+  };
+  try {
+    const report = await sdwShipPr.runShipPr({
+      projectRoot: tmpDir,
+      config,
+      head: 'develop',
+      base: 'master',
+      maxIterations: 2,
+      pollIntervalMs: 10000
+    }, fakeExecutor);
+
+    assert.ok(calls.some(c => c.includes('gh pr checks') && c.includes('--watch')), 'The native watch command is consumed while checks are pending');
+    assert.strictEqual(report.reviewConvergence.converged, true, 'The loop re-polls after the native watch and converges');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('sdw-ship-pr - native watch: a watch failure falls back to the poll interval', async () => {
+  const { tmpDir, config } = setupTestWorkspace();
+  config.scmProvider = 'github';
+  config.scmCodeReviewEnabled = true;
+  config.runAllTests = false;
+  let checkCalls = 0;
+  const fakeExecutor = (cmd) => {
+    if (cmd.includes('pr checks --help')) return 'FLAGS --watch';
+    if (cmd.includes('gh pr checks') && cmd.includes('--watch')) throw new Error('no checks reported on the branch');
+    if (cmd.includes('gh pr checks')) {
+      checkCalls += 1;
+      return JSON.stringify(checkCalls === 1
+        ? [{ name: 'ci/build', state: 'pending', bucket: 'pending' }]
+        : [{ name: 'ci/build', state: 'pass', bucket: 'pass' }]);
+    }
+    if (cmd.includes('reviewThreads')) {
+      return JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } });
+    }
+    if (cmd.includes('where gh') || cmd.includes('command -v gh')) return '/usr/bin/gh';
+    if (cmd.includes('gh auth status')) return 'Logged in';
+    if (cmd.includes('gh repo view')) return JSON.stringify({ owner: { login: 'fake-owner' }, name: 'fake-repo' });
+    if (cmd.includes('gh pr list')) {
+      return JSON.stringify([{ number: 42, url: 'https://github.com/fake-owner/fake-repo/pull/42', headRefName: 'develop', baseRefName: 'master' }]);
+    }
+    return '';
+  };
+  try {
+    const report = await sdwShipPr.runShipPr({
+      projectRoot: tmpDir,
+      config,
+      head: 'develop',
+      base: 'master',
+      maxIterations: 2,
+      pollIntervalMs: 5
+    }, fakeExecutor);
+
+    assert.ok(checkCalls >= 2, 'The loop re-polls after the fallback interval');
+    assert.strictEqual(report.reviewConvergence.converged, true, 'The fallback keeps the settle period and converges');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
