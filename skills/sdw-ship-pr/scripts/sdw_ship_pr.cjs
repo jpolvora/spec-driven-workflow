@@ -29,6 +29,124 @@ function assertSafeRef(ref, label) {
   }
 }
 
+function safeGit(executor, cmd) {
+  try {
+    return String(executor(cmd) || '');
+  } catch (e) {
+    return '';
+  }
+}
+
+function listBranchCommits(executor, base, head) {
+  const cmds = [
+    `git log ${base}..${head} --pretty=format:%H%x1f%h%x1f%s%x1f%an%x1f%ad --date=short`,
+    `git log --pretty=format:%H%x1f%h%x1f%s%x1f%an%x1f%ad --date=short -n 30 ${head}`
+  ];
+  for (const cmd of cmds) {
+    const out = safeGit(executor, cmd).trim();
+    if (!out) continue;
+    const commits = out.split(/\r?\n/).map((line) => {
+      const parts = line.split('\x1f');
+      return {
+        hash: (parts[0] || '').trim(),
+        short: (parts[1] || '').trim(),
+        subject: (parts[2] || '').trim(),
+        author: (parts[3] || '').trim(),
+        date: (parts[4] || '').trim()
+      };
+    }).filter((c) => c.hash && c.subject);
+    if (commits.length > 0) return commits.slice(0, 50);
+  }
+  return [];
+}
+
+function listBranchFiles(executor, base, head) {
+  const out = safeGit(executor, `git diff --name-status ${base}...${head}`).trim()
+    || safeGit(executor, `git diff --name-only ${base}...${head}`).trim();
+  if (!out) return [];
+  return out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).slice(0, 100);
+}
+
+function getSpecTitle(projectRoot, specSlug) {
+  try {
+    if (!specSlug) return null;
+    const dir = path.join(projectRoot, '.sdw', 'specs');
+    if (!fs.existsSync(dir)) return null;
+    const files = fs.readdirSync(dir).filter((f) => f.includes(specSlug));
+    for (const f of files) {
+      const content = fs.readFileSync(path.join(dir, f), 'utf8').split(/\r?\n/).slice(0, 25).join('\n');
+      const m = content.match(/^title:\s*["']?(.+?)["']?\s*$/m);
+      if (m && m[1].trim()) return m[1].trim();
+    }
+  } catch (e) {}
+  return null;
+}
+
+function buildPrTitle({ explicit, specSlug, specTitle, head, base, commits }) {
+  if (explicit) return explicit;
+  if (!commits || commits.length === 0) {
+    return specSlug ? `feat(${specSlug}): deliver ${specSlug}` : `feat: deliver changes from ${head}`;
+  }
+  const count = commits.length;
+  if (specSlug) {
+    const subject = specTitle || specSlug;
+    const suffix = count > 1 ? ` (${count} commits)` : '';
+    return `feat(${specSlug}): deliver ${subject}${suffix}`.slice(0, 120);
+  }
+  const first = String(commits[0].subject || '').slice(0, 80);
+  const suffix = count > 1 ? ` (+${count - 1} more, ${head}→${base})` : ` (${head}→${base})`;
+  return `feat(${head}): ${first}${suffix}`.slice(0, 120);
+}
+
+function buildPrBody({ explicit, specSlug, specTitle, head, base, commits, files, config }) {
+  if (explicit) return explicit;
+  if ((!commits || commits.length === 0) && (!files || files.length === 0)) {
+    return specSlug ? `Automated delivery for specification ${specSlug}.` : `Automated delivery pull request.`;
+  }
+  const lines = [];
+  lines.push('## Summary');
+  lines.push(`Automated delivery \`${head}\` → \`${base}\`.`);
+  if (specSlug) lines.push(`- Spec: \`${specSlug}\`${specTitle ? ` — ${specTitle}` : ''}`);
+  lines.push(`- Commits: ${commits.length}`);
+  lines.push(`- Files changed: ${files.length}`);
+  lines.push('');
+  if (commits.length > 0) {
+    lines.push('## Commits');
+    commits.slice(0, 30).forEach((c) => lines.push(`- \`${c.short}\` ${c.subject} (${c.author}, ${c.date})`));
+    if (commits.length > 30) lines.push(`- ... and ${commits.length - 30} more`);
+    lines.push('');
+    const feats = commits.filter((c) => /^feat(\(|:)/i.test(c.subject));
+    const fixes = commits.filter((c) => /^fix(\(|:)/i.test(c.subject));
+    const others = commits.filter((c) => !/^(feat|fix)(\(|:)/i.test(c.subject));
+    lines.push('## Features');
+    if (feats.length > 0) {
+      lines.push('### Features');
+      feats.slice(0, 20).forEach((c) => lines.push(`- \`${c.short}\` ${c.subject}`));
+    }
+    if (fixes.length > 0) {
+      lines.push('### Fixes');
+      fixes.slice(0, 20).forEach((c) => lines.push(`- \`${c.short}\` ${c.subject}`));
+    }
+    if (others.length > 0) {
+      lines.push('### Other');
+      others.slice(0, 20).forEach((c) => lines.push(`- \`${c.short}\` ${c.subject}`));
+    }
+    lines.push('');
+  }
+  if (files.length > 0) {
+    lines.push('## Files changed');
+    files.slice(0, 50).forEach((f) => lines.push(`- ${f}`));
+    if (files.length > 50) lines.push(`- ... and ${files.length - 50} more`);
+    lines.push('');
+  }
+  lines.push('## Verification');
+  if (config.prePrCommand) lines.push(`- prePrCommand: \`${config.prePrCommand}\``);
+  if (config.requiredBuild) lines.push(`- Build: \`${config.buildCommand || 'npm run build'}\``);
+  if (config.runAllTests) lines.push(`- Tests: \`${config.testCommand || 'npm test'}\``);
+  lines.push(`- Security checks: ${config.securityChecksEnabled ? 'enabled' : 'disabled'}`);
+  return lines.join('\n');
+}
+
 function resolveStateDir(projectRoot, config = {}) {
   const configured = config.stateDir || '{projectRoot}/.sdw/state';
   let skillsRootVal = typeof config.skillsRoot === 'string' && config.skillsRoot.trim()
@@ -243,8 +361,14 @@ async function runShipPr(options = {}, customExecutor = null) {
   if (specSlug) assertSafeSlug(specSlug);
   assertSafeRef(head, 'head');
   assertSafeRef(base, 'base');
-  const title = options.title || (specSlug ? `feat(${specSlug}): deliver ${specSlug}` : `feat: deliver changes from ${head}`);
-  const body = options.body || (specSlug ? `Automated delivery for specification ${specSlug}.` : `Automated delivery pull request.`);
+  const specTitle = getSpecTitle(projectRoot, specSlug);
+  const branchCommits = listBranchCommits(executor, base, head);
+  const branchFiles = listBranchFiles(executor, base, head);
+  const title = buildPrTitle({ explicit: options.title, specSlug, specTitle, head, base, commits: branchCommits });
+  const body = buildPrBody({
+    explicit: options.body, specSlug, specTitle, head, base,
+    commits: branchCommits, files: branchFiles, config
+  });
 
   const pushDelivery = options.push || Boolean(config.pushDelivery);
   const scmProviderName = config.scmProvider || 'none';
@@ -462,17 +586,24 @@ async function runShipPr(options = {}, customExecutor = null) {
 
       // When an active PR is open/reused, complement the PR and update description if relevant
       if (prResult.reused && prResult.number && typeof provider.updatePullRequest === 'function') {
-        let headCommit = '';
-        try { headCommit = executor('git rev-parse --short HEAD').toString().trim(); } catch (e) {}
-        const amendmentNote = specSlug && specSlug !== 'unspecified'
-          ? `### Amending Delivery: ${specSlug}\n- Commit: \`${headCommit || 'HEAD'}\`\n- Timestamp: ${new Date().toISOString()}`
-          : null;
-        const newBodyContent = amendmentNote || body;
-        if (newBodyContent) {
+        const headCommit = safeGit(executor, 'git rev-parse --short HEAD').trim() || 'HEAD';
+        const latestList = branchCommits.slice(0, 5).map((c) => `- \`${c.short}\` ${c.subject}`).join('\n');
+        const amendmentNote = [
+          `### Amending Delivery${specSlug && specSlug !== 'unspecified' ? `: ${specSlug}` : ''}`,
+          `- Commit: \`${headCommit}\``,
+          `- HEAD: \`${headCommit}\``,
+          `- Timestamp: ${new Date().toISOString()}`,
+          `- Commits in range \`${base}..${head}\`: ${branchCommits.length}`,
+          `- Files changed: ${branchFiles.length}`,
+          latestList ? `#### Latest commits\n${latestList}` : null
+        ].filter(Boolean).join('\n');
+        const newBodyContent = options.body || amendmentNote || body;
+        if (newBodyContent || (!options.title && title)) {
           try {
             log(`[sdw-ship-pr] Notice: Amending an active pull request while review/approval is pending is not a recommended practice, but adapting as a non-blocking operation: complementing PR #${prResult.number} description with amending delivery...`);
             await provider.updatePullRequest({
               prNumber: prResult.number,
+              title: options.title ? undefined : title,
               body: newBodyContent,
               appendBody: true,
               dryRun
@@ -1045,5 +1176,10 @@ module.exports = {
   locateStateFile,
   cmdListThreads,
   cmdResolveThread,
-  cmdCheckStatus
+  cmdCheckStatus,
+  listBranchCommits,
+  listBranchFiles,
+  getSpecTitle,
+  buildPrTitle,
+  buildPrBody
 };
