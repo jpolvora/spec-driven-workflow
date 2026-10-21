@@ -828,10 +828,14 @@ async function runShipPr(options = {}, customExecutor = null) {
             let fixSummary = 'Applied and verified the requested review fix.';
             let canResolve = false;
             let fixResult = null;
-            // Thread feedback has no deterministic patch in the sdw-fixer catalog, so delegating
-            // would only produce a skipped, status=no-op result. Fall through to the cooperative protocol.
-            const defaultFixer = null;
-            const effectiveFixCommand = reviewFixCommand || null;
+            // Delegate to sdw-fixer when no explicit reviewFixCommand is set (AC13).
+            // Non-catalog rules record skipped entries with status no-op, so the
+            // delegation is observable and never misread as completed work.
+            const defaultFixer = reviewFixCommand ? null : buildDefaultFixerCommand(projectRoot, activeList);
+            const effectiveFixCommand = reviewFixCommand || (defaultFixer && defaultFixer.command) || null;
+            if (defaultFixer) {
+              log(`[sdw-ship-pr] reviewFixCommand unset; delegating to sdw-fixer: ${defaultFixer.command}`);
+            }
             if (typeof options.threadFixer === 'function') {
               // The caller owns applying, testing, committing, and pushing the fix.
               fixResult = await options.threadFixer({
