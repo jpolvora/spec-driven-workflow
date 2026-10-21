@@ -57,7 +57,7 @@ Presets name common relationships (`trunk`, `github`, `develop`, `gitflow`, `git
 - Any lane name works through overrides. A release run sets `integrationBranch` to `release/1.4`; a maintenance run sets `workBranch` to `maintenance/2.x`; a GitLab promotion reuses the post-merge sequence with `workBranch` = `main` and `integrationBranch` = `staging`.
 - Update sequence: `git switch <workBranch>`, `git fetch origin`, `git merge --ff-only origin/<workBranch>`.
 - Feature creation: `git switch -c <featurePrefix><slug> <workBranch>`.
-- Post-merge sequence: `git switch <workBranch>`; when the work lane equals the integration lane, `git merge --ff-only origin/<integrationBranch>`; otherwise `git fetch origin <integrationBranch>:<integrationBranch>` then `git merge --ff-only <integrationBranch>`; then optional `git push origin <workBranch>`.
+- Post-merge sequence: `git switch <workBranch>`; when the work lane equals the integration lane, `git fetch origin` then `git merge --ff-only origin/<integrationBranch>`; otherwise `git fetch origin <integrationBranch>` then `git merge --ff-only origin/<integrationBranch>` (the local integration ref is never written, so a blocked fast-forward leaves every branch untouched); then optional `git push origin <workBranch>`.
 - The undocumented top-level `baseBranch` key is replaced by `branching.integrationBranch`; no compatibility shim is added.
 - The post-merge synchronization runs inside `sdw-ship-pr` when the convergence loop observes `MERGED`. When the merge is observed by a later run instead, AC7's pre-start update repairs the work branch.
 - A diverged work branch is never reset or rebased automatically; it is reported as `blocked` with the remediation command.
