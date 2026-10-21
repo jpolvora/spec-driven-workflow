@@ -965,6 +965,26 @@ test('00048 AC4: a call echoed by its result in another envelope is one invocati
   assert.match(markdown, /No repeated run invocation or unreadable transcript was found\./);
 });
 
+test('00048 AC4: a command recorded three times in a row is still one invocation', (t) => {
+  const root = makeProject(t);
+  const state = makeState({ runId: 'run-5760-chain', slug: '00576-chain' });
+  writeState(root, state);
+  writeDefaultArtifacts(root, state);
+  const transcriptPath = 'transcripts/session-00576.txt';
+  const commandLine = 'operator: node skills/sdw-orch/scripts/sdw_orch.cjs run --spec .sdw/specs/00576-chain.md';
+  writeArtifact(root, transcriptPath, [commandLine, commandLine, commandLine].join('\n'));
+  writeRetroConfig(root, { enabled: false, transcripts: [transcriptPath] });
+
+  const result = runRetroCli(root, ['run', '--run-id', state.runId, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.deepEqual(
+    report.signals.repeated_run_invocation,
+    [],
+    'the chain collapses as one echoed record instead of reporting lines 1 and 3'
+  );
+});
+
 test('00048 AC4: identical commands separated by another event still report both lines', (t) => {
   const root = makeProject(t);
   const state = makeState({ runId: 'run-5740-separated', slug: '00574-separated' });

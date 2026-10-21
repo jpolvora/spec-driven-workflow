@@ -314,11 +314,14 @@ function scanTranscriptLines(reportedPath, content) {
     }
     if (!invocation.specification) continue;
     // Spec 00048 AC4: the same command excerpt on the immediately preceding
-    // line is the call echoed by its result, not a second invocation.
+    // line is the call echoed by its result, not a second invocation. Advance
+    // the reference line so a chain of identical adjacent records keeps
+    // collapsing instead of tripping a two-line gap on the third record.
     if (previous
       && index - previous.index === 1
       && previous.excerpt === invocation.excerpt
       && previous.specification === invocation.specification) {
+      previous = { index, excerpt: invocation.excerpt, specification: invocation.specification };
       continue;
     }
     previous = { index, excerpt: invocation.excerpt, specification: invocation.specification };
