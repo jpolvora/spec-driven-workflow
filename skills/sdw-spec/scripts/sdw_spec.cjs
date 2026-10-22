@@ -402,12 +402,14 @@ function isDriftExcluded(relPath) {
 function collectDriftFiles(root, baseRef) {
   const changed = new Set();
 
-  const tracked = runGit(root, ['diff', '--name-status', baseRef, '--', '.']);
-  for (const line of tracked.split('\n')) {
-    if (!line.trim()) continue;
-    for (const field of line.split('\t').slice(1)) {
-      if (field.trim()) changed.add(normalizeProjectPath(field.trim()));
-    }
+  // -z keeps non-ASCII, quoted, and backslash paths unquoted; --no-renames makes
+  // the output strict status/path pairs, so a rename is a delete plus an add and
+  // both paths stay in the drift set.
+  const tracked = runGit(root, ['diff', '--name-status', '--no-renames', '-z', baseRef, '--', '.']);
+  const fields = tracked.split('\0').filter((field) => field !== '');
+  for (let i = 0; i + 1 < fields.length; i += 2) {
+    const relPath = fields[i + 1].trim();
+    if (relPath) changed.add(normalizeProjectPath(relPath));
   }
 
   const untracked = runGit(root, ['ls-files', '--others', '--exclude-standard', '-z']);
@@ -418,10 +420,12 @@ function collectDriftFiles(root, baseRef) {
   return [...changed].filter((relPath) => relPath && !isDriftExcluded(relPath)).sort();
 }
 
-// AC5: only an exact project-relative path mention makes a file in scope.
+// AC5: only an exact project-relative path mention makes a file in scope. A
+// trailing period that ends a sentence is not part of the path, while a period
+// followed by a word character continues a longer filename and stays rejected.
 function specMentionsPath(specContent, relPath) {
   const escaped = relPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`(?<![A-Za-z0-9_.\\/-])${escaped}(?![A-Za-z0-9_.\\/-])`).test(specContent);
+  return new RegExp(`(?<![A-Za-z0-9_.\\/-])${escaped}(?![A-Za-z0-9_\\/-]|\\.\\w)`).test(specContent);
 }
 
 function driftTimestamp(now) {

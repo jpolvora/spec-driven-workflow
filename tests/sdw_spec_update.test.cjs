@@ -302,3 +302,66 @@ test('DoR: update is exposed through help and the documented JSON report fields'
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+// Review round: a path followed by a sentence-ending period is still a mention,
+// while a period that continues a longer filename stays rejected.
+test('00038 review: a sentence-ending period does not hide a named path', () => {
+  const { root, specPath } = setupDriftRepo();
+  try {
+    const spec = fs
+      .readFileSync(specPath, 'utf8')
+      .replace(`It names \`${NAMED_PATH}\`.`, `The fix lives in ${NAMED_PATH}.`);
+    fs.writeFileSync(specPath, spec, 'utf8');
+    fs.writeFileSync(path.join(root, NAMED_PATH), 'module.exports = "changed";\n', 'utf8');
+
+    const res = runUpdate(root, ['--slug', SLUG, '--json']);
+    assert.equal(res.status, 0, res.stderr);
+    const report = JSON.parse(res.stdout);
+    assert.deepEqual(report.matchedFiles, [NAMED_PATH], 'a sentence-ending period is not part of the path');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('00038 review: a longer filename is never matched by a shorter named path', () => {
+  const { root, specPath } = setupDriftRepo();
+  try {
+    const spec = fs
+      .readFileSync(specPath, 'utf8')
+      .replace(`It names \`${NAMED_PATH}\`.`, `The fix lives in ${NAMED_PATH}.bak.`);
+    fs.writeFileSync(specPath, spec, 'utf8');
+    fs.writeFileSync(path.join(root, NAMED_PATH), 'module.exports = "changed";\n', 'utf8');
+
+    const report = JSON.parse(runUpdate(root, ['--slug', SLUG, '--json']).stdout);
+    assert.deepEqual(report.matchedFiles, [], 'a path that only prefixes a longer filename stays unmatched');
+    assert.ok(report.unmatchedFiles.includes(NAMED_PATH), 'the longer filename never makes the named path a match');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Review round: `git diff --name-status` without -z quotes non-ASCII paths, so a
+// tracked file whose name has non-ASCII bytes was dropped from the drift set.
+test('00038 review: a non-ASCII tracked path reaches the drift set', () => {
+  const { root, specPath } = setupDriftRepo();
+  try {
+    const unicodePath = 'docs/café.md';
+    fs.mkdirSync(path.join(root, 'docs'), { recursive: true });
+    fs.writeFileSync(path.join(root, unicodePath), '# cafe\n', 'utf8');
+    git(root, ['add', '-A']);
+    git(root, ['commit', '-q', '-m', 'fixture unicode path']);
+
+    const spec = fs
+      .readFileSync(specPath, 'utf8')
+      .replace('- Base note.', `- Base note.\n- Also names ${unicodePath}`);
+    fs.writeFileSync(specPath, spec, 'utf8');
+    fs.writeFileSync(path.join(root, unicodePath), '# cafe changed\n', 'utf8');
+
+    const res = runUpdate(root, ['--slug', SLUG, '--json']);
+    assert.equal(res.status, 0, res.stderr);
+    const report = JSON.parse(res.stdout);
+    assert.ok(report.matchedFiles.includes(unicodePath), 'the quoted git form never reaches the drift set');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
