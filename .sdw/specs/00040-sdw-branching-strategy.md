@@ -3,7 +3,7 @@ id: null
 slug: 00040-sdw-branching-strategy
 title: "SDW Branching Strategy — Configurable Presets, Branch Lanes, and Post-Merge Sync"
 source: local
-status: draft
+status: implemented
 specDate: 2026-10-21
 ---
 # Specification — SDW Branching Strategy

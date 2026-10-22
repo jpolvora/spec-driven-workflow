@@ -3,7 +3,7 @@ id: null
 slug: 00037-sdw-run-retrospective-candidates
 title: "SDW Run Retrospective Candidates"
 source: local
-status: ready-to-implement
+status: implemented
 specDate: 2026-10-21
 ---
 # Specification — SDW Run Retrospective Candidates

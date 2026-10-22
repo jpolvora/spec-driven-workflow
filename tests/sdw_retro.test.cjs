@@ -6,6 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const zlib = require('zlib');
 const { execSync, spawnSync } = require('child_process');
 
 const retro = require('../skills/sdw-retro/scripts/retro.cjs');
@@ -114,6 +115,12 @@ function writeArtifact(root, relative, content) {
   const absolute = path.join(root, relative);
   fs.mkdirSync(path.dirname(absolute), { recursive: true });
   fs.writeFileSync(absolute, content, 'utf8');
+}
+
+function writeBinaryArtifact(root, relative, buffer) {
+  const absolute = path.join(root, relative);
+  fs.mkdirSync(path.dirname(absolute), { recursive: true });
+  fs.writeFileSync(absolute, buffer);
 }
 
 function writeDefaultArtifacts(root, state) {
@@ -573,6 +580,453 @@ test('AC13: a retro run leaves every pre-existing file unchanged', (t) => {
     delete after[reportPath];
   }
   assert.deepEqual(after, before, 'no pre-existing file changed');
+});
+
+test('AC5: a paused sibling run appears as leftover_run in both reports', (t) => {
+  const root = makeProject(t);
+  const selected = makeState({ runId: 'run-4000-completed', slug: '00400-leftover' });
+  const paused = makeState({
+    runId: 'run-4100-paused',
+    slug: '00400-leftover',
+    status: 'paused',
+    updatedAt: '2020-01-01T00:00:00.000Z'
+  });
+  writeState(root, selected);
+  writeState(root, paused);
+  writeDefaultArtifacts(root, selected);
+
+  const result = runRetroCli(root, ['run', '--run-id', selected.runId, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.signals.leftover_run.length, 1);
+  const leftover = report.signals.leftover_run[0];
+  assert.equal(leftover.runId, paused.runId, 'the signal names the sibling run id');
+  assert.equal(leftover.status, 'paused', 'the signal names its status');
+  assert.ok(Number.isFinite(leftover.ageMs) && leftover.ageMs > 0, 'the signal reports its age');
+
+  const markdown = fs.readFileSync(path.join(root, report.outputs.markdown), 'utf8');
+  assert.match(markdown, /### Leftover Runs/);
+  assert.ok(markdown.includes(paused.runId), 'the markdown report names the leftover run');
+  assert.match(markdown, /status paused/);
+});
+
+test('AC5: no leftover_run when every sibling run is terminal', (t) => {
+  const root = makeProject(t);
+  const selected = makeState({ runId: 'run-4200-completed', slug: '00420-terminal' });
+  const failed = makeState({ runId: 'run-4210-failed', slug: '00420-terminal', status: 'failed' });
+  const older = makeState({ runId: 'run-4190-completed', slug: '00420-terminal' });
+  for (const state of [selected, failed, older]) writeState(root, state);
+  writeDefaultArtifacts(root, selected);
+
+  const result = runRetroCli(root, ['run', '--run-id', selected.runId, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.deepEqual(report.signals.leftover_run, []);
+
+  const markdown = fs.readFileSync(path.join(root, report.outputs.markdown), 'utf8');
+  assert.match(markdown, /No sibling run is open for this specification\./);
+});
+
+function writeRetroConfig(root, retro) {
+  fs.writeFileSync(
+    path.join(root, '.sdw', 'config.json'),
+    `${JSON.stringify({ specsDir: '.sdw/specs', retro }, null, 2)}\n`,
+    'utf8'
+  );
+}
+
+test('AC6: a configured transcript is read, listed with its line count, and scanned', (t) => {
+  const root = makeProject(t);
+  const state = makeState({ runId: 'run-5000-transcript', slug: '00500-transcript' });
+  writeState(root, state);
+  writeDefaultArtifacts(root, state);
+  const transcriptPath = 'transcripts/session-00500.txt';
+  writeArtifact(root, transcriptPath, [
+    'operator: node skills/sdw-orch/scripts/sdw_orch.cjs run --spec .sdw/specs/00500-transcript.md',
+    'assistant: dispatched task-1',
+    'operator: node skills/sdw-orch/scripts/sdw_orch.cjs resume --run-id run-5000-transcript'
+  ].join('\n'));
+  writeRetroConfig(root, { enabled: false, transcripts: [transcriptPath] });
+
+  const result = runRetroCli(root, ['run', '--run-id', state.runId, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.ok(report.inputs.includes(transcriptPath), 'transcript is listed under report inputs');
+  assert.deepEqual(report.transcripts, [{ path: transcriptPath, lines: 3, mode: 'host' }]);
+  assert.equal(report.transcriptMode, 'host', 'the mode defaults to host');
+  assert.deepEqual(report.signals.repeated_run_invocation, [], 'run followed by resume is not a repeat');
+
+  const markdown = fs.readFileSync(path.join(root, report.outputs.markdown), 'utf8');
+  assert.ok(markdown.includes(`- \`${transcriptPath}\` (transcript, 3 lines, host)`));
+
+  // The repeatable CLI flag feeds the same input list.
+  const cliTranscript = 'notes/cli-session.txt';
+  writeArtifact(root, cliTranscript, 'one\ntwo');
+  const cli = runRetroCli(root, ['run', '--run-id', state.runId, '--transcript', cliTranscript, '--json']);
+  assert.equal(cli.status, 0, cli.stderr);
+  const cliReport = JSON.parse(cli.stdout);
+  assert.deepEqual(cliReport.transcripts, [
+    { path: transcriptPath, lines: 3, mode: 'host' },
+    { path: cliTranscript, lines: 2, mode: 'host' }
+  ]);
+  assert.ok(cliReport.inputs.includes(cliTranscript));
+});
+
+test('AC7: repeated run invocations with no resume cite file and line numbers only', (t) => {
+  const root = makeProject(t);
+  const state = makeState({ runId: 'run-5100-repeated', slug: '00510-repeated' });
+  writeState(root, state);
+  writeDefaultArtifacts(root, state);
+  const transcriptPath = 'transcripts/session-00510.txt';
+  writeArtifact(root, transcriptPath, [
+    'operator: node skills/sdw-orch/scripts/sdw_orch.cjs run --spec .sdw/specs/00510-repeated.md # BODY-MARKER-A',
+    'assistant: task-1 accepted',
+    'operator: node skills/sdw-orch/scripts/sdw_orch.cjs run --spec .sdw/specs/00510-repeated.md # BODY-MARKER-B'
+  ].join('\n'));
+  writeRetroConfig(root, { enabled: false, transcripts: [transcriptPath] });
+
+  const result = runRetroCli(root, ['run', '--run-id', state.runId, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.deepEqual(report.signals.repeated_run_invocation, [
+    { path: transcriptPath, specification: '00510-repeated', lines: [1, 3] }
+  ]);
+  assert.equal(JSON.stringify(report).includes('BODY-MARKER'), false, 'transcript bodies never enter the JSON report');
+  assert.equal(
+    JSON.stringify(report.signals.repeated_run_invocation).includes('sdw-orch'),
+    false,
+    'the signal cites no command text'
+  );
+
+  const markdown = fs.readFileSync(path.join(root, report.outputs.markdown), 'utf8');
+  assert.equal(markdown.includes('BODY-MARKER'), false, 'transcript bodies never enter the Markdown report');
+  assert.ok(markdown.includes(`\`${transcriptPath}\` lines 1 and 3`));
+  assert.match(markdown, /two `sdw-orch run` invocations for `00510-repeated` with no `resume` between them/);
+});
+
+test('AC7: a resume between run invocations prevents the signal', (t) => {
+  const root = makeProject(t);
+  const state = makeState({ runId: 'run-5200-resumed', slug: '00520-resumed' });
+  writeState(root, state);
+  writeDefaultArtifacts(root, state);
+  const transcriptPath = 'transcripts/session-00520.txt';
+  writeArtifact(root, transcriptPath, [
+    'operator: node skills/sdw-orch/scripts/sdw_orch.cjs run --spec .sdw/specs/00520-resumed.md',
+    'operator: node skills/sdw-orch/scripts/sdw_orch.cjs resume --run-id run-5200-resumed',
+    'operator: node skills/sdw-orch/scripts/sdw_orch.cjs run --spec .sdw/specs/00520-resumed.md'
+  ].join('\n'));
+  writeRetroConfig(root, { enabled: false, transcripts: [transcriptPath] });
+
+  const result = runRetroCli(root, ['run', '--run-id', state.runId, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.deepEqual(report.signals.repeated_run_invocation, []);
+
+  const markdown = fs.readFileSync(path.join(root, report.outputs.markdown), 'utf8');
+  assert.match(markdown, /No repeated run invocation or unreadable transcript was found\./);
+});
+
+test('AC8: a missing configured transcript produces transcript_unreadable and exit 0', (t) => {
+  const root = makeProject(t);
+  const state = makeState({ runId: 'run-5300-unreadable', slug: '00530-unreadable' });
+  writeState(root, state);
+  writeDefaultArtifacts(root, state);
+  const missing = 'transcripts/missing-00530.jsonl';
+  writeRetroConfig(root, { enabled: false, transcripts: [missing] });
+
+  const result = runRetroCli(root, ['run', '--run-id', state.runId, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.deepEqual(report.signals.transcript_unreadable, [{ path: missing, reason: 'not-found' }]);
+  assert.deepEqual(report.transcripts, []);
+  assert.equal(report.inputs.includes(missing), false, 'an unreadable transcript is not a read input');
+  assert.ok(fs.existsSync(path.join(root, report.outputs.markdown)), 'report still renders');
+  assert.ok(fs.existsSync(path.join(root, report.outputs.json)));
+
+  const markdown = fs.readFileSync(path.join(root, report.outputs.markdown), 'utf8');
+  assert.ok(markdown.includes(`\`${missing}\`: transcript unreadable (not-found)`));
+});
+
+test('00047 AC2: a zstd transcript is decoded frame by frame, not only its first frame', (t) => {
+  const root = makeProject(t);
+  const state = makeState({ runId: 'run-5400-zstd', slug: '00540-zstd' });
+  writeState(root, state);
+  writeDefaultArtifacts(root, state);
+  const transcriptPath = 'transcripts/session-00540.jsonl.zstd';
+  const runLine = 'node skills/sdw-orch/scripts/sdw_orch.cjs run --spec .sdw/specs/00540-zstd.md';
+  const frameOne = zlib.zstdCompressSync(Buffer.from([
+    `operator: ${runLine}`,
+    'assistant: task-2 dispatched',
+    ''
+  ].join('\n'), 'utf8'));
+  const frameTwo = zlib.zstdCompressSync(Buffer.from([
+    `operator: ${runLine}`,
+    'assistant: task-2 accepted',
+    ''
+  ].join('\n'), 'utf8'));
+  const fileBytes = Buffer.concat([frameOne, frameTwo]);
+  writeBinaryArtifact(root, transcriptPath, fileBytes);
+  writeRetroConfig(root, { enabled: false, transcripts: [transcriptPath] });
+
+  const result = runRetroCli(root, ['run', '--run-id', state.runId, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.deepEqual(report.transcripts, [{ path: transcriptPath, lines: 5, mode: 'host' }]);
+  assert.deepEqual(report.signals.repeated_run_invocation, [
+    { path: transcriptPath, specification: '00540-zstd', lines: [1, 3] }
+  ], 'both frames are scanned, so both run invocations are found');
+
+  const firstFrameOnly = zlib.zstdDecompressSync(fileBytes).toString('utf8').split(/\r?\n/).length;
+  assert.ok(
+    report.transcripts[0].lines > firstFrameOnly,
+    'the reported line count covers every concatenated frame, not just the first'
+  );
+
+  const markdown = fs.readFileSync(path.join(root, report.outputs.markdown), 'utf8');
+  assert.ok(markdown.includes(`- \`${transcriptPath}\` (transcript, 5 lines, host)`));
+});
+
+test('00047 AC4: --transcript-mode is recorded next to each transcript input and defaults to host', (t) => {
+  const root = makeProject(t);
+  const state = makeState({ runId: 'run-5500-mode', slug: '00550-mode' });
+  writeState(root, state);
+  writeDefaultArtifacts(root, state);
+  const transcriptPath = 'transcripts/session-00550.txt';
+  writeArtifact(root, transcriptPath, 'user: run the retro\nassistant: retro dispatched');
+  writeRetroConfig(root, { enabled: false, transcripts: [transcriptPath] });
+
+  const defaulted = runRetroCli(root, ['run', '--run-id', state.runId, '--json']);
+  assert.equal(defaulted.status, 0, defaulted.stderr);
+  const defaultReport = JSON.parse(defaulted.stdout);
+  assert.equal(defaultReport.transcriptMode, 'host', 'the mode defaults to host when omitted');
+  assert.deepEqual(defaultReport.transcripts, [{ path: transcriptPath, lines: 2, mode: 'host' }]);
+  const defaultMarkdown = fs.readFileSync(path.join(root, defaultReport.outputs.markdown), 'utf8');
+  assert.ok(defaultMarkdown.includes(`- \`${transcriptPath}\` (transcript, 2 lines, host)`));
+
+  const captured = runRetroCli(root, [
+    'run', '--run-id', state.runId, '--transcript-mode', 'captured', '--json'
+  ]);
+  assert.equal(captured.status, 0, captured.stderr);
+  const capturedReport = JSON.parse(captured.stdout);
+  assert.equal(capturedReport.transcriptMode, 'captured');
+  assert.deepEqual(capturedReport.transcripts, [{ path: transcriptPath, lines: 2, mode: 'captured' }]);
+  const capturedMarkdown = fs.readFileSync(path.join(root, capturedReport.outputs.markdown), 'utf8');
+  assert.ok(capturedMarkdown.includes(`- \`${transcriptPath}\` (transcript, 2 lines, captured)`));
+  assert.equal(capturedMarkdown.includes('(transcript, 2 lines, host)'), false);
+
+  const invalid = runRetroCli(root, ['run', '--run-id', state.runId, '--transcript-mode', 'log']);
+  assert.equal(invalid.status, 1, 'an unsupported mode is rejected');
+  assert.match(invalid.stderr, /invalid --transcript-mode: log; expected host\|captured/);
+});
+
+test('00047 AC5: non-text transcripts report transcript_unreadable and exit 0', (t) => {
+  const root = makeProject(t);
+  const state = makeState({ runId: 'run-5600-binary', slug: '00560-binary' });
+  writeState(root, state);
+  writeDefaultArtifacts(root, state);
+  const transcriptPath = 'transcripts/session-00560.bin';
+  writeBinaryArtifact(root, transcriptPath, Buffer.from([0x00, 0xff, 0xfe, 0x80, 0x81, 0xc3, 0x28]));
+  writeRetroConfig(root, { enabled: false, transcripts: [transcriptPath] });
+
+  const result = runRetroCli(root, ['run', '--run-id', state.runId, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.deepEqual(report.signals.transcript_unreadable, [{ path: transcriptPath, reason: 'not-text' }]);
+  assert.deepEqual(report.transcripts, [], 'a non-text file is not a read transcript input');
+  assert.equal(report.inputs.includes(transcriptPath), false);
+  assert.ok(fs.existsSync(path.join(root, report.outputs.markdown)), 'the report still renders');
+
+  const markdown = fs.readFileSync(path.join(root, report.outputs.markdown), 'utf8');
+  assert.ok(markdown.includes(`\`${transcriptPath}\`: transcript unreadable (not-text)`));
+
+  // A decodable zstd frame whose payload is not UTF-8 text is not a transcript
+  // either: the frame decodes, the text decoding fails, and the reason is `not-text`.
+  const binaryZstd = 'transcripts/session-00560-text.zstd';
+  writeBinaryArtifact(root, binaryZstd, zlib.zstdCompressSync(Buffer.from([0xff, 0xfe, 0x80])));
+  const zstdResult = runRetroCli(root, [
+    'run', '--run-id', state.runId, '--transcript', binaryZstd, '--json'
+  ]);
+  assert.equal(zstdResult.status, 0, zstdResult.stderr);
+  const zstdReport = JSON.parse(zstdResult.stdout);
+  assert.deepEqual(zstdReport.signals.transcript_unreadable, [
+    { path: transcriptPath, reason: 'not-text' },
+    { path: binaryZstd, reason: 'not-text' }
+  ]);
+  assert.deepEqual(zstdReport.transcripts, [], 'a non-text payload is not a read transcript input');
+  const zstdMarkdown = fs.readFileSync(path.join(root, zstdReport.outputs.markdown), 'utf8');
+  assert.ok(zstdMarkdown.includes(`\`${binaryZstd}\`: transcript unreadable (not-text)`));
+});
+
+test('00048 AC1 & AC2: a quoted command inside a JSON message and prose naming both tokens are not invocations', (t) => {
+  const root = makeProject(t);
+  const state = makeState({ runId: 'run-5700-precision', slug: '00570-precision' });
+  writeState(root, state);
+  writeDefaultArtifacts(root, state);
+  const transcriptPath = 'transcripts/session-00570.txt';
+  const quoted = 'task-2 complete: the scan (`sdw-orch`/`sdw_orch.cjs` + `run`/`resume` command word) ran on two `run --spec .sdw/specs/00570-precision.md` lines; never run git commit.';
+  writeArtifact(root, transcriptPath, [
+    `{"type":"agent/inbox/spliced","data":{"inserted":[{"type":"text","text":${JSON.stringify(quoted)}}]}}`,
+    'assistant: before you run the suite, read skills/sdw-orch/scripts/sdw_orch.cjs and the --spec .sdw/specs/00570-precision.md` note.',
+    `{"type":"user/message","data":{"content":[{"type":"text","text":${JSON.stringify(quoted)}}]}}`
+  ].join('\n'));
+  writeRetroConfig(root, { enabled: false, transcripts: [transcriptPath] });
+
+  const result = runRetroCli(root, ['run', '--run-id', state.runId, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.deepEqual(report.signals.repeated_run_invocation, [], 'quoted commands and prose mentions are not invocations');
+
+  const markdown = fs.readFileSync(path.join(root, report.outputs.markdown), 'utf8');
+  assert.match(markdown, /No repeated run invocation or unreadable transcript was found\./);
+});
+
+test('00048 AC1 & AC2: escaped-quote tool calls are detected, and a separated duplicate reports both lines', (t) => {
+  const root = makeProject(t);
+  const state = makeState({ runId: 'run-5710-escaping', slug: '00571-escaping' });
+  writeState(root, state);
+  writeDefaultArtifacts(root, state);
+  const transcriptPath = 'transcripts/session-00571.jsonl';
+  const commandLine = '{"command":"node \\"L:/x/skills/sdw-orch/scripts/sdw_orch.cjs\\" run --spec .sdw/specs/00571-escaping.md --root ."}';
+  writeArtifact(root, transcriptPath, [
+    commandLine,
+    '{"type":"tool/result","data":"exit 0"}',
+    'operator: sdw-orch run --spec .sdw/specs/00571-escaping.md'
+  ].join('\n'));
+  writeRetroConfig(root, { enabled: false, transcripts: [transcriptPath] });
+
+  const result = runRetroCli(root, ['run', '--run-id', state.runId, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.deepEqual(report.signals.repeated_run_invocation, [
+    { path: transcriptPath, specification: '00571-escaping', lines: [1, 3] }
+  ], 'the escaped JSON quotes do not break the executable-followed-by-command-word shape');
+
+  const markdown = fs.readFileSync(path.join(root, report.outputs.markdown), 'utf8');
+  assert.ok(markdown.includes(`\`${transcriptPath}\` lines 1 and 3`));
+});
+
+test('00048 AC3: quotes, backticks, and trailing punctuation are stripped from the --spec value', (t) => {
+  const root = makeProject(t);
+  const state = makeState({ runId: 'run-5720-spec', slug: '00572-spec' });
+  writeState(root, state);
+  writeDefaultArtifacts(root, state);
+  const transcriptPath = 'transcripts/session-00572.txt';
+  writeArtifact(root, transcriptPath, [
+    'operator: node skills/sdw-orch/scripts/sdw_orch.cjs run --spec .sdw/specs/00572-spec.md`,',
+    'assistant: task-1 accepted',
+    'operator: node skills/sdw-orch/scripts/sdw_orch.cjs run --spec "00572-spec.md"'
+  ].join('\n'));
+  writeRetroConfig(root, { enabled: false, transcripts: [transcriptPath] });
+
+  const result = runRetroCli(root, ['run', '--run-id', state.runId, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.deepEqual(report.signals.repeated_run_invocation, [
+    { path: transcriptPath, specification: '00572-spec', lines: [1, 3] }
+  ], 'both captured values normalize to the same specification stem');
+  assert.equal(JSON.stringify(report).includes('00572-spec.md`'), false, 'the raw backticked value never reaches the report');
+  assert.equal(JSON.stringify(report).includes('00572-spec.md"'), false);
+});
+
+test('00048 AC4: a call echoed by its result in another envelope is one invocation', (t) => {
+  const root = makeProject(t);
+  const state = makeState({ runId: 'run-5730-echo', slug: '00573-echo' });
+  writeState(root, state);
+  writeDefaultArtifacts(root, state);
+  const transcriptPath = 'transcripts/session-00573.jsonl';
+  const callId = 'call_fixture_00573';
+  const command = 'node "L:/x/skills/sdw-orch/scripts/sdw_orch.cjs" run --spec .sdw/specs/00573-echo.md';
+  const issued = JSON.stringify({
+    type: 'assistant/message',
+    data: {
+      turn: 1,
+      step: 1,
+      message: { role: 'assistant', content: [{ type: 'tool-call', id: callId, arguments: { command } }] }
+    }
+  });
+  const echoed = JSON.stringify({
+    type: 'tool/call',
+    data: { turn: 1, step: 1, callId, name: 'pwsh', arguments: { command } }
+  });
+  assert.notEqual(issued, echoed, 'the two lines differ in their host envelope');
+  writeArtifact(root, transcriptPath, [issued, echoed].join('\n'));
+  writeRetroConfig(root, { enabled: false, transcripts: [transcriptPath] });
+
+  const result = runRetroCli(root, ['run', '--run-id', state.runId, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.deepEqual(
+    report.signals.repeated_run_invocation,
+    [],
+    'the call and the record that echoes it carry the same command excerpt'
+  );
+
+  const markdown = fs.readFileSync(path.join(root, report.outputs.markdown), 'utf8');
+  assert.match(markdown, /No repeated run invocation or unreadable transcript was found\./);
+});
+
+test('00048 AC4: a command recorded three times in a row is still one invocation', (t) => {
+  const root = makeProject(t);
+  const state = makeState({ runId: 'run-5760-chain', slug: '00576-chain' });
+  writeState(root, state);
+  writeDefaultArtifacts(root, state);
+  const transcriptPath = 'transcripts/session-00576.txt';
+  const commandLine = 'operator: node skills/sdw-orch/scripts/sdw_orch.cjs run --spec .sdw/specs/00576-chain.md';
+  writeArtifact(root, transcriptPath, [commandLine, commandLine, commandLine].join('\n'));
+  writeRetroConfig(root, { enabled: false, transcripts: [transcriptPath] });
+
+  const result = runRetroCli(root, ['run', '--run-id', state.runId, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.deepEqual(
+    report.signals.repeated_run_invocation,
+    [],
+    'the chain collapses as one echoed record instead of reporting lines 1 and 3'
+  );
+});
+
+test('00048 AC4: identical commands separated by another event still report both lines', (t) => {
+  const root = makeProject(t);
+  const state = makeState({ runId: 'run-5740-separated', slug: '00574-separated' });
+  writeState(root, state);
+  writeDefaultArtifacts(root, state);
+  const transcriptPath = 'transcripts/session-00574.txt';
+  const commandLine = 'operator: node skills/sdw-orch/scripts/sdw_orch.cjs run --spec .sdw/specs/00574-separated.md';
+  writeArtifact(root, transcriptPath, [commandLine, 'assistant: task-1 accepted', commandLine].join('\n'));
+  writeRetroConfig(root, { enabled: false, transcripts: [transcriptPath] });
+
+  const result = runRetroCli(root, ['run', '--run-id', state.runId, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.deepEqual(report.signals.repeated_run_invocation, [
+    { path: transcriptPath, specification: '00574-separated', lines: [1, 3] }
+  ], 'one intervening event keeps the two invocations apart');
+
+  const markdown = fs.readFileSync(path.join(root, report.outputs.markdown), 'utf8');
+  assert.ok(markdown.includes(`\`${transcriptPath}\` lines 1 and 3`));
+});
+
+test('00048 AC4: adjacent matching lines with different text still report both lines', (t) => {
+  const root = makeProject(t);
+  const state = makeState({ runId: 'run-5750-adjacent', slug: '00575-adjacent' });
+  writeState(root, state);
+  writeDefaultArtifacts(root, state);
+  const transcriptPath = 'transcripts/session-00575.txt';
+  writeArtifact(root, transcriptPath, [
+    'operator: node skills/sdw-orch/scripts/sdw_orch.cjs run --spec .sdw/specs/00575-adjacent.md',
+    'operator: node skills/sdw-orch/scripts/sdw_orch.cjs run --spec specs/00575-adjacent.md --new-run'
+  ].join('\n'));
+  writeRetroConfig(root, { enabled: false, transcripts: [transcriptPath] });
+
+  const result = runRetroCli(root, ['run', '--run-id', state.runId, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.deepEqual(report.signals.repeated_run_invocation, [
+    { path: transcriptPath, specification: '00575-adjacent', lines: [1, 2] }
+  ], 'adjacent lines that name the specification differently are two invocations');
+
+  const markdown = fs.readFileSync(path.join(root, report.outputs.markdown), 'utf8');
+  assert.ok(markdown.includes(`\`${transcriptPath}\` lines 1 and 2`));
 });
 
 function makeOrchProject(t) {

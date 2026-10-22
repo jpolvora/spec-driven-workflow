@@ -95,6 +95,7 @@ function parseArgs(args) {
     sandbox: false,
     noWorktrees: false,
     worktrees: false,
+    noTaskCheckpoint: false,
     noFeatureBranch: false,
     featureBranch: false,
     taskId: null,
@@ -103,7 +104,8 @@ function parseArgs(args) {
     reason: null,
     skillsRoot: null,
     implementationMode: null,
-    refineMode: false
+    refineMode: false,
+    newRun: false
   };
 
   const positional = [];
@@ -115,6 +117,7 @@ function parseArgs(args) {
     else if (arg === '--skip-security') result.skipSecurity = true;
     else if (arg === '--no-worktrees') result.noWorktrees = true;
     else if (arg === '--worktrees') result.worktrees = true;
+    else if (arg === '--no-task-checkpoint') result.noTaskCheckpoint = true;
     else if (arg === '--no-feature-branch') result.noFeatureBranch = true;
     else if (arg === '--feature-branch') result.featureBranch = true;
     else if (arg === '--skip-review') result.skipReview = true;
@@ -126,6 +129,7 @@ function parseArgs(args) {
     else if (arg === '--force') result.force = true;
     else if (arg === '--allow-archived') result.allowArchived = true;
     else if (arg === '--second-pass' || arg === '--refine') result.refineMode = true;
+    else if (arg === '--new-run') result.newRun = true;
     else if (arg === '--latest') result.latest = true;
     else if (arg === '--dry-run') result.dryRun = true;
     else if (arg === '--sandbox') result.sandbox = true;
@@ -274,8 +278,8 @@ function orchCommandPath() {
   return __filename.replace(/\\/g, '/');
 }
 
-// Spec 00037 AC15: a successful delivery records the exact advisory retro
-// command. sdw-orch never runs it; the operator decides whether to review.
+// Spec 00037 AC15 / spec 00045 AC1-AC3: a successful delivery records the exact
+// retro command. `retro.enabled` decides whether sdw-orch also runs it.
 function retroScriptPath(targetRoot) {
   return resolveSkillScript(targetRoot, 'sdw-retro', path.join('scripts', 'retro.cjs'))
     || path.resolve(__dirname, '../../sdw-retro/scripts/retro.cjs');
@@ -283,6 +287,76 @@ function retroScriptPath(targetRoot) {
 
 function retroCommandFor(targetRoot, runId) {
   return `node "${normalizePath(retroScriptPath(targetRoot))}" run --run-id ${runId} --root "${normalizePath(targetRoot)}"`;
+}
+
+// Runs sdw-retro for a completed run and normalizes the outcome into the shape
+// recorded on state.retro (AC1). A non-zero exit, a missing report, or an
+// unparsable payload is a recorded failure (AC2); it never throws.
+function runRetroForCompletedRun(targetRoot, state) {
+  const retro = {
+    status: 'failed',
+    reportMd: null,
+    reportJson: null,
+    error: null,
+    ranAt: new Date().toISOString()
+  };
+  const result = spawnSync(process.execPath, [
+    retroScriptPath(targetRoot),
+    'run',
+    '--run-id', state.runId,
+    '--root', targetRoot,
+    '--json'
+  ], { cwd: targetRoot, encoding: 'utf8' });
+  if (result.error) {
+    retro.error = result.error.message;
+    return retro;
+  }
+  if (result.status !== 0) {
+    retro.error = String(result.stderr || '').trim() || `sdw-retro exited with code ${result.status}`;
+    return retro;
+  }
+  let report;
+  try {
+    report = JSON.parse(result.stdout || '');
+  } catch (parseError) {
+    retro.error = `sdw-retro returned unparsable JSON: ${parseError.message}`;
+    return retro;
+  }
+  const outputs = report && report.outputs;
+  if (!outputs || typeof outputs.markdown !== 'string' || typeof outputs.json !== 'string') {
+    retro.error = 'sdw-retro did not declare report output paths';
+    return retro;
+  }
+  retro.status = 'passed';
+  retro.reportMd = normalizePath(outputs.markdown);
+  retro.reportJson = normalizePath(outputs.json);
+  return retro;
+}
+
+// Spec 00045 AC4: a specification with a run that never reached a terminal
+// status must be resumed, not restarted. Returns the open runs, newest first.
+// The guard is read-only: a missing state directory means no run exists.
+function findOpenRunsForSpec(stateDir, specSlug) {
+  if (!fs.existsSync(stateDir)) return [];
+  const open = [];
+  for (const name of fs.readdirSync(stateDir)) {
+    if (!name.endsWith('.state.json')) continue;
+    let run = null;
+    try {
+      run = JSON.parse(fs.readFileSync(path.join(stateDir, name), 'utf8'));
+    } catch (e) {
+      continue;
+    }
+    if (!run || run.specSlug !== specSlug) continue;
+    if (run.status === 'completed' || run.status === 'failed') continue;
+    open.push({
+      runId: run.runId || name.replace(/\.state\.json$/, ''),
+      status: run.status || 'unknown',
+      createdAt: run.createdAt || ''
+    });
+  }
+  open.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  return open;
 }
 
 function isScopedExcluded(rel) {
@@ -373,6 +447,36 @@ function stageAndCommitOnly(targetRoot, files, message) {
   }
   git(targetRoot, ['commit', '-m', message], { stdio: 'ignore' });
   return { committed: true, commitSha: getBaseCommit(targetRoot), files: stageable };
+}
+
+// Spec 00044 AC3: an accepted task is checkpointed immediately, not only at the
+// Step 6 delivery commit. One scoped commit plus one tag per task keeps the work
+// recoverable across a crash between tasks; the Step 6 exclusions apply.
+function checkpointRefName(runId, taskId) {
+  const part = value => String(value || '')
+    .replace(/[^A-Za-z0-9._-]+/g, '-')
+    .replace(/\.{2,}/g, '.')
+    .replace(/^[-.]+|[-.]+$/g, '') || 'task';
+  return `sdw-checkpoint-${part(runId)}-${part(taskId)}`;
+}
+
+function checkpointTask(targetRoot, { specSlug, runId, taskId, files = [], commitSha = null }) {
+  let sha = commitSha;
+  if (!sha) {
+    const res = stageAndCommitOnly(targetRoot, files, `task(${specSlug}): ${taskId}`);
+    if (!res.committed) return { commitSha: res.commitSha, tag: null, tagError: null };
+    sha = res.commitSha;
+  }
+  const tag = checkpointRefName(runId, taskId);
+  try {
+    git(targetRoot, ['tag', '-f', tag, sha], { stdio: 'ignore' });
+  } catch (tagErr) {
+    // PR #34 review finding: the commit (or the integrated cherry-pick) is already
+    // durable, and committed work can never be re-corroborated on retry. A tag that
+    // cannot be written is reported, not raised, so the task is still accepted.
+    return { commitSha: sha, tag: null, tagError: tagErr.message };
+  }
+  return { commitSha: sha, tag, tagError: null };
 }
 
 function collectDeliveryFiles(targetRoot, specSlug, state) {
@@ -885,6 +989,23 @@ function cmdRun(options) {
       // No remote default branch: keep the configuration-only lanes.
     }
     return printRunDryRunPlan({ targetRoot, resolvedSpec, specSlug, config, options, branching });
+  }
+
+  // Spec 00045 AC4: refuse to start a second run while another run for the same
+  // specification is still open. Reusing an explicit --run-id restores that run
+  // instead of creating a new one; --new-run is the intentional override.
+  const stateDir = path.resolve((config && config.stateDir) || path.join(targetRoot, '.sdw', 'state'));
+  const restoresExplicitRun = Boolean(options.runId
+    && fs.existsSync(path.join(stateDir, `${options.runId}.state.json`)));
+  if (!options.newRun && !restoresExplicitRun) {
+    const openRuns = findOpenRunsForSpec(stateDir, specSlug);
+    if (openRuns.length > 0) {
+      const existing = openRuns[0];
+      const message = `Specification "${specSlug}" already has an open run "${existing.runId}" (status: ${existing.status}). Continue it with: node "${normalizePath(orchCommandPath())}" resume --run-id ${existing.runId}. Pass --new-run to start a new run intentionally.`;
+      console.error(`[sdw-orch] Blocked: ${message}`);
+      options._runResult = { error: message };
+      return 1;
+    }
   }
 
   // Sandbox execution: run the whole pipeline against an isolated local clone
@@ -2487,8 +2608,23 @@ function cmdRun(options) {
   state.retroCommand = retroCommandFor(targetRoot, state.runId);
   state = stateManager.saveRunState(targetRoot, state);
   console.log(`\n[sdw-orch] Workflow completed successfully for run "${state.runId}".`);
-  console.log(`[sdw-retro] Review this delivery with (advisory, run manually):`);
-  console.log(`  ${state.retroCommand}`);
+
+  // Spec 00045 AC1-AC3: execute the retrospective when retro.enabled is true,
+  // record its outcome on state.retro, and keep the completed delivery even
+  // when it fails. Otherwise keep the advisory print unchanged.
+  if (config && config.retro && config.retro.enabled === true) {
+    state.retro = runRetroForCompletedRun(targetRoot, state);
+    state = stateManager.saveRunState(targetRoot, state);
+    if (state.retro.status === 'passed') {
+      console.log(`[sdw-retro] Retrospective report: ${state.retro.reportMd}`);
+      console.log(`[sdw-retro] Retrospective data: ${state.retro.reportJson}`);
+    } else {
+      console.warn(`[sdw-retro] Retrospective failed; run "${state.runId}" stays completed: ${state.retro.error}`);
+    }
+  } else {
+    console.log(`[sdw-retro] Review this delivery with (advisory, run manually):`);
+    console.log(`  ${state.retroCommand}`);
+  }
 
   options._runResult = {
     runId: state.runId,
@@ -2905,7 +3041,30 @@ function cmdTaskFinish(options) {
     return 1;
   }
 
+  // PR #34 review finding: the checkpoint must not bypass the Step 6 pre-commit
+  // secret scan. It runs before integration and before the checkpoint commit, over
+  // the tree that holds the task's change, so a leak is rejected before any commit
+  // or cherry-pick exists. The task stays dispatched for a clean retry.
+  if (!options.noTaskCheckpoint && !state.refineMode && config.securityChecksEnabled && !options.skipSecurity) {
+    const scanRoot = effectiveUseWorktrees ? taskWorktreeAbs : targetRoot;
+    const scanResult = runSecurityGate(scanRoot, { staged: false });
+    if (scanResult.exitCode !== 0) {
+      console.error(`Error: Task "${taskId}" blocked by pre-commit security checks (exit code ${scanResult.exitCode}). No commit, cherry-pick, or tag was created.`);
+      state.steps[4].securityGate = {
+        bypassed: false,
+        taskId,
+        scanRoot: effectiveUseWorktrees ? taskWorktreeRel : '.',
+        exitCode: scanResult.exitCode,
+        severityCounts: scanResult.severityCounts,
+        findings: scanResult.findings
+      };
+      stateManager.saveRunState(targetRoot, state);
+      return scanResult.exitCode;
+    }
+  }
+
   // Integrate worktree if used (AC10, AC11)
+  let checkpointTag = null;
   if (effectiveUseWorktrees) {
     try {
       const intRes = implementationRunner.integrateTaskWorktree({
@@ -2929,7 +3088,37 @@ function cmdTaskFinish(options) {
       console.error(`Error: Worktree integration failed for ${taskId}: ${cpErr.message}`);
       return 1;
     }
-  } else {
+  }
+
+  // Spec 00044 AC3: save every accepted task in the primary tree so a crash or
+  // reset between tasks cannot lose corroborated work. Step 6 stays the delivery
+  // commit and aggregates whatever this checkpoint did not already commit.
+  // Second-pass runs are excluded: their explicit `refine(...)` Step 6 commit is
+  // the save, and `deliveryCommitCreated` must still describe it.
+  if (!options.noTaskCheckpoint && !state.refineMode) {
+    try {
+      const checkpoint = checkpointTask(targetRoot, {
+        specSlug: state.specSlug,
+        runId: state.runId,
+        taskId,
+        files: evidenceData.filesChanged,
+        // Worktree mode: the cherry-pick creates a new SHA on the primary branch,
+        // so the tag must point at that integrated commit, not the pre-integration
+        // worktree commit whose branch is deleted right after integration.
+        commitSha: effectiveUseWorktrees ? getBaseCommit(targetRoot) : null
+      });
+      commitSha = checkpoint.commitSha || commitSha;
+      checkpointTag = checkpoint.tag;
+      if (checkpoint.tagError) {
+        console.warn(`[sdw-orch task finish] Warning: checkpoint tag for "${taskId}" was not created: ${checkpoint.tagError}. The saved commit already covers the work.`);
+      }
+    } catch (cpErr) {
+      // Only a failed commit reaches this branch: the work is still uncommitted, so
+      // rejecting the task keeps a meaningful retry path.
+      console.error(`Error: Failed to checkpoint task "${taskId}": ${cpErr.message}`);
+      return 1;
+    }
+  } else if (!effectiveUseWorktrees) {
     commitSha = getBaseCommit(targetRoot);
   }
 
@@ -2943,6 +3132,7 @@ function cmdTaskFinish(options) {
     status: 'completed',
     evidencePath: path.isAbsolute(evidencePath) ? path.relative(targetRoot, evidenceFileAbs).replace(/\\/g, '/') : evidencePath.replace(/\\/g, '/'),
     commitSha,
+    checkpointTag,
     filesChanged: evidenceData.filesChanged,
     acIds: evidenceData.acIds,
     summary: evidenceData.summary,
@@ -2958,6 +3148,9 @@ function cmdTaskFinish(options) {
   console.log(`  Files Changed: ${evidenceData.filesChanged.join(', ')}`);
   if (commitSha) {
     console.log(`  Commit SHA:    ${commitSha}`);
+  }
+  if (checkpointTag) {
+    console.log(`  Checkpoint:    ${checkpointTag}`);
   }
 
   // Check if all DAG tasks are completed
@@ -3407,6 +3600,7 @@ Subcommands:
 
 Options:
   --run-id <id>          Explicit run identifier (default: auto-generated or latest)
+  --new-run              Start a new run even when another run for the same specification is open
   --task <id>            DAG task ID for task next/finish/abandon (alias: --task-id)
   --evidence <path>      Path to evidence JSON file (alias: --evidence-path)
   --reason <text>        Why the dispatched task is being abandoned
@@ -3427,6 +3621,7 @@ Options:
   --skip-security        Bypass pre-commit security checks gate (audit logged)
   --no-worktrees         Disable git worktrees even if configured
   --worktrees            Force git worktrees on multi-task plans
+  --no-task-checkpoint   Do not commit and tag each accepted task (Step 6 remains the only save)
   --no-feature-branch    Disable feature branch creation even if configured
   --feature-branch       Force feature branch creation
   --skip-review          Skip code review step

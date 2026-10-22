@@ -1,23 +1,35 @@
 #!/usr/bin/env node
 'use strict';
 
-// retro.cjs — human-invoked retrospective over a completed sdw-orch run.
+// retro.cjs — retrospective over a completed sdw-orch run, invoked manually or
+// by sdw-orch when `retro.enabled` is true.
 //
-// Inputs are the run state file and the step artifacts that state declares.
-// Host transcripts and agent chat logs are excluded by construction: the
-// scanner never enumerates host log locations, and any declared path that
-// looks like a transcript, session log, or chat log is skipped and reported
-// as an excluded input. Missing declared artifacts are reported as absences;
-// their content is never synthesized.
+// Inputs are the run state file, the step artifacts that state declares, and
+// the transcript files explicitly named by `retro.transcripts` or
+// `--transcript`. Host transcripts are never discovered: the scanner does not
+// enumerate host log locations, and an unconfigured declared path that looks
+// like a transcript, session log, or chat log is skipped and reported as an
+// excluded input. Configured transcripts are scanned line by line for
+// orchestrator command signatures; the report cites path and line numbers
+// only, never line bodies. Missing declared artifacts are reported as
+// absences; their content is never synthesized. An unreadable transcript is
+// reported as a signal and never fails the command.
 //
 // `retro run` writes <runId>.retro.md and <runId>.retro.json inside the run
 // artifact directory. It never writes anywhere else and never touches git.
 
 const fs = require('fs');
 const path = require('path');
+const util = require('util');
+const zlib = require('zlib');
 
 const STATE_DIR = '.sdw/state';
-const USAGE = 'Usage: retro.cjs run [--run-id <id>] [--root <path>] [--json]';
+const USAGE = 'Usage: retro.cjs run [--run-id <id>] [--root <path>] [--transcript <path>]... [--transcript-mode <host|captured>] [--json]';
+
+// A named transcript can be a host session file: a zstd frame sequence where
+// one zstdDecompressSync call returns only the first frame.
+const ZSTD_MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
+const TRANSCRIPT_MODES = Object.freeze(['host', 'captured']);
 
 const CANDIDATE_FIELDS = Object.freeze(['id', 'title', 'severity', 'category', 'evidence', 'proposedChange']);
 const SEVERITIES = Object.freeze(['critical', 'high', 'medium', 'low']);
@@ -124,8 +136,7 @@ function readStateFiles(root) {
   return entries;
 }
 
-function selectRun(root, wantedRunId) {
-  const entries = readStateFiles(root);
+function selectRunEntry(entries, wantedRunId) {
   let candidates = entries;
   if (wantedRunId) {
     const wanted = normalizeRunId(wantedRunId);
@@ -140,6 +151,224 @@ function selectRun(root, wantedRunId) {
   candidates.sort((a, b) => runSortValue(b) - runSortValue(a)
     || String(b.state.runId || b.name).localeCompare(String(a.state.runId || a.name)));
   return candidates[0];
+}
+
+function selectRun(root, wantedRunId) {
+  return selectRunEntry(readStateFiles(root), wantedRunId);
+}
+
+// Spec 00045 AC5: sibling run states of the same specification that never
+// reached a terminal status. Only files already read for run selection are used.
+function collectLeftoverRuns(entries, selected) {
+  const specSlug = selected.state.specSlug;
+  if (!specSlug) return [];
+  return entries
+    .filter((entry) => entry.file !== selected.file && entry.state.specSlug === specSlug)
+    .filter((entry) => entry.state.status !== 'completed' && entry.state.status !== 'failed')
+    .map((entry) => {
+      const stamp = entry.state.updatedAt || entry.state.createdAt;
+      const parsed = Date.parse(stamp);
+      return {
+        runId: entry.state.runId || entry.name.replace(/\.state\.json$/i, ''),
+        status: entry.state.status || 'unknown',
+        ageMs: Number.isFinite(parsed) ? Math.max(0, Date.now() - parsed) : null
+      };
+    })
+    .sort((a, b) => (b.ageMs || 0) - (a.ageMs || 0));
+}
+
+function formatAge(ageMs) {
+  if (!Number.isFinite(ageMs)) return 'unknown';
+  const minutes = Math.floor(ageMs / 60000);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ${minutes % 60}m`;
+  return `${Math.floor(hours / 24)}d ${hours % 24}h`;
+}
+
+// Spec 00045 AC6: transcripts are opt-in inputs. `retro.transcripts` in
+// .sdw/config.json and repeated `--transcript` flags name them; nothing is
+// discovered on the host.
+function readConfiguredTranscripts(root) {
+  const configFile = path.join(root, '.sdw', 'config.json');
+  try {
+    const config = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+    const listed = config && config.retro && Array.isArray(config.retro.transcripts)
+      ? config.retro.transcripts
+      : [];
+    return listed
+      .map((entry) => (entry === null || entry === undefined ? '' : String(entry).trim()))
+      .filter(Boolean);
+  } catch (error) {
+    return [];
+  }
+}
+
+function resolveTranscript(root, declared) {
+  const expanded = String(declared).trim().replace(/\{projectRoot\}/g, normalizePath(root));
+  const absolute = path.isAbsolute(expanded) ? path.normalize(expanded) : path.resolve(root, expanded);
+  return {
+    absolute,
+    reported: isInside(root, absolute) ? normalizePath(path.relative(root, absolute)) : normalizePath(expanded)
+  };
+}
+
+function countLines(content) {
+  return content === '' ? 0 : content.split(/\r?\n/).length;
+}
+
+// Spec 00047 AC2: host session files hold thousands of concatenated zstd
+// frames, and decoding only the first one loses almost everything. Split on
+// the frame magic, decode each frame, and concatenate the results.
+function zstdFrameOffsets(buffer) {
+  const offsets = [];
+  let offset = buffer.indexOf(ZSTD_MAGIC);
+  while (offset !== -1) {
+    offsets.push(offset);
+    offset = buffer.indexOf(ZSTD_MAGIC, offset + ZSTD_MAGIC.length);
+  }
+  return offsets;
+}
+
+function decodeZstdFrames(buffer) {
+  const offsets = zstdFrameOffsets(buffer);
+  const parts = [];
+  for (let index = 0; index < offsets.length; index += 1) {
+    const start = offsets[index];
+    const end = index + 1 < offsets.length ? offsets[index + 1] : buffer.length;
+    try {
+      parts.push(zlib.zstdDecompressSync(buffer.subarray(start, end)));
+    } catch (error) {
+      // A magic sequence that does not begin a frame must not abort the run.
+    }
+  }
+  return parts.length === 0 ? null : Buffer.concat(parts);
+}
+
+// Spec 00047 AC2/AC5: zstd frames are decoded in memory; anything that is
+// neither valid UTF-8 text nor a decodable zstd frame is not a transcript.
+function decodeTranscriptContent(buffer) {
+  const isZstd = buffer.subarray(0, ZSTD_MAGIC.length).equals(ZSTD_MAGIC);
+  const bytes = isZstd ? decodeZstdFrames(buffer) : buffer;
+  if (!bytes) return null;
+  try {
+    return new util.TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch (error) {
+    return null;
+  }
+}
+
+// Spec 00045 AC7, 00048 AC1/AC2: format-agnostic command signatures. A line is
+// an orchestrator invocation only when the executable is immediately followed
+// by the `run` or `resume` command word, allowing a closing quote (and the
+// backslashes that escape it inside JSON) between them. A line that mentions
+// the executable and the word `run` in separate clauses is prose.
+const ORCHESTRATOR_INVOCATION = /(?:sdw-orch\b|sdw_orch\.cjs)\\*["']?\s+(resume|run)\b/i;
+
+// Spec 00048 AC3: the `--spec` value may be wrapped in quotes or backticks,
+// escaped as a JSON string, and followed by punctuation. Strip the wrappers
+// before the file stem is derived.
+function normalizeSpecValue(raw) {
+  return String(raw || '')
+    .trim()
+    .replace(/^[\\`"']+/, '')
+    .replace(/[\\`"'.,;:!?)\]}>]+$/, '');
+}
+
+// Spec 00048 AC4: one invocation is often recorded twice, once in the message
+// that issued it and once in the tool record that echoed it, so the two lines
+// differ in their host envelope. Compare a normalized command excerpt instead:
+// the command word `run` plus the normalized `--spec` value when present, which
+// ignores envelope text, whitespace runs, quoting, and escape noise.
+function orchestratorInvocation(line) {
+  const invocation = line.match(ORCHESTRATOR_INVOCATION);
+  if (!invocation) return null;
+  if (invocation[1].toLowerCase() === 'resume') {
+    return { verb: 'resume', specification: null, excerpt: null };
+  }
+  const rest = line.slice(invocation.index + invocation[0].length);
+  const match = rest.match(/--spec(?:=|\s+)(?:"([^"]+)"|'([^']+)'|(\S+))/i);
+  const value = match ? normalizeSpecValue(match[1] || match[2] || match[3]) : '';
+  const specification = value
+    ? path.posix.basename(normalizePath(value).replace(/^\.\//, '')).replace(/\.md$/i, '')
+    : null;
+  return {
+    verb: 'run',
+    specification: specification || null,
+    excerpt: value ? `run --spec ${value}` : 'run'
+  };
+}
+
+function scanTranscriptLines(reportedPath, content) {
+  const findings = [];
+  const pending = new Map();
+  let previous = null;
+  const lines = content.split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    const invocation = orchestratorInvocation(lines[index]);
+    if (!invocation) continue;
+    if (invocation.verb === 'resume') {
+      pending.clear();
+      previous = null;
+      continue;
+    }
+    if (!invocation.specification) continue;
+    // Spec 00048 AC4: the same command excerpt on the immediately preceding
+    // line is the call echoed by its result, not a second invocation. Advance
+    // the reference line so a chain of identical adjacent records keeps
+    // collapsing instead of tripping a two-line gap on the third record.
+    if (previous
+      && index - previous.index === 1
+      && previous.excerpt === invocation.excerpt
+      && previous.specification === invocation.specification) {
+      previous = { index, excerpt: invocation.excerpt, specification: invocation.specification };
+      continue;
+    }
+    previous = { index, excerpt: invocation.excerpt, specification: invocation.specification };
+    const prior = pending.get(invocation.specification);
+    if (prior !== undefined) {
+      findings.push({
+        path: reportedPath,
+        specification: invocation.specification,
+        lines: [prior, index + 1]
+      });
+    }
+    pending.set(invocation.specification, index + 1);
+  }
+  return findings;
+}
+
+// Spec 00045 AC6-AC8, 00047 AC2-AC5: read every explicitly named transcript
+// once, decoding zstd frames in memory. Unreadable paths become signals; they
+// never abort the report.
+function collectTranscripts(root, declaredPaths, mode) {
+  const inputs = [];
+  const unreadable = [];
+  const repeated = [];
+  const seen = new Set();
+  for (const declared of toArray(declaredPaths)) {
+    const resolved = resolveTranscript(root, declared);
+    if (seen.has(resolved.absolute)) continue;
+    seen.add(resolved.absolute);
+    let buffer = null;
+    try {
+      buffer = fs.readFileSync(resolved.absolute);
+    } catch (error) {
+      unreadable.push({
+        path: resolved.reported,
+        reason: error && error.code === 'ENOENT' ? 'not-found' : 'read-error'
+      });
+      continue;
+    }
+    const content = decodeTranscriptContent(buffer);
+    if (content === null) {
+      unreadable.push({ path: resolved.reported, reason: 'not-text' });
+      continue;
+    }
+    inputs.push({ path: resolved.reported, lines: countLines(content), mode });
+    repeated.push(...scanTranscriptLines(resolved.reported, content));
+  }
+  return { inputs, unreadable, repeated };
 }
 
 function artifactDirectory(root, state) {
@@ -243,7 +472,7 @@ function durationBetween(start, end) {
   return Math.max(0, to - from);
 }
 
-function collectSignals(state, inspection) {
+function collectSignals(state, inspection, leftoverRuns = [], transcripts = {}) {
   const steps = state.steps && typeof state.steps === 'object' ? state.steps : {};
   const stepKeys = Object.keys(steps).sort((a, b) => toNumber(a) - toNumber(b));
   const step4 = steps['4'] && typeof steps['4'] === 'object' ? steps['4'] : {};
@@ -379,7 +608,10 @@ function collectSignals(state, inspection) {
     gateRepairs,
     reviewFindings,
     unresolvedThreads,
-    missingArtifacts: inspection.missingArtifacts
+    missingArtifacts: inspection.missingArtifacts,
+    leftover_run: leftoverRuns,
+    repeated_run_invocation: toArray(transcripts.repeated),
+    transcript_unreadable: toArray(transcripts.unreadable)
   };
 }
 
@@ -429,7 +661,9 @@ function buildReport(options) {
     statePath: options.statePath,
     artifactsDir: options.artifactsDir,
     generatedAt: new Date().toISOString(),
+    transcriptMode: options.transcriptMode || 'host',
     inputs: [...options.inspection.inputs],
+    transcripts: toArray(options.transcripts),
     excludedInputs: [...options.inspection.excludedInputs],
     artifacts: [...options.inspection.artifacts],
     signals: options.signals,
@@ -450,10 +684,16 @@ function renderMarkdown(report) {
   lines.push('');
 
   lines.push('## Inputs', '');
+  const transcriptInputs = new Map(toArray(report.transcripts).map((item) => [item.path, item]));
   if (report.inputs.length === 0) {
-    lines.push('No declared artifacts were read.');
+    lines.push('No inputs were read.');
   } else {
-    for (const input of report.inputs) lines.push(`- \`${input}\``);
+    for (const input of report.inputs) {
+      const transcript = transcriptInputs.get(input);
+      lines.push(transcript
+        ? `- \`${input}\` (transcript, ${transcript.lines} lines, ${transcript.mode || 'host'})`
+        : `- \`${input}\``);
+    }
   }
   lines.push('');
 
@@ -531,6 +771,29 @@ function renderMarkdown(report) {
   }
   lines.push('');
 
+  lines.push('### Transcripts', '');
+  if (signals.repeated_run_invocation.length === 0 && signals.transcript_unreadable.length === 0) {
+    lines.push('No repeated run invocation or unreadable transcript was found.');
+  } else {
+    for (const item of signals.transcript_unreadable) {
+      lines.push(`- \`${item.path}\`: transcript unreadable (${item.reason}). Its content was not read.`);
+    }
+    for (const item of signals.repeated_run_invocation) {
+      lines.push(`- \`${item.path}\` lines ${item.lines.join(' and ')}: two \`sdw-orch run\` invocations for \`${item.specification}\` with no \`resume\` between them.`);
+    }
+  }
+  lines.push('');
+
+  lines.push('### Leftover Runs', '');
+  if (signals.leftover_run.length === 0) {
+    lines.push('No sibling run is open for this specification.');
+  } else {
+    for (const item of signals.leftover_run) {
+      lines.push(`- \`${item.runId}\` (status ${item.status || 'unknown'}, age ${formatAge(item.ageMs)}): a sibling run that never reached a terminal status.`);
+    }
+  }
+  lines.push('');
+
   lines.push('## Candidates', '');
   if (report.candidates.length === 0) {
     lines.push('No candidates recorded. A report with signals and no candidates is valid.');
@@ -573,7 +836,8 @@ function writeReports(root, artifactsDirectoryPath, report) {
 
 function runRetro(options = {}) {
   const root = path.resolve(options.root || findProjectRoot(process.cwd()));
-  const selected = selectRun(root, options.runId);
+  const entries = readStateFiles(root);
+  const selected = selectRunEntry(entries, options.runId);
   const state = selected.state;
   const statePath = normalizePath(path.relative(root, selected.file));
   const artifactsDirectoryPath = artifactDirectory(root, state);
@@ -589,14 +853,24 @@ function runRetro(options = {}) {
 
   const expected = collectExpectedArtifacts(state);
   const inspection = inspectArtifacts(root, expected);
-  const signals = collectSignals(state, inspection);
+  const transcriptMode = options.transcriptMode || 'host';
+  const transcripts = collectTranscripts(root, [
+    ...readConfiguredTranscripts(root),
+    ...toArray(options.transcripts)
+  ], transcriptMode);
+  for (const transcript of transcripts.inputs) {
+    if (!inspection.inputs.includes(transcript.path)) inspection.inputs.push(transcript.path);
+  }
+  const signals = collectSignals(state, inspection, collectLeftoverRuns(entries, selected), transcripts);
   const report = buildReport({
     state,
     runIdFallback: selected.name.replace(/\.state\.json$/i, ''),
     statePath,
     artifactsDir,
+    transcriptMode,
     inspection,
     signals,
+    transcripts: transcripts.inputs,
     candidates: options.candidates
   });
   const outputs = writeReports(root, artifactsDirectoryPath, report);
@@ -604,7 +878,15 @@ function runRetro(options = {}) {
 }
 
 function parseArgs(argv) {
-  const options = { subcommand: null, runId: null, root: null, json: false, help: false };
+  const options = {
+    subcommand: null,
+    runId: null,
+    root: null,
+    transcripts: [],
+    transcriptMode: 'host',
+    json: false,
+    help: false
+  };
   const positional = [];
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -618,13 +900,28 @@ function parseArgs(argv) {
       options.root = argv[++index];
       if (options.root === undefined) throw new Error('missing value for --root');
     } else if (arg.startsWith('--root=')) options.root = arg.slice('--root='.length);
-    else if (arg.startsWith('-')) throw new Error(`unknown argument: ${arg}`);
+    else if (arg === '--transcript') {
+      const value = argv[++index];
+      if (value === undefined) throw new Error('missing value for --transcript');
+      options.transcripts.push(value);
+    } else if (arg.startsWith('--transcript=')) options.transcripts.push(arg.slice('--transcript='.length));
+    else if (arg === '--transcript-mode') {
+      options.transcriptMode = argv[++index];
+      if (options.transcriptMode === undefined) throw new Error('missing value for --transcript-mode');
+    } else if (arg.startsWith('--transcript-mode=')) {
+      options.transcriptMode = arg.slice('--transcript-mode='.length);
+    } else if (arg.startsWith('-')) throw new Error(`unknown argument: ${arg}`);
     else positional.push(arg);
   }
   options.subcommand = positional[0] || null;
   if (positional.length > 1) throw new Error(`unexpected argument: ${positional[1]}`);
   if (options.runId !== null && String(options.runId).trim() === '') throw new Error('missing value for --run-id');
   if (options.root !== null && String(options.root).trim() === '') throw new Error('missing value for --root');
+  if (options.transcripts.some((value) => String(value).trim() === '')) throw new Error('missing value for --transcript');
+  if (!TRANSCRIPT_MODES.includes(options.transcriptMode)) {
+    throw new Error(`invalid --transcript-mode: ${options.transcriptMode}; expected ${TRANSCRIPT_MODES.join('|')}`);
+  }
+  options.transcripts = options.transcripts.map((value) => String(value).trim());
   return options;
 }
 

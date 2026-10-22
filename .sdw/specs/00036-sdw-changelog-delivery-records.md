@@ -3,7 +3,7 @@ id: null
 slug: 00036-sdw-changelog-delivery-records
 title: "SDW Changelog Delivery Records"
 source: local
-status: ready-to-implement
+status: implemented
 specDate: 2026-10-21
 ---
 # Specification — SDW Changelog Delivery Records

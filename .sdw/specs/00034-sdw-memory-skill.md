@@ -3,10 +3,9 @@ id: null
 slug: 00034-sdw-memory-skill
 title: "SDW Memory Skill — Central Knowledge Wrapper with Pluggable Store Backends"
 source: local
-status: draft
+status: implemented
 specDate: 2026-10-21
 ---
-
 # Specification — SDW Memory Skill — Central Knowledge Wrapper with Pluggable Store Backends
 
 ## Description

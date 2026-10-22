@@ -3,10 +3,9 @@ id: null
 slug: 00020-sdw-orch-branch-strategy
 title: "SDW Orchestrator Configurable Branch and Ship-Ref Strategy"
 source: local
-status: awaiting-approval
+status: abandoned
 specDate: 2026-10-19
 ---
-
 # Specification — SDW Orchestrator Configurable Branch and Ship-Ref Strategy
 
 ## Description

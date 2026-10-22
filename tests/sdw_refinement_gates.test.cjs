@@ -123,6 +123,7 @@ test('sdw-refinement-gates - AC1, AC2: Step 2 Refinement naming and structured b
       specPath,
       root: repoRoot,
       runId,
+      newRun: true, // the scaffold state above is inspected, not resumed
       skipSecurity: true,
       skipReview: true,
       unattended: true,
