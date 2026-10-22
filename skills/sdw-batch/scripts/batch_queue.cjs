@@ -529,7 +529,9 @@ function mergeEnabled(config, options = {}) {
 function applyMerge({ config, manifest, item, options = {} } = {}) {
   if (!item) return undefined;
   // AC6: a resumed queue never re-merges an item whose attempt is already on
-  // the manifest, whether that attempt succeeded or failed.
+  // the manifest, whether that attempt succeeded or failed. This is the
+  // per-item rule; the pre-flight reads the same record through
+  // preflightMergeOpen, which treats only a `merged` record as final.
   if (item.merge && item.merge.attempted === true) return item.merge;
 
   const at = new Date().toISOString();
@@ -670,6 +672,18 @@ function missingDeliveries(config, manifest, item, baseCommit) {
     && !baseContains(config, prior.deliveryCommit, baseCommit));
 }
 
+// Pre-flight merge eligibility. The per-item path (applyMerge) treats any
+// recorded attempt as final; this path re-issues the merge while the earlier
+// delivery is missing from the refreshed base, because AC12 requires the queue
+// to land an earlier open pull request before delegating the next item. A
+// recorded `failed` attempt merged nothing, so retrying it is recovery; only a
+// record whose status is `merged` is final here.
+function preflightMergeOpen(prior, pullRequest) {
+  if (!pullRequest || pullRequest.prNumber === null) return false;
+  if (pullRequest.shipStatus !== 'delivered') return false;
+  return !(prior.merge && prior.merge.status === 'merged');
+}
+
 function runPreflight({ config, manifest, item, options = {} } = {}) {
   const at = new Date().toISOString();
   const baseBranch = baseBranchOf(config);
@@ -713,17 +727,8 @@ function runPreflight({ config, manifest, item, options = {} } = {}) {
   let mergedAny = false;
   for (const prior of missing) {
     const pullRequest = deliveredPullRequest(config, prior);
-    // AC6 makes the per-item merge idempotent: a record that already merged is
-    // never re-merged, here or on resume. AC12 governs this pre-flight path:
-    // while the pull request is still open the base cannot contain the
-    // delivery, so the merge is issued now. A recorded attempt whose status is
-    // "failed" threw before the provider merged anything, so retrying it is
-    // recovery rather than a duplicate merge; a record with status "merged"
-    // whose delivery is still missing halts instead of merging again.
     const alreadyMerged = Boolean(prior.merge && prior.merge.status === 'merged');
-    const open = pullRequest.prNumber !== null
-      && pullRequest.shipStatus === 'delivered'
-      && !alreadyMerged;
+    const open = preflightMergeOpen(prior, pullRequest);
     if (!open) {
       const message = alreadyMerged
         ? `${missingDeliveryMessage(prior, baseBranch)} although its manifest records merged pull request #${pullRequest.prNumber}`

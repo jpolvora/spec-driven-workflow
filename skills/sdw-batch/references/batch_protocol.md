@@ -127,7 +127,14 @@ Every completed item records `merge`:
 | `prNumber` | The targeted pull request id, when one existed. |
 | `at` | ISO timestamp of the outcome. |
 
-A merge failure is an operator concern (permissions, pending approvals, branch rules): the failure is recorded, the item stays `completed`, and the queue advances. A resume never re-issues a merge whose attempt is already recorded, whether it succeeded or failed.
+A merge failure is an operator concern (permissions, pending approvals, branch rules): the failure is recorded, the item stays `completed`, and the queue advances.
+
+Two call sites read a recorded attempt, and they differ by design:
+
+| Path | Rule |
+|---|---|
+| Per-item merge (`applyMerge`) | Any recorded attempt is final: a resumed queue never re-issues a merge whose attempt is already on the manifest, whether it succeeded or failed. |
+| Pre-flight merge (`preflightMergeOpen`) | Only a record with status `merged` is final. While the earlier pull request is still open, the refreshed base cannot contain its delivery, so the pre-flight re-issues the merge, including a retry of a recorded `failed` attempt, which merged nothing. A record that already merged halts instead, naming the missing delivery commit. |
 
 ### Pre-flight
 
@@ -165,7 +172,7 @@ A halt prints `[sdw-batch] Pre-flight halted the queue before delegating "<slug>
 - If the recorded state is already `completed`, reconcile the item (copy delivery commit and branch) and advance without re-executing.
 - If the state file is missing, delegate a fresh `run` with a new run id.
 - Every resumed item is pre-flighted again before delegation (§ 4), so a base that advanced while the queue was paused is re-read rather than trusted.
-- A resume never re-issues a merge already recorded on an item; the pre-flight retries only an earlier open pull request whose delivery is missing from the refreshed base.
+- A resume never re-issues a merge already recorded on an item through the per-item path. The pre-flight re-issues one only for an earlier pull request that is still open while its delivery is missing from the refreshed base, and never for a record whose status is `merged`.
 - The manifest policy (`continueOnError`, `syncIndex`) is preserved unless the resuming invocation overrides it.
 
 ## 6. Failure Policy
