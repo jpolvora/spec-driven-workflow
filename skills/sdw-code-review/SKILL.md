@@ -18,6 +18,14 @@ Lean standalone code reviewer for Spec-Driven Workflow. Analyzes committed and
 uncommitted working-tree changes against an auto-detected base branch, applying
 `sdw-rules` simplicity first (YAGNI, surgical scope, syntax hygiene).
 
+## Fresh-Session Mandate
+
+An orchestrated invocation (`sdw-orch` Step 7) executes only in a context-fresh
+reviewer subagent session. Its brief carries target root, base reference, report
+path, and scope fence, never the implementation transcript, prior worker reasoning,
+DAG prompts, or judge verdicts. Same-session CLI review in the orchestrator session
+is not a verdict; standalone `doctor` plus `--dry-run` stay valid.
+
 ## Subcommands
 
 - `run [--base <ref>] [--target <path>] [--report <path>] [--fix] [--dry-run] [--json]`: Review working tree and HEAD diffs, write Markdown fix plan, emit JSON.
@@ -40,9 +48,10 @@ uncommitted working-tree changes against an auto-detected base branch, applying
    - Run: `node skills/sdw-code-review/scripts/sdw_code_review.cjs run --target <path> --report <reportPath> [--fix] [--dry-run] [--json]`
    - Done when: Helper exits `0` (no `critical`/`warning`) or `1` (blocking or invalid input).
 
-3. **Triage Report & Delegate**
-   Read Markdown report as executable fix plan. Under `sdw-orch` Step 7, dispatch
-   subagent or CLI runner and inspect JSON (`passed`, `errorCount`,
+3. **Triage Report in a Fresh Session**
+   Read Markdown report as executable fix plan. For an orchestrated Step 7 verdict,
+   triage runs only in a context-fresh reviewer subagent session; never run this CLI
+   in the orchestrator session. Inspect JSON (`passed`, `errorCount`,
    `warningCount`, `suggestionCount`, `findings`) to advance, fix, or pause.
    - Done when: Blocking findings are `0` or fix ceiling reached with residual recorded.
 
