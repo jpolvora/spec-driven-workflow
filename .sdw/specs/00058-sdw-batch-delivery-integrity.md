@@ -3,7 +3,7 @@ id: null
 slug: 00058-sdw-batch-delivery-integrity
 title: "SDW Batch Delivery Integrity — Merge, Pre-Flight, Base Freshness, and Registry Truth"
 source: local
-status: ready-to-implement
+status: implemented
 specDate: 2026-10-22
 priority: high
 value: "Makes the queue merge every delivered item, prove the base before delegating, survive a stale paused run, and keep the registry honest about what shipped"
