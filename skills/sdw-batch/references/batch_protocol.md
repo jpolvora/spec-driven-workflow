@@ -74,7 +74,7 @@ Path: `.sdw/state/batch-{batchId}.json` (gitignored run state).
 
 Statuses: `pending`, `already_implemented`, `in_progress`, `awaiting_implementation`, `awaiting_judgment`, `completed`, `failed`.
 Manifest statuses: `in_progress`, `paused`, `halted`, `completed`, `completed_with_errors`.
-Item fields: `retroFollowUp` records the follow-up outcome of a completed item; `followUpDepth: 1` and `origin` mark a queued follow-up item.
+Item fields: `retroFollowUp` records the follow-up outcome of a completed item; `followUpDepth: 1` and `origin` mark a queued follow-up item. `merge` records the pull request merge outcome of a completed item (§ 4); `preflight` records the base refresh that preceded its delegation (§ 4).
 
 ### Already-implemented skip
 
@@ -107,27 +107,87 @@ A follow-up item is still fully summarized: `candidates` and `bySeverity` stay v
 
 A failed specification creation is recorded as `{ candidateId, error }` in `failures`; the remaining candidates are still processed, the item stays `completed`, and the queue status does not change. Queued specifications and failures appear in the summary. The stage never prompts and never halts the queue; only the delegated run outcome halts or pauses it.
 
-## 4. Resume Rules
+## 4. Auto-Merge and Pre-Flight
+
+### Auto-merge policy
+
+`batch.autoMerge` in `.sdw/config.json` decides whether the queue merges each delivered pull request. An absent key resolves to `true`; only an explicit `false` opts out. `--no-merge` on `sdw-batch run` or `sdw-batch resume` disables the merge for that invocation only and never rewrites the configuration.
+
+After an item completes and its follow-up stage finishes, the queue reads the delegated run's step 8 output (`pullRequest`, `shipStatus`). When the ship status is `delivered` and the pull request id is numeric, it issues one provider merge call through the configured `scmProvider`, reusing the `sdw-ship-pr --merge` contract: `gh pr merge <n> --merge` for GitHub, `az repos pr update --id <n> --status completed` for Azure DevOps. The queue never deletes the head branch and never invents provider flags.
+
+Every completed item records `merge`:
+
+| Field | Meaning |
+|---|---|
+| `requested` | The policy asked for a merge (`batch.autoMerge` true and `--no-merge` absent). |
+| `attempted` | A provider merge call was issued. |
+| `ok` | `true` when the provider accepted the merge, `false` when it failed, `null` when no call was made. |
+| `status` | `merged`, `skipped`, or `failed`. |
+| `reason` | The skip reason (`--no-merge`, `batch.autoMerge is false`, `no-pr`, `invalid-pr-number`, `no scm provider`) or the provider error. |
+| `prNumber` | The targeted pull request id, when one existed. |
+| `at` | ISO timestamp of the outcome. |
+
+A merge failure is an operator concern (permissions, pending approvals, branch rules): the failure is recorded, the item stays `completed`, and the queue advances.
+
+Two call sites read a recorded attempt, and they differ by design:
+
+| Path | Rule |
+|---|---|
+| Per-item merge (`applyMerge`) | Any recorded attempt is final: a resumed queue never re-issues a merge whose attempt is already on the manifest, whether it succeeded or failed. |
+| Pre-flight merge (`preflightMergeOpen`) | Only a record with status `merged` is final. While the earlier pull request is still open, the refreshed base cannot contain its delivery, so the pre-flight re-issues the merge, including a retry of a recorded `failed` attempt, which merged nothing. A record that already merged halts instead, naming the missing delivery commit. |
+
+### Pre-flight
+
+Before an item is delegated, the queue refreshes the base lane without checking anything out: `git fetch origin +refs/heads/<base>:refs/remotes/origin/<base>`, where `<base>` is `branching.workBranch`, then `branching.integrationBranch`, then the remote default branch. The resolved commit is recorded on the item:
+
+```json
+"preflight": {
+  "requested": true,
+  "status": "refreshed",
+  "remote": "origin",
+  "baseBranch": "develop",
+  "baseCommit": "0dc5ce6...",
+  "reason": null,
+  "at": "2026-10-21T12:05:00.000Z"
+}
+```
+
+`status` is `refreshed`, `halted`, `failed`, `no-remote`, `no-base-branch`, or `unavailable` (no git repository). Without a repository, a remote, or a resolvable base lane there is nothing shared to prove, so `no-remote`, `no-base-branch`, and `unavailable` record the condition and the queue proceeds. A failed fetch halts instead, because the queue cannot prove the base it would delegate onto.
+
+With a refreshed base, every earlier completed item's `deliveryCommit` must be reachable from it (`git merge-base --is-ancestor`). A missing delivery is handled before delegating:
+
+| Missing delivery | Action |
+|---|---|
+| Its pull request is still open and auto-merge is enabled | Merge the pull request now (same provider contract), refresh the base once more, and verify again. |
+| Its pull request is still open and auto-merge is disabled (`batch.autoMerge: false` or `--no-merge`) | Halt with a descriptive error naming the pull request, the commit, and the branch. |
+| No open pull request can deliver it (already merged, or never shipped) | Halt naming the missing commit and the branch. |
+
+A halt prints `[sdw-batch] Pre-flight halted the queue before delegating "<slug>": ...`, sets the manifest to `halted`, leaves the item `pending`, prints the summary, and exits `1`. The operator merges the pull request or fixes the base, then resumes.
+
+## 5. Resume Rules
 
 - Resume skips items that are `completed` or `already_implemented`; neither is delegated again.
 - Resume starts at the first item that is not `completed`.
 - If the item records a `runId` whose state is `paused` or `in_progress`, delegate `sdw-orch resume` with that exact id (never a new run).
 - If the recorded state is already `completed`, reconcile the item (copy delivery commit and branch) and advance without re-executing.
 - If the state file is missing, delegate a fresh `run` with a new run id.
+- Every resumed item is pre-flighted again before delegation (§ 4), so a base that advanced while the queue was paused is re-read rather than trusted.
+- A resume never re-issues a merge already recorded on an item through the per-item path. The pre-flight re-issues one only for an earlier pull request that is still open while its delivery is missing from the refreshed base, and never for a record whose status is `merged`.
 - The manifest policy (`continueOnError`, `syncIndex`) is preserved unless the resuming invocation overrides it.
 
-## 5. Failure Policy
+## 6. Failure Policy
 
 - Default: the item is marked `failed`, the manifest becomes `halted`, remaining items stay `pending`, and the command exits `1`.
+- A pre-flight halt also exits `1` and sets the manifest to `halted`, but the item is never marked `failed`: it was never delegated.
 - `--continue-on-error`: the failure is recorded and the queue advances; the final manifest becomes `completed_with_errors` and the command exits `1`.
 - Batch exit codes are `0` (completed), `1` (failure or finished with errors), `4`/`5` (propagated pauses). A delegated failure code is recorded in `error`, never re-emitted, so no caller can mistake a failure for a pause.
 - Resuming a batch whose manifest is `completed_with_errors` returns `1` and leaves the manifest unchanged; it never re-labels the batch as `completed`.
 
-## 6. Summary
+## 7. Summary
 
-After completion, halt, or pause, `sdw-batch` prints one table: index, slug, status, duration, delivery commit. A follow-up section below the table lists the queued specifications and every creation failure with its candidate id. `--json` prints the manifest instead. Per-spec artifacts and state remain in the single run's directory.
+After completion, halt, or pause, `sdw-batch` prints one table: index, slug, status, duration, delivery commit, and merge outcome (`merged #<n>`, `failed`, `skipped: <reason>`, or `-`). A follow-up section below the table lists the queued specifications and every creation failure with its candidate id. `--json` prints the manifest instead. Per-spec artifacts and state remain in the single run's directory.
 
-## 7. Boundaries
+## 8. Boundaries
 
 - No parallel execution: one delegated run at a time.
 - No direct calls to individual `sdw-orch` steps; the CLI is the only interface.

@@ -26,13 +26,34 @@ function writeSpec(root, name, slug) {
 function writeState(root, runId, status, extra = {}) {
   const stateDir = path.join(root, '.sdw', 'state');
   fs.mkdirSync(stateDir, { recursive: true });
+  const pullRequest = extra.pullRequest || null;
+  const shipStatus = extra.shipStatus || null;
   fs.writeFileSync(path.join(stateDir, `${runId}.state.json`), JSON.stringify({
     runId,
     status,
     specSlug: 'fixture',
     deliveryCommit: extra.deliveryCommit || null,
-    branch: extra.branch || 'develop'
+    branch: extra.branch || 'develop',
+    pullRequest,
+    shipStatus,
+    // Step 8 output is the delivery record sdw-orch writes for the item.
+    steps: {
+      8: { name: 'pr_preparation', status: 'completed', output: { pullRequest, shipStatus } }
+    }
   }, null, 2), 'utf8');
+}
+
+function writeConfig(root, config) {
+  fs.mkdirSync(path.join(root, '.sdw'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.sdw', 'config.json'), `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+}
+
+function writeDeliveredState(root, runId, prNumber) {
+  writeState(root, runId, 'completed', {
+    deliveryCommit: `commit-${prNumber}`,
+    pullRequest: { number: prNumber, url: `https://example.test/pull/${prNumber}` },
+    shipStatus: 'delivered'
+  });
 }
 
 function setup() {
@@ -65,6 +86,54 @@ function captureLogs(fn) {
   } finally {
     console.log = original;
   }
+}
+
+function captureAll(fn) {
+  const logs = [];
+  const errors = [];
+  const originalLog = console.log;
+  const originalError = console.error;
+  console.log = (...args) => logs.push(args.join(' '));
+  console.error = (...args) => errors.push(args.join(' '));
+  try {
+    return { result: fn(), logs, errors };
+  } finally {
+    console.log = originalLog;
+    console.error = originalError;
+  }
+}
+
+function git(dir, args) {
+  const result = spawnSync('git', args, { cwd: dir, encoding: 'utf8' });
+  if (result.status !== 0) {
+    throw new Error(`git ${args.join(' ')} failed: ${String(result.stderr || result.stdout || '').trim()}`);
+  }
+  return String(result.stdout || '').trim();
+}
+
+// Pre-flight fixtures need a real base lane on a real remote: a bare `origin`
+// plus a work repository whose `develop` pushes to it.
+function initRepoWithRemote(root) {
+  const remote = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-batch-origin-'));
+  git(remote, ['init', '--bare', '-q']);
+  git(root, ['init', '-q']);
+  git(root, ['config', 'user.name', 'SDW Tester']);
+  git(root, ['config', 'user.email', 'tester@sdw.org']);
+  fs.writeFileSync(path.join(root, 'README.md'), '# batch fixture\n', 'utf8');
+  git(root, ['add', '-A']);
+  git(root, ['commit', '-q', '-m', 'initial commit']);
+  git(root, ['branch', '-M', 'develop']);
+  git(root, ['remote', 'add', 'origin', remote.replace(/\\/g, '/')]);
+  git(root, ['push', '-q', '-u', 'origin', 'develop']);
+  return remote;
+}
+
+function writeDeliveredCommit(root, runId, deliveryCommit, prNumber) {
+  writeState(root, runId, 'completed', {
+    deliveryCommit,
+    pullRequest: { number: prNumber, url: `https://example.test/pull/${prNumber}` },
+    shipStatus: 'delivered'
+  });
 }
 
 test('pre-flight: a missing specification rejects the batch before any manifest exists', () => {
@@ -609,3 +678,538 @@ test('cli: run parses a specification list and batch options', () => {
   assert.equal(options.batchId, 'batch-x');
   assert.equal(cli.parseArgs(['resume', 'batch-x']).batchId, 'batch-x');
 });
+
+// Spec 00053 AC1-AC7: the queue merges each delivered pull request before it
+// advances, records the outcome per item, and never re-merges on resume.
+
+test('AC1: batch.autoMerge resolves to true when absent and honours an explicit false', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-batch-merge-config-'));
+  try {
+    assert.equal(queue.loadConfig(root).autoMerge, true, 'an absent batch.autoMerge resolves to true');
+    writeConfig(root, { batch: { autoMerge: false } });
+    assert.equal(queue.loadConfig(root).autoMerge, false, 'the configured false is preserved');
+    writeConfig(root, { batch: { autoMerge: true } });
+    assert.equal(queue.loadConfig(root).autoMerge, true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC2 & AC5: a delivered pull request is merged before the next item is delegated and recorded on the manifest', () => {
+  const { root, specs } = setup();
+  try {
+    writeConfig(root, { scmProvider: 'github', batch: { autoMerge: true } });
+    const events = [];
+    const { result } = captureLogs(() => queue.runBatch(specs, {
+      root,
+      noSync: true,
+      _invoke: ({ runId, specPath }) => {
+        const name = path.basename(specPath);
+        events.push(`delegate:${name}`);
+        writeDeliveredState(root, runId, name.includes('alpha') ? '11' : '12');
+        return 0;
+      },
+      _mergePr: ({ prNumber, command, provider }) => {
+        events.push(`merge:${prNumber}`);
+        assert.equal(provider, 'github', 'the configured SCM provider is used');
+        assert.match(command, /^gh pr merge \d+ --merge$/, 'the ship-pr merge command is reused');
+        return { merged: true };
+      }
+    }));
+
+    assert.equal(result, 0);
+    assert.deepEqual(events, [
+      'delegate:00001-alpha.md',
+      'merge:11',
+      'delegate:00002-beta.md',
+      'merge:12'
+    ], 'each delivered pull request is merged before the queue advances');
+
+    const manifest = queue.loadManifest(queue.loadConfig(root));
+    for (const item of manifest.queue) {
+      assert.ok(item.merge, 'every completed item records its merge outcome');
+      for (const field of ['requested', 'attempted', 'ok', 'status', 'prNumber', 'at']) {
+        assert.ok(
+          Object.prototype.hasOwnProperty.call(item.merge, field),
+          `the merge record carries ${field}`
+        );
+      }
+      assert.equal(item.merge.requested, true);
+      assert.equal(item.merge.attempted, true);
+      assert.equal(item.merge.ok, true);
+      assert.equal(item.merge.status, 'merged');
+      assert.equal(typeof item.merge.at, 'string');
+    }
+    assert.equal(manifest.queue[0].merge.prNumber, '11');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC3: autoMerge false and --no-merge skip the merge with the policy reason', () => {
+  const policyOff = setup();
+  try {
+    writeConfig(policyOff.root, { scmProvider: 'github', batch: { autoMerge: false } });
+    let calls = 0;
+    const { result } = captureLogs(() => queue.runBatch(policyOff.specs, {
+      root: policyOff.root,
+      noSync: true,
+      _invoke: ({ runId }) => { writeDeliveredState(policyOff.root, runId, '7'); return 0; },
+      _mergePr: () => { calls += 1; }
+    }));
+
+    assert.equal(result, 0);
+    assert.equal(calls, 0, 'a false policy never calls the provider');
+    const manifest = queue.loadManifest(queue.loadConfig(policyOff.root));
+    for (const item of manifest.queue) {
+      assert.equal(item.merge.status, 'skipped');
+      assert.equal(item.merge.requested, false);
+      assert.equal(item.merge.attempted, false);
+      assert.equal(item.merge.ok, null);
+      assert.match(item.merge.reason, /batch\.autoMerge is false/);
+    }
+  } finally {
+    fs.rmSync(policyOff.root, { recursive: true, force: true });
+  }
+
+  const flagOff = setup();
+  try {
+    writeConfig(flagOff.root, { scmProvider: 'github', batch: { autoMerge: true } });
+    let calls = 0;
+    const { result } = captureLogs(() => queue.runBatch(flagOff.specs, {
+      root: flagOff.root,
+      noSync: true,
+      noMerge: true,
+      _invoke: ({ runId }) => { writeDeliveredState(flagOff.root, runId, '8'); return 0; },
+      _mergePr: () => { calls += 1; }
+    }));
+
+    assert.equal(result, 0);
+    assert.equal(calls, 0, '--no-merge overrides a true policy');
+    const manifest = queue.loadManifest(queue.loadConfig(flagOff.root));
+    assert.equal(manifest.queue[0].merge.status, 'skipped');
+    assert.match(manifest.queue[0].merge.reason, /--no-merge/);
+  } finally {
+    fs.rmSync(flagOff.root, { recursive: true, force: true });
+  }
+});
+
+test('AC4: a failed merge is recorded and the queue advances with the item still completed', () => {
+  const { root, specs } = setup();
+  try {
+    writeConfig(root, { scmProvider: 'github', batch: { autoMerge: true } });
+    const attempts = [];
+    const { result, logs } = captureLogs(() => queue.runBatch(specs, {
+      root,
+      noSync: true,
+      _invoke: ({ runId, specPath }) => {
+        writeDeliveredState(root, runId, path.basename(specPath).includes('alpha') ? '21' : '22');
+        return 0;
+      },
+      _mergePr: ({ prNumber }) => {
+        attempts.push(prNumber);
+        throw new Error('branch protection blocks the merge');
+      }
+    }));
+
+    assert.equal(result, 0, 'the batch exit code reflects the delegated runs, never the merge');
+    assert.deepEqual(attempts, ['21', '22'], 'a failed merge never stops the next item');
+    const manifest = queue.loadManifest(queue.loadConfig(root));
+    assert.deepEqual(manifest.queue.map(item => item.status), ['completed', 'completed']);
+    assert.equal(manifest.status, 'completed');
+
+    const first = manifest.queue[0].merge;
+    assert.equal(first.status, 'failed');
+    assert.equal(first.ok, false);
+    assert.equal(first.attempted, true);
+    assert.match(first.reason, /branch protection/);
+    assert.ok(logs.join('\n').includes('Merge failed'), 'the operator sees the merge failure');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC6: resume never merges an item whose manifest already records an attempted merge', () => {
+  const { root, specs } = setup();
+  try {
+    writeConfig(root, { scmProvider: 'github', batch: { autoMerge: true } });
+    let mergeCalls = 0;
+
+    const { result: paused } = captureLogs(() => queue.runBatch(specs, {
+      root,
+      noSync: true,
+      _invoke: ({ runId, specPath }) => {
+        if (path.basename(specPath).includes('alpha')) {
+          writeDeliveredState(root, runId, '31');
+          return 0;
+        }
+        writeState(root, runId, 'paused');
+        return 4;
+      },
+      _mergePr: () => { mergeCalls += 1; return { merged: true }; }
+    }));
+
+    assert.equal(paused, 4);
+    assert.equal(mergeCalls, 1);
+    let manifest = queue.loadManifest(queue.loadConfig(root));
+    const firstMergeAt = manifest.queue[0].merge.at;
+    assert.equal(manifest.queue[0].merge.status, 'merged');
+
+    const { result: resumed } = captureLogs(() => queue.resumeBatch(manifest.batchId, {
+      root,
+      noSync: true,
+      _invoke: ({ runId }) => { writeDeliveredState(root, runId, '32'); return 0; },
+      _mergePr: () => { mergeCalls += 1; return { merged: true }; }
+    }));
+
+    assert.equal(resumed, 0);
+    assert.equal(mergeCalls, 2, 'only the item that had not merged yet is merged');
+
+    manifest = queue.loadManifest(queue.loadConfig(root), manifest.batchId);
+    assert.equal(manifest.queue[0].merge.at, firstMergeAt, 'the recorded merge is never reissued');
+
+    // Even a reconciled item that re-enters the completed branch keeps its
+    // recorded attempt: the guard is on the attempt, not on the item status.
+    manifest.queue[0].status = 'awaiting_implementation';
+    manifest.status = 'in_progress';
+    manifest.currentIndex = 0;
+    queue.saveManifest(queue.loadConfig(root), manifest);
+
+    const { result: reconciled } = captureLogs(() => queue.resumeBatch(manifest.batchId, {
+      root,
+      noSync: true,
+      _invoke: () => { throw new Error('a completed run must not be delegated'); },
+      _mergePr: () => { mergeCalls += 1; return { merged: true }; }
+    }));
+
+    assert.equal(reconciled, 0);
+    assert.equal(mergeCalls, 2, 'an attempted merge recorded on the manifest is never reissued');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC7: the summary prints each item merge outcome', () => {
+  const { root, specs } = setup();
+  try {
+    writeConfig(root, { scmProvider: 'github', batch: { autoMerge: true } });
+    const { result, logs } = captureLogs(() => queue.runBatch(specs, {
+      root,
+      noSync: true,
+      _invoke: ({ runId, specPath }) => {
+        if (path.basename(specPath).includes('alpha')) {
+          writeDeliveredState(root, runId, '41');
+        } else {
+          writeState(root, runId, 'completed', { deliveryCommit: 'no-pr' });
+        }
+        return 0;
+      },
+      _mergePr: () => ({ merged: true })
+    }));
+
+    assert.equal(result, 0);
+    const output = logs.join('\n');
+    assert.ok(output.includes('| Merge'), 'the summary carries a merge column');
+    assert.match(output, /00001-alpha.*merged #41/);
+    assert.match(output, /00002-beta.*skipped: no-pr/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Spec 00053 AC8: `--no-merge` is accepted by both `run` and `resume`.
+
+test('AC8: --no-merge parses on run and resume and the CLI accepts the flag', () => {
+  const run = cli.parseArgs(['run', 'a.md', 'b.md', '--no-merge']);
+  assert.equal(run.noMerge, true, 'run accepts --no-merge');
+  assert.deepEqual(run.specPaths, ['a.md', 'b.md'], 'the flag never consumes a specification path');
+  const resume = cli.parseArgs(['resume', 'batch-x', '--no-merge']);
+  assert.equal(resume.noMerge, true, 'resume accepts --no-merge');
+  assert.equal(resume.batchId, 'batch-x');
+  assert.equal(cli.parseArgs(['run', 'a.md']).noMerge, false, 'the default is a configured merge');
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-batch-no-merge-'));
+  try {
+    const spec = writeSpec(root, '00001-alpha.md', '00001-alpha');
+    const runResult = spawnSync(process.execPath, [CLI, 'run', spec, '--dry-run', '--no-merge', '--root', root], { encoding: 'utf8' });
+    assert.equal(runResult.status, 0, `run --no-merge is accepted: ${runResult.stderr}`);
+    assert.match(runResult.stdout, /Dry-run plan/);
+
+    const resumeResult = spawnSync(process.execPath, [CLI, 'resume', '--no-merge', '--root', root], { encoding: 'utf8' });
+    assert.doesNotMatch(resumeResult.stderr, /unknown option/, 'resume never rejects --no-merge');
+    assert.match(resumeResult.stderr, /No batch manifest found/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Spec 00053 AC11-AC13: the pre-flight refreshes the base lane, proves earlier
+// deliveries are reachable from it, and reacts to a stale base.
+
+test('AC11: the pre-flight refreshes the base from origin and records the resolved base commit per item', () => {
+  const { root, specs } = setup();
+  let remote = null;
+  try {
+    const config = {
+      scmProvider: 'github',
+      batch: { autoMerge: true },
+      branching: { workBranch: 'develop', integrationBranch: 'develop' }
+    };
+    writeConfig(root, config);
+    remote = initRepoWithRemote(root);
+    const initial = git(root, ['rev-parse', 'refs/remotes/origin/develop']);
+    let advanced = null;
+    let delegations = 0;
+    const { result } = captureLogs(() => queue.runBatch(specs, {
+      root,
+      noSync: true,
+      _invoke: ({ runId, specPath }) => {
+        delegations += 1;
+        const alpha = path.basename(specPath).includes('alpha');
+        writeDeliveredCommit(root, runId, initial, alpha ? '51' : '52');
+        if (alpha) {
+          // Advance the remote base while the first item runs, so the second
+          // pre-flight proves it refreshed rather than reading a cached ref.
+          git(root, ['commit', '-q', '--allow-empty', '-m', 'advance origin']);
+          advanced = git(root, ['rev-parse', 'HEAD']);
+          git(root, ['push', '-q', 'origin', 'develop']);
+          git(root, ['reset', '-q', '--hard', 'HEAD~1']);
+        }
+        return 0;
+      },
+      _mergePr: () => ({ merged: true })
+    }));
+
+    assert.equal(result, 0);
+    assert.equal(delegations, 2);
+    const manifest = queue.loadManifest(queue.loadConfig(root));
+    for (const item of manifest.queue) {
+      assert.equal(item.preflight.status, 'refreshed');
+      assert.equal(item.preflight.remote, 'origin');
+      assert.equal(item.preflight.baseBranch, 'develop');
+      assert.match(item.preflight.baseCommit, /^[0-9a-f]{40}$/);
+      assert.equal(typeof item.preflight.at, 'string');
+    }
+    assert.equal(manifest.queue[0].preflight.baseCommit, initial);
+    assert.equal(manifest.queue[1].preflight.baseCommit, advanced, 'the second pre-flight reads the advanced remote base');
+    assert.notEqual(manifest.queue[0].preflight.baseCommit, manifest.queue[1].preflight.baseCommit);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    if (remote) fs.rmSync(remote, { recursive: true, force: true });
+  }
+});
+
+test('AC12: the pre-flight merges an earlier open pull request when auto-merge is enabled, then delegates', () => {
+  const { root, specs } = setup();
+  let remote = null;
+  try {
+    writeConfig(root, {
+      scmProvider: 'github',
+      batch: { autoMerge: true },
+      branching: { workBranch: 'develop', integrationBranch: 'develop' }
+    });
+    remote = initRepoWithRemote(root);
+    // The first delivery stays on a feature branch: the base cannot contain it
+    // until the pull request is merged.
+    git(root, ['switch', '-q', '-c', 'feature/00001-alpha']);
+    fs.writeFileSync(path.join(root, 'delivery.txt'), 'alpha delivery\n', 'utf8');
+    git(root, ['add', '-A']);
+    git(root, ['commit', '-q', '-m', 'alpha delivery']);
+    const delivery = git(root, ['rev-parse', 'HEAD']);
+    git(root, ['switch', '-q', 'develop']);
+
+    const mergeCalls = [];
+    let delegations = 0;
+    const { result } = captureLogs(() => queue.runBatch(specs, {
+      root,
+      noSync: true,
+      _invoke: ({ runId, specPath }) => {
+        delegations += 1;
+        const alpha = path.basename(specPath).includes('alpha');
+        writeDeliveredCommit(root, runId, delivery, alpha ? '71' : '72');
+        return 0;
+      },
+      _mergePr: ({ prNumber }) => {
+        mergeCalls.push(prNumber);
+        if (mergeCalls.length === 1) throw new Error('branch protection blocks the merge');
+        if (mergeCalls.length === 2) {
+          // The first attempt threw before the provider merged anything, so the
+          // recorded attempt is a failure and this retry is the first effective
+          // merge of the pull request (AC12), never a re-issue of a merge that
+          // already happened (AC6).
+          const attempt = queue.loadManifest(queue.loadConfig(root));
+          assert.equal(attempt.queue[0].merge.attempted, true);
+          assert.equal(attempt.queue[0].merge.status, 'failed', 'the first attempt merged nothing');
+          // The provider merge lands the delivery on the remote base.
+          git(root, ['push', '-q', '--force', 'origin', 'refs/heads/feature/00001-alpha:refs/heads/develop']);
+        }
+        return { merged: true };
+      }
+    }));
+
+    assert.equal(result, 0, 'the queue continues after the pre-flight merge');
+    assert.equal(delegations, 2);
+    assert.deepEqual(mergeCalls, ['71', '71', '72'], 'the failed attempt is retried once by the pre-flight, then the second item merges its own pull request');
+    const manifest = queue.loadManifest(queue.loadConfig(root));
+    assert.equal(manifest.queue[1].status, 'completed');
+    assert.equal(manifest.queue[0].merge.status, 'merged', 'the pre-flight merge is recorded on the earlier item');
+    assert.equal(manifest.queue[0].merge.ok, true);
+    assert.equal(manifest.queue[0].merge.prNumber, '71');
+    assert.equal(manifest.queue[1].preflight.status, 'refreshed');
+    assert.equal(manifest.queue[1].preflight.baseCommit, delivery, 'the base is refreshed again after the merge');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    if (remote) fs.rmSync(remote, { recursive: true, force: true });
+  }
+});
+
+test('AC6 & AC12: the pre-flight never re-merges a pull request whose manifest records a merged attempt', () => {
+  const { root, specs } = setup();
+  let remote = null;
+  try {
+    writeConfig(root, {
+      scmProvider: 'github',
+      batch: { autoMerge: true },
+      branching: { workBranch: 'develop', integrationBranch: 'develop' }
+    });
+    remote = initRepoWithRemote(root);
+    git(root, ['switch', '-q', '-c', 'feature/00001-alpha']);
+    fs.writeFileSync(path.join(root, 'delivery.txt'), 'alpha delivery\n', 'utf8');
+    git(root, ['add', '-A']);
+    git(root, ['commit', '-q', '-m', 'alpha delivery']);
+    const delivery = git(root, ['rev-parse', 'HEAD']);
+    git(root, ['switch', '-q', 'develop']);
+
+    const mergeCalls = [];
+    let delegations = 0;
+    const { result, errors } = captureAll(() => queue.runBatch(specs, {
+      root,
+      noSync: true,
+      _invoke: ({ runId, specPath }) => {
+        delegations += 1;
+        const alpha = path.basename(specPath).includes('alpha');
+        writeDeliveredCommit(root, runId, delivery, alpha ? '91' : '92');
+        return 0;
+      },
+      // The merge is recorded but never reaches the remote base, so the
+      // pre-flight finds the delivery missing while the record says merged.
+      _mergePr: ({ prNumber }) => { mergeCalls.push(prNumber); return { merged: true }; }
+    }));
+
+    assert.equal(result, 1, 'a recorded merge whose delivery is missing halts instead of re-merging');
+    assert.equal(delegations, 1, 'the second specification is never delegated');
+    assert.deepEqual(mergeCalls, ['91'], 'the pre-flight never re-issues a recorded merge');
+    const manifest = queue.loadManifest(queue.loadConfig(root));
+    assert.equal(manifest.status, 'halted');
+    assert.equal(manifest.queue[0].merge.status, 'merged');
+    const preflight = manifest.queue[1].preflight;
+    assert.equal(preflight.status, 'halted');
+    assert.match(preflight.reason, /#91/);
+    assert.match(preflight.reason, /records merged pull request/);
+    assert.ok(preflight.reason.includes(delivery), 'the halt names the missing delivery commit');
+    assert.match(errors.join('\n'), /Pre-flight halted the queue/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    if (remote) fs.rmSync(remote, { recursive: true, force: true });
+  }
+});
+
+test('AC12: a still-open earlier pull request halts the queue when auto-merge is disabled', () => {
+  const { root, specs } = setup();
+  let remote = null;
+  try {
+    writeConfig(root, {
+      scmProvider: 'github',
+      batch: { autoMerge: false },
+      branching: { workBranch: 'develop', integrationBranch: 'develop' }
+    });
+    remote = initRepoWithRemote(root);
+    git(root, ['switch', '-q', '-c', 'feature/00001-alpha']);
+    fs.writeFileSync(path.join(root, 'delivery.txt'), 'alpha delivery\n', 'utf8');
+    git(root, ['add', '-A']);
+    git(root, ['commit', '-q', '-m', 'alpha delivery']);
+    const delivery = git(root, ['rev-parse', 'HEAD']);
+    git(root, ['switch', '-q', 'develop']);
+
+    let delegations = 0;
+    let mergeCalls = 0;
+    const { result, errors } = captureAll(() => queue.runBatch(specs, {
+      root,
+      noSync: true,
+      _invoke: ({ runId }) => {
+        delegations += 1;
+        writeDeliveredCommit(root, runId, delivery, '81');
+        return 0;
+      },
+      _mergePr: () => { mergeCalls += 1; return { merged: true }; }
+    }));
+
+    assert.equal(result, 1, 'a disabled auto-merge halts instead of delegating on a stale base');
+    assert.equal(delegations, 1, 'the second specification is never delegated');
+    assert.equal(mergeCalls, 0, 'auto-merge stays disabled for the pre-flight too');
+    const manifest = queue.loadManifest(queue.loadConfig(root));
+    assert.equal(manifest.status, 'halted');
+    assert.deepEqual(manifest.queue.map(item => item.status), ['completed', 'pending']);
+    const preflight = manifest.queue[1].preflight;
+    assert.equal(preflight.status, 'halted');
+    assert.match(preflight.reason, /#81/);
+    assert.match(preflight.reason, /auto-merge is disabled/);
+    assert.ok(preflight.reason.includes(delivery), 'the halt names the missing delivery commit');
+    assert.match(preflight.reason, /develop/, 'the halt names the branch');
+    const output = errors.join('\n');
+    assert.match(output, /Pre-flight halted the queue/);
+    assert.match(output, /00002-beta/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    if (remote) fs.rmSync(remote, { recursive: true, force: true });
+  }
+});
+
+test('AC13: a refreshed base missing the previous delivery commit halts and names the commit and the branch', () => {
+  const { root, specs } = setup();
+  let remote = null;
+  try {
+    writeConfig(root, {
+      scmProvider: 'github',
+      batch: { autoMerge: true },
+      branching: { workBranch: 'develop', integrationBranch: 'develop' }
+    });
+    remote = initRepoWithRemote(root);
+    git(root, ['switch', '-q', '-c', 'feature/00001-alpha']);
+    fs.writeFileSync(path.join(root, 'delivery.txt'), 'alpha delivery\n', 'utf8');
+    git(root, ['add', '-A']);
+    git(root, ['commit', '-q', '-m', 'alpha delivery']);
+    const delivery = git(root, ['rev-parse', 'HEAD']);
+    git(root, ['switch', '-q', 'develop']);
+
+    let delegations = 0;
+    const { result, errors } = captureAll(() => queue.runBatch(specs, {
+      root,
+      noSync: true,
+      _invoke: ({ runId }) => {
+        delegations += 1;
+        writeDeliveredCommit(root, runId, delivery, '91');
+        return 0;
+      },
+      // The completion merge is accepted, but the base never receives it.
+      _mergePr: () => ({ merged: true })
+    }));
+
+    assert.equal(result, 1);
+    assert.equal(delegations, 1, 'the queue halts before delegating the next item');
+    const manifest = queue.loadManifest(queue.loadConfig(root));
+    assert.equal(manifest.status, 'halted');
+    assert.deepEqual(manifest.queue.map(item => item.status), ['completed', 'pending']);
+    const preflight = manifest.queue[1].preflight;
+    assert.equal(preflight.status, 'halted');
+    assert.ok(preflight.reason.includes(delivery), 'the halt names the missing delivery commit');
+    assert.match(preflight.reason, /base branch "develop"/);
+    assert.equal(preflight.baseBranch, 'develop');
+    assert.equal(typeof preflight.baseCommit, 'string');
+    assert.match(errors.join('\n'), /Pre-flight halted the queue before delegating "00002-beta"/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    if (remote) fs.rmSync(remote, { recursive: true, force: true });
+  }
+});
+

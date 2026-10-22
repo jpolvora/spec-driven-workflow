@@ -64,6 +64,9 @@
     "followUp": "queue",
     "transcripts": []
   },
+  "batch": {
+    "autoMerge": true
+  },
   "memory": {
     "backends": {
       "wsMemo": true
