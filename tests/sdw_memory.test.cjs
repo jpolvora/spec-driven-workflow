@@ -369,6 +369,22 @@ test('00057 AC24: applying a learning records the applying step and the evidence
 
     const noEvidence = memory.applyLearning({ root, runId, slug: 'retry-must-abandon', step: 7 });
     assert.strictEqual(noEvidence.applied, false, 'AC24: an application without evidence is refused');
+
+    // The CLI path the protocol documents must reach the same code: a regression
+    // passed the root string as the options object, so every CLI call failed.
+    const cli = spawnSync(process.execPath, [
+      MEMORY_SCRIPT, 'apply', '--run', runId, '--slug', 'retry-must-abandon',
+      '--step', '8', '--evidence', 'skills/sdw-orch/scripts/sdw_orch.cjs:920',
+      '--root', root, '--json'
+    ], { cwd: root, encoding: 'utf8' });
+    assert.strictEqual(cli.status, 0, `AC24: the CLI applies a recorded learning: ${cli.stderr}`);
+    const cliPayload = JSON.parse(cli.stdout);
+    assert.strictEqual(cliPayload.applied, true, 'AC24: the CLI reports the application');
+    assert.deepStrictEqual(
+      cliPayload.appliedBy,
+      { step: 8, evidence: 'skills/sdw-orch/scripts/sdw_orch.cjs:920' },
+      'AC24: the CLI records the applying step and the evidence'
+    );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

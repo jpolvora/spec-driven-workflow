@@ -702,7 +702,7 @@ Usage:
     if (!options.run) { console.error('[sdw-memory] Error: apply requires --run <runId>'); process.exit(1); }
     if (!options.slug) { console.error('[sdw-memory] Error: apply requires --slug <slug>'); process.exit(1); }
     if (!options.evidence) { console.error('[sdw-memory] Error: apply requires --evidence <locator>'); process.exit(1); }
-    const applied = applyLearning(root, { runId: options.run, slug: options.slug, step: options.step, evidence: options.evidence });
+    const applied = applyLearning({ root, runId: options.run, slug: options.slug, step: options.step, evidence: options.evidence });
     if (!applied.applied) { console.error(`[sdw-memory] Error: ${applied.error}`); process.exit(1); }
     if (options.json) console.log(JSON.stringify(applied, null, 2));
     else console.log(`[sdw-memory] Applied ${applied.slug} at step ${applied.appliedBy.step} (evidence ${applied.appliedBy.evidence})`);
