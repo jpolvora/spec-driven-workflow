@@ -437,16 +437,24 @@ function stageAndCommitOnly(targetRoot, files, message) {
     return { committed: false, commitSha: getBaseCommit(targetRoot), files: [] };
   }
   git(targetRoot, ['add', '--', ...stageable], { stdio: 'ignore' });
+  // Both the emptiness probe and the commit are scoped to the requested paths:
+  // an index entry staged elsewhere (by an earlier step or by the operator)
+  // must never ride along under this commit's subject.
   let staged = '';
   try {
-    staged = execSync('git diff --cached --name-only', { cwd: targetRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    const probe = spawnSync('git', ['diff', '--cached', '--name-only', '--', ...stageable], {
+      cwd: targetRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore']
+    });
+    staged = probe && probe.stdout ? String(probe.stdout).trim() : '';
   } catch (e) {
     staged = '';
   }
   if (!staged) {
     return { committed: false, commitSha: getBaseCommit(targetRoot), files: stageable };
   }
-  git(targetRoot, ['commit', '-m', message], { stdio: 'ignore' });
+  git(targetRoot, ['commit', '-m', message, '--only', '--', ...stageable], { stdio: 'ignore' });
   return { committed: true, commitSha: getBaseCommit(targetRoot), files: stageable };
 }
 

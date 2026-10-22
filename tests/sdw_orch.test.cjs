@@ -723,6 +723,31 @@ title: Delivery Fixture
   }
 });
 
+test('00054 AC15: a scoped commit never absorbs an index entry staged elsewhere', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-scoped-only-'));
+  try {
+    execSync('git init', { cwd: tmpDir, stdio: 'ignore' });
+    execSync('git config user.name "SDW Tester"', { cwd: tmpDir, stdio: 'ignore' });
+    execSync('git config user.email "tester@sdw.org"', { cwd: tmpDir, stdio: 'ignore' });
+    fs.writeFileSync(path.join(tmpDir, 'report.md'), 'report\n', 'utf8');
+    fs.writeFileSync(path.join(tmpDir, 'unrelated.txt'), 'staged elsewhere\n', 'utf8');
+    execSync('git add unrelated.txt', { cwd: tmpDir, stdio: 'ignore' });
+
+    const result = sdwOrch.stageAndCommitOnly(tmpDir, ['report.md'], 'docs(demo): record delivery report');
+    assert.equal(result.committed, true, 'the scoped path is committed');
+
+    const committed = execSync('git show --name-only --format= HEAD', { cwd: tmpDir, encoding: 'utf8' })
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    assert.deepEqual(committed, ['report.md'], 'the commit carries only the requested path');
+    const stillStaged = execSync('git diff --cached --name-only', { cwd: tmpDir, encoding: 'utf8' }).trim();
+    assert.equal(stillStaged, 'unrelated.txt', 'the unrelated index entry stays staged and uncommitted');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test('00054 AC2-AC10: report renders tasks, commits, files, gates, review, breaking changes, quality, observations and notes', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-delivery-report-render-'));
   try {
