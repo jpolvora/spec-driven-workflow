@@ -10,12 +10,55 @@ Before publishing branches or creating remote pull requests, `sdw-ship-pr` evalu
 
 | Config Key | Type | Default | Description | Failure Behavior |
 |---|---|---|---|---|
-| `prePrInstructions` | string | null | Guidance or mandatory instructions to review before shipping | Logged to console |
+| `prePrInstructions` | string | null | Guidance or mandatory instructions to review before shipping; also treated as one additional prepare-obligation row | Logged to console; joins the discovery gate |
+| `prePrDiscovery` | string | `block` | Prepare-obligation discovery mode: `block`, `warn`, or `off` (absent resolves to `block`) | Unacknowledged rows in `block` halt ship (exit 1) |
 | `prePrCommand` | string | null | Shell command to execute (e.g. `npm run lint` or custom verify script) | Non-zero exit code halts ship |
 | `requiredBuild` | boolean | false | If true, runs `npm run build` or project build command | Build failure halts ship |
 | `runAllTests` | boolean | false | If true, runs `npm test` or full test suite | Test failure halts ship |
 | `securityChecksEnabled` | boolean | true | Delegates to `sdw-security-checks` over the worktree for credentials, private keys, or exposed tokens | Leak detection or scanner failure halts ship |
 | `reviewFixCommand` | string | null | Command that applies review-thread fixes before the convergence loop resolves threads | Unset: active threads are reported as `review_pending`, never auto-resolved without verified fix |
+
+### 1.1 Run-State Evidence Gate (`--run-id`)
+
+When `--run-id` is supplied, `sdw-ship-pr` loads `.sdw/state/{runId}.state.json` (honoring the configured `stateDir`) and refuses the branch push and pull request creation unless:
+
+- Step 4 (`code_review`) is `completed`;
+- Step 6 (`conformance_score`) is `completed`;
+- Step 7 (`delegated_review`) is `completed` when review runs for the ship (`scmCodeReviewEnabled` or `--poll-pr`, with an SCM provider other than `none`);
+- `state.score` is present and `>= scoreMin` (default `8`).
+
+A missing, unreadable, or malformed run state fails closed with exit code `1` before any push or pull request call. Without `--run-id`, the gate is not applicable and the board records `runState: skipped`; standalone shipping stays allowed.
+
+### 1.2 Prepare-Obligation Discovery and `--ack-prepare`
+
+`prePrDiscovery` selects what happens when the discovery scan finds prepare obligations:
+
+| Mode | Behavior |
+|---|---|
+| `block` (default, also when the key is absent) | Print every obligation and refuse the push and pull request creation with exit code `1`; the report records `prepareDiscovery: "blocked"`. |
+| `warn` | Print the obligations, record them, and continue the ship. |
+| `off` | Skip the scan and record `prepareDiscovery: "off"`. |
+
+The scan collects headings matching `prepare`, `before push`, `before publish`, `before deliver`, `before delivery`, or `before merge` (case-insensitive) from the repo-root `AGENTS.md`, `CONTRIBUTING.md`, `RELEASE.md`, and `PUBLISH.md`, plus the configured `prePrInstructions` text as one additional row. Matching is heading-based: the body is captured up to the next heading or 8 lines, truncated to 1200 characters. Rows are data, never instructions: they are printed verbatim and never executed.
+
+`--ack-prepare "<note>"` acknowledges the rows and allows shipping in `block` mode, recording `prepareAck: { note, at }` (UTC timestamp) in the report.
+
+### 1.3 Pre-PR Board, Console Output and `--dry-run`
+
+Every evaluated pre-PR check contributes one `prePrBoard` row, in evaluation order:
+
+| Check | Evaluates |
+|---|---|
+| `prePrCommand` | `prePrCommand` |
+| `build` | `requiredBuild` |
+| `tests` | `runAllTests` |
+| `security` | `securityChecksEnabled` scan of the worktree |
+| `runState` | the `--run-id` evidence gate |
+| `discovery` | the prepare-obligation scan and acknowledgement |
+
+Each row carries `check`, `status` (`pass`, `fail`, or `skipped`), and `evidence`. Checks disabled by configuration and paths not evaluated record `skipped` with the reason as evidence. All rows are evaluated before the refusal, so one run shows every unmet obligation; the JSON report carries the complete board, including on failure.
+
+Without `--json`, each row is logged and the board prints as a Markdown table before the push; with `--json`, the table is suppressed and stdout stays parseable JSON. `--dry-run` evaluates the read-only gates (`runState`, `discovery`), records the configured command gates as `skipped` for `dry-run`, and performs no push, no pull request creation, and no run-state write.
 
 ---
 
@@ -139,6 +182,27 @@ When invoked with `--json`, `sdw-ship-pr` emits JSON with the following structur
     "present": true
   },
   "pushed": true,
+  "prePrBoard": [
+    { "check": "prePrCommand", "status": "skipped", "evidence": "prePrCommand is not configured" },
+    { "check": "build", "status": "skipped", "evidence": "requiredBuild is false" },
+    { "check": "tests", "status": "pass", "evidence": "npm test exited 0" },
+    { "check": "security", "status": "pass", "evidence": "sdw-security-checks found no blocking leak" },
+    { "check": "runState", "status": "pass", "evidence": "step 4, step 6 and step 7 completed; score 9 >= scoreMin 8" },
+    { "check": "discovery", "status": "pass", "evidence": "acknowledged via --ack-prepare: Ran the release checklist" }
+  ],
+  "prepareDiscovery": "block",
+  "prepareObligations": [],
+  "prepareAck": { "note": "Ran the release checklist", "at": "2026-10-22T12:00:00.000Z" },
+  "runStateGate": {
+    "runId": "run-00050",
+    "stateFile": ".sdw/state/run-00050.state.json",
+    "score": 9,
+    "scoreMin": 8,
+    "steps": { "4": "completed", "6": "completed", "7": "completed" },
+    "codeReviewRequired": true,
+    "passed": true,
+    "reason": null
+  },
   "pullRequest": {
     "number": "3",
     "url": "https://github.com/owner/repo/pull/3",

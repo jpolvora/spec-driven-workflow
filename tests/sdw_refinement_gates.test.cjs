@@ -408,6 +408,7 @@ test('sdw-refinement-gates - AC11, AC12: Project pre-PR commands stage changes, 
     const configPath = path.join(repoRoot, '.sdw', 'config.json');
     const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     cfg.prePrInstructions = 'Bump package.json version to 1.1.0';
+    cfg.prePrDiscovery = 'warn';
     cfg.prePrCommand = 'node -e "const p = JSON.parse(require(\'fs\').readFileSync(\'package.json\')); p.version = \'1.1.0\'; require(\'fs\').writeFileSync(\'package.json\', JSON.stringify(p, null, 2));"';
     fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2), 'utf8');
 
