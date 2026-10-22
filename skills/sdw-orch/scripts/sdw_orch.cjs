@@ -247,6 +247,20 @@ function assertSafeSlug(specSlug) {
   }
 }
 
+// True when `ancestor` is reachable from `descendant`; a missing ref is never an
+// ancestor. Used to decide whether a refreshed remote lane can seed a branch.
+function isAncestorCommit(targetRoot, ancestor, descendant) {
+  if (!ancestor || !descendant) return false;
+  try {
+    return spawnSync('git', ['merge-base', '--is-ancestor', String(ancestor), String(descendant)], {
+      cwd: targetRoot,
+      stdio: 'ignore'
+    }).status === 0;
+  } catch (e) {
+    return false;
+  }
+}
+
 function git(targetRoot, args, options = {}) {
   const result = spawnSync('git', args, { cwd: targetRoot, encoding: 'utf8', ...options });
   if (result.error) throw result.error;
@@ -1173,6 +1187,8 @@ function cmdRun(options) {
 
   let activeBranch = currentBranch;
   let branchReused = false;
+  // AC8 (spec 00058): the lane reference the feature branch actually started from.
+  let branchStartPoint = null;
 
   // Feature branch activation before step 1 (AC6, AC8)
   // Dirty working trees are allowed: execution proceeds independently of git
@@ -1218,6 +1234,21 @@ function cmdRun(options) {
             return false;
           }
         };
+        const laneStartPoint = () => (fromWorkLane ? workBranch : currentBranch);
+        let startRef = fromWorkLane ? workBranch : null;
+        let startPoint = laneStartPoint();
+        // The refreshed remote lane may seed the branch only when it descends from
+        // the local lane: a stale lane must never drop local commits.
+        const remoteLaneDescendsFromLocal = () => {
+          try {
+            const localSha = String(git(targetRoot, ['rev-parse', '--verify', '--quiet', `refs/heads/${workBranch}`], { stdio: ['ignore', 'pipe', 'ignore'] }) || '').trim();
+            const remoteSha = String(git(targetRoot, ['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${workBranch}`], { stdio: ['ignore', 'pipe', 'ignore'] }) || '').trim();
+            if (!remoteSha) return false;
+            return localSha === remoteSha || isAncestorCommit(targetRoot, localSha, remoteSha);
+          } catch (e) {
+            return false;
+          }
+        };
         if ((fromWorkLane || workLaneCheckedOut) && branching.updateWorkBranch) {
           try {
             if (workLaneCheckedOut) {
@@ -1228,7 +1259,15 @@ function cmdRun(options) {
               } catch (mergeErr) {
                 // Product guarantee: a dirty tree never blocks activation.
                 if (!treeIsDirty()) throw mergeErr;
-                console.warn(`[Branch Activation] ${branching.strategy}: skipped the update of "${workBranch}" over dirty files; continuing from the current HEAD.`);
+                if (remoteLaneDescendsFromLocal()) {
+                  // AC8: the refreshed remote lane commit is the start point, not
+                  // the stale local lane; the start point is recorded below.
+                  startRef = `refs/remotes/origin/${workBranch}`;
+                  startPoint = `origin/${workBranch}`;
+                  console.warn(`[Branch Activation] ${branching.strategy}: "${workBranch}" could not be fast-forwarded over dirty files; starting ${targetBranch} from ${startPoint}.`);
+                } else {
+                  console.warn(`[Branch Activation] ${branching.strategy}: skipped the update of "${workBranch}" over dirty files; continuing from the current HEAD.`);
+                }
               }
             } else {
               // Update the lane ref without checking it out, so a dirty tree never blocks.
@@ -1244,7 +1283,7 @@ function cmdRun(options) {
         // AC6: Create and switch to new feature branch from the work lane.
         if (fromWorkLane) {
           const laneRef = spawnSync('git', ['rev-parse', '--verify', '--quiet', `refs/heads/${workBranch}`], { cwd: targetRoot });
-          if (laneRef.status !== 0) {
+          if (laneRef.status !== 0 && startRef === workBranch) {
             const message = `Work branch "${workBranch}" does not exist locally; cannot start the feature branch.`;
             console.error(`[Branch Activation] ${message}`);
             options._runResult = { error: message };
@@ -1252,18 +1291,19 @@ function cmdRun(options) {
           }
         }
         const createArgs = fromWorkLane
-          ? ['switch', '-c', targetBranch, workBranch]
+          ? ['switch', '-c', targetBranch, startRef || workBranch]
           : ['switch', '-c', targetBranch];
-        const announceCreation = (startPoint) => {
+        const announceCreation = (startedFrom) => {
           let startSha = '';
           try { startSha = String(git(targetRoot, ['rev-parse', '--short', 'HEAD'], { stdio: ['ignore', 'pipe', 'ignore'] }) || '').trim(); } catch (shaErr) {}
-          console.log(`[Branch Activation] ${branching.strategy}: created ${targetBranch} from ${startPoint}${startSha ? ` at ${startSha}` : ''}.`);
+          console.log(`[Branch Activation] ${branching.strategy}: created ${targetBranch} from ${startedFrom}${startSha ? ` at ${startSha}` : ''}.`);
         };
         try {
           git(targetRoot, createArgs, { stdio: 'ignore' });
           branchReused = false;
           activeBranch = targetBranch;
-          announceCreation(fromWorkLane ? workBranch : currentBranch);
+          branchStartPoint = startPoint;
+          announceCreation(startPoint);
         } catch (createErr) {
           // Product guarantee: a dirty tree never blocks activation. When the work
           // lane checkout would overwrite dirty files, start from the current branch.
@@ -1273,6 +1313,7 @@ function cmdRun(options) {
               git(targetRoot, ['switch', '-c', targetBranch], { stdio: 'ignore' });
               branchReused = false;
               activeBranch = targetBranch;
+              branchStartPoint = currentBranch;
               console.warn(`[Branch Activation] ${branching.strategy}: work lane "${workBranch}" could not be checked out over dirty files; created ${targetBranch} from ${currentBranch}.`);
               announceCreation(currentBranch);
             } catch (fallbackErr) {
@@ -1336,6 +1377,12 @@ function cmdRun(options) {
   const refineMode = Boolean(options.refineMode || state.refineMode);
   if (refineMode && !state.refineMode) {
     state.refineMode = true;
+    state = stateManager.saveRunState(targetRoot, state);
+  }
+
+  // AC8 (spec 00058): record the lane reference the feature branch started from.
+  if (branchStartPoint) {
+    state.branchStartPoint = branchStartPoint;
     state = stateManager.saveRunState(targetRoot, state);
   }
 
@@ -2612,9 +2659,33 @@ function cmdRun(options) {
         if (shipResult) {
           const hasActivePr = Boolean(shipResult.pullRequest && (shipResult.pullRequest.url || shipResult.pullRequest.number));
           if (shipResult.blocking === true) {
-            // The pull request still has failing checks or active review threads.
-            // A multi-spec queue must not advance past an unconverged delivery.
-            throw new Error(shipResult.error || 'sdw-ship-pr reported an unconverged pull request');
+            // Spec 00058 AC11: failing checks or open review threads are a pause,
+            // not a failure. The host converges the pull request and resumes the
+            // run from the delivery stage; nothing is marked failed or completed.
+            const pauseMessage = shipResult.error || 'sdw-ship-pr reported an unconverged pull request';
+            state.pullRequest = shipResult.pullRequest || state.pullRequest || null;
+            state.shipStatus = shipResult.shipStatus || 'review_pending';
+            state = stateManager.saveRunState(targetRoot, state);
+            state = stateManager.updateStepState(targetRoot, state.runId, 8, 'blocked_convergence', {
+              pullRequest: state.pullRequest,
+              shipStatus: state.shipStatus,
+              error: pauseMessage
+            });
+            state.status = 'paused';
+            state = stateManager.saveRunState(targetRoot, state);
+            const pausedPr = state.pullRequest && state.pullRequest.number !== undefined && state.pullRequest.number !== null
+              ? ` #${state.pullRequest.number}`
+              : '';
+            console.error(`[sdw-orch Step 8] Delivery paused: ${pauseMessage}`);
+            console.error(`[sdw-orch Step 8] Converge pull request${pausedPr} and resume with: node "${normalizePath(orchCommandPath())}" resume --run-id ${state.runId}`);
+            options._runResult = {
+              runId: state.runId,
+              status: 'paused',
+              shipStatus: state.shipStatus,
+              pullRequest: state.pullRequest,
+              error: pauseMessage
+            };
+            return 6;
           }
           if (shipResult.shipStatus === 'failed' || (shipResult.success === false && !hasActivePr)) {
             throw new Error(shipResult.error || 'sdw-ship-pr reported delivery failure');
