@@ -1396,9 +1396,21 @@ test('00058 AC17, AC18 & AC19: the registry transition follows the delivery stag
       /^status: implemented$/m,
       'AC19: the header follows the registry in the same transition'
     );
+    const headSubject = execSync('git log -1 --pretty=%s', { cwd: deliveredRoot, encoding: 'utf8' }).trim();
+    assert.equal(
+      headSubject,
+      `chore(${slug}): mark the specification completed in the registry`,
+      'AC17: the transition is committed on the delivery branch'
+    );
+    const committedFiles = execSync('git show --name-only --pretty=format: HEAD', { cwd: deliveredRoot, encoding: 'utf8' })
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+    assert.ok(committedFiles.includes('.sdw/specs/index.specs.md'), 'AC17: the registry row is committed');
+    assert.ok(committedFiles.includes(`.sdw/specs/${slug}.md`), 'AC19: the header is committed in the same commit');
     const dirt = execSync('git status --porcelain', { cwd: deliveredRoot, encoding: 'utf8' });
-    assert.ok(dirt.includes('.sdw/specs/index.specs.md'), 'the registry change happens after the delivery commit is created');
-    assert.ok(dirt.includes(`.sdw/specs/${slug}.md`), 'the header change happens after the delivery commit is created');
+    assert.ok(!dirt.includes('.sdw/specs/index.specs.md'), 'no uncommitted registry change remains');
+    assert.ok(!dirt.includes(`.sdw/specs/${slug}.md`), 'no uncommitted header change remains');
   } finally {
     fs.rmSync(deliveredRoot, { recursive: true, force: true });
   }

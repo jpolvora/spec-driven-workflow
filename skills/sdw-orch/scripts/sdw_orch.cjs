@@ -545,6 +545,27 @@ function collectDeliveryFiles(targetRoot, specSlug, state) {
   return [...files].sort();
 }
 
+// AC17/AC19: the two paths the completion transition owns. They are committed
+// together and scoped, so the merged pull request carries the flip instead of
+// leaving it as a worktree change that only a later sync propagates.
+function completedTransitionFiles(targetRoot, state) {
+  const files = [];
+  const root = path.resolve(targetRoot);
+  try {
+    const cfg = loadProjectConfig(root);
+    const specsDirAbs = cfg && cfg.specsDir ? path.resolve(cfg.specsDir) : path.join(root, '.sdw', 'specs');
+    const idxRel = normalizeRel(path.relative(root, path.join(specsDirAbs, 'index.specs.md')));
+    if (idxRel && !idxRel.includes('..') && fs.existsSync(path.join(root, idxRel))) files.push(idxRel);
+  } catch (e) {}
+  if (state && state.specPath) {
+    try {
+      const specRel = normalizeRel(path.relative(root, path.resolve(root, state.specPath)));
+      if (specRel && !specRel.includes('..') && fs.existsSync(path.join(root, specRel))) files.push(specRel);
+    } catch (e) {}
+  }
+  return [...new Set(files)].sort();
+}
+
 function runSecurityGate(targetRoot, options = {}) {
   try {
     const scriptPath = resolveSkillScript(targetRoot, 'sdw-security-checks', path.join('scripts', 'sdw_security_checks.cjs'), options);
@@ -2748,10 +2769,39 @@ function cmdRun(options) {
   // already passed Step 8 converges on the same row.
   markSpecCompleted();
 
+  // AC17/AC19 consequence: the transition writes the registry row and the
+  // specification header after the delivery stage published the branch, so the
+  // flip needs its own scoped commit to reach the pull request before the merge.
+  const transitionFiles = completedTransitionFiles(targetRoot, state);
+  if (transitionFiles.length > 0 && isGitRepo(targetRoot)) {
+    try {
+      const flip = stageAndCommitOnly(
+        targetRoot,
+        transitionFiles,
+        `chore(${specSlug}): mark the specification completed in the registry`
+      );
+      if (flip && flip.committed) {
+        state.registryCommit = flip.commitSha;
+        state = stateManager.saveRunState(targetRoot, state);
+        console.log(`[Step 8: Registry] Recorded the completion transition in ${flip.commitSha}.`);
+      }
+    } catch (flipErr) {
+      const message = `the completion transition could not be committed: ${flipErr.message}`;
+      console.warn(`[sdw-orch] Warning: ${message}`);
+      try {
+        stateManager.recordWarning(targetRoot, state.runId, 8, message);
+        state = stateManager.loadRunState(targetRoot, state.runId) || state;
+      } catch (warnErr) {}
+    }
+  }
+
   // Remote Push / Branch Publishing (--push or config.pushDelivery) fallback
   const shouldPush = options.push !== undefined ? options.push : (config && config.pushDelivery);
   const refineNothingToPush = refineMode && state.deliveryCommitCreated === false;
-  if (shouldPush && !state.pushedBranch && !refineNothingToPush) {
+  const branchPublished = Boolean(state.pushedBranch);
+  const pushForDelivery = Boolean(shouldPush) && !branchPublished;
+  const pushForTransition = Boolean(state.registryCommit) && branchPublished;
+  if ((pushForDelivery || pushForTransition) && !refineNothingToPush) {
     if (!isGitRepo(targetRoot)) {
       console.log(`[sdw-orch] Remote push skipped: not a git repository.`);
     } else {
