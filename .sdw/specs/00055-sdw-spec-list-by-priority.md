@@ -91,7 +91,7 @@ Keep value judgement where it belongs, in the authoring path, and keep the CLI d
   | 00022 | low | M | Harness diagnostics beyond `sdw-doctor`: pipeline simulation and Tier-1 budget audit |
   | 00017 | low | L | Acceptance-criteria ledger and traceability |
   | 00018 | low | L | Fresh-context verification and adversarial audit |
-  | 00056 | medium | L | Per-role model hints in `.sdw/config.json` with opt-in capability detection and dispatch envelopes |
+  | 00056 | medium | L | Lets each orchestration role run its own model instead of one model for every step |
   | 00057 | medium | M | Routes the Step 5 judge's interpretation into the delivery report instead of discarding it after scoring |
 
 - The table lists declared values, so a specification authored after this one declares its own values here; the reference output below covers the pending set at authoring time.
