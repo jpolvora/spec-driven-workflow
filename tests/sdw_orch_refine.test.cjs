@@ -187,7 +187,12 @@ test('refine: a real change is scored, committed as refine(...), and shipped', (
 
     const after = stateManager.loadRunState(root, state.runId);
     assert.equal(after.deliveryCommitCreated, true, 'a commit was created');
-    assert.equal(headSubject(root), 'refine(refine-demo): second pass refinement');
+    assert.equal(headSubject(root), 'docs(refine-demo): record delivery report', 'AC15: the report commit is HEAD after a second-pass run');
+    assert.equal(
+      execSync('git log -2 --format=%s', { cwd: root, encoding: 'utf8' }).trim().split('\n')[1],
+      'refine(refine-demo): second pass refinement',
+      'the refinement commit stays intact beneath the report commit'
+    );
     assert.equal(after.steps[6].status, 'completed');
     assert.notEqual(after.steps[8].status, 'failed', 'Step 8 runs because a commit exists');
 

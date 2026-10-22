@@ -41,7 +41,7 @@ function writeArtifactSafely(targetRoot, runId, stepNum, filePath, content) {
 }
 
 function writeStep2Artifact(options) {
-  const { targetRoot, specSlug, runId, grillingResult, effectiveSpecContent, artifactsDir } = options;
+  const { targetRoot, specSlug, runId, grillingResult, effectiveSpecContent, specObservations, artifactsDir } = options;
   try {
     const absDir = ensureArtifactDir(targetRoot, specSlug, runId, artifactsDir);
     const fileName = `${specSlug}-step-2.md`;
@@ -87,6 +87,23 @@ function writeStep2Artifact(options) {
         md += `  - \`${f}\`\n`;
       });
       md += `\n`;
+    }
+
+    // Spec 00054 AC14: observations are advisory and carry kind, other spec,
+    // evidence, and severity; an empty set is recorded as "None."
+    if (Array.isArray(specObservations)) {
+      md += `## Spec Observations\n\n`;
+      if (specObservations.length === 0) {
+        md += `None.\n\n`;
+      } else {
+        md += `| Kind | Other Specification | Evidence | Severity |\n`;
+        md += `|---|---|---|---|\n`;
+        for (const obs of specObservations) {
+          const cell = (value) => String(value == null ? '' : value).replace(/\|/g, '\\|');
+          md += `| ${cell(obs.kind)} | ${cell(obs.otherSpec)} | ${cell(obs.evidence)} | ${cell(obs.severity)} |\n`;
+        }
+        md += `\n`;
+      }
     }
 
     // Refined Spec Snapshot

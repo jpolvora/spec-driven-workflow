@@ -163,10 +163,241 @@ function applyDecision(specContent, dimension, chosenOption) {
   return specContent + decisionNote;
 }
 
+// Spec 00054 AC11-AC14: advisory observations read other specifications and
+// record what they provably say. Nothing here rewrites a specification, and no
+// observation can block a run: every failure degrades to "no observation".
+const DELIVERED_STATUSES = new Set(['completed', 'implemented']);
+const SUPERSESSION_PHRASES = [
+  'superseded by',
+  'abandoned in favor of',
+  'will not implement',
+  'supersedes',
+  'replaces',
+  'replaced by'
+];
+const OBSERVATION_ORDER = ['overlap', 'superseded', 'conflict'];
+const MAX_EVIDENCE_LENGTH = 240;
+
+function readTextFile(filePath) {
+  try {
+    return fs.readFileSync(filePath, 'utf8');
+  } catch (e) {
+    return null;
+  }
+}
+
+function frontMatterValue(specContent, key) {
+  const frontMatter = String(specContent || '').match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!frontMatter) return null;
+  const escapedKey = String(key).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const line = frontMatter[1].match(new RegExp(`^${escapedKey}:\\s*(.+)$`, 'm'));
+  if (!line) return null;
+  const value = line[1].trim().replace(/^["']|["']$/g, '');
+  return value || null;
+}
+
+function specIdentity(specContent, filePath) {
+  const slug = frontMatterValue(specContent, 'slug')
+    || path.basename(filePath, path.extname(filePath));
+  const rawId = frontMatterValue(specContent, 'id');
+  const id = rawId && rawId !== 'null' ? rawId : null;
+  const prefixMatch = String(slug).match(/^\d{3,}/);
+  return {
+    slug,
+    id,
+    numericPrefix: prefixMatch ? prefixMatch[0] : null
+  };
+}
+
+function parseRegistryStatuses(indexContent) {
+  const statuses = new Map();
+  for (const line of String(indexContent || '').split(/\r?\n/)) {
+    if (!line.trim().startsWith('|')) continue;
+    const cells = line.split('|').slice(1, -1).map((cell) => cell.trim());
+    if (cells.length < 4) continue;
+    const slug = cells[1];
+    const status = cells[3];
+    if (!slug || !status) continue;
+    if (/^slug$/i.test(slug) || /^:?-{3,}:?$/.test(slug)) continue;
+    statuses.set(slug, status.toLowerCase());
+  }
+  return statuses;
+}
+
+function listSpecFiles(specsDir) {
+  try {
+    return fs.readdirSync(specsDir)
+      .filter((name) => name.endsWith('.md'))
+      .filter((name) => name !== 'index.specs.md' && !name.endsWith('-report.md'))
+      .map((name) => path.join(specsDir, name));
+  } catch (e) {
+    return [];
+  }
+}
+
+function flattenConfigKeys(value, prefix, result) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    for (const [key, child] of Object.entries(value)) {
+      const nextPrefix = prefix ? `${prefix}.${key}` : key;
+      if (child && typeof child === 'object' && !Array.isArray(child)) {
+        flattenConfigKeys(child, nextPrefix, result);
+      } else {
+        result.push(nextPrefix);
+      }
+    }
+  } else if (prefix) {
+    result.push(prefix);
+  }
+  return result;
+}
+
+function readConfigKeys(configPath) {
+  const raw = readTextFile(configPath);
+  if (raw === null) return [];
+  try {
+    return flattenConfigKeys(JSON.parse(raw), '', []);
+  } catch (e) {
+    return [];
+  }
+}
+
+function escapeRegExp(text) {
+  return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// A declaration is the key immediately followed by `:` or `=`. Prose mentions
+// ("see scoreMin in the configuration") stay unrecorded: the value is the proof.
+function extractDeclaredValues(specContent, key) {
+  const values = new Set();
+  const pattern = new RegExp(`\`?${escapeRegExp(key)}\`?\\s*(?::|=)\\s*\`?([^\`\\s,;|)]+)`, 'gi');
+  for (const match of String(specContent || '').matchAll(pattern)) {
+    const value = match[1].replace(/^["']|["']$/g, '').replace(/[.,;:]+$/, '');
+    if (value) values.add(value);
+  }
+  return [...values].sort();
+}
+
+function matchTargetReference(text, identity) {
+  const normalized = String(text || '').toLowerCase();
+  if (identity.slug && normalized.includes(identity.slug.toLowerCase())) return identity.slug;
+  if (identity.id && normalized.includes(identity.id.toLowerCase())) return identity.id;
+  if (identity.numericPrefix && new RegExp(`(^|[^0-9])${identity.numericPrefix}([^0-9]|$)`).test(normalized)) {
+    return identity.numericPrefix;
+  }
+  return null;
+}
+
+function truncateEvidence(text) {
+  const value = String(text || '').replace(/\s+/g, ' ').trim();
+  return value.length > MAX_EVIDENCE_LENGTH ? `${value.slice(0, MAX_EVIDENCE_LENGTH - 1)}…` : value;
+}
+
+function observation(kind, otherSpec, evidence, severity) {
+  return { kind, otherSpec, evidence: truncateEvidence(evidence), severity };
+}
+
+/**
+ * Spec 00054 AC11-AC14: file-content heuristics over sibling specifications.
+ * Returns [] when the specification directory is unavailable or unreadable; the
+ * caller records what came back and never gates the run on the result.
+ */
+function analyzeSpecObservations(options = {}) {
+  const observations = [];
+  const root = path.resolve(options.targetRoot || '.');
+  const targetFile = options.specPath
+    ? (path.isAbsolute(options.specPath) ? options.specPath : path.resolve(root, options.specPath))
+    : null;
+  const targetContent = options.specContent || (targetFile ? readTextFile(targetFile) : null);
+  if (!targetContent) return observations;
+
+  const specsDir = path.resolve(options.specsDir || path.join(root, '.sdw', 'specs'));
+  const targetIdentity = specIdentity(targetContent, targetFile || 'spec.md');
+  const targetFiles = extractTargetFiles(targetContent);
+  const configPath = path.resolve(options.configPath || path.join(root, '.sdw', 'config.json'));
+  const configKeys = readConfigKeys(configPath);
+  const targetDeclarations = new Map();
+  for (const key of configKeys) {
+    targetDeclarations.set(key, extractDeclaredValues(targetContent, key));
+  }
+  const registry = parseRegistryStatuses(readTextFile(path.join(specsDir, 'index.specs.md')));
+
+  for (const otherFile of listSpecFiles(specsDir)) {
+    if (targetFile && path.resolve(otherFile) === targetFile) continue;
+    const otherContent = readTextFile(otherFile);
+    if (!otherContent) continue;
+    const otherIdentity = specIdentity(otherContent, otherFile);
+    const indexedStatus = registry.get(otherIdentity.slug)
+      || registry.get(path.basename(otherFile, path.extname(otherFile)));
+    const rawStatus = indexedStatus || frontMatterValue(otherContent, 'status');
+    const delivered = Boolean(rawStatus) && DELIVERED_STATUSES.has(String(rawStatus).toLowerCase());
+    const otherFiles = extractTargetFiles(otherContent);
+    const sharedFiles = targetFiles.filter((file) => otherFiles.includes(file));
+    const severity = delivered && sharedFiles.length > 0 ? 'high' : 'medium';
+
+    if (delivered) {
+      for (const file of sharedFiles) {
+        observations.push(observation(
+          'overlap',
+          otherIdentity.slug,
+          `Specs "${targetIdentity.slug}" and "${otherIdentity.slug}" both name \`${file}\`.`,
+          severity
+        ));
+      }
+    }
+
+    for (const line of String(otherContent).split(/\r?\n/)) {
+      const lowerLine = line.toLowerCase();
+      const phrase = SUPERSESSION_PHRASES.find((candidate) => lowerLine.includes(candidate));
+      if (!phrase) continue;
+      const matchedReference = matchTargetReference(line, targetIdentity);
+      if (!matchedReference) continue;
+      observations.push(observation(
+        'superseded',
+        otherIdentity.slug,
+        `Spec "${otherIdentity.slug}" names "${matchedReference}" in a supersession context ("${phrase}"): ${line.trim()}`,
+        severity
+      ));
+    }
+
+    for (const key of configKeys) {
+      const targetValues = targetDeclarations.get(key) || [];
+      if (targetValues.length === 0) continue;
+      const otherValues = extractDeclaredValues(otherContent, key);
+      if (otherValues.length === 0) continue;
+      const same = otherValues.length === targetValues.length
+        && otherValues.every((value) => targetValues.includes(value));
+      if (same) continue;
+      observations.push(observation(
+        'conflict',
+        otherIdentity.slug,
+        `Spec "${targetIdentity.slug}" declares \`${key}\` as ${targetValues.join(', ')}; spec "${otherIdentity.slug}" declares it as ${otherValues.join(', ')}.`,
+        severity
+      ));
+    }
+  }
+
+  const seen = new Set();
+  return observations
+    .filter((item) => {
+      const key = `${item.kind}|${item.otherSpec}|${item.evidence}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => {
+      const kindDelta = OBSERVATION_ORDER.indexOf(a.kind) - OBSERVATION_ORDER.indexOf(b.kind);
+      if (kindDelta !== 0) return kindDelta;
+      const specDelta = String(a.otherSpec).localeCompare(String(b.otherSpec));
+      if (specDelta !== 0) return specDelta;
+      return String(a.evidence).localeCompare(String(b.evidence));
+    });
+}
+
 module.exports = {
   DECISION_DIMENSIONS,
   analyzeSpecificationGaps,
   applyDecision,
   generateRefinementBlueprint,
-  extractTargetFiles
+  extractTargetFiles,
+  analyzeSpecObservations
 };

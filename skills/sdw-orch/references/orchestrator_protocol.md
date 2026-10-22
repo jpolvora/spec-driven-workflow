@@ -65,7 +65,7 @@ Each execution session is completely isolated within a dedicated JSON state file
 ## 2. 8-Step State Machine
 
 1. **Derivation:** Identifies whether the spec is already agent-ready (EARS ACs, DoR, YAML frontmatter). Skips derivation if ready; otherwise reformulates human stories.
-2. **Grilling:** Walks the decision tree covering input bounds, failure scenarios, and concurrency. Auto-resolves known gaps or prompts user via `ask_question` with recommended defaults.
+2. **Grilling:** Walks the decision tree covering input bounds, failure scenarios, and concurrency. Auto-resolves known gaps or prompts user via `ask_question` with recommended defaults. Records advisory spec observations over sibling specifications in `steps[2].output.specObservations`; they never block or alter the run.
 3. **DAG Generation:** Analyzes complexity (file count, touchpoints) and decomposes requirements into 1 or more atomic tasks.
 4. **Implementation Dispatch:** Sequentially dispatches one DAG task at a time to a single worker, with a complete brief (criteria, scope fence, prohibitions, evidence contract) instead of the orchestrator's transcript. Every accepted task is checkpointed immediately: one scoped commit of its `filesChanged` plus the tag `sdw-checkpoint-{runId}-{taskId}`.
 5. **Conformance Scoring:** An LLM judge fences the criteria plus the generated diff, emits a 0-10 score with per-criterion verdicts. If the score is below threshold (default 8/10), feedback triggers the re-implementation loop.
@@ -109,7 +109,7 @@ Intermediate outputs of human-auditable steps (2, 3, 5) are persisted as human-r
 - **State Linkage:** Run state records `state.artifactsDir` and `state.steps[N].artifact` with forward slashes relative to project root.
 
 ### Scope & In-Scope Steps
-- **Step 2 (Refinement):** `{slug}-step-2.md` contains metadata header, `## Decision Gaps & Resolutions` table, `## Decision Tree Walk` summary, and `## Refined Spec Snapshot`.
+- **Step 2 (Refinement):** `{slug}-step-2.md` contains metadata header, `## Decision Gaps & Resolutions` table, `## Decision Tree Walk` summary, `## Spec Observations` table, and `## Refined Spec Snapshot`.
 - **Step 3 (DAG Generation):** `{slug}-step-3.md` contains metadata header, `## Complexity Analysis`, `## Task Decomposition` table, and `## Task Context Prompts` blocks.
 - **Step 5 (Conformance Scoring):** `{slug}-step-5.md` contains metadata header, `## Implementation Summary`, `## Conformance Score` evaluation, `## Verified Acceptance Criteria`, `## Failing Acceptance Criteria`, and `## Feedback`.
 - **Step 7 (Delegated Code Review):** `{slug}-step-7.md` is the `sdw-code-review` Markdown fix-plan report (header, findings table, detailed findings, fix plan) written via `--report`.
@@ -270,7 +270,7 @@ Re-executes an already delivered specification in refinement mode instead of imp
 `--dry-run` and `--sandbox` answer two different questions and are mutually exclusive.
 
 ### Plan-Only Dry Run (`--dry-run`)
-- `run <specPath> --dry-run` validates the specification in authoring mode and prints the plan: spec path and slug, target root, scoring/delivery/branch settings, the resolved branch plan, the eight step names, and `No steps executed (--dry-run).`
+- `run <specPath> --dry-run` validates the specification in authoring mode and prints the plan: spec path and slug, target root, scoring/delivery/branch settings, the resolved branch plan, the eight step names, one line per spec observation, and `No steps executed (--dry-run).`
 - The branch plan prints `Strategy: <preset>`, `Start lane: <branch> (update: yes|no)`, `Feature branch: <prefix><slug>`, `Pull request target: <integration branch>`, and `After merge: <actions>`, all resolved from configuration without executing git commands.
 - It creates no run state, no artifacts, no branches, no worktrees, and no clones. Exit code `0` when the spec validates, `1` when it does not.
 
@@ -283,6 +283,39 @@ Re-executes an already delivered specification in refinement mode instead of imp
 - **Paths:** dispatch envelopes and task prompts print absolute sandbox paths, the working directory is the clone root, and `task finish` / `resume` commands carry `--root <clonePath>`.
 - **Lifecycle:** `sandbox list`, `sandbox report --run-id`, `sandbox clean --run-id`. The report is refreshed after `run`, `resume`, and `task finish`; cleanup is always proposed, never automatic, and keeps `sandbox.json` plus `report.md`. Creation halts when the resolved target directory already exists, naming the `sandbox clean --run-id` command; `sandbox clean` also removes an orphaned target left by an interrupted creation (no metadata).
 - **Limits:** a clone is a filesystem and git boundary, not a security sandbox. Worker commands still run with the host credentials and network.
+
+## 11. Delivery Report & Spec Observations (Spec 00054)
+
+### Delivery Report
+
+After Step 7 resolves and before Step 8 delegates to `sdw-ship-pr`, the run writes `{specFileNameWithoutExtension}-report.md` in the specification directory (`.sdw/specs/00054-example.md` -> `.sdw/specs/00054-example-report.md`) and records its project-relative path in `state.deliveryReport`. The run commits the report with a scoped commit (`docs({specSlug}): record delivery report`) that stages only that file, whenever it is written; the commit never rewrites the Step 6 delivery commit. `--skip-pr` and second-pass runs commit it too, so `HEAD` is the report commit after any run that wrote one, while the Step 6 delivery or `refine({slug})` commit stays intact beneath it.
+
+Template order:
+
+1. `# Delivery Report — {specTitle}`
+2. `## Metadata`: specification file and slug, run id, run status, branch, base branch, base commit, delivery commit, ship status, score / `scoreMin`, implementation start (first dispatch), implementation end (last acceptance), total wall-clock duration, and one row per step with its duration.
+3. `## Tasks`: `id | title | status | covered ACs | checkpoint commit | started | completed | duration`.
+4. `## Commits`: `git log --format='%h %s' <baseCommit>..HEAD`, plus the delivery commit when it is outside that range.
+5. `## Files Changed`: change type from `git diff --name-status <baseCommit>..HEAD`, grouped by the task whose `filesChanged` names the path; a file owned by several tasks lists under each.
+6. `## Verification`: Step 4 gate status, exit code, and duration, plus the Step 8 delivery status.
+7. `## Code Review`: Step 7 status, result, findings by severity, blocking count, and report path.
+8. `## Breaking Changes`: deterministic candidates from `.sdw/config.json` and `.sdw/config.schema.json` key diffs, added or removed CLI flags in `skills/*/scripts/*.cjs`, configuration schema property changes, and renamed or deleted files under `skills/`; each cites its diff path, and an empty set renders `None detected`.
+9. `## Quality`: conformance score, judge verdict counts, review findings by severity, executed test totals from task evidence, and gate statuses.
+10. `## Spec Observations`: the Step 2 observations.
+11. `## Notes`: `state.errors`, skipped steps, abandoned and re-dispatched tasks, security-gate bypasses, and recorded environment facts.
+12. `## Outcome`: run status, delivery commit, ship status, and duration.
+
+The report reads recorded evidence only; it never re-runs a gate or a review. A write or commit failure appends a warning to `state.errors` and the run continues without failing delivery. A resumed run rewrites the same companion path from current run state; it never appends a second report.
+
+### Spec Observations
+
+Step 2 records advisory `specObservations` in `steps[2].output` and in the `{slug}-step-2.md` artifact (`## Spec Observations`). Each entry carries `kind`, `otherSpec`, `evidence`, and `severity`. The rules are file-content heuristics that stay explainable from the evidence they cite:
+
+- `overlap`: another specification with registry status `completed` or `implemented` names a target file also named by this specification. `evidence` names both specifications and the shared file.
+- `superseded`: another specification names this specification's slug, id, or numeric prefix on a line that contains `supersedes`, `superseded by`, `replaces`, `replaced by`, `abandoned in favor of`, or `will not implement`. `evidence` names the other specification and the matched reference.
+- `conflict`: this specification and another declare the same key (a key present in `.sdw/config.json`) with different values, for example `scoreMin: 9` versus `scoreMin: 7`. `evidence` names both specifications, the key, and both values.
+
+Target files are the backticked project-relative paths that contain a `/` and a file extension, the same extraction [`spec_grilling.cjs`](../scripts/spec_grilling.cjs) supplies to the Step 2 blueprint. `severity` is `high` only when the other specification is already delivered and shares target files; otherwise `medium`. Observations never fail validation, rewrite a specification, or block or alter a run. `--dry-run` prints each observation and writes no report or Step 2 artifact.
 
 
 

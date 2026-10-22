@@ -172,6 +172,84 @@ test('sdw-step-artifacts - AC1, AC2, AC3, AC4, AC5, AC6, AC7, AC12, AC13: Step 2
   }
 });
 
+test('sdw-step-artifacts - 00054 AC11-AC14: Step 2 records spec observations in output and artifact', () => {
+  const repoRoot = setupTestRepo();
+  try {
+    const slug = '054-observations';
+    const specPath = createDummySpec(repoRoot, slug);
+    fs.appendFileSync(specPath, '\nTouches `skills/sdw-orch/scripts/sdw_orch.cjs` and declares scoreMin: 9.\n', 'utf8');
+
+    const specsDir = path.join(repoRoot, '.sdw', 'specs');
+    fs.writeFileSync(path.join(specsDir, 'index.specs.md'), [
+      '# Specification Index',
+      '',
+      '| Prefix | Slug | Title | Status | Source | Spec Date | Validation | Archival Date |',
+      '|---|---|---|---|---|---|---|---|',
+      '| 010 | 010-delivered | Delivered | completed | local | 2026-10-20 | PASS | - |',
+      '| 060 | 060-newer | Newer | pending | local | 2026-10-22 | PASS | - |',
+      '| 070 | 070-conflict | Conflict | pending | local | 2026-10-22 | PASS | - |',
+      ''
+    ].join('\n'), 'utf8');
+    fs.writeFileSync(path.join(specsDir, '010-delivered.md'), [
+      '---', 'slug: 010-delivered', 'status: completed', '---',
+      '# Delivered', 'Also touches `skills/sdw-orch/scripts/sdw_orch.cjs`.', ''
+    ].join('\n'), 'utf8');
+    fs.writeFileSync(path.join(specsDir, '060-newer.md'), [
+      '---', 'slug: 060-newer', 'status: pending', '---',
+      '# Newer', `This specification supersedes \`${slug}\`.`, ''
+    ].join('\n'), 'utf8');
+    fs.writeFileSync(path.join(specsDir, '070-conflict.md'), [
+      '---', 'slug: 070-conflict', 'status: pending', '---',
+      '# Conflict', 'It fixes scoreMin: 7.', ''
+    ].join('\n'), 'utf8');
+
+    const runId = `run-${Date.now()}-${slug}`;
+    const res = sdwOrch.cmdRun({
+      specPath,
+      root: repoRoot,
+      runId,
+      skipSecurity: true,
+      skipReview: true,
+      skipPr: true,
+      unattended: true,
+      implementation: {
+        mode: 'command',
+        command: 'node -e "const fs = require(\'fs\'); fs.writeFileSync(\'artifact-task.txt\', \'done\'); fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({ taskId: process.env.SDW_TASK_ID, acIds: [\'AC1\', \'AC2\'], filesChanged: [\'artifact-task.txt\'], summary: \'observations done\' }));"'
+      }
+    });
+
+    assert.strictEqual(res, 0);
+
+    const state = stateManager.loadRunState(repoRoot, runId);
+    const observations = state.steps[2].output.specObservations;
+    assert.ok(Array.isArray(observations) && observations.length > 0, 'AC14: Step 2 output records the observations');
+    for (const item of observations) {
+      assert.ok(item.kind, 'AC14: kind is recorded');
+      assert.ok(item.otherSpec, 'AC14: otherSpec is recorded');
+      assert.ok(item.evidence, 'AC14: evidence is recorded');
+      assert.ok(item.severity, 'AC14: severity is recorded');
+    }
+    const kinds = new Set(observations.map((item) => item.kind));
+    assert.ok(kinds.has('overlap'), 'AC11: the delivered overlap is recorded in Step 2 output');
+    assert.ok(kinds.has('superseded'), 'AC12: the supersession is recorded in Step 2 output');
+    assert.ok(kinds.has('conflict'), 'AC13: the configuration conflict is recorded in Step 2 output');
+
+    const artifactPath = path.join(repoRoot, state.steps[2].artifact);
+    const artifact = fs.readFileSync(artifactPath, 'utf8');
+    assert.ok(artifact.includes('## Spec Observations'), 'AC14: the Step 2 artifact carries the observations');
+    assert.ok(artifact.includes('010-delivered'), 'AC11: the artifact names the overlapping specification');
+    assert.ok(artifact.includes('skills/sdw-orch/scripts/sdw_orch.cjs'), 'AC11: the artifact names the shared file');
+    assert.ok(artifact.includes('060-newer'), 'AC12: the artifact names the superseding specification');
+    assert.ok(artifact.includes('070-conflict'), 'AC13: the artifact names the conflicting specification');
+
+    const reportPath = path.join(specsDir, `${slug}-report.md`);
+    assert.ok(fs.existsSync(reportPath), 'the delivery report exists beside the specification');
+    assert.ok(fs.readFileSync(reportPath, 'utf8').includes('## Spec Observations'), 'AC10: the report carries the observations');
+  } finally {
+    fs.rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test('sdw-step-artifacts - AC8: Resumed run reuses existing artifacts directory from state', () => {
   const repoRoot = setupTestRepo();
   try {
