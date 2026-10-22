@@ -18,6 +18,7 @@ Options:
   --batch-id <id>         Explicit batch identifier
   --continue-on-error     Continue the queue when a specification fails
   --no-sync               Skip sdw-spec sync after a completed specification
+  --no-merge              Skip the automatic pull request merge for this invocation
   --dry-run               Validate the specification list and print the plan only
   --json                  Print the manifest as JSON
   -h, --help              Show this help`;
@@ -29,7 +30,8 @@ function parseArgs(argv) {
     batchId: null,
     root: null,
     json: false,
-    dryRun: false
+    dryRun: false,
+    noMerge: false
   };
   const positional = [];
   for (let i = 0; i < argv.length; i += 1) {
@@ -37,6 +39,9 @@ function parseArgs(argv) {
     if (arg === '--json') options.json = true;
     else if (arg === '--continue-on-error') options.continueOnError = true;
     else if (arg === '--no-sync') options.noSync = true;
+    // Spec 00053 AC8: run and resume share the parser, so one flag disables the
+    // queue merge for either subcommand without rewriting the configuration.
+    else if (arg === '--no-merge') options.noMerge = true;
     else if (arg === '--dry-run') options.dryRun = true;
     else if (arg === '--root') options.root = argv[++i];
     else if (arg.startsWith('--root=')) options.root = arg.slice(7);

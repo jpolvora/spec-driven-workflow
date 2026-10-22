@@ -58,6 +58,9 @@ function loadConfig(targetRoot) {
     specsDir: expand(raw.specsDir, path.join(root, '.sdw', 'specs')),
     stateDir: expand(raw.stateDir, path.join(root, '.sdw', 'state')),
     retro: raw.retro && typeof raw.retro === 'object' && !Array.isArray(raw.retro) ? raw.retro : {},
+    // Spec 00053 AC11: the pre-flight refreshes the configured lanes, so the
+    // queue carries the branch block it must resolve, unmerged.
+    branching: raw.branching && typeof raw.branching === 'object' && !Array.isArray(raw.branching) ? raw.branching : {},
     // Spec 00053 AC1: an unattended queue merges by default; only an explicit
     // boolean false opts out, and an absent key resolves to true.
     autoMerge: typeof batch.autoMerge === 'boolean' ? batch.autoMerge : true,
@@ -501,6 +504,25 @@ function runMergeCommand({ config, command }) {
   return { merged: true, command };
 }
 
+// The delegated run's step 8 output is the delivery record; the queue never
+// derives a pull request from anywhere else.
+function deliveredPullRequest(config, item) {
+  const state = readRunState(config, item && item.runId);
+  const stepOutput = state && state.steps && state.steps[8] ? state.steps[8].output : null;
+  const pullRequest = (stepOutput && stepOutput.pullRequest) || (state && state.pullRequest) || null;
+  const shipStatus = (stepOutput && stepOutput.shipStatus) || (state && state.shipStatus) || null;
+  const prNumber = pullRequest && pullRequest.number !== undefined && pullRequest.number !== null
+    ? pullRequest.number
+    : null;
+  return { shipStatus, prNumber };
+}
+
+// Effective merge policy for one invocation: the configured default, with
+// `--no-merge` (AC3/AC8) overriding it for run and resume alike.
+function mergeEnabled(config, options = {}) {
+  return options.noMerge !== true && Boolean(config && config.autoMerge);
+}
+
 // Records one merge outcome per completed item. A policy skip or a provider
 // failure is recorded on the item and the queue keeps advancing: the item's
 // completed status is owned by the delegated run and never changes here.
@@ -512,7 +534,7 @@ function applyMerge({ config, manifest, item, options = {} } = {}) {
 
   const at = new Date().toISOString();
   const noMerge = options.noMerge === true;
-  const requested = !noMerge && Boolean(config && config.autoMerge);
+  const requested = mergeEnabled(config, options);
   const record = (status, extra = {}) => {
     item.merge = {
       requested,
@@ -535,14 +557,9 @@ function applyMerge({ config, manifest, item, options = {} } = {}) {
     return record('skipped', { reason });
   }
 
-  const state = readRunState(config, item.runId);
-  const stepOutput = state && state.steps && state.steps[8] ? state.steps[8].output : null;
-  const pullRequest = (stepOutput && stepOutput.pullRequest) || (state && state.pullRequest) || null;
-  const shipStatus = (stepOutput && stepOutput.shipStatus) || (state && state.shipStatus) || null;
-  const prNumber = pullRequest && pullRequest.number !== undefined && pullRequest.number !== null
-    ? pullRequest.number
-    : null;
-  if (shipStatus !== 'delivered' || prNumber === null) {
+  const pullRequest = deliveredPullRequest(config, item);
+  const prNumber = pullRequest.prNumber;
+  if (pullRequest.shipStatus !== 'delivered' || prNumber === null) {
     say(options, `[sdw-batch] Merge skipped for ${item.slug}: no-pr.`);
     return record('skipped', { reason: 'no-pr' });
   }
@@ -572,6 +589,189 @@ function applyMerge({ config, manifest, item, options = {} } = {}) {
   }
   saveManifest(config, manifest);
   return item.merge;
+}
+
+// Spec 00053 AC11-AC13: every delegation is preceded by a base refresh. The
+// refreshed base must reach every earlier delivery commit; a missing one is
+// either merged through its still-open pull request, or halts the queue before
+// a stale base can seed the next item.
+const BATCH_REMOTE = 'origin';
+
+function gitCommand(config, args) {
+  const result = spawnSync('git', args, {
+    cwd: config.root,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    const detail = String(result.stderr || result.stdout || '').trim();
+    throw new Error(detail || `git ${args.join(' ')} exited with code ${result.status}`);
+  }
+  return String(result.stdout || '').trim();
+}
+
+// The lane the next item branches from: the configured work lane, then the
+// integration lane, then the remote default branch. No lane means the queue
+// cannot prove a base, so the pre-flight records the condition instead.
+function baseBranchOf(config) {
+  const branching = config && config.branching ? config.branching : {};
+  for (const value of [branching.workBranch, branching.integrationBranch]) {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  try {
+    const head = gitCommand(config, ['symbolic-ref', '--short', `refs/remotes/${BATCH_REMOTE}/HEAD`]);
+    if (!head) return null;
+    return head.startsWith(`${BATCH_REMOTE}/`) ? head.slice(BATCH_REMOTE.length + 1).trim() : head.trim();
+  } catch (e) {
+    return null;
+  }
+}
+
+// Fetches the base lane into its remote-tracking ref without touching the work
+// tree or any local branch. A repository without a remote has nothing shared
+// to prove, which is a recorded condition, never a halt.
+function refreshBase(config, baseBranch) {
+  try {
+    gitCommand(config, ['rev-parse', '--is-inside-work-tree']);
+  } catch (err) {
+    return { status: 'unavailable', reason: err.message };
+  }
+  try {
+    gitCommand(config, ['remote', 'get-url', BATCH_REMOTE]);
+  } catch (e) {
+    return { status: 'no-remote', reason: `remote "${BATCH_REMOTE}" is not configured` };
+  }
+  gitCommand(config, ['fetch', BATCH_REMOTE, `+refs/heads/${baseBranch}:refs/remotes/${BATCH_REMOTE}/${baseBranch}`]);
+  return {
+    status: 'refreshed',
+    baseCommit: gitCommand(config, ['rev-parse', `refs/remotes/${BATCH_REMOTE}/${baseBranch}`])
+  };
+}
+
+function baseContains(config, commit, baseCommit) {
+  try {
+    gitCommand(config, ['merge-base', '--is-ancestor', String(commit), String(baseCommit)]);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+function missingDeliveryMessage(prior, baseBranch) {
+  return `base branch "${baseBranch}" does not contain delivery commit ${prior.deliveryCommit} from "${prior.slug}"`;
+}
+
+function missingDeliveries(config, manifest, item, baseCommit) {
+  return manifest.queue.filter(prior =>
+    prior.index < item.index
+    && prior.status === 'completed'
+    && prior.deliveryCommit
+    && !baseContains(config, prior.deliveryCommit, baseCommit));
+}
+
+function runPreflight({ config, manifest, item, options = {} } = {}) {
+  const at = new Date().toISOString();
+  const baseBranch = baseBranchOf(config);
+  const store = (status, extra = {}) => {
+    item.preflight = {
+      requested: true,
+      status,
+      remote: BATCH_REMOTE,
+      baseBranch,
+      baseCommit: null,
+      reason: null,
+      at,
+      ...extra
+    };
+    saveManifest(config, manifest);
+    return item.preflight;
+  };
+  if (!baseBranch) {
+    store('no-base-branch', { reason: 'no work or integration branch resolves for the base refresh' });
+    return null;
+  }
+
+  let refreshed;
+  try {
+    refreshed = refreshBase(config, baseBranch);
+  } catch (err) {
+    const message = err && err.message ? err.message : String(err);
+    store('failed', { reason: message });
+    return { halt: true, message: `pre-flight could not refresh "${baseBranch}" from ${BATCH_REMOTE}: ${message}` };
+  }
+  if (refreshed.status !== 'refreshed') {
+    store(refreshed.status, { reason: refreshed.reason });
+    return null;
+  }
+  let baseCommit = refreshed.baseCommit;
+  store('refreshed', { baseCommit });
+
+  let missing = missingDeliveries(config, manifest, item, baseCommit);
+  if (missing.length === 0) return null;
+
+  let mergedAny = false;
+  for (const prior of missing) {
+    const pullRequest = deliveredPullRequest(config, prior);
+    const open = pullRequest.prNumber !== null
+      && pullRequest.shipStatus === 'delivered'
+      && !(prior.merge && prior.merge.status === 'merged');
+    if (!open) {
+      const message = `${missingDeliveryMessage(prior, baseBranch)} and no open pull request can deliver it`;
+      store('halted', { baseCommit, reason: message });
+      return { halt: true, message };
+    }
+    // AC12: an earlier pull request is still open, so the base omits its
+    // delivery. Auto-merge lands it now; a disabled policy halts instead.
+    if (!mergeEnabled(config, options)) {
+      const message = `pull request #${pullRequest.prNumber} for "${prior.slug}" is still open, so "${baseBranch}" lacks delivery commit ${prior.deliveryCommit}; auto-merge is disabled (enable batch.autoMerge, drop --no-merge, or merge the pull request manually)`;
+      store('halted', { baseCommit, reason: message });
+      return { halt: true, message };
+    }
+    const command = mergeCommandFor(config.scmProvider, pullRequest.prNumber);
+    if (!command || !/^\d+$/.test(String(pullRequest.prNumber))) {
+      const message = `${missingDeliveryMessage(prior, baseBranch)} and scmProvider "${config.scmProvider}" cannot merge pull request #${pullRequest.prNumber}`;
+      store('halted', { baseCommit, reason: message });
+      return { halt: true, message };
+    }
+    const mergePr = typeof options._mergePr === 'function' ? options._mergePr : runMergeCommand;
+    const mergedAt = new Date().toISOString();
+    try {
+      mergePr({ config, item: prior, prNumber: pullRequest.prNumber, command, provider: config.scmProvider });
+      prior.merge = { requested: true, attempted: true, ok: true, status: 'merged', reason: null, prNumber: pullRequest.prNumber, at: mergedAt };
+      mergedAny = true;
+      say(options, `[sdw-batch] Merged ${pullRequest.prNumber} for ${prior.slug} before delegating ${item.slug}.`);
+    } catch (err) {
+      const detail = err && err.message ? err.message : String(err);
+      prior.merge = { requested: true, attempted: true, ok: false, status: 'failed', reason: detail, prNumber: pullRequest.prNumber, at: mergedAt };
+      const message = `${missingDeliveryMessage(prior, baseBranch)}; the pre-flight merge of pull request #${pullRequest.prNumber} failed: ${detail}`;
+      store('halted', { baseCommit, reason: message });
+      return { halt: true, message };
+    }
+  }
+
+  if (mergedAny) {
+    // One extra refresh after the merges: the same fetch, never a wait loop.
+    try {
+      baseCommit = refreshBase(config, baseBranch).baseCommit;
+    } catch (err) {
+      const message = err && err.message ? err.message : String(err);
+      store('failed', { baseCommit, reason: message });
+      return { halt: true, message: `pre-flight could not refresh "${baseBranch}" after merging earlier items: ${message}` };
+    }
+    item.preflight.baseCommit = baseCommit;
+    saveManifest(config, manifest);
+  }
+
+  missing = missingDeliveries(config, manifest, item, baseCommit);
+  if (missing.length > 0) {
+    // AC13: the refreshed base still omits a delivery; name the commit and the
+    // branch instead of delegating onto a stale base.
+    const message = `${missingDeliveryMessage(missing[0], baseBranch)}; refusing to delegate "${item.slug}" on a stale base`;
+    store('halted', { baseCommit, reason: message });
+    return { halt: true, message };
+  }
+  return null;
 }
 
 function triggerSpecSync(config) {
@@ -711,6 +911,18 @@ function executeQueue(manifest, config, options) {
     if (item.status === 'already_implemented') {
       say(options, `[sdw-batch] Skipping already-implemented specification [${item.index + 1}/${manifest.total}]: ${item.slug} (${item.skipReason})`);
       continue;
+    }
+
+    // Spec 00053 AC11-AC13: refresh the base and prove the earlier deliveries
+    // are reachable before this item is delegated. A halt leaves the item
+    // pending and returns the failure exit code without touching the run.
+    const preflight = runPreflight({ config, manifest, item, options });
+    if (preflight && preflight.halt) {
+      manifest.status = 'halted';
+      saveManifest(config, manifest);
+      console.error(`\n[sdw-batch] Pre-flight halted the queue before delegating "${item.slug}": ${preflight.message}`);
+      printSummary(manifest, options);
+      return 1;
     }
 
     manifest.currentIndex = i;
