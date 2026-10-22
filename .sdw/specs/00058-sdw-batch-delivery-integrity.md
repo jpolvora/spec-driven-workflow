@@ -64,6 +64,7 @@ One rule replaces the current mix: the queue advances on evidence, never on a st
 - Delivery-evidence resolution order for a skipped item: the queue item's own `runId`, then the most recent run state for the specification whose status is `completed` and which carries a `deliveryCommit`, then the provider's pull request for the feature branch. Every source is a recorded value; the queue never guesses a branch name from a title.
 - Stale-run rule: an open run is stale when `git merge-base --is-ancestor <run.baseCommit> <refreshed lane commit>` fails. A run whose base commit is an ancestor is not stale and is resumed as today.
 - Registry transition order after this change: Step 6 creates the delivery commit without touching the registry; Step 8 marks the specification `completed` and sets the header to `implemented` only after the delivery stage reports a delivered pull request or after `--skip-pr`; a run that fails before that leaves both unchanged. This satisfies spec 00002 AC24, which places the transition after delivery completes, and it removes the false `completed` row that the skip path currently trusts.
+- Consequence of that order, to handle at delivery time: the delivery stage has already pushed the branch when the transition runs, so the registry row and the header become worktree changes that no commit on the branch contains yet. The delivery must commit those two paths on the branch before the pull request is merged, otherwise the flip reaches the integration lane only through a later sync. A run started from a lane that still carries those uncommitted changes must not leak them into the next specification's branch.
 - Header repair: `sdw-spec sync` reconciles the header status from the registry when the registry is authoritative, and reports every disagreement it cannot resolve.
 - Target surfaces:
   - `skills/sdw-batch/scripts/batch_queue.cjs`: the skip path runs the merge and pre-flight stages, `missingDeliveries` keys on delivery evidence, the pre-flight fast-forwards the local lane and records the start point, the provider-based pull request resolution, the convergence pause, and the stale-run classification.
@@ -72,8 +73,12 @@ One rule replaces the current mix: the queue advances on evidence, never on a st
   - `skills/sdw-orch/scripts/sdw_orch.cjs`: exit code `6` for an unconverged delivery, the registry transition moved after the delivery stage, the header update in the same transition, and the branch start point taken from the refreshed lane when the local lane is stale.
   - `skills/sdw-orch/references/orchestrator_protocol.md`: exit code `6`, the transition order, and the branch start point rule.
   - `skills/sdw-orch/SKILL.md` and `skills/sdw-batch/SKILL.md`: the new pause code and the evidence rule inside the Tier-1 line budgets.
+  - `skills/sdw-spec/scripts/spec_index.cjs`: `updateSpecStatus` writes the specification header status in the same transition as the registry row.
+  - `skills/sdw-spec/scripts/spec_sync.cjs` and `skills/sdw-spec/scripts/sdw_spec.cjs`: the registry and header drift report, naming the file and both values, plus the header repair path.
+  - `.sdw/specs/00038-sdw-spec-drift-repair.md`, `00050-sdw-ship-pr-native-pre-pr-enforcement-ga.md`, `00051-issue-linkage-imported-scm-issues-close-.md`, `00052-sdw-fresh-subagent-code-review.md`, `00053-batch-auto-merge-sdw-batch-merges-each-d.md`, `00054-sdw-orch-delivery-report-companion-file-.md`, and `00055-sdw-spec-list-by-priority.md`: the seven headers repaired to `implemented`.
   - `tests/sdw_batch.test.cjs` and `tests/sdw_batch_retro.test.cjs`: the skip-path merge and pre-flight, the base proof over skipped items, the convergence pause, and the stale-run halt and override.
   - `tests/sdw_orch.test.cjs` and `tests/sdw_scoped_commit.test.cjs`: the registry transition order, the header update, and the start point selection.
+  - `tests/sdw_spec_header_drift.test.cjs`: the drift report and the header repair.
 - All helper scripts remain Node.js CommonJS (.cjs) using standard library modules only. No new runtime dependencies.
 
 ## Out of Scope

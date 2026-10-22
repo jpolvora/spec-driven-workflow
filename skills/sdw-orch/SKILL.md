@@ -102,6 +102,7 @@ Orchestrates spec execution from input requirement to delivery commit, automated
 
 ## Delivery Pause, Registry Truth & Stale Runs
 
+- Delivery is proven by evidence, never by the registry row: the queue resolves the run id, delivery commit, branch, and pull request from the item's run state, then from the most recent completed run carrying a delivery commit, then from the SCM provider by head branch.
 - An unconverged delivery pauses with exit code `6`: run `paused`, Step 8 `blocked_convergence`. Converge the pull request, then `resume`; nothing is marked failed or completed.
 - Step 6 never writes the registry. Only after the delivery stage reports the delivery, or with `--skip-pr`, does Step 8 mark the specification `completed` and set its header `status: implemented` in the same transition; a run that fails earlier leaves both unchanged.
 - An open run whose recorded base commit is not an ancestor of the refreshed work lane is stale and is never resumed: `--new-run` starts a fresh run and records the superseded id.
