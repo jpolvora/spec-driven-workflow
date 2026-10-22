@@ -3103,8 +3103,17 @@ function cmdTaskFinish(options) {
       commitSha = checkpoint.commitSha || commitSha;
       checkpointTag = checkpoint.tag;
     } catch (cpErr) {
-      console.error(`Error: Failed to checkpoint task "${taskId}": ${cpErr.message}`);
-      return 1;
+      // Worktree mode: integration already committed the work to the primary branch
+      // and deleted the worktree, so a failed tag costs no durability and must not
+      // strand the task in a retry loop that can never corroborate the clean tree.
+      if (effectiveUseWorktrees) {
+        console.warn(`[sdw-orch task finish] Warning: checkpoint tag for "${taskId}" was not created: ${cpErr.message}. The integrated commit already saves the work.`);
+        commitSha = getBaseCommit(targetRoot);
+        checkpointTag = null;
+      } else {
+        console.error(`Error: Failed to checkpoint task "${taskId}": ${cpErr.message}`);
+        return 1;
+      }
     }
   } else if (!effectiveUseWorktrees) {
     commitSha = getBaseCommit(targetRoot);

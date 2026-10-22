@@ -299,6 +299,46 @@ test('AC3: worktree mode tags the integrated primary-tree commit, not the worktr
   }
 });
 
+test('AC3: worktree mode accepts the task when the checkpoint tag cannot be created', () => {
+  const root = setupRepo();
+  try {
+    fs.writeFileSync(path.join(root, '.sdw', 'config.json'), JSON.stringify({ useWorktrees: true }, null, 2), 'utf8');
+    assert.equal(pauseAtDispatch(root), 4);
+    const state = stateManager.findLatestRunState(root);
+    const taskId = state.steps[4].dispatch.activeTaskId;
+    const wtRel = `.sdw/worktrees/${state.runId}/${taskId}`;
+    execSync(`git worktree add -q "${wtRel}" -b "sdw-${state.runId}-${taskId}" HEAD`, { cwd: root, stdio: 'ignore' });
+
+    fs.appendFileSync(path.join(root, wtRel, 'app.cjs'), `// ${taskId} worktree work\n`, 'utf8');
+    const evidence = {
+      taskId,
+      status: 'success',
+      acIds: [state.dagTasks[0].coveredAcs[0]],
+      filesChanged: ['app.cjs'],
+      tests: [],
+      summary: 'worktree task with a blocked tag'
+    };
+    const evidencePath = path.join(root, 'tagfail.evidence.json');
+    fs.writeFileSync(evidencePath, JSON.stringify(evidence, null, 2), 'utf8');
+
+    // A directory at the tag ref path makes `git tag -f` fail deterministically.
+    const tagRef = path.join(root, '.git', 'refs', 'tags', `sdw-checkpoint-${state.runId}-${taskId}`);
+    fs.mkdirSync(tagRef, { recursive: true });
+    fs.writeFileSync(path.join(tagRef, 'junk'), 'x', 'utf8');
+
+    assert.equal(sdwOrch.cmdTaskFinish({ root, runId: state.runId, taskId, evidencePath }), 0, 'The integrated task is still accepted');
+
+    const after = stateManager.loadRunState(root, state.runId);
+    const record = after.steps[4].tasks[taskId];
+    assert.equal(record.status, 'completed', 'The task is accepted');
+    assert.ok(!record.checkpointTag, 'No tag is recorded');
+    assert.equal(record.commitSha, gitOut(root, 'rev-parse HEAD'), 'The integrated SHA is recorded');
+    assert.equal(gitOut(root, 'rev-list --count HEAD~1..HEAD'), '1', 'The cherry-pick still landed');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('AC9-AC10: task finish rejects a non-dispatched task and names the active one', () => {
   const root = setupRepo();
   try {
