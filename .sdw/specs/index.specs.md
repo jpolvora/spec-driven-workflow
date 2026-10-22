@@ -64,3 +64,4 @@ Central repository index tracking specification lifecycle states, metadata, and 
 | 00051 | 00051-issue-linkage-imported-scm-issues-close- | issue linkage: imported SCM issues close automatically when the implementing pull request references the source item id | completed | local | 2026-10-22 | PASS | - |
 | 00052 | 00052-sdw-fresh-subagent-code-review | SDW Fresh-Subagent Code Review Isolation | pending | local | 2026-10-22 | PASS | - |
 | 00053 | 00053-batch-auto-merge-sdw-batch-merges-each-d | batch auto-merge: sdw-batch merges each delivered pull request before advancing to the next specification | pending | local | 2026-10-22 | PASS | - |
+| 00054 | 00054-sdw-orch-delivery-report-companion-file- | sdw-orch delivery report companion file and spec-conflict observations at ingestion | pending | local | 2026-10-22 | PASS | - |
