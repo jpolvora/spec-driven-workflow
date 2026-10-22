@@ -237,6 +237,7 @@ function parseArgs(args) {
     commentId: null,
     comment: null,
     runId: null,
+    ackPrepare: null,
     spec: null,
     head: null,
     base: null,
@@ -268,6 +269,8 @@ function parseArgs(args) {
       options.comment = args[++i];
     } else if (arg === '--run-id' && args[i + 1]) {
       options.runId = args[++i];
+    } else if (arg === '--ack-prepare' && args[i + 1]) {
+      options.ackPrepare = args[++i];
     } else if (arg === '--spec' && args[i + 1]) {
       options.spec = args[++i];
     } else if (arg === '--head' && args[i + 1]) {
@@ -370,6 +373,108 @@ function locateStateFile(projectRoot, runId, specSlug = null, config = {}) {
   }
 
   return null;
+}
+
+// Spec 00050: pre-PR discovery scan and run-state evidence gate.
+const PRE_PR_DISCOVERY_MODES = ['block', 'warn', 'off'];
+const PRE_PR_DISCOVERY_FILES = ['AGENTS.md', 'CONTRIBUTING.md', 'RELEASE.md', 'PUBLISH.md'];
+const PRE_PR_PREPARE_HEADING = /prepare|before push|before publish|before deliver|before delivery|before merge/i;
+const PRE_PR_DISCOVERY_MAX_LINES = 8;
+const PRE_PR_DISCOVERY_MAX_CHARS = 1200;
+
+function resolvePrePrDiscovery(config = {}) {
+  const configured = config.prePrDiscovery;
+  if (configured === undefined || configured === null) return 'block';
+  const mode = String(configured).trim().toLowerCase();
+  if (!PRE_PR_DISCOVERY_MODES.includes(mode)) {
+    throw new Error(
+      `Invalid prePrDiscovery value "${configured}". Allowed values: ${PRE_PR_DISCOVERY_MODES.join(', ')}.`
+    );
+  }
+  return mode;
+}
+
+function discoverPrepareObligations(projectRoot, config = {}) {
+  const rows = [];
+  for (const fileName of PRE_PR_DISCOVERY_FILES) {
+    const filePath = path.join(projectRoot, fileName);
+    let lines;
+    try {
+      if (!fs.existsSync(filePath)) continue;
+      lines = fs.readFileSync(filePath, 'utf8').split(/\r?\n/);
+    } catch (e) {
+      continue;
+    }
+    for (let i = 0; i < lines.length; i++) {
+      const headingMatch = lines[i].match(/^#{1,6}\s+(.+?)\s*$/);
+      if (!headingMatch || !PRE_PR_PREPARE_HEADING.test(headingMatch[1])) continue;
+      const bodyLines = [];
+      for (let j = i + 1; j < lines.length && bodyLines.length < PRE_PR_DISCOVERY_MAX_LINES; j++) {
+        if (/^#{1,6}\s+/.test(lines[j])) break;
+        bodyLines.push(lines[j]);
+      }
+      rows.push({
+        source: fileName,
+        heading: headingMatch[1].trim(),
+        body: bodyLines.join('\n').trim().slice(0, PRE_PR_DISCOVERY_MAX_CHARS)
+      });
+    }
+  }
+  const instructions = typeof config.prePrInstructions === 'string' ? config.prePrInstructions.trim() : '';
+  if (instructions) {
+    rows.push({
+      source: '.sdw/config.json',
+      heading: 'prePrInstructions',
+      body: instructions.slice(0, PRE_PR_DISCOVERY_MAX_CHARS)
+    });
+  }
+  return rows;
+}
+
+function evaluateRunStateGate(projectRoot, runId, specSlug, config = {}) {
+  const gate = {
+    runId,
+    stateFile: null,
+    score: null,
+    scoreMin: null,
+    steps: {},
+    passed: false,
+    reason: null
+  };
+  const stateFilePath = locateStateFile(projectRoot, runId, specSlug, config);
+  if (!stateFilePath) {
+    gate.reason = `run state "${runId}.state.json" was not found; refusing to ship without run evidence`;
+    return gate;
+  }
+  gate.stateFile = path.relative(projectRoot, stateFilePath).split(path.sep).join('/');
+  let state;
+  try {
+    state = JSON.parse(fs.readFileSync(stateFilePath, 'utf8'));
+  } catch (e) {
+    gate.reason = `run state "${gate.stateFile}" is unreadable (${e.message}); refusing to ship`;
+    return gate;
+  }
+  if (!state || typeof state !== 'object' || Array.isArray(state)) {
+    gate.reason = `run state "${gate.stateFile}" is malformed; refusing to ship`;
+    return gate;
+  }
+  const steps = state.steps && typeof state.steps === 'object' ? state.steps : {};
+  const statusOf = (n) => (steps[n] && typeof steps[n] === 'object' && steps[n].status !== undefined
+    ? String(steps[n].status)
+    : null);
+  gate.steps = { 4: statusOf(4), 6: statusOf(6) };
+  gate.score = Number.isFinite(Number(state.score)) ? Number(state.score) : null;
+  gate.scoreMin = Number.isFinite(Number(config.scoreMin)) ? Number(config.scoreMin) : 8;
+
+  const failures = [];
+  if (gate.steps[4] !== 'completed') failures.push(`step 4 is "${gate.steps[4] || 'missing'}" (expected "completed")`);
+  if (gate.steps[6] !== 'completed') failures.push(`step 6 is "${gate.steps[6] || 'missing'}" (expected "completed")`);
+  if (gate.score === null) failures.push(`run score is missing (scoreMin ${gate.scoreMin})`);
+  else if (gate.score < gate.scoreMin) failures.push(`run score ${gate.score} is below scoreMin ${gate.scoreMin}`);
+
+  gate.passed = failures.length === 0;
+  gate.reason = gate.passed ? null : failures.join('; ');
+  return gate;
 }
 
 /**
@@ -698,6 +803,10 @@ async function runShipPr(options = {}, customExecutor = null) {
     scmProvider: scmProviderName,
     pushed: false,
     prePrPassed: false,
+    prepareDiscovery: null,
+    prepareObligations: [],
+    prepareAck: null,
+    runStateGate: null,
     pullRequest: null,
     // Spec 024 AC26: when merge is requested, an audit record exists from the
     // start, so a delivery that fails before the merge step still explains why
@@ -819,6 +928,61 @@ async function runShipPr(options = {}, customExecutor = null) {
       }
 
       report.prePrPassed = true;
+    }
+
+    // Step 1b: Run-state evidence and discovered prepare obligations (spec 00050).
+    // Both are read-only file checks, so they are evaluated in dry-run too; the
+    // ship refuses after every unmet obligation has been printed.
+    const discoveryMode = resolvePrePrDiscovery(config);
+    report.prepareDiscovery = discoveryMode;
+    const gateFailures = [];
+
+    if (options.runId) {
+      const runStateGate = evaluateRunStateGate(projectRoot, options.runId, specSlug, config);
+      report.runStateGate = runStateGate;
+      if (runStateGate.passed) {
+        log(`[sdw-ship-pr] Run-state gate passed: step 4 and step 6 completed, score ${runStateGate.score} >= scoreMin ${runStateGate.scoreMin}.`);
+      } else {
+        warn(`[sdw-ship-pr] Run-state gate failed: ${runStateGate.reason}.`);
+        gateFailures.push(`Run-state gate failed for "${options.runId}": ${runStateGate.reason}.`);
+      }
+    } else {
+      log('[sdw-ship-pr] Run-state gate skipped: --run-id not supplied (standalone ship).');
+    }
+
+    if (discoveryMode === 'off') {
+      log('[sdw-ship-pr] Prepare discovery skipped: prePrDiscovery is "off".');
+    } else {
+      const prepareObligations = discoverPrepareObligations(projectRoot, config);
+      report.prepareObligations = prepareObligations;
+      if (prepareObligations.length > 0) {
+        log(`[sdw-ship-pr] Discovered ${prepareObligations.length} prepare obligation(s) (prePrDiscovery: ${discoveryMode}):`);
+        for (const row of prepareObligations) {
+          log(`[sdw-ship-pr]   [${row.source}] ${row.heading}`);
+          if (row.body) {
+            for (const line of row.body.split('\n')) log(`[sdw-ship-pr]     ${line}`);
+          }
+        }
+      } else {
+        log('[sdw-ship-pr] No prepare obligations discovered.');
+      }
+
+      if (!options.ackPrepare && prepareObligations.length > 0 && discoveryMode === 'block') {
+        report.prepareDiscovery = 'blocked';
+        gateFailures.push(`Prepare discovery gate failed: prePrDiscovery is "block" and ${prepareObligations.length} prepare obligation(s) are unacknowledged; complete them and re-run with --ack-prepare "<note>".`);
+      } else if (!options.ackPrepare && prepareObligations.length > 0 && discoveryMode === 'warn') {
+        warn(`[sdw-ship-pr] prePrDiscovery is "warn": continuing despite ${prepareObligations.length} prepare obligation(s).`);
+      }
+    }
+
+    if (options.ackPrepare) {
+      report.prepareAck = { note: options.ackPrepare, at: new Date().toISOString() };
+      log(`[sdw-ship-pr] Prepare obligations acknowledged via --ack-prepare: ${options.ackPrepare}`);
+    }
+
+    if (gateFailures.length > 0) {
+      report.prePrPassed = false;
+      throw new Error(`Pre-PR enforcement refused to push or create a pull request. ${gateFailures.join(' ')}`);
     }
 
     // Check if an active PR is already open for this branch
@@ -1729,6 +1893,9 @@ module.exports = {
   parseArgs,
   loadConfig,
   locateStateFile,
+  resolvePrePrDiscovery,
+  discoverPrepareObligations,
+  evaluateRunStateGate,
   cmdListThreads,
   cmdResolveThread,
   cmdCheckStatus,
