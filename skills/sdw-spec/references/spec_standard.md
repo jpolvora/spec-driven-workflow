@@ -4,7 +4,7 @@ Canonical specification format and schema rules for Spec-Driven Workflow (SDW).
 
 ## 1. YAML Frontmatter
 
-Every specification must begin with YAML frontmatter containing exactly these 6 keys:
+Every specification must begin with YAML frontmatter containing these 6 required keys plus 4 optional ranking fields:
 
 ```yaml
 ---
@@ -14,10 +14,14 @@ title: "Feature Title"    # Quoted human-readable title
 source: local             # One of: 'local' | 'github' | 'azure-devops'
 status: draft             # One of the 5 spec statuses (see section 5)
 specDate: 2026-10-19      # ISO date (YYYY-MM-DD)
+priority: high            # Optional: 'high' | 'medium' | 'low' (default 'medium')
+value: "Why it matters"   # Optional: one line of free text (default: none)
+effort: M                 # Optional: 'S' | 'M' | 'L' (default: unset)
+blockedBy: ["00038"]      # Optional: prefixes or slugs that land first (default: empty)
 ---
 ```
 
-`status` is the authoring state, not an implementation order. A missing key or an unknown value fails validation.
+`status` is the authoring state, not an implementation order. A missing required key or an unknown `status`, `source`, `priority`, or `effort` value fails validation; the four optional keys are read only by `sdw-spec list-by-priority`, which ranks registry-pending specifications from them.
 
 ## 2. Autoincrement Prefix Convention
 

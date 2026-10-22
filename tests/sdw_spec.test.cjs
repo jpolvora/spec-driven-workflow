@@ -674,9 +674,10 @@ function writePriorityFixture(root, spec) {
   const criteria = (spec.acs || ['The system shall satisfy the fixture.'])
     .map((criterion, index) => `- AC${index + 1}: ${criterion}`)
     .join('\n');
+  const body = spec.body ? `\n${spec.body}\n` : '';
   fs.writeFileSync(
     path.join(root, '.sdw', 'specs', `${slug}.md`),
-    `${lines.join('\n')}\n# Specification — ${title}\n\n## Description\n\nFixture.\n\n## Acceptance Criteria\n\n${criteria}\n`,
+    `${lines.join('\n')}\n# Specification — ${title}\n\n## Description\n\nFixture.\n\n## Acceptance Criteria\n\n${criteria}\n${body}`,
     'utf8'
   );
   return {
@@ -900,4 +901,273 @@ test('00055 AC3: declared fields are read from frontmatter in inline, scalar, ab
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+function collisionPairs(stdout) {
+  return [...stdout.matchAll(/^(\d{5}) <-> (\d{5}) \((\d+) shared paths?\)$/gm)].map((match) => [
+    match[1],
+    match[2],
+    Number(match[3])
+  ]);
+}
+
+function snapshotTree(root) {
+  const files = new Map();
+  const walk = (dir) => {
+    for (const name of fs.readdirSync(dir).sort()) {
+      const full = path.join(dir, name);
+      if (fs.statSync(full).isDirectory()) walk(full);
+      else files.set(path.relative(root, full).replace(/\\/g, '/'), fs.readFileSync(full, 'utf8'));
+    }
+  };
+  walk(path.join(root, '.sdw'));
+  return files;
+}
+
+test('00055 AC11 & AC12: --limit caps rows while the totals keep every pending specification', () => {
+  const root = setupPriorityWorkspace([
+    { prefix: '00001', name: 'high-ready', status: 'ready-to-implement', priority: 'high', effort: 'S', date: '2026-10-01' },
+    { prefix: '00002', name: 'high-draft', status: 'draft', priority: 'high', effort: 'M', date: '2026-10-02' },
+    { prefix: '00003', name: 'medium', status: 'draft', priority: 'medium', effort: 'S', date: '2026-10-03' },
+    { prefix: '00004', name: 'low', status: 'draft', priority: 'low', effort: 'S', date: '2026-10-04' }
+  ]);
+  try {
+    const full = runListByPriority(root);
+    assert.equal(full.status, 0, full.stderr);
+    const fullOrder = rankedPrefixes(full.stdout);
+    assert.deepEqual(fullOrder, ['00001', '00002', '00003', '00004']);
+
+    const limited = runListByPriority(root, ['--limit', '2']);
+    assert.equal(limited.status, 0, limited.stderr);
+    assert.deepEqual(rankedPrefixes(limited.stdout), fullOrder.slice(0, 2), 'only the first n ranked rows print');
+    assert.ok(limited.stdout.includes('Ranked pending specifications (4)'), 'the header keeps the full pending count');
+    assert.match(limited.stdout, /^Totals: 4 pending \| 2 high \| 1 medium \| 1 low \| 0 blocked$/m);
+
+    const single = runListByPriority(root, ['--limit=1']);
+    assert.equal(single.status, 0, single.stderr);
+    assert.deepEqual(rankedPrefixes(single.stdout), ['00001']);
+
+    for (const invalid of ['0', 'abc', '-1', '1.5']) {
+      const rejected = runListByPriority(root, [`--limit=${invalid}`]);
+      assert.equal(rejected.status, 1, `--limit=${invalid} exits 1`);
+      assert.equal(rejected.stdout, '', 'no table is printed for an invalid limit');
+      assert.ok(rejected.stderr.includes(`Invalid --limit value "${invalid}"`), rejected.stderr);
+    }
+
+    const missing = runListByPriority(root, ['--limit']);
+    assert.equal(missing.status, 1);
+    assert.ok(missing.stderr.includes('Invalid --limit value "(missing)"'), missing.stderr);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('00055 AC13: --json prints counts and timestamp-free ranked items', () => {
+  const root = setupPriorityWorkspace([
+    { prefix: '00001', name: 'alpha', status: 'ready-to-implement', priority: 'high', effort: 'S', value: 'Ships alpha', date: '2026-10-01' },
+    { prefix: '00002', name: 'beta', status: 'draft', date: '2026-10-02', acs: ['The system shall do one thing.', 'The system shall do another thing.'] }
+  ]);
+  try {
+    const run = runListByPriority(root, ['--json']);
+    assert.equal(run.status, 0, run.stderr);
+    const payload = JSON.parse(run.stdout);
+    assert.deepEqual(Object.keys(payload), ['counts', 'items']);
+    assert.deepEqual(payload.counts, { pending: 2, high: 1, medium: 1, low: 0, blocked: 0 });
+    assert.deepEqual(Object.keys(payload.items[0]), [
+      'rank',
+      'prefix',
+      'slug',
+      'title',
+      'priority',
+      'effort',
+      'acCount',
+      'readiness',
+      'registryStatus',
+      'blockedBy',
+      'blocked',
+      'value',
+      'specDate'
+    ]);
+    assert.deepEqual(payload.items[0], {
+      rank: 1,
+      prefix: '00001',
+      slug: '00001-alpha',
+      title: 'alpha',
+      priority: 'high',
+      effort: 'S',
+      acCount: 1,
+      readiness: 'ready-to-implement',
+      registryStatus: 'pending',
+      blockedBy: [],
+      blocked: false,
+      value: 'Ships alpha',
+      specDate: '2026-10-01'
+    });
+    assert.equal(payload.items[1].acCount, 2, 'the acceptance-criteria count is carried');
+    assert.equal(payload.items[1].priority, 'medium', 'an absent priority reads as medium');
+    assert.equal(payload.items[1].effort, null, 'an absent effort stays unset');
+    assert.doesNotMatch(run.stdout, /timestamp|generatedAt|updatedAt|createdAt|runTime/i);
+
+    const limited = JSON.parse(runListByPriority(root, ['--json', '--limit', '1']).stdout);
+    assert.equal(limited.items.length, 1);
+    assert.equal(limited.counts.pending, 2, 'counts keep every pending specification under --limit');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('00055 AC14 & AC15: --collisions reports shared skills/ paths in count-then-prefix order', () => {
+  const root = setupPriorityWorkspace([
+    { prefix: '00010', name: 'two-shared', body: 'See `skills/alpha/one.cjs` and `skills/beta/two.cjs`, plus `skills/*/SKILL.md`.' },
+    { prefix: '00011', name: 'two-shared-peer', body: 'See skills/alpha/one.cjs and skills/beta/two.cjs.' },
+    { prefix: '00012', name: 'one-shared', body: 'See `skills/alpha/one.cjs` and `skills/gamma/three.cjs`.' },
+    { prefix: '00013', name: 'no-shared', body: 'See `skills/only/four.cjs`.' }
+  ]);
+  try {
+    const run = runListByPriority(root, ['--collisions']);
+    assert.equal(run.status, 0, run.stderr);
+    assert.deepEqual(collisionPairs(run.stdout), [
+      ['00010', '00011', 2],
+      ['00010', '00012', 1],
+      ['00011', '00012', 1]
+    ]);
+    assert.ok(run.stdout.includes('skills/alpha/one.cjs'), 'the shared path is listed');
+    assert.ok(!run.stdout.includes('skills/*'), 'a wildcard token names no concrete surface');
+    assert.ok(run.stdout.indexOf('00010 <-> 00011') < run.stdout.indexOf('00010 <-> 00012'));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+
+  const clean = setupPriorityWorkspace([
+    { prefix: '00020', name: 'wildcard-only', body: 'Applies `skills/*/SKILL.md` to every skill.' },
+    { prefix: '00021', name: 'unique-path', body: 'Applies `skills/only/one.cjs`.' }
+  ]);
+  try {
+    const run = runListByPriority(clean, ['--collisions']);
+    assert.equal(run.status, 0, run.stderr);
+    assert.equal(run.stdout.trim(), 'No surface collisions among pending specifications.');
+  } finally {
+    fs.rmSync(clean, { recursive: true, force: true });
+  }
+});
+
+test('00055 AC16 & AC17: repeated runs are byte-identical and write no byte', () => {
+  const root = setupPriorityWorkspace([
+    { prefix: '00001', name: 'alpha', priority: 'high', effort: 'S', body: 'Uses `skills/alpha/one.cjs`.' },
+    { prefix: '00002', name: 'beta', priority: 'low', body: 'Uses `skills/alpha/one.cjs` and `skills/beta/two.cjs`.' },
+    { prefix: '00003', name: 'gamma', blockedBy: ['00002'] }
+  ]);
+  try {
+    fs.mkdirSync(path.join(root, '.sdw', 'state'), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, '.sdw', 'state', 'run-fixture.state.json'),
+      JSON.stringify({ runId: 'run-fixture', status: 'running' }, null, 2),
+      'utf8'
+    );
+    const before = Object.fromEntries(snapshotTree(root));
+
+    for (const args of [[], ['--json'], ['--collisions'], ['--limit', '2']]) {
+      const first = runListByPriority(root, args);
+      const second = runListByPriority(root, args);
+      assert.equal(first.status, 0, first.stderr);
+      assert.equal(first.stdout, second.stdout, `stdout is byte-identical for ${args.join(' ') || '(table)'}`);
+    }
+
+    const after = Object.fromEntries(snapshotTree(root));
+    assert.deepEqual(after, before, 'specification files, the registry, and run state are untouched');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('00055 AC18: authoring validation rejects out-of-enum priority and effort', () => {
+  const spec = (extra) => `---
+id: null
+slug: 00001-enum
+title: "Enum"
+source: local
+status: draft
+specDate: 2026-10-22
+${extra}---
+# Specification — Enum
+## Description
+Desc.
+### Design Intent
+Intent.
+## Acceptance Criteria
+- AC1: The system shall validate declared ranking fields.
+## Notes
+None.
+## Out of Scope
+| Feature | Reason |
+|---|---|
+| Out | Scope |
+## Assumptions & Open Questions
+| Assumption | Chosen default | Rationale | Confirmed |
+|---|---|---|---|
+| A | B | C | y |
+## Definition of Ready (DoR)
+| Readiness Item | Requirement | Verification Method |
+|---|---|---|
+| R | V | M |
+## Validation & Observation Notes
+### Telemetry & Observable Signals
+- Signals
+### Negative & Failing Test Scenarios
+- Rejection of an out-of-enum priority
+`;
+
+  const valid = validate(spec('priority: high\nvalue: "x"\neffort: M\n'), { mode: 'authoring' });
+  assert.equal(valid.ok, true, JSON.stringify(valid.errors));
+
+  const badPriority = validate(spec('priority: urgent\n'), { mode: 'authoring' });
+  assert.equal(badPriority.ok, false);
+  const priorityError = badPriority.errors.find((error) => error.code === 'priority');
+  assert.ok(priorityError, 'priority enum violation is reported');
+  assert.match(priorityError.message, /urgent/);
+  assert.match(priorityError.message, /high, medium, low/);
+
+  const badEffort = validate(spec('effort: XL\n'), { mode: 'authoring' });
+  assert.equal(badEffort.ok, false);
+  const effortError = badEffort.errors.find((error) => error.code === 'effort');
+  assert.ok(effortError, 'effort enum violation is reported');
+  assert.match(effortError.message, /XL/);
+  assert.match(effortError.message, /S, M, L/);
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-spec-enum-'));
+  try {
+    const file = path.join(root, '00001-enum.md');
+    fs.writeFileSync(file, spec('priority: urgent\n'), 'utf8');
+    const run = spawnSync(
+      process.execPath,
+      [path.join(__dirname, '..', 'skills', 'sdw-spec', 'scripts', 'validate_spec.cjs'), '--mode=authoring', file],
+      { encoding: 'utf8' }
+    );
+    assert.equal(run.status, 1, 'the validator CLI exits 1');
+    assert.match(run.stderr, /priority must be one of: high, medium, low \(found "urgent"\)/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('00055 AC19: sdw-spec docs declare the subcommand and ranking fields within budget', () => {
+  const root = path.join(__dirname, '..');
+  const skill = fs.readFileSync(path.join(root, 'skills', 'sdw-spec', 'SKILL.md'), 'utf8');
+  const standard = fs.readFileSync(path.join(root, 'skills', 'sdw-spec', 'references', 'spec_standard.md'), 'utf8');
+
+  assert.ok(skill.split(/\r?\n/).length <= 120, 'the Tier-1 skill stays within its 120-line budget');
+  for (const doc of [skill, standard]) {
+    assert.ok(doc.includes('list-by-priority'), 'the subcommand is documented');
+    for (const field of ['priority', 'value', 'effort', 'blockedBy']) {
+      assert.ok(doc.includes(field), `${field} is documented`);
+    }
+  }
+
+  assert.match(skill, /\| `priority` \| `high`, `medium`, `low` \| `medium` \|/);
+  assert.match(skill, /\| `value` \| free text, one line \| none \|/);
+  assert.match(skill, /\| `effort` \| `S`, `M`, `L` \| unset \|/);
+  assert.match(skill, /\| `blockedBy` \| list of prefixes or slugs \| empty \|/);
+  assert.match(standard, /'high' \| 'medium' \| 'low' \(default 'medium'\)/);
+  assert.match(standard, /'S' \| 'M' \| 'L' \(default: unset\)/);
+  assert.match(standard, /prefixes or slugs that land first \(default: empty\)/);
 });

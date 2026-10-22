@@ -311,6 +311,20 @@ function validate(text, options) {
     if (['github', 'azure-devops'].includes(fm.source) && !/^### Prior Work Sweep\s*$/m.test(normalizedText)) {
       errors.push({ code: 'prior-work', message: 'Tracker specifications require ### Prior Work Sweep.' });
     }
+    // AC18: the declared ranking fields are enum-checked at authoring time so a typo
+    // fails validation instead of silently ranking as an unknown priority.
+    if (fm.priority && !PRIORITY_VALUES.includes(fm.priority)) {
+      errors.push({
+        code: 'priority',
+        message: `priority must be one of: ${PRIORITY_VALUES.join(', ')} (found "${fm.priority}").`
+      });
+    }
+    if (fm.effort && !EFFORT_VALUES.includes(fm.effort)) {
+      errors.push({
+        code: 'effort',
+        message: `effort must be one of: ${EFFORT_VALUES.join(', ')} (found "${fm.effort}").`
+      });
+    }
   }
 
   for (const heading of ['## Description', '## Acceptance Criteria']) {

@@ -99,6 +99,8 @@ Options:
   --title <title>          Explicit title for newly synthesized specification
   --slug <slug>            Specification slug ("new" and "update" subcommands)
   --from <commit>          Base commit for drift comparison in "update" (default: HEAD)
+  --limit <n>              Cap list-by-priority rows at n; the totals keep every pending specification
+  --collisions             Report pending specifications that name the same skills/ path
   --apply                  Write the proposed drift insertion into the specification
   --mode <mode>            Validation mode (authoring | compat, default: authoring)
   --force                  Force overwrite or allow archiving incomplete specifications
@@ -300,9 +302,24 @@ function blockedByLabel(item) {
   return item.blocked ? `blocked: ${entries}` : entries;
 }
 
-function renderPriorityTable(ranking) {
+// AC11: `--limit` caps printed rows only; counts are computed before the slice.
+function limitedItems(items, limit) {
+  return limit === null ? items : items.slice(0, limit);
+}
+
+// AC12: a limit that is not a positive integer is a usage error, never a silent default.
+function parseLimitOption(limit) {
+  if (limit === null) return null;
+  const raw = limit === undefined ? '' : String(limit).trim();
+  if (!/^[1-9][0-9]*$/.test(raw)) {
+    throw new Error(`Invalid --limit value "${raw || '(missing)'}"; expected a positive integer.`);
+  }
+  return Number(raw);
+}
+
+function renderPriorityTable(ranking, limit = null) {
   const headers = ['RANK', 'PREFIX', 'PRIORITY', 'EFFORT', 'AC', 'READINESS', 'BLOCKED BY', 'VALUE'];
-  const rows = ranking.items.map((item) => [
+  const rows = limitedItems(ranking.items, limit).map((item) => [
     String(item.rank),
     item.prefix || '-',
     item.priority,
@@ -325,9 +342,79 @@ function renderPriorityTable(ranking) {
   return lines.join('\n');
 }
 
+// AC13: the machine-readable projection carries no clock-derived field, so two runs
+// over unchanged inputs serialize identically.
+function renderPriorityJson(ranking, limit = null) {
+  return JSON.stringify({ counts: ranking.counts, items: limitedItems(ranking.items, limit) }, null, 2);
+}
+
+// AC14: a collision surface is a `skills/` path token in the specification body.
+// Wildcard tokens carry `*`, name no concrete surface, and are ignored.
+const COLLISION_TOKEN = /skills\/[A-Za-z0-9_./*{}-]+/g;
+const TRAILING_PUNCTUATION = /[.,;:!?)\]}>'"]+$/;
+
+function collisionTokens(content) {
+  const body = String(content || '').replace(/^---\s*\n[\s\S]*?\n---\s*\n?/, '');
+  const tokens = new Set();
+  for (const match of body.matchAll(COLLISION_TOKEN)) {
+    const token = match[0].replace(TRAILING_PUNCTUATION, '');
+    if (token.includes('*') || token.length <= 'skills/'.length) continue;
+    tokens.add(token);
+  }
+  return [...tokens].sort(compareText);
+}
+
+function collectCollisions(options = {}) {
+  const { specsDir } = resolvePaths(options.root);
+  const registry = readIndex({ root: options.root });
+  const surfaces = (registry.exists ? registry.entries : [])
+    .filter((entry) => String(entry.status || '').toLowerCase() === 'pending')
+    .sort((left, right) => compareText(left.prefix, right.prefix))
+    .map((entry) => {
+      const specPath = registeredSpecPath(specsDir, entry);
+      return {
+        prefix: entry.prefix || '',
+        tokens: specPath ? collisionTokens(fs.readFileSync(specPath, 'utf8')) : []
+      };
+    });
+
+  const pairs = [];
+  for (let left = 0; left < surfaces.length; left += 1) {
+    for (let right = left + 1; right < surfaces.length; right += 1) {
+      const shared = surfaces[left].tokens.filter((token) => surfaces[right].tokens.includes(token));
+      if (shared.length === 0) continue;
+      pairs.push({ left: surfaces[left].prefix, right: surfaces[right].prefix, shared });
+    }
+  }
+
+  // AC14: most shared surfaces first, then the left and right prefix ascending.
+  pairs.sort(
+    (a, b) => b.shared.length - a.shared.length || compareText(a.left, b.left) || compareText(a.right, b.right)
+  );
+  return pairs;
+}
+
+function renderCollisions(pairs) {
+  if (pairs.length === 0) return 'No surface collisions among pending specifications.';
+  const lines = [`[sdw-spec list-by-priority] Surface collisions among pending specifications (${pairs.length} pairs):`];
+  for (const pair of pairs) {
+    lines.push('');
+    lines.push(`${pair.left} <-> ${pair.right} (${pair.shared.length} shared path${pair.shared.length === 1 ? '' : 's'})`);
+    for (const token of pair.shared) lines.push(`  ${token}`);
+  }
+  return lines.join('\n');
+}
+
 function cmdListByPriority(options) {
   try {
-    console.log(renderPriorityTable(buildPriorityRanking(options)));
+    const limit = parseLimitOption(options.limit);
+    // AC9/AC8 preconditions gate every invocation, including --collisions and --json.
+    const ranking = buildPriorityRanking(options);
+    if (options.collisions) {
+      console.log(renderCollisions(collectCollisions(options)));
+      return 0;
+    }
+    console.log(options.json ? renderPriorityJson(ranking, limit) : renderPriorityTable(ranking, limit));
     return 0;
   } catch (err) {
     console.error(`[sdw-spec list-by-priority] Error: ${err.message}`);
