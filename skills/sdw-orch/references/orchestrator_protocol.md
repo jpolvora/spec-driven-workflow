@@ -49,7 +49,7 @@ Each execution session is completely isolated within a dedicated JSON state file
       "output": {},
       "dispatch": { "activeTaskId": null, "sequence": 2, "dispatchedAt": null, "baseline": { "dirty": [], "hashes": {} }, "abandonments": [] },
       "tasks": {
-        "task-1": { "status": "completed", "filesChanged": ["src/a.ts"], "acIds": ["AC1"], "summary": "..." }
+        "task-1": { "status": "completed", "filesChanged": ["src/a.ts"], "acIds": ["AC1"], "summary": "...", "commitSha": "9f2c41...", "checkpointTag": "sdw-checkpoint-run-1729300000-feature-task-1" }
       },
       "gates": { "build": { "status": "passed", "exitCode": 0 }, "test": { "status": "passed", "exitCode": 0 } }
     },
@@ -67,9 +67,9 @@ Each execution session is completely isolated within a dedicated JSON state file
 1. **Derivation:** Identifies whether the spec is already agent-ready (EARS ACs, DoR, YAML frontmatter). Skips derivation if ready; otherwise reformulates human stories.
 2. **Grilling:** Walks the decision tree covering input bounds, failure scenarios, and concurrency. Auto-resolves known gaps or prompts user via `ask_question` with recommended defaults.
 3. **DAG Generation:** Analyzes complexity (file count, touchpoints) and decomposes requirements into 1 or more atomic tasks.
-4. **Implementation Dispatch:** Sequentially dispatches one DAG task at a time to a single worker, with a complete brief (criteria, scope fence, prohibitions, evidence contract) instead of the orchestrator's transcript.
+4. **Implementation Dispatch:** Sequentially dispatches one DAG task at a time to a single worker, with a complete brief (criteria, scope fence, prohibitions, evidence contract) instead of the orchestrator's transcript. Every accepted task is checkpointed immediately: one scoped commit of its `filesChanged` plus the tag `sdw-checkpoint-{runId}-{taskId}`.
 5. **Conformance Scoring:** An LLM judge fences the criteria plus the generated diff, emits a 0-10 score with per-criterion verdicts. If the score is below threshold (default 8/10), feedback triggers the re-implementation loop.
-6. **Delivery Commit:** Creates an atomic, structured git commit for verified code.
+6. **Delivery Commit:** Creates an atomic, structured git commit for verified code. It remains the delivery commit after the per-task checkpoints and aggregates whatever they did not already commit.
 7. **Delegated Code Review via sdw-code-review:** Dispatches subagent or CLI runner for `sdw-code-review`; inspects the generated JSON report (`passed`, `errorCount`, `warningCount`, `suggestionCount`, `findings`) to advance to Step 8, iterate surgical fixes (up to 3 attempts with security gate and scoped fix commits), or pause on residual blocking findings. `sdw-code-review` is the sole review authority.
 8. **PR Preparation, Delivery & Code Review Convergence:** Assembles pull request metadata, marks the spec completed, pushes the active branch to remote origin (when `--push` or `pushDelivery` enabled), opens or reuses the pull request via the SCM provider contract, and executes the post-delivery review convergence loop (monitoring CI checks and automated code reviews to fix comments until green).
 
@@ -94,7 +94,7 @@ Configurable feature branch activation and per-task isolated git worktrees:
 - **Trivial Skip Rule:** If DAG tasks count === 1 and complexity is `low` or `simple`, skips worktree creation (`reason: "single low-complexity task"`).
 - **Creation:** For each DAG task, creates an exclusive worktree:
   `git worktree add .sdw/worktrees/{runId}/{taskId} -b task/{runId}/{taskId} HEAD`
-- **Execution & Integration:** Subagent implements in the worktree. Changes are committed inside the worktree (`task({specSlug}): {taskId}`) and integrated into the primary working tree via `git cherry-pick <commitSha>`.
+- **Execution & Integration:** Subagent implements in the worktree. Changes are committed inside the worktree (`task({specSlug}): {taskId}`) and integrated into the primary working tree via `git cherry-pick <commitSha>`. The integration commit is tagged `sdw-checkpoint-{runId}-{taskId}`; no second checkpoint commit is created.
 - **Conflict Handling:** Cherry-pick conflicts halt execution with exit code 1; the conflicted worktree is preserved for operator inspection.
 - **Clean Removal:** Once integrated, removes worktree via `git worktree remove` and deletes task branch via `git branch -d`.
 - **Overrides:** `--no-worktrees` and `--no-feature-branch` flags override configuration for the current run.
@@ -158,6 +158,18 @@ Step 4 turns each DAG task into a dispatched worker. Exactly one task is in flig
 - **Change Corroboration:** Dispatch records a baseline of the already-dirty paths with a SHA-256 of each. In the primary tree, at least one `filesChanged` path must be dirty now and either clean at dispatch or with different content, so edits inherited from an earlier task never corroborate. Non-git workspaces fall back to existence. Empty worktrees in worktree mode are rejected with code 1.
 - **DAG Dependency Gate:** Rejects completion if upstream DAG dependencies are not yet completed.
 
+### Per-Task Checkpoint Save
+- After acceptance, the orchestrator immediately saves the task in the primary tree instead of waiting for Step 6: one scoped commit of the corroborated `filesChanged`, message `task({specSlug}): {taskId}`.
+- Scope is the Step 6 set: the same `isScopedExcluded` rules apply, so `.sdw/state/`, `.sdw/worktrees/`, `.sdw/sandbox/`, `.git/`, absolute paths, and `..` traversal are never committed. Unrelated dirty files stay uncommitted.
+- The commit is tagged `sdw-checkpoint-{runId}-{taskId}` (`git tag -f`). The tag is the crash and reset recovery pointer: `git show <tag>:<path>` recovers accepted file content, and `git tag --list "sdw-checkpoint-*"` matches completed tasks in state.
+- `steps[4].tasks[taskId]` records `commitSha` and `checkpointTag`. A task that accepted no file change (second-pass no-change) records `HEAD` and gets no tag.
+- Worktree mode tags the cherry-picked integration commit (`HEAD` after integration) rather than creating a second commit, so the tag points into the accepted primary-branch history instead of the pre-integration worktree SHA; that worktree SHA stays recorded under `state.worktrees`.
+- **Second pass excluded:** `--second-pass` runs keep a single `refine({slug}): second pass refinement` Step 6 commit, so `deliveryCommitCreated` still describes the refinement save.
+- **Opt out:** `--no-task-checkpoint` skips the checkpoint commit and tag; the Step 6 delivery commit then remains the only save and `commitSha` records `HEAD` at acceptance.
+- **Fail closed on the commit, warn on the tag:** a git failure creating the checkpoint commit rejects the task (`task finish` exits `1` with the git error) and leaves it dispatched for retry, because the work is still uncommitted and a retry can corroborate it. Once the commit exists (or, in worktree mode, the cherry-pick landed), committed work can never be re-corroborated, so a tag that cannot be written only warns: the task is accepted with its commit SHA recorded and `checkpointTag: null`.
+- **Security gate first:** the same pre-commit secret scan as Step 6 runs before worktree integration and before the checkpoint commit when `securityChecksEnabled` is on (and `--skip-security` is absent), scanning the task worktree when worktrees are in use and the primary tree otherwise. A finding rejects the task with the scanner's exit code, creates no commit, cherry-pick, or tag, records `steps[4].securityGate`, and leaves the task dispatched so the worker can remove the secret.
+- Worker prompts still forbid git mutation: the orchestrator owns this save, as it owns Step 6.
+
 ### Dispatch Prompt Contract
 Sections in order: `## Task Context`, `## Description`, `## Assigned Acceptance Criteria`, `## Remaining Acceptance Criteria (do not regress)`, `## Target Files`, `## Scope Fence`, `## Dependency Context`, `## Prior Partial Progress`, `## Implementation Rules (sdw-rules)`, `## Test Discipline`, `## Prohibited Actions`, `## Evidence Schema`, `## Report Contract`, `## Finish Command`. Dependency context and prior progress are omitted when empty.
 
@@ -195,6 +207,7 @@ Prohibitions carried by every prompt: no `git commit`/`push`/`branch`/`checkout`
 ### Delivery Commit Guard (Step 6)
 - Delivery commit is refused if Step 4 is not `completed`, any DAG task is unaccepted, or any verification gate is not `passed`.
 - **Scoped commits only:** never run `git add -A`. Stage exactly the tracked spec files: accepted evidence `filesChanged` plus `index.specs.md`. Unrelated worktree changes are left uncommitted.
+- Per-task checkpoint commits already cover accepted `filesChanged`, so Step 6 commits only what remains (for example a registry update) and records the current `HEAD` when nothing is left; the delivery state stays authoritative.
 - Fixer, pre-PR, and review-fix commits stage only their own delta (`diffSinceSnapshot`) or fixer-touched files, never the whole tree.
 
 ## 7. PR Delivery & Review Convergence Delegation (Step 8)

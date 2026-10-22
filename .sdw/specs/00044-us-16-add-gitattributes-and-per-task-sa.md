@@ -99,6 +99,7 @@ Reviewed existing workspace implementations and tracker references prior to spec
 
 ## Notes
 
+- Target files (project-relative): new repo-root `.gitattributes`, `skills/sdw-orch/scripts/sdw_orch.cjs`, `skills/sdw-orch/SKILL.md`, `skills/sdw-orch/references/orchestrator_protocol.md`, `tests/sdw_orch_dispatch.test.cjs`. The root `.gitattributes` has no directory segment, so it is named here as prose while the extractor skips it; it is still a new file required by AC1.
 - All helper scripts and tooling anchors must use Node.js CommonJS (.cjs) using standard library modules only.
 - Adhere strictly to the 3-Tier skill authoring standard and EARS acceptance criteria conventions.
 

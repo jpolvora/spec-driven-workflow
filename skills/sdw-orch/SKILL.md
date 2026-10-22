@@ -31,7 +31,7 @@ Orchestrates spec execution from input requirement to delivery commit, automated
 - `sandbox report --run-id <runId>`: Regenerates and prints the sandbox report.
 - `sandbox clean --run-id <runId>`: Deletes the sandbox clone and keeps its metadata and report.
 - `task next [--run-id <runId>] [--json]`: Dispatches the next ready DAG task and emits its dispatch envelope (subagent mode).
-- `task finish --run-id <runId> --task <taskId> --evidence <evidencePath>`: Validates the dispatched task's evidence and accepts it.
+- `task finish --run-id <runId> --task <taskId> --evidence <evidencePath>`: Validates the dispatched task's evidence, accepts it, then saves it with one scoped checkpoint commit plus the tag `sdw-checkpoint-{runId}-{taskId}` (opt out: `--no-task-checkpoint`; second-pass runs keep their single `refine(...)` commit).
 - `task abandon --run-id <runId> --task <taskId> --reason <text>`: Returns the dispatched task to the queue after a lost or failed worker.
 - `score submit --run-id <runId> --verdict <path>`: Submits the Step 5 judge verdict and applies the conformance score.
 - `resume`: Resumes an interrupted or paused run from its last recorded step in `.sdw/state/{runId}.state.json`.
@@ -72,9 +72,9 @@ Orchestrates spec execution from input requirement to delivery commit, automated
    - Done when: DAG tasks generated, and DAG artifact `{slug}-step-3.md` persisted.
 
 4. **Implementation Execution (Sequential Subagent Dispatch)**
-   In `subagent` mode (default), dispatch exactly one ready DAG task and pause with exit code 4. Each brief carries the `sdw-rules` simplicity constraints (minimum code, surgical scope, no unrequested features). For each envelope: spawn one subagent that reads the prompt file and executes it as written, wait for its report, then submit `task finish`. If the worker reports a non-`success` status or never returns, run `task abandon --reason` and dispatch again. In `command` mode, execute the configured subprocess in topological DAG order. Worktrees are command-mode only; subagent mode uses the primary tree with dispatch-baseline corroboration. Once every task is accepted, run build and test verification gates.
+   In `subagent` mode (default), dispatch exactly one ready DAG task and pause with exit code 4. Each brief carries the `sdw-rules` simplicity constraints (minimum code, surgical scope, no unrequested features). For each envelope: spawn one subagent that reads the prompt file and executes it as written, wait for its report, then submit `task finish`. If the worker reports a non-`success` status or never returns, run `task abandon --reason` and dispatch again. In `command` mode, execute the configured subprocess in topological DAG order. Worktrees are command-mode only; subagent mode uses the primary tree with dispatch-baseline corroboration. Every accepted `task finish` immediately saves the task as one scoped commit of its `filesChanged` (message `task({specSlug}): {taskId}`) plus the checkpoint tag `sdw-checkpoint-{runId}-{taskId}`, so a crash or reset between tasks loses nothing; `--no-task-checkpoint` opts out and `--second-pass` keeps its single `refine(...)` delivery commit. Once every task is accepted, run build and test verification gates.
    - Run: `node skills/sdw-orch/scripts/sdw_orch.cjs task next --run-id <runId>`
-   - Done when: Every DAG task has accepted evidence, corroborated against its dispatch baseline, and build/test gates pass.
+   - Done when: Every DAG task has accepted evidence, corroborated against its dispatch baseline and saved as a checkpoint commit plus tag, and build/test gates pass.
    - Exit codes: `4` dispatch pause (normal), `1` failure.
 
 5. **Evaluate Conformance Score (LLM judge)**
@@ -83,7 +83,7 @@ Orchestrates spec execution from input requirement to delivery commit, automated
    - Done when: The judge verdict covers every criterion and the derived score meets the threshold, with the scoring artifact `{slug}-step-5.md` persisted.
 
 6. **Delivery Commit & Security Gate**
-   Refuse delivery commit if Step 4 is incomplete, any task unaccepted, or any gate failed. Run pre-commit secret leak scan (`sdw-security-checks`) when enabled. Stage and commit only tracked spec files (accepted evidence `filesChanged` + `index.specs.md`); unrelated worktree changes are never staged.
+   Refuse delivery commit if Step 4 is incomplete, any task unaccepted, or any gate failed. Run pre-commit secret leak scan (`sdw-security-checks`) when enabled. Stage and commit only tracked spec files (accepted evidence `filesChanged` + `index.specs.md`); unrelated worktree changes are never staged. Per-task checkpoint commits already cover accepted files, so Step 6 commits what remains and records `HEAD` when nothing is left.
    - Done when: Step 4 quality guards pass, pre-commit security check passes, and scoped delivery commit exists.
 
 7. **Delegated Code Review via sdw-code-review**
