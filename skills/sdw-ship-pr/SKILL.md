@@ -27,7 +27,8 @@ node skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs check-status --pr <number>
 ```
 
 Parameters:
-- `--run-id <id>`: Active orchestrator run identifier (updates `.sdw/state/{runId}.state.json`).
+- `--run-id <id>`: Active orchestrator run identifier (validates run-state evidence; updates `.sdw/state/{runId}.state.json`).
+- `--ack-prepare "<note>"`: Acknowledge discovered prepare obligations and record `prepareAck` in the report.
 - `--spec <slug>`: Specification slug (derives default PR title/body).
 - `--head <branch>`: PR source head branch (defaults to current active git branch).
 - `--base <branch>`: PR target base branch (defaults to `.sdw/config.json` `baseBranch`, then `master`/`main`).
@@ -42,7 +43,7 @@ Parameters:
 - `--checks-start-interval <ms>`: Poll interval while waiting for the first check run (default `5000`).
 - `--no-native-watch`: Disable the provider's native run watch (`gh run watch <run-id> --exit-status`) and always use interval polling.
 - `--max-preemptions <n>`: Concurrent-push adaptation budget (default `3`).
-- `--dry-run`: Simulate pre-PR checks, branch push, PR creation, and review polling without remote mutations.
+- `--dry-run`: Simulate pre-PR checks, branch push, PR creation, and review polling without remote mutations or run-state writes.
 - `--json`: Output structured JSON execution report.
 
 Detailed protocol: [`references/ship_protocol.md`](references/ship_protocol.md).
@@ -56,12 +57,15 @@ Detailed protocol: [`references/ship_protocol.md`](references/ship_protocol.md).
 - Done when: Head, base, SCM provider, and quality options resolved; working tree verified.
 
 ### Step 2: Pre-PR Verification Gates
-1. If `prePrInstructions` is configured, evaluate and display the instructions.
+1. If `prePrInstructions` is configured, print it; its text also joins the prepare-obligation discovery rows.
 2. If `prePrCommand` is set, execute the command (e.g. custom linter or checklist). Halt if it fails.
 3. If `requiredBuild: true`, execute `npm run build` or project build command. Halt if it fails.
 4. If `runAllTests: true`, execute test suite. Halt if tests fail.
-5. If `securityChecksEnabled: true`, inspect staged diff for secret leaks or sensitive patterns.
-- Done when: All configured pre-PR gates evaluate to pass; failures halt execution with exit code 1.
+5. If `securityChecksEnabled: true`, inspect the worktree for secret leaks or sensitive patterns.
+6. If `--run-id` is supplied, load `.sdw/state/{runId}.state.json`: require steps 4 and 6 `completed`, step 7 too when review runs (`scmCodeReviewEnabled`/`--poll-pr` with an SCM provider), and `score >= scoreMin` (default 8). Missing or unreadable state exits 1 before any push or PR.
+7. Discover prepare obligations from repository prepare headings (`prepare`, `before push`, `before publish`, `before deliver`, `before delivery`, `before merge`) and `prePrInstructions`: `prePrDiscovery` `block` (default) refuses unacknowledged rows, `warn` prints and continues, `off` skips; `--ack-prepare "<note>"` records `prepareAck`.
+8. Record one `prePrBoard` row per check (`prePrCommand`, `build`, `tests`, `security`, `runState`, `discovery`; `pass`/`fail`/`skipped` with evidence) and print the board as a Markdown table before the push. `--dry-run` reports without mutations.
+- Done when: Every configured gate and run-state/discovery check is evaluated, the board is printed, and failures halt with exit code 1.
 
 ### Step 3: Dirty Worktree Selection and Remote Branch Push
 When the working tree is dirty, the host agent (LLM) selects what belongs to this session before anything is staged. `sdw-ship-pr` never commits unrelated changes on its own.

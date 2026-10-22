@@ -237,6 +237,7 @@ function parseArgs(args) {
     commentId: null,
     comment: null,
     runId: null,
+    ackPrepare: null,
     spec: null,
     head: null,
     base: null,
@@ -268,6 +269,8 @@ function parseArgs(args) {
       options.comment = args[++i];
     } else if (arg === '--run-id' && args[i + 1]) {
       options.runId = args[++i];
+    } else if (arg === '--ack-prepare' && args[i + 1]) {
+      options.ackPrepare = args[++i];
     } else if (arg === '--spec' && args[i + 1]) {
       options.spec = args[++i];
     } else if (arg === '--head' && args[i + 1]) {
@@ -370,6 +373,133 @@ function locateStateFile(projectRoot, runId, specSlug = null, config = {}) {
   }
 
   return null;
+}
+
+// Spec 00050: pre-PR discovery scan and run-state evidence gate.
+const PRE_PR_DISCOVERY_MODES = ['block', 'warn', 'off'];
+const PRE_PR_DISCOVERY_FILES = ['AGENTS.md', 'CONTRIBUTING.md', 'RELEASE.md', 'PUBLISH.md'];
+const PRE_PR_PREPARE_HEADING = /prepare|before push|before publish|before deliver|before delivery|before merge/i;
+const PRE_PR_DISCOVERY_MAX_LINES = 8;
+const PRE_PR_DISCOVERY_MAX_CHARS = 1200;
+
+function formatPrePrBoard(board = []) {
+  const cell = value => String(value === null || value === undefined ? '' : value)
+    .replace(/\|/g, '\\|')
+    .replace(/\r?\n/g, ' ');
+  const lines = [
+    '| Check | Status | Evidence |',
+    '| --- | --- | --- |'
+  ];
+  for (const row of board) {
+    lines.push(`| ${cell(row.check)} | ${cell(row.status)} | ${cell(row.evidence)} |`);
+  }
+  return lines.join('\n');
+}
+
+function resolvePrePrDiscovery(config = {}) {
+  const configured = config.prePrDiscovery;
+  if (configured === undefined || configured === null) return 'block';
+  const mode = String(configured).trim().toLowerCase();
+  if (!PRE_PR_DISCOVERY_MODES.includes(mode)) {
+    throw new Error(
+      `Invalid prePrDiscovery value "${configured}". Allowed values: ${PRE_PR_DISCOVERY_MODES.join(', ')}.`
+    );
+  }
+  return mode;
+}
+
+function discoverPrepareObligations(projectRoot, config = {}) {
+  const rows = [];
+  for (const fileName of PRE_PR_DISCOVERY_FILES) {
+    const filePath = path.join(projectRoot, fileName);
+    let lines;
+    try {
+      if (!fs.existsSync(filePath)) continue;
+      lines = fs.readFileSync(filePath, 'utf8').split(/\r?\n/);
+    } catch (e) {
+      continue;
+    }
+    for (let i = 0; i < lines.length; i++) {
+      const headingMatch = lines[i].match(/^#{1,6}\s+(.+?)\s*$/);
+      if (!headingMatch || !PRE_PR_PREPARE_HEADING.test(headingMatch[1])) continue;
+      const bodyLines = [];
+      for (let j = i + 1; j < lines.length && bodyLines.length < PRE_PR_DISCOVERY_MAX_LINES; j++) {
+        if (/^#{1,6}\s+/.test(lines[j])) break;
+        bodyLines.push(lines[j]);
+      }
+      rows.push({
+        source: fileName,
+        heading: headingMatch[1].trim(),
+        body: bodyLines.join('\n').trim().slice(0, PRE_PR_DISCOVERY_MAX_CHARS)
+      });
+    }
+  }
+  const instructions = typeof config.prePrInstructions === 'string' ? config.prePrInstructions.trim() : '';
+  if (instructions) {
+    rows.push({
+      source: '.sdw/config.json',
+      heading: 'prePrInstructions',
+      body: instructions.slice(0, PRE_PR_DISCOVERY_MAX_CHARS)
+    });
+  }
+  return rows;
+}
+
+function evaluateRunStateGate(projectRoot, runId, specSlug, config = {}, options = {}) {
+  const gate = {
+    runId,
+    stateFile: null,
+    score: null,
+    scoreMin: null,
+    steps: {},
+    codeReviewRequired: Boolean(options.scmCodeReviewEnabled),
+    passed: false,
+    reason: null
+  };
+  let stateFilePath;
+  try {
+    stateFilePath = locateStateFile(projectRoot, runId, specSlug, config);
+  } catch (e) {
+    gate.reason = `run state for "${runId}" is unreadable (${e.message}); refusing to ship without run evidence`;
+    return gate;
+  }
+  if (!stateFilePath) {
+    gate.reason = `run state "${runId}.state.json" was not found; refusing to ship without run evidence`;
+    return gate;
+  }
+  gate.stateFile = path.relative(projectRoot, stateFilePath).split(path.sep).join('/');
+  let state;
+  try {
+    state = JSON.parse(fs.readFileSync(stateFilePath, 'utf8'));
+  } catch (e) {
+    gate.reason = `run state "${gate.stateFile}" is unreadable (${e.message}); refusing to ship`;
+    return gate;
+  }
+  if (!state || typeof state !== 'object' || Array.isArray(state)) {
+    gate.reason = `run state "${gate.stateFile}" is malformed; refusing to ship`;
+    return gate;
+  }
+  const steps = state.steps && typeof state.steps === 'object' ? state.steps : {};
+  const statusOf = (n) => (steps[n] && typeof steps[n] === 'object' && steps[n].status !== undefined
+    ? String(steps[n].status)
+    : null);
+  gate.steps = { 4: statusOf(4), 6: statusOf(6) };
+  if (gate.codeReviewRequired) gate.steps[7] = statusOf(7);
+  gate.score = Number.isFinite(Number(state.score)) ? Number(state.score) : null;
+  gate.scoreMin = Number.isFinite(Number(config.scoreMin)) ? Number(config.scoreMin) : 8;
+
+  const failures = [];
+  if (gate.steps[4] !== 'completed') failures.push(`step 4 is "${gate.steps[4] || 'missing'}" (expected "completed")`);
+  if (gate.steps[6] !== 'completed') failures.push(`step 6 is "${gate.steps[6] || 'missing'}" (expected "completed")`);
+  if (gate.codeReviewRequired && gate.steps[7] !== 'completed') {
+    failures.push(`step 7 is "${gate.steps[7] || 'missing'}" (expected "completed" because code review is enabled)`);
+  }
+  if (gate.score === null) failures.push(`run score is missing (scoreMin ${gate.scoreMin})`);
+  else if (gate.score < gate.scoreMin) failures.push(`run score ${gate.score} is below scoreMin ${gate.scoreMin}`);
+
+  gate.passed = failures.length === 0;
+  gate.reason = gate.passed ? null : failures.join('; ');
+  return gate;
 }
 
 /**
@@ -690,6 +820,8 @@ async function runShipPr(options = {}, customExecutor = null) {
   const pushDelivery = options.push || Boolean(config.pushDelivery);
   const scmProviderName = config.scmProvider || 'none';
   const scmCodeReviewEnabled = options.pollPr || Boolean(config.scmCodeReviewEnabled);
+  // Spec 00050 AC9: Step 7 only exists when review actually runs for this ship.
+  const codeReviewGateEnabled = scmCodeReviewEnabled && scmProviderName !== 'none';
 
   const report = {
     success: false,
@@ -698,6 +830,11 @@ async function runShipPr(options = {}, customExecutor = null) {
     scmProvider: scmProviderName,
     pushed: false,
     prePrPassed: false,
+    prePrBoard: [],
+    prepareDiscovery: null,
+    prepareObligations: [],
+    prepareAck: null,
+    runStateGate: null,
     pullRequest: null,
     // Spec 024 AC26: when merge is requested, an audit record exists from the
     // start, so a delivery that fails before the merge step still explains why
@@ -732,75 +869,101 @@ async function runShipPr(options = {}, customExecutor = null) {
       log(`[sdw-ship-pr] Pre-PR Instructions: ${config.prePrInstructions}`);
     }
 
-    if (dryRun) {
-      log('[sdw-ship-pr] (dry-run) Simulating pre-PR verification gates (prePrCommand, requiredBuild, runAllTests, security checks)...');
-      report.prePrPassed = true;
+    const gateFailures = [];
+    const boardRow = (check, status, evidence) => report.prePrBoard.push({ check, status, evidence });
+    const failGate = (check, message) => {
+      boardRow(check, 'fail', message);
+      gateFailures.push(message);
+    };
+
+    if (!config.prePrCommand) {
+      boardRow('prePrCommand', 'skipped', 'prePrCommand is not configured');
+    } else if (dryRun) {
+      log(`[sdw-ship-pr] (dry-run) prePrCommand not executed: "${config.prePrCommand}".`);
+      boardRow('prePrCommand', 'skipped', 'dry-run: prePrCommand was not executed');
     } else {
-      if (config.prePrCommand) {
-        log(`[sdw-ship-pr] Running prePrCommand: "${config.prePrCommand}"...`);
-        const beforePrePr = listChangedPaths(executor);
-        try {
-          executor(config.prePrCommand, { timeout: verificationTimeoutMs });
-        } catch (cmdErr) {
-          throw new Error(`prePrCommand failed: ${cmdErr.message}`);
-        }
+      log(`[sdw-ship-pr] Running prePrCommand: "${config.prePrCommand}"...`);
+      const beforePrePr = listChangedPaths(executor);
+      try {
+        executor(config.prePrCommand, { timeout: verificationTimeoutMs });
 
         // Stage only files produced by the command; never sweep unrelated worktree changes.
-        try {
-          const changed = stageChangedSince(executor, beforePrePr, projectRoot);
-          if (changed.length > 0) {
-            // Scan the staged pre-PR changes before creating history.
-            if (config.securityChecksEnabled) {
-              let securityScanner = null;
-              try {
-                securityScanner = require('../../sdw-security-checks/scripts/sdw_security_checks.cjs');
-              } catch (e) {
-                securityScanner = null;
-              }
-              if (!securityScanner || typeof securityScanner.scan !== 'function') {
-                throw new Error('Security checks enabled but the sdw-security-checks scanner is unavailable.');
-              }
-              const scanResult = securityScanner.scan({ root: projectRoot, staged: true });
-              if (scanResult.exitCode !== 0) {
-                throw new Error(`Security checks failed on pre-PR changes: ${scanResult.message || 'blocking findings detected'}`);
-              }
+        const changed = stageChangedSince(executor, beforePrePr, projectRoot);
+        if (changed.length > 0) {
+          // Scan the staged pre-PR changes before creating history.
+          if (config.securityChecksEnabled) {
+            let securityScanner = null;
+            try {
+              securityScanner = require('../../sdw-security-checks/scripts/sdw_security_checks.cjs');
+            } catch (e) {
+              securityScanner = null;
             }
-
-            log(`[sdw-ship-pr] Committing ${changed.length} pre-PR change(s)...`);
-            const safeSlug = specSlug && specSlug !== 'unspecified' && /^[a-z0-9][a-z0-9-]*$/.test(specSlug) ? specSlug : null;
-            const commitMsg = safeSlug ? `chore(${safeSlug}): apply pre-pr requirements` : 'chore: apply pre-pr requirements';
-            const commitRes = spawnSync('git', ['commit', '-m', commitMsg], { cwd: projectRoot, stdio: 'ignore' });
-            if (commitRes.status !== 0) {
-              throw new Error(`pre-PR commit failed with exit code ${commitRes.status}`);
+            if (!securityScanner || typeof securityScanner.scan !== 'function') {
+              throw new Error('Security checks enabled but the sdw-security-checks scanner is unavailable.');
+            }
+            const scanResult = securityScanner.scan({ root: projectRoot, staged: true });
+            if (scanResult.exitCode !== 0) {
+              throw new Error(`Security checks failed on pre-PR changes: ${scanResult.message || 'blocking findings detected'}`);
             }
           }
-        } catch (modErr) {
-          throw modErr;
-        }
-      }
 
-      if (config.requiredBuild) {
-        const buildCmd = config.buildCommand || (config.verification && config.verification.buildCommand) || 'npm run build';
-        log(`[sdw-ship-pr] Running requiredBuild (${buildCmd})...`);
-        try {
-          executor(buildCmd, { timeout: verificationTimeoutMs });
-        } catch (buildErr) {
-          throw new Error(`requiredBuild failed: ${buildErr.message}`);
+          log(`[sdw-ship-pr] Committing ${changed.length} pre-PR change(s)...`);
+          const safeSlug = specSlug && specSlug !== 'unspecified' && /^[a-z0-9][a-z0-9-]*$/.test(specSlug) ? specSlug : null;
+          const commitMsg = safeSlug ? `chore(${safeSlug}): apply pre-pr requirements` : 'chore: apply pre-pr requirements';
+          const commitRes = spawnSync('git', ['commit', '-m', commitMsg], { cwd: projectRoot, stdio: 'ignore' });
+          if (commitRes.status !== 0) {
+            throw new Error(`pre-PR commit failed with exit code ${commitRes.status}`);
+          }
         }
+        boardRow('prePrCommand', 'pass', `"${config.prePrCommand}" exited 0`);
+      } catch (cmdErr) {
+        const message = /^prePrCommand failed:/.test(cmdErr.message)
+          ? cmdErr.message
+          : `prePrCommand failed: ${cmdErr.message}`;
+        failGate('prePrCommand', message);
       }
+    }
 
-      if (config.runAllTests) {
-        const testCmd = config.testCommand || (config.verification && config.verification.testCommand) || 'npm test';
-        log(`[sdw-ship-pr] Running runAllTests (${testCmd})...`);
-        try {
-          executor(testCmd, { timeout: verificationTimeoutMs });
-        } catch (testErr) {
-          throw new Error(`runAllTests failed: ${testErr.message}`);
-        }
+    if (!config.requiredBuild) {
+      boardRow('build', 'skipped', 'requiredBuild is false');
+    } else if (dryRun) {
+      log('[sdw-ship-pr] (dry-run) requiredBuild not executed.');
+      boardRow('build', 'skipped', 'dry-run: build was not executed');
+    } else {
+      const buildCmd = config.buildCommand || (config.verification && config.verification.buildCommand) || 'npm run build';
+      log(`[sdw-ship-pr] Running requiredBuild (${buildCmd})...`);
+      try {
+        executor(buildCmd, { timeout: verificationTimeoutMs });
+        boardRow('build', 'pass', `${buildCmd} exited 0`);
+      } catch (buildErr) {
+        failGate('build', `requiredBuild failed: ${buildErr.message}`);
       }
+    }
 
-      if (config.securityChecksEnabled) {
-        log('[sdw-ship-pr] Evaluating security leak checks...');
+    if (!config.runAllTests) {
+      boardRow('tests', 'skipped', 'runAllTests is false');
+    } else if (dryRun) {
+      log('[sdw-ship-pr] (dry-run) runAllTests not executed.');
+      boardRow('tests', 'skipped', 'dry-run: tests were not executed');
+    } else {
+      const testCmd = config.testCommand || (config.verification && config.verification.testCommand) || 'npm test';
+      log(`[sdw-ship-pr] Running runAllTests (${testCmd})...`);
+      try {
+        executor(testCmd, { timeout: verificationTimeoutMs });
+        boardRow('tests', 'pass', `${testCmd} exited 0`);
+      } catch (testErr) {
+        failGate('tests', `runAllTests failed: ${testErr.message}`);
+      }
+    }
+
+    if (!config.securityChecksEnabled) {
+      boardRow('security', 'skipped', 'securityChecksEnabled is false');
+    } else if (dryRun) {
+      log('[sdw-ship-pr] (dry-run) security leak checks not executed.');
+      boardRow('security', 'skipped', 'dry-run: security scan was not executed');
+    } else {
+      log('[sdw-ship-pr] Evaluating security leak checks...');
+      try {
         let securityScanner = null;
         try {
           securityScanner = require('../../sdw-security-checks/scripts/sdw_security_checks.cjs');
@@ -816,10 +979,85 @@ async function runShipPr(options = {}, customExecutor = null) {
         if (scanResult.exitCode !== 0) {
           throw new Error(`Security checks failed: ${scanResult.message || 'blocking findings detected'}`);
         }
+        boardRow('security', 'pass', 'sdw-security-checks found no blocking leak');
+      } catch (securityErr) {
+        failGate('security', securityErr.message);
+      }
+    }
+
+    // Step 1b: Run-state evidence and discovered prepare obligations (spec 00050).
+    // Both are read-only file checks, so they are evaluated in dry-run too; the
+    // ship refuses after every unmet obligation has been printed.
+    const discoveryMode = resolvePrePrDiscovery(config);
+    report.prepareDiscovery = discoveryMode;
+
+    if (options.runId) {
+      const runStateGate = evaluateRunStateGate(projectRoot, options.runId, specSlug, config, {
+        scmCodeReviewEnabled: codeReviewGateEnabled
+      });
+      report.runStateGate = runStateGate;
+      if (runStateGate.passed) {
+        const stepsLabel = runStateGate.codeReviewRequired ? 'step 4, step 6 and step 7' : 'step 4 and step 6';
+        log(`[sdw-ship-pr] Run-state gate passed: ${stepsLabel} completed, score ${runStateGate.score} >= scoreMin ${runStateGate.scoreMin}.`);
+        boardRow('runState', 'pass', `${stepsLabel} completed; score ${runStateGate.score} >= scoreMin ${runStateGate.scoreMin}`);
+      } else {
+        warn(`[sdw-ship-pr] Run-state gate failed: ${runStateGate.reason}.`);
+        failGate('runState', `run-state gate failed for "${options.runId}": ${runStateGate.reason}`);
+      }
+    } else {
+      log('[sdw-ship-pr] Run-state gate skipped: --run-id not supplied (standalone ship).');
+      boardRow('runState', 'skipped', '--run-id not supplied (standalone ship)');
+    }
+
+    if (discoveryMode === 'off') {
+      log('[sdw-ship-pr] Prepare discovery skipped: prePrDiscovery is "off".');
+      boardRow('discovery', 'skipped', 'prePrDiscovery is "off"');
+    } else {
+      const prepareObligations = discoverPrepareObligations(projectRoot, config);
+      report.prepareObligations = prepareObligations;
+      if (prepareObligations.length > 0) {
+        log(`[sdw-ship-pr] Discovered ${prepareObligations.length} prepare obligation(s) (prePrDiscovery: ${discoveryMode}):`);
+        for (const row of prepareObligations) {
+          log(`[sdw-ship-pr]   [${row.source}] ${row.heading}`);
+          if (row.body) {
+            for (const line of row.body.split('\n')) log(`[sdw-ship-pr]     ${line}`);
+          }
+        }
+      } else {
+        log('[sdw-ship-pr] No prepare obligations discovered.');
       }
 
-      report.prePrPassed = true;
+      if (prepareObligations.length === 0) {
+        boardRow('discovery', 'pass', 'no prepare obligations discovered');
+      } else if (options.ackPrepare) {
+        boardRow('discovery', 'pass', `acknowledged via --ack-prepare: ${options.ackPrepare}`);
+      } else if (discoveryMode === 'block') {
+        report.prepareDiscovery = 'blocked';
+        failGate('discovery', `prepare discovery gate failed: prePrDiscovery is "block" and ${prepareObligations.length} prepare obligation(s) are unacknowledged; complete them and re-run with --ack-prepare "<note>"`);
+      } else {
+        warn(`[sdw-ship-pr] prePrDiscovery is "warn": continuing despite ${prepareObligations.length} prepare obligation(s).`);
+        boardRow('discovery', 'pass', `prePrDiscovery "warn": ${prepareObligations.length} obligation(s) printed; ship continues`);
+      }
     }
+
+    if (options.ackPrepare) {
+      report.prepareAck = { note: options.ackPrepare, at: new Date().toISOString() };
+      log(`[sdw-ship-pr] Prepare obligations acknowledged via --ack-prepare: ${options.ackPrepare}`);
+    }
+
+    // Spec 00050 AC11/AC12: one row per evaluated check, printed before the push.
+    if (!options.json) {
+      for (const row of report.prePrBoard) {
+        log(`[sdw-ship-pr] prePrBoard ${row.status}: ${row.check} - ${row.evidence}`);
+      }
+      log('[sdw-ship-pr] Pre-PR board:');
+      log(formatPrePrBoard(report.prePrBoard));
+    }
+
+    if (gateFailures.length > 0) {
+      throw new Error(`Pre-PR enforcement refused to push or create a pull request. ${gateFailures.join(' ')}`);
+    }
+    report.prePrPassed = true;
 
     // Check if an active PR is already open for this branch
     let activePrEarly = null;
@@ -1467,8 +1705,8 @@ async function runShipPr(options = {}, customExecutor = null) {
       }
     }
 
-    // Step 5: State Persistence
-    if (options.runId) {
+    // Step 5: State Persistence (never in dry-run: AC13 forbids writing run state)
+    if (options.runId && !dryRun) {
       const stateFilePath = locateStateFile(projectRoot, options.runId, specSlug, config);
       if (stateFilePath && fs.existsSync(stateFilePath)) {
         try {
@@ -1516,7 +1754,7 @@ async function runShipPr(options = {}, customExecutor = null) {
     // Expose the partial report (including the merge audit record) to callers.
     err.report = report;
 
-    if (options.runId) {
+    if (options.runId && !dryRun) {
       const stateFilePath = locateStateFile(projectRoot, options.runId, specSlug, config);
       if (stateFilePath && fs.existsSync(stateFilePath)) {
         try {
@@ -1718,7 +1956,10 @@ if (require.main === module) {
     .catch(err => {
       console.error(`\n[sdw-ship-pr] Error: ${err.message}`);
       if (options.json) {
-        process.stdout.write(JSON.stringify({ success: false, error: err.message }, null, 2) + '\n');
+        const failureReport = err.report && typeof err.report === 'object'
+          ? { ...err.report, success: false, error: err.message }
+          : { success: false, error: err.message };
+        process.stdout.write(JSON.stringify(failureReport, null, 2) + '\n');
       }
       process.exit(1);
     });
@@ -1729,6 +1970,9 @@ module.exports = {
   parseArgs,
   loadConfig,
   locateStateFile,
+  resolvePrePrDiscovery,
+  discoverPrepareObligations,
+  evaluateRunStateGate,
   cmdListThreads,
   cmdResolveThread,
   cmdCheckStatus,

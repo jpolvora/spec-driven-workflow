@@ -333,6 +333,16 @@
       "description": "Optional project-specific instructions or checklist for agents to verify prior to PR submission.",
       "default": ""
     },
+    "prePrDiscovery": {
+      "type": "string",
+      "enum": [
+        "block",
+        "warn",
+        "off"
+      ],
+      "default": "block",
+      "description": "Controls the pre-PR discovery scan of repo-root AGENTS.md, CONTRIBUTING.md, RELEASE.md, and PUBLISH.md plus prePrInstructions: block refuses the push and pull request until --ack-prepare is supplied, warn prints the discovered obligations and continues, off skips the scan. Absent resolves to block."
+    },
     "reviewFixCommand": {
       "type": "string",
       "description": "Optional command that applies review-thread fixes. When unset, sdw-ship-pr never resolves active threads automatically.",
