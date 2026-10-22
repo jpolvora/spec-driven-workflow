@@ -7,17 +7,17 @@
 | Specification file | `.sdw/specs/00038-sdw-spec-drift-repair.md` |
 | Specification slug | 00038-sdw-spec-drift-repair |
 | Run ID | run-1792689089514-00038-sdw-spec-drift-repair |
-| Run status | paused |
+| Run status | failed |
 | Branch | `feature/00038-sdw-spec-drift-repair` |
 | Base branch | `master` |
 | Base commit | `747f4946f9d6bdf4841050e826c2e69cc07f7b79` |
 | Delivery commit | `d16074f9126108af189483f5a640a86ee7b942a6` |
-| Ship status | pending |
+| Ship status | review_pending |
 | Score | 10/10 (scoreMin 8) |
 | Implementation start | 2026-10-22T17:11:29.580Z |
 | Implementation end | 2026-10-22T17:25:08.274Z |
 | Total wall-clock duration | 13m 38s |
-| Generated at | 2026-10-22T17:31:55.301Z |
+| Generated at | 2026-10-22T17:41:08.732Z |
 | Step 1: derivation (skipped) | 1ms |
 | Step 2: refinement (completed) | 34ms |
 | Step 3: dag_generation (completed) | 3ms |
@@ -25,7 +25,7 @@
 | Step 5: scoring (completed) | 4m 28s |
 | Step 6: delivery_commit (completed) | 377ms |
 | Step 7: code_review (completed) | 696ms |
-| Step 8: pr_preparation (pending) | n/a |
+| Step 8: pr_preparation (failed) | n/a |
 
 
 ## Tasks
@@ -39,6 +39,8 @@
 
 | SHA | Subject | Range |
 |---|---|---|
+| `3a007ea` | fix(00038-sdw-spec-drift-repair): keep the registry row pending until the delivery ships | base..HEAD |
+| `9239e0c` | docs(00038-sdw-spec-drift-repair): record delivery report | base..HEAD |
 | `d16074f` | feat(00038-sdw-spec-drift-repair): implement 00038-sdw-spec-drift-repair | base..HEAD |
 | `89d38ae` | task(00038-sdw-spec-drift-repair): task-2 | base..HEAD |
 | `6998a2b` | task(00038-sdw-spec-drift-repair): task-1 | base..HEAD |
@@ -62,11 +64,12 @@
 
 | File | Change |
 |---|---|
-| `.sdw/specs/index.specs.md` | modified |
+| `.sdw/specs/00038-sdw-spec-drift-repair-report.md` | added |
 
 ## Verification
 
 - test gate: status `passed`, exit code `0`, duration 1m 44s
+- Step 8 delivery: `failed` (ship status `review_pending`)
 
 ## Code Review
 
@@ -135,13 +138,14 @@
 
 ## Notes
 
+- Error (step 8, 2026-10-22T17:38:52.493Z): Pull request did not converge: 1 failing check(s), 1 active thread(s) remain
 - Step 1 (derivation) skipped: not recorded
 - Task task-2 accepted after re-dispatch (sequence 2)
 - Environment: workspace: 4 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
 
 ## Outcome
 
-- Result: `paused`
+- Result: `failed`
 - Delivery commit: `d16074f9126108af189483f5a640a86ee7b942a6`
-- Ship status: `pending`
+- Ship status: `review_pending`
 - Duration: 13m 38s
