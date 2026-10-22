@@ -673,8 +673,8 @@ function renderQualitySection(context) {
     let verified = 0;
     let failed = 0;
     for (const verdict of verdicts) {
-      if (verdict && verdict.status === 'verified') verified += 1;
-      else if (verdict && verdict.status === 'failed') failed += 1;
+      if (verdict && verdict.verdict === 'verified') verified += 1;
+      else if (verdict && verdict.verdict === 'failed') failed += 1;
     }
     markdown += `- Judge verdicts: ${verified} verified, ${failed} failed (${verdicts.length} judged)\n`;
   } else {

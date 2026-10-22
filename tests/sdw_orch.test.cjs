@@ -839,7 +839,7 @@ title: "Demo Feature"
         },
         5: {
           name: 'scoring', status: 'completed', startedAt: '2026-10-22T10:31:40.000Z', completedAt: '2026-10-22T10:32:40.000Z',
-          output: { score: 9, verdict: { verdicts: [{ id: 'AC1', status: 'verified' }, { id: 'AC2', status: 'verified' }, { id: 'AC3', status: 'failed' }] } }
+          output: { score: 9, verdict: { verdicts: [{ id: 'AC1', verdict: 'verified' }, { id: 'AC2', verdict: 'verified' }, { id: 'AC3', verdict: 'failed' }] } }
         },
         6: { name: 'delivery_commit', status: 'completed', startedAt: '2026-10-22T10:32:40.000Z', completedAt: '2026-10-22T10:33:10.000Z' },
         7: {
