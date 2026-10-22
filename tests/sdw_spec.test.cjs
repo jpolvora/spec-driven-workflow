@@ -5,11 +5,13 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { spawnSync } = require('child_process');
 
-const { initIndex, readIndex, writeIndex, listIndex, archiveSpec, updateSpecStatus, scanSpecsDir } = require('../skills/sdw-spec/scripts/spec_index.cjs');
+const { initIndex, readIndex, writeIndex, listIndex, archiveSpec, updateSpecStatus, scanSpecsDir, readDeclaredFields } = require('../skills/sdw-spec/scripts/spec_index.cjs');
 const { getNextPrefix, createNewSpec, importRemoteSpec, toEarsCriterion } = require('../skills/sdw-spec/scripts/spec_creator.cjs');
 const { validate, validateFile } = require('../skills/sdw-spec/scripts/validate_spec.cjs');
 const { syncIndex } = require('../skills/sdw-spec/scripts/spec_sync.cjs');
+const { buildPriorityRanking } = require('../skills/sdw-spec/scripts/sdw_spec.cjs');
 const { ScmProvider, createScmProvider } = require('../skills/sdw-spec/scripts/scm_provider_contract.cjs');
 const sdwOrch = require('../skills/sdw-orch/scripts/sdw_orch.cjs');
 
@@ -645,5 +647,257 @@ test('Spec 00054 companions: a {slug}-report.md file is never registered as a sp
     assert.equal(scanned[0].slug, '00001-alpha');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// Spec 00055 fixtures: declared ranking fields live only in frontmatter; the
+// registry keeps its existing columns.
+const PRIORITY_CLI = path.join(__dirname, '..', 'skills', 'sdw-spec', 'scripts', 'sdw_spec.cjs');
+
+function writePriorityFixture(root, spec) {
+  const slug = `${spec.prefix}-${spec.name}`;
+  const title = spec.title || spec.name;
+  const lines = [
+    '---',
+    'id: null',
+    `slug: ${slug}`,
+    `title: "${title}"`,
+    'source: local',
+    `status: ${spec.status || 'draft'}`,
+    `specDate: ${spec.date || '2026-10-01'}`
+  ];
+  if (spec.priority !== undefined) lines.push(`priority: ${spec.priority}`);
+  if (spec.value !== undefined) lines.push(`value: "${spec.value}"`);
+  if (spec.effort !== undefined) lines.push(`effort: ${spec.effort}`);
+  if (spec.blockedBy !== undefined) lines.push(`blockedBy: [${spec.blockedBy.map((token) => `"${token}"`).join(', ')}]`);
+  lines.push('---');
+  const criteria = (spec.acs || ['The system shall satisfy the fixture.'])
+    .map((criterion, index) => `- AC${index + 1}: ${criterion}`)
+    .join('\n');
+  fs.writeFileSync(
+    path.join(root, '.sdw', 'specs', `${slug}.md`),
+    `${lines.join('\n')}\n# Specification — ${title}\n\n## Description\n\nFixture.\n\n## Acceptance Criteria\n\n${criteria}\n`,
+    'utf8'
+  );
+  return {
+    prefix: spec.prefix,
+    slug,
+    title,
+    status: spec.registryStatus || 'pending',
+    source: 'local',
+    specDate: spec.date || '2026-10-01',
+    validation: 'PASS'
+  };
+}
+
+function setupPriorityWorkspace(specs) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-spec-priority-'));
+  const sdwDir = path.join(root, '.sdw');
+  fs.mkdirSync(path.join(sdwDir, 'specs'), { recursive: true });
+  fs.mkdirSync(path.join(sdwDir, 'state'), { recursive: true });
+  fs.writeFileSync(path.join(sdwDir, 'config.json'), JSON.stringify({
+    specsDir: '{projectRoot}/.sdw/specs',
+    stateDir: '{projectRoot}/.sdw/state',
+    scoreMin: 8
+  }, null, 2), 'utf8');
+  writeIndex(specs.map((spec) => writePriorityFixture(root, spec)), { root });
+  return root;
+}
+
+function runListByPriority(root, args = []) {
+  return spawnSync(process.execPath, [PRIORITY_CLI, 'list-by-priority', '--root', root, ...args], {
+    cwd: root,
+    encoding: 'utf8'
+  });
+}
+
+function rankedPrefixes(stdout) {
+  return stdout
+    .split('\n')
+    .map((line) => line.match(/^\d+\s+\|\s+(\d{5})\s+\|/))
+    .filter(Boolean)
+    .map((match) => match[1]);
+}
+
+function tableRow(stdout, prefix) {
+  const line = stdout.split('\n').find((candidate) => new RegExp(`^\\d+\\s+\\|\\s+${prefix}\\s+\\|`).test(candidate));
+  assert.ok(line, `row for ${prefix} exists in the ranked table`);
+  return line.split('|').map((cell) => cell.trim());
+}
+
+test('00055 AC1, AC2 & AC10: list-by-priority ranks registry-pending rows in a full table', () => {
+  const root = setupPriorityWorkspace([
+    { prefix: '00001', name: 'alpha', status: 'ready-to-implement', priority: 'high', effort: 'S', value: 'Ships alpha' },
+    { prefix: '00002', name: 'beta', status: 'implemented', registryStatus: 'completed', priority: 'high', effort: 'S', value: 'Delivered' },
+    { prefix: '00003', name: 'gamma', status: 'abandoned', registryStatus: 'archived', priority: 'low', effort: 'M' },
+    { prefix: '00004', name: 'delta', status: 'draft', acs: ['The system shall do one thing.', 'The system shall do another thing.'] }
+  ]);
+  try {
+    const help = spawnSync(process.execPath, [PRIORITY_CLI, 'help'], { encoding: 'utf8' });
+    assert.equal(help.status, 0);
+    assert.match(help.stdout, /list-by-priority\s+Rank pending specifications/);
+
+    const run = runListByPriority(root);
+    assert.equal(run.status, 0, run.stderr);
+
+    const header = run.stdout.split('\n').find((line) => line.startsWith('RANK '));
+    assert.ok(header, 'ranked table header is printed');
+    assert.deepEqual(
+      header.split('|').map((cell) => cell.trim()),
+      ['RANK', 'PREFIX', 'PRIORITY', 'EFFORT', 'AC', 'READINESS', 'BLOCKED BY', 'VALUE']
+    );
+    assert.deepEqual(rankedPrefixes(run.stdout), ['00001', '00004'], 'completed and archived rows are excluded');
+    assert.deepEqual(tableRow(run.stdout, '00001').slice(0, 8), ['1', '00001', 'high', 'S', '1', 'ready-to-implement', '-', 'Ships alpha']);
+    assert.deepEqual(tableRow(run.stdout, '00004').slice(0, 7), ['2', '00004', 'medium', '-', '2', 'draft', '-'], 'absent priority is medium and absent effort stays unset');
+    assert.equal(tableRow(run.stdout, '00004')[7], '-', 'an absent value prints as a dash');
+    assert.match(run.stdout, /^Totals: 2 pending \| 1 high \| 1 medium \| 0 low \| 0 blocked$/m);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('00055 AC4, AC5 & AC6: ordering follows priority, blocking, readiness, effort, specDate, prefix', () => {
+  const root = setupPriorityWorkspace([
+    { prefix: '00012', name: 'high-medium-effort', status: 'ready-to-implement', priority: 'high', effort: 'M', date: '2026-09-01' },
+    { prefix: '00013', name: 'high-large-effort', status: 'ready-to-implement', priority: 'high', effort: 'L', date: '2026-09-01' },
+    { prefix: '00003', name: 'high-unset-effort', status: 'ready-to-implement', priority: 'high', date: '2026-09-01' },
+    { prefix: '00004', name: 'high-draft', status: 'draft', priority: 'high', effort: 'S', date: '2026-09-01' },
+    { prefix: '00015', name: 'high-awaiting', status: 'awaiting-approval', priority: 'high', effort: 'S', date: '2026-09-01' },
+    { prefix: '00006', name: 'high-blocked', status: 'ready-to-implement', priority: 'high', effort: 'S', date: '2026-09-01', blockedBy: ['00010'] },
+    { prefix: '00002', name: 'high-late-date', status: 'ready-to-implement', priority: 'high', effort: 'S', date: '2026-10-02' },
+    { prefix: '00005', name: 'high-early-date', status: 'ready-to-implement', priority: 'high', effort: 'S', date: '2026-10-01' },
+    { prefix: '00008', name: 'medium-late-date', status: 'ready-to-implement', priority: 'medium', effort: 'S', date: '2026-10-05' },
+    { prefix: '00011', name: 'medium-default-priority', status: 'ready-to-implement', effort: 'S', date: '2026-09-05' },
+    { prefix: '00009', name: 'low-late-date', status: 'ready-to-implement', priority: 'low', effort: 'S', date: '2026-10-05' },
+    { prefix: '00014', name: 'low-first-tie', status: 'ready-to-implement', priority: 'low', effort: 'S', date: '2026-10-04' },
+    { prefix: '00020', name: 'low-second-tie', status: 'ready-to-implement', priority: 'low', effort: 'S', date: '2026-10-04' },
+    { prefix: '00010', name: 'open-dependency', status: 'ready-to-implement', date: '2026-09-01' }
+  ]);
+  try {
+    const expected = ['00005', '00002', '00012', '00013', '00003', '00004', '00015', '00006', '00011', '00008', '00010', '00014', '00020', '00009'];
+    const ranking = buildPriorityRanking({ root });
+    assert.deepEqual(ranking.items.map((item) => item.prefix), expected);
+    assert.deepEqual(ranking.items.map((item) => item.rank), expected.map((_, index) => index + 1));
+
+    const byPrefix = Object.fromEntries(ranking.items.map((item) => [item.prefix, item]));
+    assert.equal(byPrefix['00011'].priority, 'medium', 'absent priority reads as medium');
+    assert.equal(byPrefix['00003'].effort, null, 'absent effort stays unset');
+    assert.equal(byPrefix['00006'].blocked, true);
+    assert.equal(byPrefix['00005'].specDate, '2026-10-01');
+
+    const run = runListByPriority(root);
+    assert.equal(run.status, 0, run.stderr);
+    assert.deepEqual(rankedPrefixes(run.stdout), expected, 'the printed table carries the same order');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('00055 AC7: a blockedBy dependency blocks only while it stays pending', () => {
+  const root = setupPriorityWorkspace([
+    { prefix: '00030', name: 'blocked-design', status: 'ready-to-implement', priority: 'high', effort: 'S', date: '2026-10-01', blockedBy: ['00031'] },
+    { prefix: '00033', name: 'delivered-dependency', status: 'ready-to-implement', priority: 'high', effort: 'S', date: '2026-10-02', blockedBy: ['00034'] },
+    { prefix: '00031', name: 'open-dependency', status: 'draft', priority: 'low', effort: 'M', date: '2026-10-03' },
+    { prefix: '00034', name: 'completed-dependency', status: 'implemented', registryStatus: 'completed', priority: 'high', effort: 'S', date: '2026-10-04' }
+  ]);
+  try {
+    const ranking = buildPriorityRanking({ root });
+    const byPrefix = Object.fromEntries(ranking.items.map((item) => [item.prefix, item]));
+    assert.equal(byPrefix['00030'].blocked, true, 'a pending dependency blocks');
+    assert.deepEqual(byPrefix['00030'].blockedBy, ['00031']);
+    assert.equal(byPrefix['00033'].blocked, false, 'a completed dependency does not block');
+    assert.deepEqual(ranking.items.map((item) => item.prefix), ['00033', '00030', '00031']);
+    assert.equal(ranking.counts.blocked, 1);
+
+    const run = runListByPriority(root);
+    assert.equal(run.status, 0, run.stderr);
+    assert.equal(tableRow(run.stdout, '00030')[6], 'blocked: 00031');
+    assert.equal(tableRow(run.stdout, '00033')[6], '00034', 'a satisfied dependency is listed without the blocked marker');
+    assert.match(run.stdout, /^Totals: 3 pending \| 2 high \| 0 medium \| 1 low \| 1 blocked$/m);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('00055 AC8: an unresolved blockedBy entry exits 1 naming the specification and the entry', () => {
+  const root = setupPriorityWorkspace([
+    { prefix: '00040', name: 'orphan-blocker', priority: 'high', effort: 'S', blockedBy: ['00999'] }
+  ]);
+  try {
+    const run = runListByPriority(root);
+    assert.equal(run.status, 1);
+    assert.equal(run.stdout, '', 'no partial table is printed');
+    assert.match(run.stderr, /00040-orphan-blocker/);
+    assert.match(run.stderr, /00999/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('00055 AC9: an out-of-enum priority or effort exits 1 naming the specification and the value', () => {
+  const priorityRoot = setupPriorityWorkspace([
+    { prefix: '00050', name: 'bad-priority', priority: 'urgent', effort: 'S' }
+  ]);
+  try {
+    const run = runListByPriority(priorityRoot);
+    assert.equal(run.status, 1);
+    assert.equal(run.stdout, '', 'no partial table is printed');
+    assert.match(run.stderr, /00050-bad-priority/);
+    assert.match(run.stderr, /urgent/);
+  } finally {
+    fs.rmSync(priorityRoot, { recursive: true, force: true });
+  }
+
+  const effortRoot = setupPriorityWorkspace([
+    { prefix: '00051', name: 'bad-effort', priority: 'high', effort: 'XL' }
+  ]);
+  try {
+    const run = runListByPriority(effortRoot);
+    assert.equal(run.status, 1);
+    assert.equal(run.stdout, '', 'no partial table is printed');
+    assert.match(run.stderr, /00051-bad-effort/);
+    assert.match(run.stderr, /XL/);
+  } finally {
+    fs.rmSync(effortRoot, { recursive: true, force: true });
+  }
+});
+
+test('00055 AC3: declared fields are read from frontmatter in inline, scalar, absent, and CRLF forms', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-spec-declared-'));
+  try {
+    const specsDir = path.join(root, '.sdw', 'specs');
+    fs.mkdirSync(specsDir, { recursive: true });
+    const write = (name, frontmatter) => {
+      const file = path.join(specsDir, `${name}.md`);
+      fs.writeFileSync(file, `---\nid: null\nslug: ${name}\ntitle: "Fixture"\nsource: local\nstatus: draft\nspecDate: 2026-10-22\n${frontmatter}---\n# Fixture\n`, 'utf8');
+      return file;
+    };
+
+    assert.deepEqual(
+      readDeclaredFields(write('00001-inline', 'priority: high\nvalue: "Worth doing"\neffort: M\nblockedBy: ["00038", "00041"]\n')),
+      { priority: 'high', value: 'Worth doing', effort: 'M', blockedBy: ['00038', '00041'] }
+    );
+    assert.deepEqual(
+      readDeclaredFields(write('00002-scalar', 'priority: low\nblockedBy: 00038\n')),
+      { priority: 'low', value: '', effort: null, blockedBy: ['00038'] }
+    );
+    assert.deepEqual(
+      readDeclaredFields(write('00003-absent', '')),
+      { priority: null, value: '', effort: null, blockedBy: [] }
+    );
+    assert.deepEqual(
+      readDeclaredFields(write('00004-empty-list', 'blockedBy: []\n')),
+      { priority: null, value: '', effort: null, blockedBy: [] }
+    );
+
+    const crlfFile = path.join(specsDir, '00005-crlf.md');
+    fs.writeFileSync(
+      crlfFile,
+      '---\r\nid: null\r\nslug: 00005-crlf\r\ntitle: "Fixture"\r\nsource: local\r\nstatus: draft\r\nspecDate: 2026-10-22\r\npriority: medium\r\neffort: S\r\n---\r\n# Fixture\r\n',
+      'utf8'
+    );
+    assert.deepEqual(readDeclaredFields(crlfFile), { priority: 'medium', value: '', effort: 'S', blockedBy: [] });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });

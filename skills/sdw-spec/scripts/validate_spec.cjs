@@ -8,6 +8,12 @@ const PLACEHOLDER = /^(?:tbd|todo|placeholder|\?+|[-–—.]{1,3}|\.{3}|n\/?a)$/
 
 const SPEC_STATUSES = ['draft', 'awaiting-approval', 'ready-to-implement', 'implemented', 'abandoned'];
 
+// Spec 00055: declared ranking fields. `priority` defaults to `medium` when
+// absent; `effort` stays unset. Both enums are shared by the validator and the
+// list-by-priority ranking so there is one vocabulary.
+const PRIORITY_VALUES = ['high', 'medium', 'low'];
+const EFFORT_VALUES = ['S', 'M', 'L'];
+
 const EARS_PATTERNS = [
   { name: 'ubiquitous', re: /^the\s+.+\s+shall\s+.+/i },
   { name: 'event-driven', re: /^when\s+.+,\s*the\s+.+\s+shall\s+.+/i },
@@ -409,6 +415,8 @@ if (require.main === module) {
 module.exports = {
   EARS_PATTERNS,
   SPEC_STATUSES,
+  PRIORITY_VALUES,
+  EFFORT_VALUES,
   earsViolation,
   validate,
   validateFile,

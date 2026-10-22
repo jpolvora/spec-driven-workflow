@@ -5,10 +5,10 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-const { initIndex, listIndex, archiveSpec, resolvePaths } = require('./spec_index.cjs');
+const { initIndex, listIndex, archiveSpec, resolvePaths, readIndex, parseFrontmatter, readDeclaredFields } = require('./spec_index.cjs');
 const { createNewSpec, importRemoteSpec } = require('./spec_creator.cjs');
 const { syncIndex } = require('./spec_sync.cjs');
-const { validateFile, SPEC_STATUSES } = require('./validate_spec.cjs');
+const { validateFile, SPEC_STATUSES, PRIORITY_VALUES, EFFORT_VALUES } = require('./validate_spec.cjs');
 
 const SPEC_STATUS_TRANSITIONS = {
   draft: ['awaiting-approval', 'abandoned'],
@@ -29,10 +29,12 @@ function parseArgs(args) {
     title: null,
     slug: null,
     from: null,
+    limit: null,
     apply: false,
     force: false,
     json: false,
     dryRun: false,
+    collisions: false,
     mode: 'authoring'
   };
 
@@ -56,6 +58,9 @@ function parseArgs(args) {
     else if (arg.startsWith('--slug=')) result.slug = arg.slice(7);
     else if (arg === '--from') result.from = args[++i] || null;
     else if (arg.startsWith('--from=')) result.from = arg.slice(7) || null;
+    else if (arg === '--limit') result.limit = args[++i];
+    else if (arg.startsWith('--limit=')) result.limit = arg.slice(8);
+    else if (arg === '--collisions') result.collisions = true;
     else if (arg === '--apply') result.apply = true;
     else if (arg === '--mode') result.mode = args[++i];
     else if (arg.startsWith('--mode=')) result.mode = arg.slice(7);
@@ -73,6 +78,7 @@ function showHelp() {
 Subcommands:
   init                     Bootstrap {specsDir}/index.specs.md with standard headers and inventory
   list                     Display registered specifications with status and validation health
+  list-by-priority         Rank pending specifications by declared priority, readiness, and effort
   new <requirements>      Synthesize canonical specification with autoincremented numerical prefix
   import                   Import remote tracker item from GitHub or Azure DevOps
   sync                     Reconcile index.specs.md against on-disk files and orchestrator run states
@@ -152,6 +158,179 @@ function cmdList(options) {
     return 0;
   } catch (err) {
     console.error(`[sdw-spec list] Error: ${err.message}`);
+    return 1;
+  }
+}
+
+// Spec 00055: ranking is a deterministic projection over declared frontmatter and
+// registry state. It infers nothing, reads no clock, and writes no file.
+const DEFAULT_PRIORITY = 'medium';
+const READINESS_VALUES = ['ready-to-implement', 'draft', 'awaiting-approval'];
+
+function compareText(left, right) {
+  const a = String(left || '');
+  const b = String(right || '');
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+function rankIndex(values, value) {
+  const index = values.indexOf(value);
+  return index === -1 ? values.length : index;
+}
+
+function registeredSpecPath(specsDir, entry) {
+  if (entry.slug) {
+    const direct = path.join(specsDir, `${entry.slug}.md`);
+    if (fs.existsSync(direct)) return direct;
+  }
+  if (entry.prefix && fs.existsSync(specsDir)) {
+    // 00054 companions (`{slug}-report.md`) are delivery artifacts, never specifications.
+    const match = fs
+      .readdirSync(specsDir)
+      .sort(compareText)
+      .find((name) => name.startsWith(`${entry.prefix}-`) && name.endsWith('.md') && !/-report\.md$/.test(name));
+    if (match) return path.join(specsDir, match);
+  }
+  return null;
+}
+
+function countAcceptanceCriteria(content) {
+  return (String(content || '').match(/^- AC[1-9][0-9]*:/gm) || []).length;
+}
+
+function resolveBlockedEntry(entries, token) {
+  return entries.find((entry) => entry.prefix === token || entry.slug === token) || null;
+}
+
+function declaredRowsFor(specsDir, entries) {
+  return entries
+    .map((entry) => {
+      const specPath = registeredSpecPath(specsDir, entry);
+      const content = specPath ? fs.readFileSync(specPath, 'utf8') : '';
+      return {
+        entry,
+        declared: specPath
+          ? readDeclaredFields(specPath)
+          : { priority: null, value: '', effort: null, blockedBy: [] },
+        readiness: specPath ? parseFrontmatter(content.replace(/\r\n?/g, '\n')).status || '' : '',
+        acCount: countAcceptanceCriteria(content)
+      };
+    })
+    .sort((a, b) => compareText(a.entry.prefix, b.entry.prefix));
+}
+
+function buildPriorityRanking(options = {}) {
+  const { specsDir } = resolvePaths(options.root);
+  const registry = readIndex({ root: options.root });
+  const allEntries = registry.exists ? registry.entries : [];
+  const pendingEntries = allEntries.filter((entry) => String(entry.status || '').toLowerCase() === 'pending');
+  const declaredRows = declaredRowsFor(specsDir, pendingEntries);
+
+  // AC9: an out-of-enum value makes the ranking meaningless, so nothing is printed.
+  for (const row of declaredRows) {
+    const { priority, effort } = row.declared;
+    if (priority !== null && !PRIORITY_VALUES.includes(priority)) {
+      throw new Error(`Invalid priority "${priority}" in specification ${row.entry.slug}; expected ${PRIORITY_VALUES.join(', ')}.`);
+    }
+    if (effort !== null && !EFFORT_VALUES.includes(effort)) {
+      throw new Error(`Invalid effort "${effort}" in specification ${row.entry.slug}; expected ${EFFORT_VALUES.join(', ')}.`);
+    }
+  }
+
+  // AC8: a blocker that resolves to no registered specification is an error, not a
+  // silent pass; AC7 marks a row blocked only while its dependency stays pending.
+  for (const row of declaredRows) {
+    const unresolved = row.declared.blockedBy.find((token) => !resolveBlockedEntry(allEntries, token));
+    if (unresolved !== undefined) {
+      throw new Error(`Unresolved blockedBy entry "${unresolved}" in specification ${row.entry.slug}; no registered specification matches that prefix or slug.`);
+    }
+  }
+
+  const items = declaredRows.map((row) => {
+    const entry = row.entry;
+    const blocked = row.declared.blockedBy.some((token) => {
+      const dependency = resolveBlockedEntry(allEntries, token);
+      return dependency !== null && String(dependency.status || '').toLowerCase() === 'pending';
+    });
+    return {
+      rank: 0,
+      prefix: entry.prefix || '',
+      slug: entry.slug || '',
+      title: entry.title || '',
+      priority: row.declared.priority || DEFAULT_PRIORITY,
+      effort: row.declared.effort,
+      acCount: row.acCount,
+      readiness: row.readiness,
+      registryStatus: entry.status || 'pending',
+      blockedBy: row.declared.blockedBy,
+      blocked,
+      value: row.declared.value,
+      specDate: entry.specDate || ''
+    };
+  });
+
+  items.sort(
+    (a, b) =>
+      rankIndex(PRIORITY_VALUES, a.priority) - rankIndex(PRIORITY_VALUES, b.priority) ||
+      Number(a.blocked) - Number(b.blocked) ||
+      rankIndex(READINESS_VALUES, a.readiness) - rankIndex(READINESS_VALUES, b.readiness) ||
+      rankIndex(EFFORT_VALUES, a.effort) - rankIndex(EFFORT_VALUES, b.effort) ||
+      compareText(a.specDate, b.specDate) ||
+      compareText(a.prefix, b.prefix)
+  );
+  items.forEach((item, index) => {
+    item.rank = index + 1;
+  });
+
+  return {
+    counts: {
+      pending: items.length,
+      high: items.filter((item) => item.priority === 'high').length,
+      medium: items.filter((item) => item.priority === 'medium').length,
+      low: items.filter((item) => item.priority === 'low').length,
+      blocked: items.filter((item) => item.blocked).length
+    },
+    items
+  };
+}
+
+function blockedByLabel(item) {
+  if (item.blockedBy.length === 0) return '-';
+  const entries = item.blockedBy.join(', ');
+  return item.blocked ? `blocked: ${entries}` : entries;
+}
+
+function renderPriorityTable(ranking) {
+  const headers = ['RANK', 'PREFIX', 'PRIORITY', 'EFFORT', 'AC', 'READINESS', 'BLOCKED BY', 'VALUE'];
+  const rows = ranking.items.map((item) => [
+    String(item.rank),
+    item.prefix || '-',
+    item.priority,
+    item.effort || '-',
+    String(item.acCount),
+    item.readiness || '-',
+    blockedByLabel(item),
+    item.value || '-'
+  ]);
+  const widths = headers.map((header, index) => Math.max(header.length, ...rows.map((row) => row[index].length)));
+  const formatRow = (cells) => cells.map((cell, index) => cell.padEnd(widths[index])).join(' | ').trimEnd();
+
+  const lines = [`[sdw-spec list-by-priority] Ranked pending specifications (${ranking.counts.pending}):`, ''];
+  lines.push(formatRow(headers));
+  lines.push(widths.map((width) => '-'.repeat(width)).join('-|-'));
+  rows.forEach((row) => lines.push(formatRow(row)));
+  lines.push(
+    `Totals: ${ranking.counts.pending} pending | ${ranking.counts.high} high | ${ranking.counts.medium} medium | ${ranking.counts.low} low | ${ranking.counts.blocked} blocked`
+  );
+  return lines.join('\n');
+}
+
+function cmdListByPriority(options) {
+  try {
+    console.log(renderPriorityTable(buildPriorityRanking(options)));
+    return 0;
+  } catch (err) {
+    console.error(`[sdw-spec list-by-priority] Error: ${err.message}`);
     return 1;
   }
 }
@@ -571,6 +750,9 @@ async function main() {
     case 'list':
       code = cmdList(options);
       break;
+    case 'list-by-priority':
+      code = cmdListByPriority(options);
+      break;
     case 'new':
       code = cmdNew(options);
       break;
@@ -609,6 +791,9 @@ module.exports = {
   parseArgs,
   cmdInit,
   cmdList,
+  cmdListByPriority,
+  buildPriorityRanking,
+  renderPriorityTable,
   cmdNew,
   cmdImport,
   cmdSync,
