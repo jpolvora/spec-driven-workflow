@@ -26,6 +26,10 @@ path, and scope fence, never the implementation transcript, prior worker reasoni
 DAG prompts, or judge verdicts. Same-session CLI review in the orchestrator session
 is not a verdict; standalone `doctor` plus `--dry-run` stay valid.
 
+When a standalone caller authored the diff under review, this skill recommends
+fresh-session execution too; the recommendation stays non-blocking so quick
+self-checks remain practical.
+
 ## Subcommands
 
 - `run [--base <ref>] [--target <path>] [--report <path>] [--fix] [--dry-run] [--json]`: Review working tree and HEAD diffs, write Markdown fix plan, emit JSON.

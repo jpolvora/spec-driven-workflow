@@ -234,6 +234,15 @@ Step 8 delegates all final PR verification gates, remote publishing, SCM submiss
 
 Step 7 delegates all working-tree review execution to the standalone `sdw-code-review` skill. The orchestrator holds no duplicated review instructions.
 
+### Fresh-Context Isolation Contract
+- **Rationale:** The orchestrator session normally authored the implementation under review. Reviewing that diff inside the originating reasoning context carries confirmation bias plus transcript contamination, and both depress defect detection; a newly spawned session sees only the delivered diff.
+- **MUST:** spawn one context-fresh reviewer subagent session for every Step 7 verdict.
+- **MUST NOT:** produce a Step 7 verdict by running the review CLI in the orchestrator session; same-session output is not a verdict.
+- **Reviewer brief contents (allowlist):** target root, base reference, report path, scope fence.
+- **Forbidden transcript contents (denylist):** implementation transcript, prior worker reasoning, DAG prompts, judge verdicts.
+- **CLI placement:** `sdw_code_review.cjs run` executes inside the fresh reviewer session for a Step 7 verdict; standalone `doctor` plus `--dry-run` stay valid outside this rule.
+- **Fixer separation:** remediation runs in a fresh `sdw-fixer` subagent session distinct from the reviewer session, never the same session. The reviewer that produced the findings MUST NOT approve fixer output; a fixer delivery is re-reviewed in a new context-fresh reviewer session.
+
 ### Delegation Contract
 - **Invocation:** `node skills/sdw-code-review/scripts/sdw_code_review.cjs run --target <root> [--base <ref>] --report <artifactsDir>/<slug>-step-7.md [--fix] [--json]`
   (executed inside the fresh reviewer subagent session only; the orchestrator session never runs it for a verdict).
