@@ -98,6 +98,11 @@ function synthesizeCanonicalSpec(options) {
     ? `\n### Prior Work Sweep\n\nReviewed existing workspace implementations and tracker references prior to specification formulation.\n`
     : '';
 
+  // Spec 00051 AC2: an imported specification names its source item in Notes.
+  const importNote = id !== null && source && source !== 'local'
+    ? `- Imported from ${source} as item #${id}.\n`
+    : '';
+
   return `---
 id: ${id !== null ? JSON.stringify(id) : 'null'}
 slug: ${slug}
@@ -123,7 +128,7 @@ ${acLines}
 
 ## Notes
 
-- All helper scripts and tooling anchors must use Node.js CommonJS (.cjs) using standard library modules only.
+${importNote}- All helper scripts and tooling anchors must use Node.js CommonJS (.cjs) using standard library modules only.
 - Adhere strictly to the 3-Tier skill authoring standard and EARS acceptance criteria conventions.
 
 ## Out of Scope
