@@ -3,10 +3,9 @@ id: "46"
 slug: 00046-sdw-batch-retro-followup
 title: "Unattended Batch Retro Follow-Up — Queued Specs From Retrospective Candidates"
 source: local
-status: ready-to-implement
+status: implemented
 specDate: 2026-10-21
 ---
-
 # Specification — Unattended Batch Retro Follow-Up — Queued Specs From Retrospective Candidates
 
 ## Description

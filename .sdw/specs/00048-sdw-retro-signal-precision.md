@@ -3,10 +3,9 @@ id: "48"
 slug: 00048-sdw-retro-signal-precision
 title: "Transcript Signal Precision — Command Shape and Repeated Invocation Matching"
 source: local
-status: ready-to-implement
+status: implemented
 specDate: 2026-10-21
 ---
-
 # Specification — Transcript Signal Precision — Command Shape and Repeated Invocation Matching
 
 ## Description

@@ -3,10 +3,9 @@ id: "45"
 slug: 00045-sdw-retro-auto-run
 title: "Automatic Retrospective After Delivery and Operational-Slip Detection"
 source: local
-status: ready-to-implement
+status: implemented
 specDate: 2026-10-21
 ---
-
 # Specification — Automatic Retrospective After Delivery and Operational-Slip Detection
 
 ## Description

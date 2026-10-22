@@ -3,10 +3,9 @@ id: "16"
 slug: 00044-us-16-add-gitattributes-and-per-task-sa
 title: "Add .gitattributes and per-task save in sdw-orch DAG"
 source: github
-status: draft
+status: implemented
 specDate: 2026-10-21
 ---
-
 # Specification — Add .gitattributes and per-task save in sdw-orch DAG
 
 ## Description

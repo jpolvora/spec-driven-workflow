@@ -3,7 +3,7 @@ id: null
 slug: 00039-sdw-batch-skill
 title: "SDW Batch Skill — Multi-Spec Queue Delegating to Single sdw-orch Runs"
 source: local
-status: ready-to-implement
+status: implemented
 specDate: 2026-10-21
 ---
 # Specification — SDW Batch Skill — Multi-Spec Queue Delegating to Single sdw-orch Runs
