@@ -276,7 +276,9 @@ function checkWorkspace(root, findings) {
     return;
   }
 
-  const specFiles = fs.readdirSync(specsDir).filter(name => /^\d{5}-.*\.md$/.test(name)).sort();
+  // Spec 00054 writes `{slug}-report.md` companions beside the specification;
+  // they are delivery artifacts, not specifications, so the audit skips them.
+  const specFiles = fs.readdirSync(specsDir).filter(name => /^\d{5}-.*\.md$/.test(name) && !/-report\.md$/.test(name)).sort();
   const index = fs.existsSync(path.join(specsDir, 'index.specs.md'))
     ? fs.readFileSync(path.join(specsDir, 'index.specs.md'), 'utf8')
     : '';

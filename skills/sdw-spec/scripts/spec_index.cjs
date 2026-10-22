@@ -148,7 +148,9 @@ function scanSpecsDir(options = {}) {
     return [];
   }
 
-  const files = fs.readdirSync(specsDir).filter(f => f.endsWith('.md') && f !== 'index.specs.md');
+  // Spec 00054 writes `{slug}-report.md` companions beside the specification;
+  // they are delivery artifacts, never registry entries.
+  const files = fs.readdirSync(specsDir).filter(f => f.endsWith('.md') && f !== 'index.specs.md' && !/-report\.md$/.test(f));
   const detected = [];
 
   for (const f of files) {

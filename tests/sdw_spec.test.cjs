@@ -6,7 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-const { initIndex, readIndex, writeIndex, listIndex, archiveSpec, updateSpecStatus } = require('../skills/sdw-spec/scripts/spec_index.cjs');
+const { initIndex, readIndex, writeIndex, listIndex, archiveSpec, updateSpecStatus, scanSpecsDir } = require('../skills/sdw-spec/scripts/spec_index.cjs');
 const { getNextPrefix, createNewSpec, importRemoteSpec, toEarsCriterion } = require('../skills/sdw-spec/scripts/spec_creator.cjs');
 const { validate, validateFile } = require('../skills/sdw-spec/scripts/validate_spec.cjs');
 const { syncIndex } = require('../skills/sdw-spec/scripts/spec_sync.cjs');
@@ -625,4 +625,25 @@ test('Spec grilling reference is present and linked', () => {
   assert.ok(skill.includes('references/grilling.md'), 'SKILL.md links the grilling reference');
   assert.ok(skill.includes('awaiting-approval'), 'SKILL.md documents the status transition');
   assert.ok(fs.existsSync(path.join(root, 'skills', 'sdw-spec', 'references', 'grilling.md')));
+});
+
+test('Spec 00054 companions: a {slug}-report.md file is never registered as a specification', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-spec-report-'));
+  try {
+    const specsDir = path.join(tmpDir, '.sdw', 'specs');
+    fs.mkdirSync(specsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(specsDir, '00001-alpha.md'),
+      '---\nid: null\nslug: 00001-alpha\ntitle: "Alpha"\nsource: local\nstatus: draft\nspecDate: 2026-10-22\n---\n\n# Alpha\n\n## Description\n\nBody.\n\n## Acceptance Criteria\n\n- AC1: The system shall work.\n',
+      'utf8'
+    );
+    fs.writeFileSync(path.join(specsDir, '00001-alpha-report.md'), '# Delivery Report — Alpha\n', 'utf8');
+    fs.writeFileSync(path.join(specsDir, 'index.specs.md'), '# Specification Index\n', 'utf8');
+
+    const scanned = scanSpecsDir({ root: tmpDir });
+    assert.equal(scanned.length, 1, 'the delivery report is not scanned as a specification');
+    assert.equal(scanned[0].slug, '00001-alpha');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });
