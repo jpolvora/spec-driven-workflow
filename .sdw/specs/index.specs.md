@@ -61,4 +61,6 @@ Central repository index tracking specification lifecycle states, metadata, and 
 | 00048 | 00048-sdw-retro-signal-precision | Transcript Signal Precision — Command Shape and Repeated Invocation Matching | completed | local | 2026-10-21 | PASS | - |
 | 00049 | 00049-sdw-retro-agnostic-discovery | Agent-Agnostic Transcript Discovery — Environment Facts and Bounded Search | completed | local | 2026-10-21 | PASS | - |
 | 00050 | 00050-sdw-ship-pr-native-pre-pr-enforcement-ga | sdw-ship-pr native pre-PR enforcement: gate shipping on run-state evidence and discovered consumer prepare obligations | completed | local | 2026-10-22 | PASS | - |
-| 00051 | 00051-issue-linkage-imported-scm-issues-close- | issue linkage: imported SCM issues close automatically when the implementing pull request references the source item id | pending | local | 2026-10-22 | PASS | - |
+| 00051 | 00051-issue-linkage-imported-scm-issues-close- | issue linkage: imported SCM issues close automatically when the implementing pull request references the source item id | completed | local | 2026-10-22 | PASS | - |
+| 00052 | 00052-sdw-fresh-subagent-code-review | SDW Fresh-Subagent Code Review Isolation | pending | local | 2026-10-22 | PASS | - |
+| 00053 | 00053-batch-auto-merge-sdw-batch-merges-each-d | batch auto-merge: sdw-batch merges each delivered pull request before advancing to the next specification | pending | local | 2026-10-22 | PASS | - |

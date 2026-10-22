@@ -31,6 +31,10 @@ Specification lifecycle, authoring, synchronization, and formatting manager inte
 - `status <slug> <status>`: Changes the spec header status through the defined transitions.
 - `archive <slug>`: Transitions completed specifications to `archived` in `index.specs.md`.
 
+## Imported Item Frontmatter
+
+`import` persists the tracker item in the specification frontmatter. `id` holds the provider item id as a string (`null` when the specification is not tracker-backed); `source` holds the provider (`github` or `azure-devops`, or `local`). Downstream, [`sdw-ship-pr`](../sdw-ship-pr/SKILL.md) reads those keys through `--spec <slug>` and appends the provider closing keyword (`Closes #<id>` for GitHub, `Fixes AB#<id>` for Azure DevOps). `local`, `null`, and any other `source` value emit no keyword. Contract details live in the [`sdw-ship-pr`](../sdw-ship-pr/SKILL.md) protocol, `skills/sdw-ship-pr/references/ship_protocol.md` § 3.
+
 ## Spec Status
 
 The header `status:` is the authoring state. The registry `Status` column remains the lifecycle state (`pending`, `completed`, `archived`); `sync` never rewrites the header.

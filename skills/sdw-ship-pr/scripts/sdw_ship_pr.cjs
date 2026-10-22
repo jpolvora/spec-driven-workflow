@@ -86,6 +86,86 @@ function getSpecTitle(projectRoot, specSlug) {
   return null;
 }
 
+// Spec 00051: the provider-specific closing keyword is the only SCM syntax the
+// body needs; where it appears is provider-agnostic.
+const ISSUE_CLOSING_KEYWORDS = new Map([
+  ['github', (id) => `Closes #${id}`],
+  ['azure-devops', (id) => `Fixes AB#${id}`]
+]);
+
+// Matches a standalone closing line, e.g. `Closes #12`, `Fixes AB#12`, `Resolves #7`.
+const CLOSING_KEYWORD_LINE = /^(Closes|Fixes|Resolves)\s+(AB)?#\d+\b/i;
+
+function parseFrontmatterValue(frontmatter, key) {
+  const match = String(frontmatter || '').match(new RegExp(`^${key}:\\s*(.*)$`, 'm'));
+  if (!match) return null;
+  const raw = match[1].trim().replace(/^["']|["']$/g, '');
+  return raw && raw !== 'null' && raw !== '~' ? raw : null;
+}
+
+/**
+ * Reads the `id` and `source` frontmatter of the specification selected by
+ * `--spec` and derives the provider closing keyword (spec 00051).
+ * A missing specification, a null id, or an unsupported provider yields no
+ * keyword: shipping still proceeds.
+ */
+function resolveIssueLink(projectRoot, specSlug) {
+  const empty = { id: null, provider: null, keyword: null, present: false };
+  try {
+    if (!specSlug) return empty;
+    const dir = path.join(projectRoot, '.sdw', 'specs');
+    if (!fs.existsSync(dir)) return empty;
+    const normSlug = String(specSlug).replace(/^\d+-/, '');
+    const files = fs.readdirSync(dir).filter((f) => f === `${specSlug}.md` || f.replace(/^\d+-/, '').replace(/\.md$/, '') === normSlug);
+    for (const f of files) {
+      const content = fs.readFileSync(path.join(dir, f), 'utf8').split(/\r?\n/).slice(0, 25).join('\n');
+      const id = parseFrontmatterValue(content, 'id');
+      const provider = parseFrontmatterValue(content, 'source');
+      const formatKeyword = id ? ISSUE_CLOSING_KEYWORDS.get(provider || '') : null;
+      const keyword = formatKeyword ? formatKeyword(id) : null;
+      return { id, provider, keyword, present: Boolean(keyword) };
+    }
+  } catch (e) {}
+  return empty;
+}
+
+function stripClosingKeywordLines(text) {
+  return String(text || '')
+    .split(/\r?\n/)
+    .filter((line) => !CLOSING_KEYWORD_LINE.test(line.trim()))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/**
+ * Appends the current closing keyword to an assembled body after removing any
+ * already present closing line, so the body carries it exactly once (AC6).
+ */
+function appendClosingKeyword(body, keyword) {
+  if (!keyword) return String(body || '');
+  const kept = stripClosingKeywordLines(body);
+  return kept ? `${kept}\n\n${keyword}` : keyword;
+}
+
+// The full description needed to replace a reused pull-request body in one
+// write. The provider contract exposes no body getter, so the same read the
+// providers use for `appendBody` is issued here; a failure degrades to append.
+function readPullRequestBody(providerName, prNumber, executor) {
+  if (!/^\d+$/.test(String(prNumber || ''))) return null;
+  try {
+    if (providerName === 'github') {
+      const data = JSON.parse(executor(`gh pr view ${prNumber} --json body`) || '{}');
+      return typeof data.body === 'string' ? data.body : null;
+    }
+    if (providerName === 'ado' || providerName === 'azure-devops') {
+      const body = String(executor(`az repos pr show --id ${prNumber} --query description -o tsv`) || '');
+      return body.replace(/\r?\n$/, '');
+    }
+  } catch (e) {}
+  return null;
+}
+
 function buildPrTitle({ explicit, specSlug, specTitle, head, base, commits }) {
   if (explicit) return explicit;
   if (!commits || commits.length === 0) {
@@ -102,10 +182,12 @@ function buildPrTitle({ explicit, specSlug, specTitle, head, base, commits }) {
   return `feat(${head}): ${first}${suffix}`.slice(0, 120);
 }
 
-function buildPrBody({ explicit, specSlug, specTitle, head, base, commits, files, config }) {
+function buildPrBody({ explicit, specSlug, specTitle, head, base, commits, files, config, issueLink }) {
   if (explicit) return explicit;
+  const closingKeyword = issueLink && issueLink.present ? issueLink.keyword : null;
   if ((!commits || commits.length === 0) && (!files || files.length === 0)) {
-    return specSlug ? `Automated delivery for specification ${specSlug}.` : `Automated delivery pull request.`;
+    const fallback = specSlug ? `Automated delivery for specification ${specSlug}.` : `Automated delivery pull request.`;
+    return appendClosingKeyword(fallback, closingKeyword);
   }
   const lines = [];
   lines.push('## Summary');
@@ -113,6 +195,7 @@ function buildPrBody({ explicit, specSlug, specTitle, head, base, commits, files
   if (specSlug) lines.push(`- Spec: \`${specSlug}\`${specTitle ? ` — ${specTitle}` : ''}`);
   lines.push(`- Commits: ${commits.length}`);
   lines.push(`- Files changed: ${files.length}`);
+  if (closingKeyword) lines.push('', closingKeyword);
   lines.push('');
   if (commits.length > 0) {
     lines.push('## Commits');
@@ -809,12 +892,13 @@ async function runShipPr(options = {}, customExecutor = null) {
   assertSafeRef(head, 'head');
   assertSafeRef(base, 'base');
   const specTitle = getSpecTitle(projectRoot, specSlug);
+  const issueLink = resolveIssueLink(projectRoot, specSlug);
   const branchCommits = listBranchCommits(executor, base, head);
   const branchFiles = listBranchFiles(executor, base, head);
   const title = buildPrTitle({ explicit: options.title, specSlug, specTitle, head, base, commits: branchCommits });
   const body = buildPrBody({
     explicit: options.body, specSlug, specTitle, head, base,
-    commits: branchCommits, files: branchFiles, config
+    commits: branchCommits, files: branchFiles, config, issueLink
   });
 
   const pushDelivery = options.push || Boolean(config.pushDelivery);
@@ -828,6 +912,8 @@ async function runShipPr(options = {}, customExecutor = null) {
     head,
     base,
     scmProvider: scmProviderName,
+    // AC8: the resolved linkage is observable on success and failure runs.
+    issueLink,
     pushed: false,
     prePrPassed: false,
     prePrBoard: [],
@@ -860,6 +946,13 @@ async function runShipPr(options = {}, customExecutor = null) {
 
   const log = options.json ? console.error : console.log;
   const warn = options.json ? console.error : console.warn;
+
+  // AC7: dry-run prints the assembled body, closing keyword included, and the
+  // simulated PR path issues no create or edit command.
+  if (dryRun) {
+    log('[sdw-ship-pr] (dry-run) Assembled pull request body:');
+    log(body);
+  }
 
   try {
     // Step 1: Pre-PR Verification Gates
@@ -1173,7 +1266,24 @@ async function runShipPr(options = {}, customExecutor = null) {
           `- Files changed: ${branchFiles.length}`,
           latestList ? `#### Latest commits\n${latestList}` : null
         ].filter(Boolean).join('\n');
-        const newBodyContent = options.body || amendmentNote || body;
+        const amendment = options.body || amendmentNote || body;
+        const closingKeyword = issueLink.present ? issueLink.keyword : null;
+        let newBodyContent = amendment;
+        let appendBody = true;
+        if (closingKeyword) {
+          // AC6: the body carries the closing keyword exactly once. Read the
+          // reused body, drop any previous closing line, and rewrite in one write.
+          const existingBody = readPullRequestBody(scmProviderName, prResult.number, executor);
+          if (existingBody !== null) {
+            const combined = [existingBody, amendment].filter((part) => String(part || '').trim()).join('\n\n---\n\n');
+            newBodyContent = appendClosingKeyword(combined, closingKeyword);
+            appendBody = false;
+          } else {
+            // The existing body could not be read; append the amendment with the
+            // keyword rather than overwrite content this run did not see.
+            newBodyContent = appendClosingKeyword(amendment, closingKeyword);
+          }
+        }
         if (newBodyContent || (!options.title && title)) {
           try {
             log(`[sdw-ship-pr] Notice: Amending an active pull request while review/approval is pending is not a recommended practice, but adapting as a non-blocking operation: complementing PR #${prResult.number} description with amending delivery...`);
@@ -1181,7 +1291,7 @@ async function runShipPr(options = {}, customExecutor = null) {
               prNumber: prResult.number,
               title: options.title ? undefined : title,
               body: newBodyContent,
-              appendBody: true,
+              appendBody,
               dryRun
             });
             log(`[sdw-ship-pr] Successfully updated PR description for PR #${prResult.number}.`);
@@ -1956,6 +2066,8 @@ if (require.main === module) {
     .catch(err => {
       console.error(`\n[sdw-ship-pr] Error: ${err.message}`);
       if (options.json) {
+        // AC8: the failure report keeps the resolved `issueLink`; only failures
+        // raised before a report exists fall back to the bare error payload.
         const failureReport = err.report && typeof err.report === 'object'
           ? { ...err.report, success: false, error: err.message }
           : { success: false, error: err.message };
@@ -1979,6 +2091,9 @@ module.exports = {
   listBranchCommits,
   listBranchFiles,
   getSpecTitle,
+  resolveIssueLink,
+  stripClosingKeywordLines,
+  appendClosingKeyword,
   buildPrTitle,
   buildPrBody,
   buildDefaultFixerCommand,
