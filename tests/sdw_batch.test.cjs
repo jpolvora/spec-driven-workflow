@@ -26,13 +26,34 @@ function writeSpec(root, name, slug) {
 function writeState(root, runId, status, extra = {}) {
   const stateDir = path.join(root, '.sdw', 'state');
   fs.mkdirSync(stateDir, { recursive: true });
+  const pullRequest = extra.pullRequest || null;
+  const shipStatus = extra.shipStatus || null;
   fs.writeFileSync(path.join(stateDir, `${runId}.state.json`), JSON.stringify({
     runId,
     status,
     specSlug: 'fixture',
     deliveryCommit: extra.deliveryCommit || null,
-    branch: extra.branch || 'develop'
+    branch: extra.branch || 'develop',
+    pullRequest,
+    shipStatus,
+    // Step 8 output is the delivery record sdw-orch writes for the item.
+    steps: {
+      8: { name: 'pr_preparation', status: 'completed', output: { pullRequest, shipStatus } }
+    }
   }, null, 2), 'utf8');
+}
+
+function writeConfig(root, config) {
+  fs.mkdirSync(path.join(root, '.sdw'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.sdw', 'config.json'), `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+}
+
+function writeDeliveredState(root, runId, prNumber) {
+  writeState(root, runId, 'completed', {
+    deliveryCommit: `commit-${prNumber}`,
+    pullRequest: { number: prNumber, url: `https://example.test/pull/${prNumber}` },
+    shipStatus: 'delivered'
+  });
 }
 
 function setup() {
@@ -608,4 +629,242 @@ test('cli: run parses a specification list and batch options', () => {
   assert.equal(options.noSync, true);
   assert.equal(options.batchId, 'batch-x');
   assert.equal(cli.parseArgs(['resume', 'batch-x']).batchId, 'batch-x');
+});
+
+// Spec 00053 AC1-AC7: the queue merges each delivered pull request before it
+// advances, records the outcome per item, and never re-merges on resume.
+
+test('AC1: batch.autoMerge resolves to true when absent and honours an explicit false', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-batch-merge-config-'));
+  try {
+    assert.equal(queue.loadConfig(root).autoMerge, true, 'an absent batch.autoMerge resolves to true');
+    writeConfig(root, { batch: { autoMerge: false } });
+    assert.equal(queue.loadConfig(root).autoMerge, false, 'the configured false is preserved');
+    writeConfig(root, { batch: { autoMerge: true } });
+    assert.equal(queue.loadConfig(root).autoMerge, true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC2 & AC5: a delivered pull request is merged before the next item is delegated and recorded on the manifest', () => {
+  const { root, specs } = setup();
+  try {
+    writeConfig(root, { scmProvider: 'github', batch: { autoMerge: true } });
+    const events = [];
+    const { result } = captureLogs(() => queue.runBatch(specs, {
+      root,
+      noSync: true,
+      _invoke: ({ runId, specPath }) => {
+        const name = path.basename(specPath);
+        events.push(`delegate:${name}`);
+        writeDeliveredState(root, runId, name.includes('alpha') ? '11' : '12');
+        return 0;
+      },
+      _mergePr: ({ prNumber, command, provider }) => {
+        events.push(`merge:${prNumber}`);
+        assert.equal(provider, 'github', 'the configured SCM provider is used');
+        assert.match(command, /^gh pr merge \d+ --merge$/, 'the ship-pr merge command is reused');
+        return { merged: true };
+      }
+    }));
+
+    assert.equal(result, 0);
+    assert.deepEqual(events, [
+      'delegate:00001-alpha.md',
+      'merge:11',
+      'delegate:00002-beta.md',
+      'merge:12'
+    ], 'each delivered pull request is merged before the queue advances');
+
+    const manifest = queue.loadManifest(queue.loadConfig(root));
+    for (const item of manifest.queue) {
+      assert.ok(item.merge, 'every completed item records its merge outcome');
+      for (const field of ['requested', 'attempted', 'ok', 'status', 'prNumber', 'at']) {
+        assert.ok(
+          Object.prototype.hasOwnProperty.call(item.merge, field),
+          `the merge record carries ${field}`
+        );
+      }
+      assert.equal(item.merge.requested, true);
+      assert.equal(item.merge.attempted, true);
+      assert.equal(item.merge.ok, true);
+      assert.equal(item.merge.status, 'merged');
+      assert.equal(typeof item.merge.at, 'string');
+    }
+    assert.equal(manifest.queue[0].merge.prNumber, '11');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC3: autoMerge false and --no-merge skip the merge with the policy reason', () => {
+  const policyOff = setup();
+  try {
+    writeConfig(policyOff.root, { scmProvider: 'github', batch: { autoMerge: false } });
+    let calls = 0;
+    const { result } = captureLogs(() => queue.runBatch(policyOff.specs, {
+      root: policyOff.root,
+      noSync: true,
+      _invoke: ({ runId }) => { writeDeliveredState(policyOff.root, runId, '7'); return 0; },
+      _mergePr: () => { calls += 1; }
+    }));
+
+    assert.equal(result, 0);
+    assert.equal(calls, 0, 'a false policy never calls the provider');
+    const manifest = queue.loadManifest(queue.loadConfig(policyOff.root));
+    for (const item of manifest.queue) {
+      assert.equal(item.merge.status, 'skipped');
+      assert.equal(item.merge.requested, false);
+      assert.equal(item.merge.attempted, false);
+      assert.equal(item.merge.ok, null);
+      assert.match(item.merge.reason, /batch\.autoMerge is false/);
+    }
+  } finally {
+    fs.rmSync(policyOff.root, { recursive: true, force: true });
+  }
+
+  const flagOff = setup();
+  try {
+    writeConfig(flagOff.root, { scmProvider: 'github', batch: { autoMerge: true } });
+    let calls = 0;
+    const { result } = captureLogs(() => queue.runBatch(flagOff.specs, {
+      root: flagOff.root,
+      noSync: true,
+      noMerge: true,
+      _invoke: ({ runId }) => { writeDeliveredState(flagOff.root, runId, '8'); return 0; },
+      _mergePr: () => { calls += 1; }
+    }));
+
+    assert.equal(result, 0);
+    assert.equal(calls, 0, '--no-merge overrides a true policy');
+    const manifest = queue.loadManifest(queue.loadConfig(flagOff.root));
+    assert.equal(manifest.queue[0].merge.status, 'skipped');
+    assert.match(manifest.queue[0].merge.reason, /--no-merge/);
+  } finally {
+    fs.rmSync(flagOff.root, { recursive: true, force: true });
+  }
+});
+
+test('AC4: a failed merge is recorded and the queue advances with the item still completed', () => {
+  const { root, specs } = setup();
+  try {
+    writeConfig(root, { scmProvider: 'github', batch: { autoMerge: true } });
+    const attempts = [];
+    const { result, logs } = captureLogs(() => queue.runBatch(specs, {
+      root,
+      noSync: true,
+      _invoke: ({ runId, specPath }) => {
+        writeDeliveredState(root, runId, path.basename(specPath).includes('alpha') ? '21' : '22');
+        return 0;
+      },
+      _mergePr: ({ prNumber }) => {
+        attempts.push(prNumber);
+        throw new Error('branch protection blocks the merge');
+      }
+    }));
+
+    assert.equal(result, 0, 'the batch exit code reflects the delegated runs, never the merge');
+    assert.deepEqual(attempts, ['21', '22'], 'a failed merge never stops the next item');
+    const manifest = queue.loadManifest(queue.loadConfig(root));
+    assert.deepEqual(manifest.queue.map(item => item.status), ['completed', 'completed']);
+    assert.equal(manifest.status, 'completed');
+
+    const first = manifest.queue[0].merge;
+    assert.equal(first.status, 'failed');
+    assert.equal(first.ok, false);
+    assert.equal(first.attempted, true);
+    assert.match(first.reason, /branch protection/);
+    assert.ok(logs.join('\n').includes('Merge failed'), 'the operator sees the merge failure');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC6: resume never merges an item whose manifest already records an attempted merge', () => {
+  const { root, specs } = setup();
+  try {
+    writeConfig(root, { scmProvider: 'github', batch: { autoMerge: true } });
+    let mergeCalls = 0;
+
+    const { result: paused } = captureLogs(() => queue.runBatch(specs, {
+      root,
+      noSync: true,
+      _invoke: ({ runId, specPath }) => {
+        if (path.basename(specPath).includes('alpha')) {
+          writeDeliveredState(root, runId, '31');
+          return 0;
+        }
+        writeState(root, runId, 'paused');
+        return 4;
+      },
+      _mergePr: () => { mergeCalls += 1; return { merged: true }; }
+    }));
+
+    assert.equal(paused, 4);
+    assert.equal(mergeCalls, 1);
+    let manifest = queue.loadManifest(queue.loadConfig(root));
+    const firstMergeAt = manifest.queue[0].merge.at;
+    assert.equal(manifest.queue[0].merge.status, 'merged');
+
+    const { result: resumed } = captureLogs(() => queue.resumeBatch(manifest.batchId, {
+      root,
+      noSync: true,
+      _invoke: ({ runId }) => { writeDeliveredState(root, runId, '32'); return 0; },
+      _mergePr: () => { mergeCalls += 1; return { merged: true }; }
+    }));
+
+    assert.equal(resumed, 0);
+    assert.equal(mergeCalls, 2, 'only the item that had not merged yet is merged');
+
+    manifest = queue.loadManifest(queue.loadConfig(root), manifest.batchId);
+    assert.equal(manifest.queue[0].merge.at, firstMergeAt, 'the recorded merge is never reissued');
+
+    // Even a reconciled item that re-enters the completed branch keeps its
+    // recorded attempt: the guard is on the attempt, not on the item status.
+    manifest.queue[0].status = 'awaiting_implementation';
+    manifest.status = 'in_progress';
+    manifest.currentIndex = 0;
+    queue.saveManifest(queue.loadConfig(root), manifest);
+
+    const { result: reconciled } = captureLogs(() => queue.resumeBatch(manifest.batchId, {
+      root,
+      noSync: true,
+      _invoke: () => { throw new Error('a completed run must not be delegated'); },
+      _mergePr: () => { mergeCalls += 1; return { merged: true }; }
+    }));
+
+    assert.equal(reconciled, 0);
+    assert.equal(mergeCalls, 2, 'an attempted merge recorded on the manifest is never reissued');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC7: the summary prints each item merge outcome', () => {
+  const { root, specs } = setup();
+  try {
+    writeConfig(root, { scmProvider: 'github', batch: { autoMerge: true } });
+    const { result, logs } = captureLogs(() => queue.runBatch(specs, {
+      root,
+      noSync: true,
+      _invoke: ({ runId, specPath }) => {
+        if (path.basename(specPath).includes('alpha')) {
+          writeDeliveredState(root, runId, '41');
+        } else {
+          writeState(root, runId, 'completed', { deliveryCommit: 'no-pr' });
+        }
+        return 0;
+      },
+      _mergePr: () => ({ merged: true })
+    }));
+
+    assert.equal(result, 0);
+    const output = logs.join('\n');
+    assert.ok(output.includes('| Merge'), 'the summary carries a merge column');
+    assert.match(output, /00001-alpha.*merged #41/);
+    assert.match(output, /00002-beta.*skipped: no-pr/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

@@ -52,11 +52,18 @@ function loadConfig(targetRoot) {
     const chosen = typeof value === 'string' && value.trim() ? value.trim() : fallback;
     return path.resolve(chosen.replace(/\{projectRoot\}/g, normalizePath(root)));
   };
+  const batch = raw.batch && typeof raw.batch === 'object' && !Array.isArray(raw.batch) ? raw.batch : {};
   return {
     root,
     specsDir: expand(raw.specsDir, path.join(root, '.sdw', 'specs')),
     stateDir: expand(raw.stateDir, path.join(root, '.sdw', 'state')),
-    retro: raw.retro && typeof raw.retro === 'object' && !Array.isArray(raw.retro) ? raw.retro : {}
+    retro: raw.retro && typeof raw.retro === 'object' && !Array.isArray(raw.retro) ? raw.retro : {},
+    // Spec 00053 AC1: an unattended queue merges by default; only an explicit
+    // boolean false opts out, and an absent key resolves to true.
+    autoMerge: typeof batch.autoMerge === 'boolean' ? batch.autoMerge : true,
+    scmProvider: typeof raw.scmProvider === 'string' && raw.scmProvider.trim()
+      ? raw.scmProvider.trim().toLowerCase()
+      : 'none'
   };
 }
 
@@ -138,7 +145,8 @@ function createManifest({ specs, options, config }) {
       deliveryCommit: null,
       branch: null,
       durationMs: null,
-      error: null
+      error: null,
+      merge: null
     };
   });
   const manifest = {
@@ -464,6 +472,108 @@ function recoverFollowUps(manifest, config, options = {}, deps) {
   return recovered;
 }
 
+// Spec 00053 AC2/AC3: the queue merge reuses the SCM provider contract that
+// `sdw-ship-pr --merge` already issues: one CLI call, the provider default
+// merge method, and never a head-branch deletion.
+function mergeCommandFor(provider, prNumber) {
+  const name = String(provider || '').toLowerCase().trim();
+  if (name === 'github' || name === 'gh') return `gh pr merge ${prNumber} --merge`;
+  if (name === 'azure-devops' || name === 'azure_devops' || name === 'ado' || name === 'az') {
+    return `az repos pr update --id ${prNumber} --status completed`;
+  }
+  return null;
+}
+
+// Synchronous provider call: the queue loop is spawnSync-based, so the merge
+// returns a value or throws instead of resolving a promise.
+function runMergeCommand({ config, command }) {
+  const result = spawnSync(command, {
+    cwd: config.root,
+    shell: true,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    const detail = String(result.stderr || result.stdout || '').trim();
+    throw new Error(detail || `${command} exited with code ${result.status}`);
+  }
+  return { merged: true, command };
+}
+
+// Records one merge outcome per completed item. A policy skip or a provider
+// failure is recorded on the item and the queue keeps advancing: the item's
+// completed status is owned by the delegated run and never changes here.
+function applyMerge({ config, manifest, item, options = {} } = {}) {
+  if (!item) return undefined;
+  // AC6: a resumed queue never re-merges an item whose attempt is already on
+  // the manifest, whether that attempt succeeded or failed.
+  if (item.merge && item.merge.attempted === true) return item.merge;
+
+  const at = new Date().toISOString();
+  const noMerge = options.noMerge === true;
+  const requested = !noMerge && Boolean(config && config.autoMerge);
+  const record = (status, extra = {}) => {
+    item.merge = {
+      requested,
+      attempted: false,
+      ok: null,
+      status,
+      reason: null,
+      prNumber: null,
+      at,
+      ...extra
+    };
+    saveManifest(config, manifest);
+    return item.merge;
+  };
+
+  if (!requested) {
+    // AC3: the policy reason stays on the record so the summary explains why.
+    const reason = noMerge ? '--no-merge' : 'batch.autoMerge is false';
+    say(options, `[sdw-batch] Merge skipped for ${item.slug}: ${reason}.`);
+    return record('skipped', { reason });
+  }
+
+  const state = readRunState(config, item.runId);
+  const stepOutput = state && state.steps && state.steps[8] ? state.steps[8].output : null;
+  const pullRequest = (stepOutput && stepOutput.pullRequest) || (state && state.pullRequest) || null;
+  const shipStatus = (stepOutput && stepOutput.shipStatus) || (state && state.shipStatus) || null;
+  const prNumber = pullRequest && pullRequest.number !== undefined && pullRequest.number !== null
+    ? pullRequest.number
+    : null;
+  if (shipStatus !== 'delivered' || prNumber === null) {
+    say(options, `[sdw-batch] Merge skipped for ${item.slug}: no-pr.`);
+    return record('skipped', { reason: 'no-pr' });
+  }
+  // The provider contract only accepts numeric pull request ids; validating
+  // here keeps the CLI command free of state-derived shell input.
+  if (!/^\d+$/.test(String(prNumber))) {
+    say(options, `[sdw-batch] Merge skipped for ${item.slug}: invalid-pr-number.`);
+    return record('skipped', { reason: 'invalid-pr-number', prNumber });
+  }
+
+  const command = mergeCommandFor(config && config.scmProvider, prNumber);
+  if (!command) {
+    say(options, `[sdw-batch] Merge skipped for ${item.slug}: scmProvider "${config.scmProvider}" cannot merge.`);
+    return record('skipped', { reason: 'no scm provider' });
+  }
+
+  const mergePr = typeof options._mergePr === 'function' ? options._mergePr : runMergeCommand;
+  try {
+    mergePr({ config, item, prNumber, command, provider: config.scmProvider });
+    item.merge = { requested: true, attempted: true, ok: true, status: 'merged', reason: null, prNumber, at };
+    say(options, `[sdw-batch] Merged ${prNumber} for ${item.slug}.`);
+  } catch (err) {
+    // AC4: record the failure, keep the item completed, let the queue advance.
+    const message = err && err.message ? err.message : String(err);
+    item.merge = { requested: true, attempted: true, ok: false, status: 'failed', reason: message, prNumber, at };
+    say(options, `[sdw-batch] Merge failed for ${item.slug}: ${message}`);
+  }
+  saveManifest(config, manifest);
+  return item.merge;
+}
+
 function triggerSpecSync(config) {
   try {
     const specSync = require('../../sdw-spec/scripts/spec_sync.cjs');
@@ -500,6 +610,16 @@ function applyRunState(item, state) {
   item.deliveryCommit = state.deliveryCommit || item.deliveryCommit || null;
 }
 
+function mergeOutcomeLabel(merge) {
+  if (!merge) return '-';
+  if (merge.status === 'merged') {
+    return merge.prNumber !== null && merge.prNumber !== undefined ? `merged #${merge.prNumber}` : 'merged';
+  }
+  if (merge.status === 'failed') return 'failed';
+  if (merge.status === 'skipped') return `skipped: ${merge.reason || 'policy'}`;
+  return '-';
+}
+
 function printSummary(manifest, options = {}) {
   if (options.json) {
     process.stdout.write(`${JSON.stringify(manifest, null, 2)}\n`);
@@ -512,15 +632,15 @@ function printSummary(manifest, options = {}) {
   console.log(`Status:   ${manifest.status}`);
   console.log(`Total:    ${manifest.total} (Completed: ${count('completed')}, Skipped: ${count('already_implemented')}, Failed: ${count('failed')}, Paused: ${manifest.queue.filter(item => item.status.startsWith('awaiting_')).length})`);
   console.log('------------------------------------------------------------');
-  console.log('# | Slug                           | Status      | Duration | Delivery Commit');
-  console.log('--|--------------------------------|-------------|----------|----------------');
+  console.log('# | Slug                           | Status      | Duration | Delivery Commit | Merge');
+  console.log('--|--------------------------------|-------------|----------|-----------------|------------------');
   manifest.queue.forEach(item => {
     const index = String(item.index + 1).padEnd(2);
     const slug = String(item.slug || item.spec).padEnd(30).slice(0, 30);
     const status = String(item.status || 'unknown').padEnd(11);
     const duration = item.durationMs ? `${(item.durationMs / 1000).toFixed(1)}s`.padEnd(8) : '-       ';
     const commit = item.deliveryCommit ? String(item.deliveryCommit).slice(0, 12) : '-';
-    console.log(`${index}| ${slug} | ${status} | ${duration} | ${commit}`);
+    console.log(`${index}| ${slug} | ${status} | ${duration} | ${commit} | ${mergeOutcomeLabel(item.merge)}`);
   });
   // Follow-up outcomes stay visible: queued specs and creation failures are
   // the operator's only signal that the retrospective changed the queue.
@@ -635,6 +755,7 @@ function executeQueue(manifest, config, options) {
       item.status = 'completed';
       item.error = null;
       applyRetroFollowUp({ config, manifest, item, options, deps: options._retroDeps });
+      applyMerge({ config, manifest, item, options });
       const followUp = item.retroFollowUp || {};
       const queued = Array.isArray(followUp.queued) ? followUp.queued.length : 0;
       const failures = Array.isArray(followUp.failures) ? followUp.failures.length : 0;
