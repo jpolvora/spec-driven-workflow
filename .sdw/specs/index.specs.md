@@ -67,3 +67,4 @@ Central repository index tracking specification lifecycle states, metadata, and 
 | 00054 | 00054-sdw-orch-delivery-report-companion-file- | sdw-orch delivery report companion file and spec-conflict observations at ingestion | pending | local | 2026-10-22 | PASS | - |
 | 00055 | 00055-sdw-spec-list-by-priority | SDW Spec Priority Ranking — Declared Priority Fields and the list-by-priority Subcommand | pending | local | 2026-10-22 | PASS | - |
 | 00056 | 00056-sdw-per-role-agent-models | SDW Per-Role Agent Model Configuration | pending | local | 2026-10-22 | PASS | - |
+| 00057 | 00057-sdw-orch-delivery-report-judge-analysis | SDW Delivery Report — Judge Analysis Section | pending | local | 2026-10-22 | PASS | - |
