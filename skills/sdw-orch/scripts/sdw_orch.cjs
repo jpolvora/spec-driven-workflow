@@ -247,6 +247,20 @@ function assertSafeSlug(specSlug) {
   }
 }
 
+// True when `ancestor` is reachable from `descendant`; a missing ref is never an
+// ancestor. Used to decide whether a refreshed remote lane can seed a branch.
+function isAncestorCommit(targetRoot, ancestor, descendant) {
+  if (!ancestor || !descendant) return false;
+  try {
+    return spawnSync('git', ['merge-base', '--is-ancestor', String(ancestor), String(descendant)], {
+      cwd: targetRoot,
+      stdio: 'ignore'
+    }).status === 0;
+  } catch (e) {
+    return false;
+  }
+}
+
 function git(targetRoot, args, options = {}) {
   const result = spawnSync('git', args, { cwd: targetRoot, encoding: 'utf8', ...options });
   if (result.error) throw result.error;
@@ -529,6 +543,27 @@ function collectDeliveryFiles(targetRoot, specSlug, state) {
     } catch (e) {}
   }
   return [...files].sort();
+}
+
+// AC17/AC19: the two paths the completion transition owns. They are committed
+// together and scoped, so the merged pull request carries the flip instead of
+// leaving it as a worktree change that only a later sync propagates.
+function completedTransitionFiles(targetRoot, state) {
+  const files = [];
+  const root = path.resolve(targetRoot);
+  try {
+    const cfg = loadProjectConfig(root);
+    const specsDirAbs = cfg && cfg.specsDir ? path.resolve(cfg.specsDir) : path.join(root, '.sdw', 'specs');
+    const idxRel = normalizeRel(path.relative(root, path.join(specsDirAbs, 'index.specs.md')));
+    if (idxRel && !idxRel.includes('..') && fs.existsSync(path.join(root, idxRel))) files.push(idxRel);
+  } catch (e) {}
+  if (state && state.specPath) {
+    try {
+      const specRel = normalizeRel(path.relative(root, path.resolve(root, state.specPath)));
+      if (specRel && !specRel.includes('..') && fs.existsSync(path.join(root, specRel))) files.push(specRel);
+    } catch (e) {}
+  }
+  return [...new Set(files)].sort();
 }
 
 function runSecurityGate(targetRoot, options = {}) {
@@ -1173,6 +1208,8 @@ function cmdRun(options) {
 
   let activeBranch = currentBranch;
   let branchReused = false;
+  // AC8 (spec 00058): the lane reference the feature branch actually started from.
+  let branchStartPoint = null;
 
   // Feature branch activation before step 1 (AC6, AC8)
   // Dirty working trees are allowed: execution proceeds independently of git
@@ -1218,6 +1255,21 @@ function cmdRun(options) {
             return false;
           }
         };
+        const laneStartPoint = () => (fromWorkLane ? workBranch : currentBranch);
+        let startRef = fromWorkLane ? workBranch : null;
+        let startPoint = laneStartPoint();
+        // The refreshed remote lane may seed the branch only when it descends from
+        // the local lane: a stale lane must never drop local commits.
+        const remoteLaneDescendsFromLocal = () => {
+          try {
+            const localSha = String(git(targetRoot, ['rev-parse', '--verify', '--quiet', `refs/heads/${workBranch}`], { stdio: ['ignore', 'pipe', 'ignore'] }) || '').trim();
+            const remoteSha = String(git(targetRoot, ['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${workBranch}`], { stdio: ['ignore', 'pipe', 'ignore'] }) || '').trim();
+            if (!remoteSha) return false;
+            return localSha === remoteSha || isAncestorCommit(targetRoot, localSha, remoteSha);
+          } catch (e) {
+            return false;
+          }
+        };
         if ((fromWorkLane || workLaneCheckedOut) && branching.updateWorkBranch) {
           try {
             if (workLaneCheckedOut) {
@@ -1228,7 +1280,15 @@ function cmdRun(options) {
               } catch (mergeErr) {
                 // Product guarantee: a dirty tree never blocks activation.
                 if (!treeIsDirty()) throw mergeErr;
-                console.warn(`[Branch Activation] ${branching.strategy}: skipped the update of "${workBranch}" over dirty files; continuing from the current HEAD.`);
+                if (remoteLaneDescendsFromLocal()) {
+                  // AC8: the refreshed remote lane commit is the start point, not
+                  // the stale local lane; the start point is recorded below.
+                  startRef = `refs/remotes/origin/${workBranch}`;
+                  startPoint = `origin/${workBranch}`;
+                  console.warn(`[Branch Activation] ${branching.strategy}: "${workBranch}" could not be fast-forwarded over dirty files; starting ${targetBranch} from ${startPoint}.`);
+                } else {
+                  console.warn(`[Branch Activation] ${branching.strategy}: skipped the update of "${workBranch}" over dirty files; continuing from the current HEAD.`);
+                }
               }
             } else {
               // Update the lane ref without checking it out, so a dirty tree never blocks.
@@ -1244,7 +1304,7 @@ function cmdRun(options) {
         // AC6: Create and switch to new feature branch from the work lane.
         if (fromWorkLane) {
           const laneRef = spawnSync('git', ['rev-parse', '--verify', '--quiet', `refs/heads/${workBranch}`], { cwd: targetRoot });
-          if (laneRef.status !== 0) {
+          if (laneRef.status !== 0 && startRef === workBranch) {
             const message = `Work branch "${workBranch}" does not exist locally; cannot start the feature branch.`;
             console.error(`[Branch Activation] ${message}`);
             options._runResult = { error: message };
@@ -1252,18 +1312,19 @@ function cmdRun(options) {
           }
         }
         const createArgs = fromWorkLane
-          ? ['switch', '-c', targetBranch, workBranch]
+          ? ['switch', '-c', targetBranch, startRef || workBranch]
           : ['switch', '-c', targetBranch];
-        const announceCreation = (startPoint) => {
+        const announceCreation = (startedFrom) => {
           let startSha = '';
           try { startSha = String(git(targetRoot, ['rev-parse', '--short', 'HEAD'], { stdio: ['ignore', 'pipe', 'ignore'] }) || '').trim(); } catch (shaErr) {}
-          console.log(`[Branch Activation] ${branching.strategy}: created ${targetBranch} from ${startPoint}${startSha ? ` at ${startSha}` : ''}.`);
+          console.log(`[Branch Activation] ${branching.strategy}: created ${targetBranch} from ${startedFrom}${startSha ? ` at ${startSha}` : ''}.`);
         };
         try {
           git(targetRoot, createArgs, { stdio: 'ignore' });
           branchReused = false;
           activeBranch = targetBranch;
-          announceCreation(fromWorkLane ? workBranch : currentBranch);
+          branchStartPoint = startPoint;
+          announceCreation(startPoint);
         } catch (createErr) {
           // Product guarantee: a dirty tree never blocks activation. When the work
           // lane checkout would overwrite dirty files, start from the current branch.
@@ -1273,6 +1334,7 @@ function cmdRun(options) {
               git(targetRoot, ['switch', '-c', targetBranch], { stdio: 'ignore' });
               branchReused = false;
               activeBranch = targetBranch;
+              branchStartPoint = currentBranch;
               console.warn(`[Branch Activation] ${branching.strategy}: work lane "${workBranch}" could not be checked out over dirty files; created ${targetBranch} from ${currentBranch}.`);
               announceCreation(currentBranch);
             } catch (fallbackErr) {
@@ -1336,6 +1398,12 @@ function cmdRun(options) {
   const refineMode = Boolean(options.refineMode || state.refineMode);
   if (refineMode && !state.refineMode) {
     state.refineMode = true;
+    state = stateManager.saveRunState(targetRoot, state);
+  }
+
+  // AC8 (spec 00058): record the lane reference the feature branch started from.
+  if (branchStartPoint) {
+    state.branchStartPoint = branchStartPoint;
     state = stateManager.saveRunState(targetRoot, state);
   }
 
@@ -2086,15 +2154,9 @@ function cmdRun(options) {
     let commitSha = null;
     let deliveryCommitCreated = false;
     try {
-      // Mark spec as completed in index.specs.md prior to staging delivery commit (AC24).
-      // A second pass never rewrites the index: the spec is already completed there, and
-      // rewriting it would manufacture a diff that turns a no-change pass into a commit.
-      if (specIndex && !refineMode) {
-        try {
-          specIndex.updateSpecStatus(specSlug, 'completed', { root: targetRoot });
-        } catch (e) {}
-      }
-
+      // Spec 00058 AC17/AC18: the delivery commit never touches the registry.
+      // A run that fails after this point must leave the registry row unchanged,
+      // so the row flips only after the delivery stage in Step 8.
       if (!isGitRepo(targetRoot)) {
         console.log(`[Step 6: Delivery Commit] Non-git workspace: delivery commit skipped.`);
         commitSha = null;
@@ -2371,6 +2433,31 @@ function cmdRun(options) {
   const hasShipPr = fs.existsSync(shipPrScript);
 
   const refineSkipShip = refineMode && state.deliveryCommitCreated === false;
+
+  // Spec 00058 AC17/AC18/AC19: the registry row is the last record the delivery
+  // owns. It flips only once the delivery stage reported the delivery, or when
+  // `--skip-pr` is in effect, and the specification header follows it in the
+  // same transition. A run that failed earlier leaves both untouched.
+  const markSpecCompleted = () => {
+    if (!specIndex || refineMode || typeof specIndex.updateSpecStatus !== 'function') return;
+    try {
+      specIndex.updateSpecStatus(specSlug, 'completed', { root: targetRoot });
+    } catch (e) {
+      // AC17: this transition owns the registry truth, so a failed write is
+      // surfaced on the run instead of leaving a stale row behind silently. The
+      // delivery already shipped, so the row is repaired by `sdw-spec sync`,
+      // which reports the drift; the run records why it is stale.
+      const message = `registry transition to completed failed for "${specSlug}": ${e.message}`;
+      console.warn(`[sdw-orch] Warning: ${message}`);
+      try {
+        stateManager.recordWarning(targetRoot, state.runId, 8, message);
+        state = stateManager.loadRunState(targetRoot, state.runId) || state;
+      } catch (warnErr) {
+        console.warn(`[sdw-orch] Warning: could not record the registry transition failure: ${warnErr.message}`);
+      }
+    }
+  };
+
   if (refineSkipShip && state.steps[8].status !== 'completed' && state.steps[8].status !== 'skipped') {
     console.log('[Step 8: PR Preparation] Second pass produced no new commit; nothing to ship.');
     state = stateManager.updateStepState(targetRoot, state.runId, 8, 'skipped', { reason: 'second pass produced no code to ship' });
@@ -2612,9 +2699,33 @@ function cmdRun(options) {
         if (shipResult) {
           const hasActivePr = Boolean(shipResult.pullRequest && (shipResult.pullRequest.url || shipResult.pullRequest.number));
           if (shipResult.blocking === true) {
-            // The pull request still has failing checks or active review threads.
-            // A multi-spec queue must not advance past an unconverged delivery.
-            throw new Error(shipResult.error || 'sdw-ship-pr reported an unconverged pull request');
+            // Spec 00058 AC11: failing checks or open review threads are a pause,
+            // not a failure. The host converges the pull request and resumes the
+            // run from the delivery stage; nothing is marked failed or completed.
+            const pauseMessage = shipResult.error || 'sdw-ship-pr reported an unconverged pull request';
+            state.pullRequest = shipResult.pullRequest || state.pullRequest || null;
+            state.shipStatus = shipResult.shipStatus || 'review_pending';
+            state = stateManager.saveRunState(targetRoot, state);
+            state = stateManager.updateStepState(targetRoot, state.runId, 8, 'blocked_convergence', {
+              pullRequest: state.pullRequest,
+              shipStatus: state.shipStatus,
+              error: pauseMessage
+            });
+            state.status = 'paused';
+            state = stateManager.saveRunState(targetRoot, state);
+            const pausedPr = state.pullRequest && state.pullRequest.number !== undefined && state.pullRequest.number !== null
+              ? ` #${state.pullRequest.number}`
+              : '';
+            console.error(`[sdw-orch Step 8] Delivery paused: ${pauseMessage}`);
+            console.error(`[sdw-orch Step 8] Converge pull request${pausedPr} and resume with: node "${normalizePath(orchCommandPath())}" resume --run-id ${state.runId}`);
+            options._runResult = {
+              runId: state.runId,
+              status: 'paused',
+              shipStatus: state.shipStatus,
+              pullRequest: state.pullRequest,
+              error: pauseMessage
+            };
+            return 6;
           }
           if (shipResult.shipStatus === 'failed' || (shipResult.success === false && !hasActivePr)) {
             throw new Error(shipResult.error || 'sdw-ship-pr reported delivery failure');
@@ -2649,26 +2760,48 @@ function cmdRun(options) {
     }
 
     state = stateManager.updateStepState(targetRoot, state.runId, 8, 'completed', prPayload);
-
-    // Mark spec as completed in index.specs.md after successful delivery (AC24)
-    if (specIndex) {
-      try {
-        specIndex.updateSpecStatus(specSlug, 'completed', { root: targetRoot });
-      } catch (e) {}
-    }
   } else if (options.skipPr) {
     state = stateManager.updateStepState(targetRoot, state.runId, 8, 'skipped', { reason: 'Skipped via --skip-pr' });
-    if (specIndex) {
+  }
+
+  // AC17/AC19: one transition site, after the delivery stage reported the
+  // delivery (or --skip-pr skipped it). Idempotent, so a resumed run that
+  // already passed Step 8 converges on the same row.
+  markSpecCompleted();
+
+  // AC17/AC19 consequence: the transition writes the registry row and the
+  // specification header after the delivery stage published the branch, so the
+  // flip needs its own scoped commit to reach the pull request before the merge.
+  const transitionFiles = completedTransitionFiles(targetRoot, state);
+  if (transitionFiles.length > 0 && isGitRepo(targetRoot)) {
+    try {
+      const flip = stageAndCommitOnly(
+        targetRoot,
+        transitionFiles,
+        `chore(${specSlug}): mark the specification completed in the registry`
+      );
+      if (flip && flip.committed) {
+        state.registryCommit = flip.commitSha;
+        state = stateManager.saveRunState(targetRoot, state);
+        console.log(`[Step 8: Registry] Recorded the completion transition in ${flip.commitSha}.`);
+      }
+    } catch (flipErr) {
+      const message = `the completion transition could not be committed: ${flipErr.message}`;
+      console.warn(`[sdw-orch] Warning: ${message}`);
       try {
-        specIndex.updateSpecStatus(specSlug, 'completed', { root: targetRoot });
-      } catch (e) {}
+        stateManager.recordWarning(targetRoot, state.runId, 8, message);
+        state = stateManager.loadRunState(targetRoot, state.runId) || state;
+      } catch (warnErr) {}
     }
   }
 
   // Remote Push / Branch Publishing (--push or config.pushDelivery) fallback
   const shouldPush = options.push !== undefined ? options.push : (config && config.pushDelivery);
   const refineNothingToPush = refineMode && state.deliveryCommitCreated === false;
-  if (shouldPush && !state.pushedBranch && !refineNothingToPush) {
+  const branchPublished = Boolean(state.pushedBranch);
+  const pushForDelivery = Boolean(shouldPush) && !branchPublished;
+  const pushForTransition = Boolean(state.registryCommit) && branchPublished;
+  if ((pushForDelivery || pushForTransition) && !refineNothingToPush) {
     if (!isGitRepo(targetRoot)) {
       console.log(`[sdw-orch] Remote push skipped: not a git repository.`);
     } else {

@@ -16,6 +16,7 @@ Subcommands:
 Options:
   --root <path>           Target workspace project root
   --batch-id <id>         Explicit batch identifier
+  --new-run               Start a fresh run instead of resuming an open one
   --continue-on-error     Continue the queue when a specification fails
   --no-sync               Skip sdw-spec sync after a completed specification
   --no-merge              Skip the automatic pull request merge for this invocation
@@ -31,7 +32,8 @@ function parseArgs(argv) {
     root: null,
     json: false,
     dryRun: false,
-    noMerge: false
+    noMerge: false,
+    newRun: false
   };
   const positional = [];
   for (let i = 0; i < argv.length; i += 1) {
@@ -42,6 +44,9 @@ function parseArgs(argv) {
     // Spec 00053 AC8: run and resume share the parser, so one flag disables the
     // queue merge for either subcommand without rewriting the configuration.
     else if (arg === '--no-merge') options.noMerge = true;
+    // Spec 00058 AC13: one flag for both subcommands starts a fresh delegated
+    // run instead of resuming (or blocking on) an open one.
+    else if (arg === '--new-run') options.newRun = true;
     else if (arg === '--dry-run') options.dryRun = true;
     else if (arg === '--root') options.root = argv[++i];
     else if (arg.startsWith('--root=')) options.root = arg.slice(7);

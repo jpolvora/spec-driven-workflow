@@ -3,7 +3,7 @@ id: null
 slug: 00054-sdw-orch-delivery-report-companion-file-
 title: "sdw-orch delivery report companion file and spec-conflict observations at ingestion"
 source: local
-status: draft
+status: implemented
 specDate: 2026-10-22
 ---
 

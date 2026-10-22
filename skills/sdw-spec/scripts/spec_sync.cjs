@@ -2,7 +2,18 @@
 
 const fs = require('fs');
 const path = require('path');
-const { resolvePaths, readIndex, writeIndex, scanSpecsDir } = require('./spec_index.cjs');
+const {
+  resolvePaths,
+  readIndex,
+  writeIndex,
+  scanSpecsDir,
+  isSpecificationFile,
+  specFileForSlug,
+  readHeaderStatus,
+  writeHeaderStatus,
+  headerStatusAgrees,
+  expectedHeaderStatus
+} = require('./spec_index.cjs');
 const { validateFile } = require('./validate_spec.cjs');
 
 function loadRunStates(stateDir) {
@@ -37,7 +48,7 @@ function loadRunStates(stateDir) {
 }
 
 function syncIndex(options = {}) {
-  const { indexPath, specsDir, stateDir } = resolvePaths(options.root);
+  const { root, indexPath, specsDir, stateDir } = resolvePaths(options.root);
   const dryRun = Boolean(options.dryRun || options['dry-run']);
 
   let existingData = readIndex(options);
@@ -179,7 +190,46 @@ function syncIndex(options = {}) {
     }
   }
 
-  // 3. Persist changes unless --dry-run is specified (AC21)
+  // 3. Reconcile every specification header with its registry row (spec 00058
+  // AC20/AC21). The registry owns lifecycle status, so a row recording a
+  // delivery is authoritative: the header must say `implemented`. Every
+  // disagreement is reported with the file, the registry value, and the header
+  // value; one with a canonical header is repaired in the same pass, and one
+  // without (a `pending` row that cannot say which authored status applies) is
+  // reported as unresolved. `--dry-run` reports without writing.
+  const headerDrift = [];
+  for (const entry of entries) {
+    if (!isSpecificationFile(`${entry.slug}.md`)) continue;
+    const specFile = specFileForSlug(specsDir, entry.slug);
+    if (!specFile) continue;
+    const headerStatus = readHeaderStatus(fs.readFileSync(specFile, 'utf8'));
+    if (headerStatusAgrees(entry.status, headerStatus)) continue;
+    const drift = {
+      slug: entry.slug,
+      file: path.relative(root, specFile).replace(/\\/g, '/'),
+      registryStatus: entry.status,
+      headerStatus,
+      expectedHeaderStatus: expectedHeaderStatus(entry.status),
+      repaired: false
+    };
+    if (!dryRun && drift.expectedHeaderStatus) {
+      drift.repaired = writeHeaderStatus(specFile, drift.expectedHeaderStatus) !== null;
+      if (drift.repaired) {
+        transitions.push({
+          slug: entry.slug,
+          field: 'headerStatus',
+          from: headerStatus,
+          to: drift.expectedHeaderStatus,
+          file: drift.file,
+          registryStatus: entry.status,
+          reason: 'Specification header status reconciled from the registry'
+        });
+      }
+    }
+    headerDrift.push(drift);
+  }
+
+  // 4. Persist changes unless --dry-run is specified (AC21)
   if (!dryRun) {
     writeIndex(entries, options);
   }
@@ -189,6 +239,9 @@ function syncIndex(options = {}) {
     totalEntries: entries.length,
     transitionsCount: transitions.length,
     transitions,
+    headerDrift,
+    headerDriftCount: headerDrift.length,
+    unresolvedHeaderDrift: headerDrift.filter((drift) => !drift.repaired && !drift.expectedHeaderStatus),
     entries
   };
 }

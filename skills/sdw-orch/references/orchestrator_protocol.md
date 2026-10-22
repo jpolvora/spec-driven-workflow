@@ -71,11 +71,11 @@ Each execution session is completely isolated within a dedicated JSON state file
 5. **Conformance Scoring:** An LLM judge fences the criteria plus the generated diff, emits a 0-10 score with per-criterion verdicts. If the score is below threshold (default 8/10), feedback triggers the re-implementation loop.
 6. **Delivery Commit:** Creates an atomic, structured git commit for verified code. It remains the delivery commit after the per-task checkpoints and aggregates whatever they did not already commit.
 7. **Fresh-Subagent Code Review via sdw-code-review:** MUST spawn one context-fresh reviewer subagent session for `sdw-code-review`; MUST NOT produce a Step 7 verdict by running the review CLI in the orchestrator session. The brief carries only target root, base reference, report path, and scope fence, never the implementation transcript. The fresh session inspects the generated JSON report (`passed`, `errorCount`, `warningCount`, `suggestionCount`, `findings`) to advance to Step 8, iterate surgical fixes (up to 3 attempts with security gate and scoped fix commits), or pause on residual blocking findings. `sdw-code-review` is the sole review authority.
-8. **PR Preparation, Delivery & Code Review Convergence:** Assembles pull request metadata, marks the spec completed, pushes the active branch to remote origin (when `--push` or `pushDelivery` enabled), opens or reuses the pull request via the SCM provider contract, and executes the post-delivery review convergence loop (monitoring CI checks and automated code reviews to fix comments until green).
+8. **PR Preparation, Delivery & Code Review Convergence:** Assembles pull request metadata, pushes the active branch to remote origin (when `--push` or `pushDelivery` enabled), opens or reuses the pull request via the SCM provider contract, and executes the post-delivery review convergence loop (monitoring CI checks and automated code reviews to fix comments until green). Only after the delivery stage reports the delivery, or when `--skip-pr` is in effect, does it mark the specification `completed` in the registry and set its header status to `implemented` in the same transition; a run that fails earlier leaves both unchanged. An unconverged delivery pauses with exit code `6` instead of failing.
 
 ## 3. Batch Execution Lives in sdw-batch
 
-`sdw-orch` executes exactly one specification per run. Specification queues are owned by [`sdw-batch`](../../sdw-batch/SKILL.md), which creates `.sdw/state/batch-{batchId}.json`, invokes `sdw-orch run <spec>` for each item, waits for the exit code, and advances. Manifest schema, pause/resume continuity, and failure policy: [`sdw-batch/references/batch_protocol.md`](../../sdw-batch/references/batch_protocol.md).
+`sdw-orch` executes exactly one specification per run. Specification queues are owned by [`sdw-batch`](../../sdw-batch/SKILL.md), which creates `.sdw/state/batch-{batchId}.json`, invokes `sdw-orch run <spec>` for each item, waits for the exit code, and advances. The queue advances on delivery evidence, never on a status string: the registry decides only whether a specification still needs implementation, the base proof is a git question, and the merge is a provider question. Manifest schema, pause/resume continuity, the delivery-evidence rule, the stale-run rule, and failure policy: [`sdw-batch/references/batch_protocol.md`](../../sdw-batch/references/batch_protocol.md).
 
 ## 4. Branch & Worktree Strategy Protocol
 
@@ -85,6 +85,7 @@ Configurable feature branch activation and per-task isolated git worktrees:
 - **Activation:** No working-tree cleanliness gate. Execution proceeds independently of git state; dirty trees never block, refuse, or halt a run.
 - **Naming:** `branching.featurePrefix` + `specSlug` (default `feature/<specSlug>`).
 - **Start Lane:** From `branching.workBranch` when it is a non-empty branch distinct from `branching.integrationBranch`; a null work lane, or one equal to the integration lane, starts from the checked-out branch (trunk behavior). With `branching.updateWorkBranch`, the work lane is fetched and fast-forwarded first.
+- **Start Point:** When the checked-out work lane cannot be fast-forwarded over a dirty work tree, the branch starts from the refreshed remote lane commit (`refs/remotes/origin/<workBranch>`) instead of the stale local lane, and the start point used is recorded. A local lane that cannot reach the refreshed commit never seeds the branch.
 - **Switch/Reuse:** If the feature branch already exists, switches to it and marks `branchReused: true`. Otherwise, creates and switches to it from the start lane. Resuming on the feature branch reuses it in place without checkout, fetch, or fast-forward.
 - **Metadata:** Records `branch`, `baseBranch`, `branchReused`, and `branching` (strategy, source, prefix, feature branch, lanes, flags) in state. The Step 8 PR payload includes `head: branch` and `base` resolved by `sdw-ship-pr` from `branching.integrationBranch` (falling back to the detected base branch).
 - **Configuration:** Presets (`trunk`, `github`, `develop`, `gitflow`, `gitlab`) and explicit overrides are documented in [`sdw-config/references/config_spec.md`](../../sdw-config/references/config_spec.md).
@@ -206,9 +207,16 @@ Prohibitions carried by every prompt: no `git commit`/`push`/`branch`/`checkout`
 
 ### Delivery Commit Guard (Step 6)
 - Delivery commit is refused if Step 4 is not `completed`, any DAG task is unaccepted, or any verification gate is not `passed`.
+- **Registry untouched:** Step 6 never writes `index.specs.md` or the specification header. The registry transition belongs to Step 8, so a run that fails at Step 6 or 7 leaves the row unchanged (or `pending` where Step 1 normalized it).
 - **Scoped commits only:** never run `git add -A`. Stage exactly the tracked spec files: accepted evidence `filesChanged` plus `index.specs.md`. Unrelated worktree changes are left uncommitted.
-- Per-task checkpoint commits already cover accepted `filesChanged`, so Step 6 commits only what remains (for example a registry update) and records the current `HEAD` when nothing is left; the delivery state stays authoritative.
+- Per-task checkpoint commits already cover accepted `filesChanged`, so Step 6 commits only what remains and records the current `HEAD` when nothing is left; the delivery state stays authoritative.
 - Fixer, pre-PR, and review-fix commits stage only their own delta (`diffSinceSnapshot`) or fixer-touched files, never the whole tree.
+
+### Delivery Pause & Registry Transition (Step 8)
+- **Convergence pause:** failing checks or open review threads are a pause, not a failure. `sdw-ship-pr` reports `blocking: true`, Step 8 is recorded `blocked_convergence`, the run status is `paused`, and the command exits `6` with the pull request recorded. The host converges the pull request and resumes; the same run re-enters the delivery stage.
+- **Transition order:** Step 6 creates the delivery commit without touching the registry; Step 8 marks the specification `completed` only after the delivery stage reports the delivery, or when `--skip-pr` is in effect. The header status is set to `implemented` in the same transition.
+- **Failure before delivery:** the run leaves the registry row unchanged (or `pending` where Step 1 normalized it) and the header unchanged.
+- **Stale-run rule for batch:** a delegated run echoes its `baseCommit`; a queue resuming an open run whose base commit is not an ancestor of the refreshed work lane must supersede it with `--new-run` instead of resuming it.
 
 ## 7. PR Delivery & Review Convergence Delegation (Step 8)
 
@@ -228,7 +236,7 @@ Step 8 delegates all final PR verification gates, remote publishing, SCM submiss
 - **Orchestrator Lifecycle Finalization:**
   - Consumes structured JSON report from `sdw-ship-pr`.
   - Records delivery outcome (`pullRequest`, `shipStatus`, `pushedBranch`, `reviewConvergence`, `branchingSync`) into `.sdw/state/{runId}.state.json`.
-  - Transitions specification status to `completed` in `.sdw/specs/index.specs.md`.
+  - Transitions specification status to `completed` in `.sdw/specs/index.specs.md` after the delivery stage reports the delivery (or `--skip-pr`), and sets the specification header status to `implemented` in the same transition.
 
 ## 8. Delegated Code Review via sdw-code-review (Step 7)
 

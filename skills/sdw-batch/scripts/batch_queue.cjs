@@ -8,11 +8,13 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-// Batch delegation is unattended and never passes --abort-on-gaps, so the only
-// pause codes sdw-orch can return here are dispatch (4) and judgment (5).
+// Batch delegation is unattended and never passes --abort-on-gaps, so the pause
+// codes sdw-orch can return here are dispatch (4), judgment (5), and delivery
+// convergence (6). Every other non-zero code is a failure.
 const PAUSE_STATUS = {
   4: 'awaiting_implementation',
-  5: 'awaiting_judgment'
+  5: 'awaiting_judgment',
+  6: 'awaiting_convergence'
 };
 
 // Spec 00046: a completed run records its retrospective candidates in
@@ -203,6 +205,199 @@ function readRunState(config, runId) {
   } catch (e) {
     return null;
   }
+}
+
+// Spec 00058 AC14: an open run left by an earlier invocation still owns the
+// specification. The queue resumes it when it is still valid and names it when
+// it is not, instead of delegating into the orchestrator's own block.
+function openRunsForSpec(config, slug) {
+  if (!slug) return [];
+  let names = [];
+  try {
+    names = fs.readdirSync(runStateDir(config));
+  } catch (e) {
+    return [];
+  }
+  const runs = [];
+  for (const name of names) {
+    if (!name.endsWith('.state.json')) continue;
+    const file = path.join(config.stateDir, name);
+    let state;
+    try {
+      state = JSON.parse(fs.readFileSync(file, 'utf8'));
+    } catch (e) {
+      continue;
+    }
+    if (!state || state.specSlug !== slug) continue;
+    if (state.status !== 'paused' && state.status !== 'in_progress') continue;
+    runs.push({ state, mtimeMs: fs.statSync(file).mtimeMs });
+  }
+  // Newest first: the most recent invocation owns the specification.
+  return runs.sort((a, b) => b.mtimeMs - a.mtimeMs).map(entry => entry.state);
+}
+
+function resolveOpenRun({ config, item } = {}) {
+  if (!item) return null;
+  const own = readRunState(config, item.runId);
+  if (own && (own.status === 'paused' || own.status === 'in_progress')) return own;
+  const candidates = openRunsForSpec(config, item.slug);
+  return candidates.length > 0 ? candidates[0] : null;
+}
+
+// AC14: a run is stale when its recorded base commit is not an ancestor of the
+// refreshed work lane commit the next branch starts from. Both commits are
+// recorded on the classification, which the summary prints verbatim.
+function classifyStaleRun({ config, item, state } = {}) {
+  if (!state) return null;
+  const laneCommit = item && item.preflight ? item.preflight.baseCommit : null;
+  const runBaseCommit = state.baseCommit || null;
+  if (!laneCommit || !runBaseCommit) return null;
+  if (baseContains(config, runBaseCommit, laneCommit)) return null;
+  return {
+    classification: 'stale',
+    runId: state.runId,
+    baseCommit: runBaseCommit,
+    laneCommit,
+    classifiedAt: new Date().toISOString()
+  };
+}
+
+// AC3: delivery evidence is read from recorded values only. The item's own run
+// comes first; then the most recent completed run for the specification that
+// carries a delivery commit. Nothing is inferred from a title.
+function mostRecentDeliveryRun(config, slug) {
+  if (!slug) return null;
+  const dir = runStateDir(config);
+  let best = null;
+  for (const name of fs.readdirSync(dir)) {
+    if (!name.endsWith('.state.json')) continue;
+    const file = path.join(dir, name);
+    let state;
+    try {
+      state = JSON.parse(fs.readFileSync(file, 'utf8'));
+    } catch (e) {
+      continue;
+    }
+    if (!state || state.status !== 'completed' || state.specSlug !== slug || !state.deliveryCommit) continue;
+    const parsed = Date.parse(state.updatedAt || state.completedAt || '');
+    const when = Number.isFinite(parsed) ? parsed : fs.statSync(file).mtimeMs;
+    if (!best || when >= best.when) best = { state, when };
+  }
+  return best ? best.state : null;
+}
+
+function hasPullRequestNumber(pullRequest) {
+  return Boolean(pullRequest)
+    && pullRequest.number !== undefined
+    && pullRequest.number !== null;
+}
+
+function stepOutputPullRequest(state) {
+  const output = state && state.steps && state.steps[8] ? state.steps[8].output : null;
+  return output && output.pullRequest ? output.pullRequest : null;
+}
+
+// AC3: adopt the run id, delivery commit, branch, and pull request recorded for
+// the specification onto the queue item before its merge stage runs.
+function adoptDeliveryEvidence({ config, item } = {}) {
+  if (!item) return null;
+  const state = readRunState(config, item.runId) || mostRecentDeliveryRun(config, item.slug);
+  if (!state) return null;
+  applyRunState(item, state);
+  const pullRequest = stepOutputPullRequest(state) || (state.pullRequest || null);
+  if (hasPullRequestNumber(pullRequest)) item.pullRequest = pullRequest;
+  return state;
+}
+
+const SAFE_BRANCH = /^[A-Za-z0-9._/-]+$/;
+
+function providerKind(config) {
+  const name = String((config && config.scmProvider) || '').toLowerCase().trim();
+  if (name === 'github' || name === 'gh') return 'github';
+  if (name === 'azure-devops' || name === 'azure_devops' || name === 'ado' || name === 'az') return 'ado';
+  return null;
+}
+
+function runProviderCommand(config, command) {
+  const result = spawnSync(command, {
+    cwd: config.root,
+    shell: true,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+  if (result.error || result.status !== 0) return null;
+  const text = String(result.stdout || '').trim();
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    return null;
+  }
+}
+
+// AC9: the provider resolves a pull request from the head branch recorded on the
+// item or its run state. A value that is not branch-shaped is never queried.
+function providerPullRequest({ config, head, options = {} } = {}) {
+  const kind = providerKind(config);
+  if (!kind || typeof head !== 'string' || !SAFE_BRANCH.test(head) || head.includes('..')) return null;
+  if (typeof options._findPr === 'function') {
+    const found = options._findPr({ head, provider: kind, config });
+    return hasPullRequestNumber(found) ? found : null;
+  }
+  const command = kind === 'github'
+    ? `gh pr list --head ${head} --state all --json number,url,state --limit 1`
+    : `az repos pr list --source-branch ${head} --status all --output json`;
+  const parsed = runProviderCommand(config, command);
+  const entry = Array.isArray(parsed) ? parsed[0] : parsed;
+  if (!entry || typeof entry !== 'object') return null;
+  const number = entry.number !== undefined ? entry.number : entry.pullRequestId;
+  if (number === undefined || number === null) return null;
+  return {
+    number,
+    url: entry.url || entry.webUrl || null,
+    state: String(entry.state || entry.status || '').toLowerCase() || null
+  };
+}
+
+// AC10: the provider's merged state proves a delivery even when the delegated
+// run stopped at `review_pending`. Unknown (null) never counts as merged.
+function providerMerged({ config, prNumber, options = {} } = {}) {
+  const kind = providerKind(config);
+  if (!kind || !/^\d+$/.test(String(prNumber))) return null;
+  if (typeof options._isPrMerged === 'function') {
+    const value = options._isPrMerged({ prNumber, provider: kind, config });
+    return value === true ? true : (value === false ? false : null);
+  }
+  const command = kind === 'github'
+    ? `gh pr view ${prNumber} --json state,merged`
+    : `az repos pr show --id ${prNumber} --output json`;
+  const parsed = runProviderCommand(config, command);
+  if (!parsed || typeof parsed !== 'object') return null;
+  if (kind === 'github') {
+    if (typeof parsed.merged === 'boolean') return parsed.merged;
+    return String(parsed.state || '').toLowerCase() === 'merged';
+  }
+  return String(parsed.status || '').toLowerCase() === 'completed';
+}
+
+// AC9 resolution order: the delegated run's step 8 output, then the run state,
+// then the SCM provider by the recorded head branch.
+function resolvePullRequest({ config, item, state, options = {} } = {}) {
+  const stepOutput = state && state.steps && state.steps[8] ? state.steps[8].output : null;
+  const fromStep = stepOutput && stepOutput.pullRequest ? stepOutput.pullRequest : null;
+  const fromState = state && state.pullRequest ? state.pullRequest : null;
+  const shipStatus = (stepOutput && stepOutput.shipStatus) || (state && state.shipStatus) || null;
+  if (hasPullRequestNumber(fromStep)) return { pullRequest: fromStep, shipStatus, source: 'step-8' };
+  if (hasPullRequestNumber(fromState)) return { pullRequest: fromState, shipStatus, source: 'run-state' };
+  const head = (state && state.branch) || (item && item.branch) || null;
+  const fromProvider = providerPullRequest({ config, head, options });
+  return { pullRequest: fromProvider, shipStatus, source: fromProvider ? 'provider' : null };
+}
+
+function pullRequestNumber(resolved) {
+  return resolved && hasPullRequestNumber(resolved.pullRequest)
+    ? resolved.pullRequest.number
+    : null;
 }
 
 function retroFollowUpPolicy(config) {
@@ -504,28 +699,15 @@ function runMergeCommand({ config, command }) {
   return { merged: true, command };
 }
 
-// The delegated run's step 8 output is the delivery record; the queue never
-// derives a pull request from anywhere else.
-function deliveredPullRequest(config, item) {
-  const state = readRunState(config, item && item.runId);
-  const stepOutput = state && state.steps && state.steps[8] ? state.steps[8].output : null;
-  const pullRequest = (stepOutput && stepOutput.pullRequest) || (state && state.pullRequest) || null;
-  const shipStatus = (stepOutput && stepOutput.shipStatus) || (state && state.shipStatus) || null;
-  const prNumber = pullRequest && pullRequest.number !== undefined && pullRequest.number !== null
-    ? pullRequest.number
-    : null;
-  return { shipStatus, prNumber };
-}
-
 // Effective merge policy for one invocation: the configured default, with
-// `--no-merge` (AC3/AC8) overriding it for run and resume alike.
+// `--no-merge` (AC3/AC8 of spec 00053) overriding it for run and resume alike.
 function mergeEnabled(config, options = {}) {
   return options.noMerge !== true && Boolean(config && config.autoMerge);
 }
 
-// Records one merge outcome per completed item. A policy skip or a provider
-// failure is recorded on the item and the queue keeps advancing: the item's
-// completed status is owned by the delegated run and never changes here.
+// Records one merge outcome per queue item. A policy skip or a provider failure
+// is recorded on the item and the queue keeps advancing: the item's delivery
+// status is owned by the delegated run and never changes here.
 function applyMerge({ config, manifest, item, options = {} } = {}) {
   if (!item) return undefined;
   // AC6: a resumed queue never re-merges an item whose attempt is already on
@@ -559,34 +741,61 @@ function applyMerge({ config, manifest, item, options = {} } = {}) {
     return record('skipped', { reason });
   }
 
-  const pullRequest = deliveredPullRequest(config, item);
-  const prNumber = pullRequest.prNumber;
-  if (pullRequest.shipStatus !== 'delivered' || prNumber === null) {
-    say(options, `[sdw-batch] Merge skipped for ${item.slug}: no-pr.`);
-    return record('skipped', { reason: 'no-pr' });
+  // AC3/AC9: the delivery evidence is adopted onto the item, then the pull
+  // request resolves from step 8, the run state, and finally the provider.
+  const state = adoptDeliveryEvidence({ config, item });
+  const resolved = resolvePullRequest({ config, item, state, options });
+  const prNumber = pullRequestNumber(resolved);
+  if (prNumber === null) {
+    // AC4: a skipped item whose delivery cannot be proven carries no evidence.
+    const reason = item.status === 'already_implemented' && !state ? 'no-delivery-evidence' : 'no-pr';
+    say(options, `[sdw-batch] Merge skipped for ${item.slug}: ${reason}.`);
+    return record('skipped', { reason, source: resolved.source });
   }
   // The provider contract only accepts numeric pull request ids; validating
   // here keeps the CLI command free of state-derived shell input.
   if (!/^\d+$/.test(String(prNumber))) {
     say(options, `[sdw-batch] Merge skipped for ${item.slug}: invalid-pr-number.`);
-    return record('skipped', { reason: 'invalid-pr-number', prNumber });
+    return record('skipped', { reason: 'invalid-pr-number', prNumber, source: resolved.source });
+  }
+
+  // AC10: a run that stopped at `review_pending` still delivered when the
+  // provider reports that pull request merged.
+  if (resolved.shipStatus !== 'delivered') {
+    const merged = providerMerged({ config, prNumber, options });
+    if (merged === true) {
+      item.merge = {
+        requested,
+        attempted: false,
+        ok: true,
+        status: 'merged',
+        reason: null,
+        prNumber,
+        source: resolved.source,
+        observed: 'merged',
+        at
+      };
+      say(options, `[sdw-batch] Pull request ${prNumber} for ${item.slug} is already merged.`);
+      saveManifest(config, manifest);
+      return item.merge;
+    }
   }
 
   const command = mergeCommandFor(config && config.scmProvider, prNumber);
   if (!command) {
     say(options, `[sdw-batch] Merge skipped for ${item.slug}: scmProvider "${config.scmProvider}" cannot merge.`);
-    return record('skipped', { reason: 'no scm provider' });
+    return record('skipped', { reason: 'no scm provider', prNumber, source: resolved.source });
   }
 
   const mergePr = typeof options._mergePr === 'function' ? options._mergePr : runMergeCommand;
   try {
     mergePr({ config, item, prNumber, command, provider: config.scmProvider });
-    item.merge = { requested: true, attempted: true, ok: true, status: 'merged', reason: null, prNumber, at };
+    item.merge = { requested: true, attempted: true, ok: true, status: 'merged', reason: null, prNumber, source: resolved.source, at };
     say(options, `[sdw-batch] Merged ${prNumber} for ${item.slug}.`);
   } catch (err) {
     // AC4: record the failure, keep the item completed, let the queue advance.
     const message = err && err.message ? err.message : String(err);
-    item.merge = { requested: true, attempted: true, ok: false, status: 'failed', reason: message, prNumber, at };
+    item.merge = { requested: true, attempted: true, ok: false, status: 'failed', reason: message, prNumber, source: resolved.source, at };
     say(options, `[sdw-batch] Merge failed for ${item.slug}: ${message}`);
   }
   saveManifest(config, manifest);
@@ -664,23 +873,97 @@ function missingDeliveryMessage(prior, baseBranch) {
   return `base branch "${baseBranch}" does not contain delivery commit ${prior.deliveryCommit} from "${prior.slug}"`;
 }
 
+// AC5: every earlier queue item that carries a delivery commit is a delivery to
+// prove, whatever that item's status. The registry row decides implementation,
+// never whether the base received the delivery.
 function missingDeliveries(config, manifest, item, baseCommit) {
   return manifest.queue.filter(prior =>
     prior.index < item.index
-    && prior.status === 'completed'
     && prior.deliveryCommit
     && !baseContains(config, prior.deliveryCommit, baseCommit));
 }
 
+function currentBranchOf(config) {
+  try {
+    const name = gitCommand(config, ['rev-parse', '--abbrev-ref', 'HEAD']);
+    return name && name !== 'HEAD' ? name : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function workTreeDirty(config) {
+  try {
+    return gitCommand(config, ['status', '--porcelain']).length > 0;
+  } catch (e) {
+    return false;
+  }
+}
+
+// AC7/AC8: move the local work lane onto the refreshed remote lane commit. A
+// lane that cannot reach the refreshed commit is a halt; a work tree that blocks
+// the update is not, because the branch start point falls back to the remote ref.
+function fastForwardWorkLane({ config, lane, baseCommit }) {
+  let localCommit = null;
+  try {
+    localCommit = gitCommand(config, ['rev-parse', '--verify', '--quiet', `refs/heads/${lane}`]) || null;
+  } catch (e) {
+    localCommit = null;
+  }
+  if (localCommit === baseCommit) return { status: 'current', startPoint: baseCommit, localCommit };
+  if (localCommit && !baseContains(config, localCommit, baseCommit)) {
+    return {
+      status: 'halted',
+      localCommit,
+      reason: `work lane "${lane}" at ${localCommit} cannot reach the refreshed commit ${baseCommit}`
+    };
+  }
+  const checkedOut = currentBranchOf(config) === lane;
+  try {
+    if (checkedOut) {
+      gitCommand(config, ['merge', '--ff-only', String(baseCommit)]);
+    } else if (localCommit) {
+      // A lane that is not checked out is moved without touching the work tree.
+      gitCommand(config, ['update-ref', `refs/heads/${lane}`, String(baseCommit), String(localCommit)]);
+    } else {
+      gitCommand(config, ['update-ref', `refs/heads/${lane}`, String(baseCommit)]);
+    }
+    return { status: 'fast-forwarded', startPoint: baseCommit, localCommit: baseCommit };
+  } catch (err) {
+    const detail = err && err.message ? err.message : String(err);
+    if (checkedOut && workTreeDirty(config)) {
+      // AC8: the remote commit is the start point the next branch will use.
+      return { status: 'deferred', startPoint: `${BATCH_REMOTE}/${lane}`, localCommit, reason: detail };
+    }
+    return {
+      status: 'halted',
+      localCommit,
+      reason: `work lane "${lane}" at ${localCommit || '(missing)'} cannot reach the refreshed commit ${baseCommit}: ${detail}`
+    };
+  }
+}
+
+// AC5: the base proof adopts the evidence of earlier items that never recorded
+// it themselves, so a skipped item still counts as a delivery.
+function adoptPriorEvidence({ config, manifest, item } = {}) {
+  if (!manifest || !Array.isArray(manifest.queue) || !item) return;
+  for (const prior of manifest.queue) {
+    if (prior.index >= item.index) continue;
+    if (prior.deliveryCommit) continue;
+    adoptDeliveryEvidence({ config, item: prior });
+  }
+}
+
 // Pre-flight merge eligibility. The per-item path (applyMerge) treats any
 // recorded attempt as final; this path re-issues the merge while the earlier
-// delivery is missing from the refreshed base, because AC12 requires the queue
+// delivery is missing from the refreshed base, because AC6 requires the queue
 // to land an earlier open pull request before delegating the next item. A
 // recorded `failed` attempt merged nothing, so retrying it is recovery; only a
 // record whose status is `merged` is final here.
-function preflightMergeOpen(prior, pullRequest) {
-  if (!pullRequest || pullRequest.prNumber === null) return false;
-  if (pullRequest.shipStatus !== 'delivered') return false;
+function preflightMergeOpen(prior, resolved) {
+  const prNumber = pullRequestNumber(resolved);
+  if (prNumber === null) return false;
+  if (resolved.shipStatus === 'failed') return false;
   return !(prior.merge && prior.merge.status === 'merged');
 }
 
@@ -694,6 +977,7 @@ function runPreflight({ config, manifest, item, options = {} } = {}) {
       remote: BATCH_REMOTE,
       baseBranch,
       baseCommit: null,
+      startPoint: null,
       reason: null,
       at,
       ...extra
@@ -718,49 +1002,63 @@ function runPreflight({ config, manifest, item, options = {} } = {}) {
     store(refreshed.status, { reason: refreshed.reason });
     return null;
   }
-  let baseCommit = refreshed.baseCommit;
-  store('refreshed', { baseCommit });
 
+  let baseCommit = refreshed.baseCommit;
+  let lane = fastForwardWorkLane({ config, lane: baseBranch, baseCommit });
+  if (lane.status === 'halted') {
+    const message = `${lane.reason}; refusing to delegate "${item.slug}" on a stale base`;
+    store('halted', { baseCommit, reason: message });
+    return { halt: true, message };
+  }
+  store('refreshed', {
+    baseCommit,
+    startPoint: lane.startPoint,
+    startPointSource: lane.status,
+    laneCommit: lane.localCommit || null
+  });
+
+  adoptPriorEvidence({ config, manifest, item });
   let missing = missingDeliveries(config, manifest, item, baseCommit);
   if (missing.length === 0) return null;
 
   let mergedAny = false;
   for (const prior of missing) {
-    const pullRequest = deliveredPullRequest(config, prior);
+    const priorState = adoptDeliveryEvidence({ config, item: prior });
+    const resolved = resolvePullRequest({ config, item: prior, state: priorState, options });
+    const prNumber = pullRequestNumber(resolved);
     const alreadyMerged = Boolean(prior.merge && prior.merge.status === 'merged');
-    const open = preflightMergeOpen(prior, pullRequest);
-    if (!open) {
+    if (!preflightMergeOpen(prior, resolved)) {
       const message = alreadyMerged
-        ? `${missingDeliveryMessage(prior, baseBranch)} although its manifest records merged pull request #${pullRequest.prNumber}`
+        ? `${missingDeliveryMessage(prior, baseBranch)} although its manifest records merged pull request #${prNumber}`
         : `${missingDeliveryMessage(prior, baseBranch)} and no open pull request can deliver it`;
-      store('halted', { baseCommit, reason: message });
+      store('halted', { baseCommit, startPoint: lane.startPoint, reason: message });
       return { halt: true, message };
     }
-    // AC12: an earlier pull request is still open, so the base omits its
+    // AC6: an earlier pull request is still open, so the base omits its
     // delivery. Auto-merge lands it now; a disabled policy halts instead.
     if (!mergeEnabled(config, options)) {
-      const message = `pull request #${pullRequest.prNumber} for "${prior.slug}" is still open, so "${baseBranch}" lacks delivery commit ${prior.deliveryCommit}; auto-merge is disabled (enable batch.autoMerge, drop --no-merge, or merge the pull request manually)`;
-      store('halted', { baseCommit, reason: message });
+      const message = `pull request #${prNumber} for "${prior.slug}" is still open, so "${baseBranch}" lacks delivery commit ${prior.deliveryCommit}; auto-merge is disabled (enable batch.autoMerge, drop --no-merge, or merge the pull request manually)`;
+      store('halted', { baseCommit, startPoint: lane.startPoint, reason: message });
       return { halt: true, message };
     }
-    const command = mergeCommandFor(config.scmProvider, pullRequest.prNumber);
-    if (!command || !/^\d+$/.test(String(pullRequest.prNumber))) {
-      const message = `${missingDeliveryMessage(prior, baseBranch)} and scmProvider "${config.scmProvider}" cannot merge pull request #${pullRequest.prNumber}`;
-      store('halted', { baseCommit, reason: message });
+    const command = mergeCommandFor(config.scmProvider, prNumber);
+    if (!command || !/^\d+$/.test(String(prNumber))) {
+      const message = `${missingDeliveryMessage(prior, baseBranch)} and scmProvider "${config.scmProvider}" cannot merge pull request #${prNumber}`;
+      store('halted', { baseCommit, startPoint: lane.startPoint, reason: message });
       return { halt: true, message };
     }
     const mergePr = typeof options._mergePr === 'function' ? options._mergePr : runMergeCommand;
     const mergedAt = new Date().toISOString();
     try {
-      mergePr({ config, item: prior, prNumber: pullRequest.prNumber, command, provider: config.scmProvider });
-      prior.merge = { requested: true, attempted: true, ok: true, status: 'merged', reason: null, prNumber: pullRequest.prNumber, at: mergedAt };
+      mergePr({ config, item: prior, prNumber, command, provider: config.scmProvider });
+      prior.merge = { requested: true, attempted: true, ok: true, status: 'merged', reason: null, prNumber, source: resolved.source, at: mergedAt };
       mergedAny = true;
-      say(options, `[sdw-batch] Merged ${pullRequest.prNumber} for ${prior.slug} before delegating ${item.slug}.`);
+      say(options, `[sdw-batch] Merged ${prNumber} for ${prior.slug} before delegating ${item.slug}.`);
     } catch (err) {
       const detail = err && err.message ? err.message : String(err);
-      prior.merge = { requested: true, attempted: true, ok: false, status: 'failed', reason: detail, prNumber: pullRequest.prNumber, at: mergedAt };
-      const message = `${missingDeliveryMessage(prior, baseBranch)}; the pre-flight merge of pull request #${pullRequest.prNumber} failed: ${detail}`;
-      store('halted', { baseCommit, reason: message });
+      prior.merge = { requested: true, attempted: true, ok: false, status: 'failed', reason: detail, prNumber, source: resolved.source, at: mergedAt };
+      const message = `${missingDeliveryMessage(prior, baseBranch)}; the pre-flight merge of pull request #${prNumber} failed: ${detail}`;
+      store('halted', { baseCommit, startPoint: lane.startPoint, reason: message });
       return { halt: true, message };
     }
   }
@@ -771,19 +1069,28 @@ function runPreflight({ config, manifest, item, options = {} } = {}) {
       baseCommit = refreshBase(config, baseBranch).baseCommit;
     } catch (err) {
       const message = err && err.message ? err.message : String(err);
-      store('failed', { baseCommit, reason: message });
+      store('failed', { baseCommit, startPoint: lane.startPoint, reason: message });
       return { halt: true, message: `pre-flight could not refresh "${baseBranch}" after merging earlier items: ${message}` };
     }
+    lane = fastForwardWorkLane({ config, lane: baseBranch, baseCommit });
+    if (lane.status === 'halted') {
+      const message = `${lane.reason}; refusing to delegate "${item.slug}" on a stale base`;
+      store('halted', { baseCommit, reason: message });
+      return { halt: true, message };
+    }
     item.preflight.baseCommit = baseCommit;
+    item.preflight.startPoint = lane.startPoint;
+    item.preflight.startPointSource = lane.status;
+    item.preflight.laneCommit = lane.localCommit || null;
     saveManifest(config, manifest);
   }
 
   missing = missingDeliveries(config, manifest, item, baseCommit);
   if (missing.length > 0) {
-    // AC13: the refreshed base still omits a delivery; name the commit and the
+    // AC6: the refreshed base still omits a delivery; name the commit and the
     // branch instead of delegating onto a stale base.
     const message = `${missingDeliveryMessage(missing[0], baseBranch)}; refusing to delegate "${item.slug}" on a stale base`;
-    store('halted', { baseCommit, reason: message });
+    store('halted', { baseCommit, startPoint: lane.startPoint, reason: message });
     return { halt: true, message };
   }
   return null;
@@ -808,11 +1115,27 @@ function orchestratorScript() {
   return path.resolve(__dirname, '..', '..', 'sdw-orch', 'scripts', 'sdw_orch.cjs');
 }
 
-function invokeOrchestrator({ config, runId, specPath, resume }) {
+// AC13: `--new-run` is forwarded to the delegated run, so the orchestrator
+// starts a fresh run instead of blocking on the open run it would otherwise
+// consider resumable. A resume has no such flag: the queue supersedes first.
+function orchestratorArgs({ config, runId, specPath, resume, newRun }) {
   const script = orchestratorScript();
-  const args = resume
-    ? [script, 'resume', '--run-id', runId, '--root', config.root]
-    : [script, 'run', path.resolve(config.root, specPath), '--run-id', runId, '--unattended', '--root', config.root];
+  if (resume) return [script, 'resume', '--run-id', runId, '--root', config.root];
+  return [
+    script,
+    'run',
+    path.resolve(config.root, specPath),
+    '--run-id',
+    runId,
+    '--unattended',
+    ...(newRun ? ['--new-run'] : []),
+    '--root',
+    config.root
+  ];
+}
+
+function invokeOrchestrator({ config, runId, specPath, resume, newRun }) {
+  const args = orchestratorArgs({ config, runId, specPath, resume, newRun });
   const result = spawnSync(process.execPath, args, { cwd: config.root, stdio: 'inherit' });
   if (result.error) throw result.error;
   return typeof result.status === 'number' ? result.status : 1;
@@ -857,6 +1180,37 @@ function printSummary(manifest, options = {}) {
     const commit = item.deliveryCommit ? String(item.deliveryCommit).slice(0, 12) : '-';
     console.log(`${index}| ${slug} | ${status} | ${duration} | ${commit} | ${mergeOutcomeLabel(item.merge)}`);
   });
+  // AC4: a merge skipped for missing delivery evidence names its item here, so
+  // an unattended queue never hides an unproven delivery behind a table row.
+  const noEvidence = manifest.queue.filter(item => item.merge && item.merge.reason === 'no-delivery-evidence');
+  if (noEvidence.length > 0) {
+    console.log('------------------------------------------------------------');
+    console.log(`Merge skipped (no delivery evidence): ${noEvidence.map(item => item.slug || item.spec).join(', ')}`);
+  }
+  // AC8: the pre-flight records the start point the next branch actually uses.
+  const startPoints = manifest.queue.filter(item => item.preflight && item.preflight.startPoint);
+  if (startPoints.length > 0) {
+    console.log('------------------------------------------------------------');
+    console.log('Pre-flight start points');
+    startPoints.forEach(item => {
+      const preflight = item.preflight;
+      const base = preflight.baseCommit ? String(preflight.baseCommit).slice(0, 12) : '-';
+      console.log(`${String(item.slug || item.spec).padEnd(30).slice(0, 30)} | base ${base} | start ${preflight.startPoint}`);
+    });
+  }
+  // AC14: every stale open run is named with its classification and both commits.
+  const staleRuns = manifest.queue.filter(item => item.staleRun);
+  if (staleRuns.length > 0) {
+    console.log('------------------------------------------------------------');
+    console.log('Stale open runs');
+    staleRuns.forEach(item => {
+      const stale = item.staleRun;
+      const action = stale.superseded || item.supersededRunId === stale.runId
+        ? `superseded by --new-run (${item.supersededRunId})`
+        : 'halted: pass --new-run to supersede';
+      console.log(`${String(item.slug || item.spec).padEnd(30).slice(0, 30)} | ${stale.classification} | run ${stale.runId} | base ${stale.baseCommit} | lane ${stale.laneCommit} | ${action}`);
+    });
+  }
   // Follow-up outcomes stay visible: queued specs and creation failures are
   // the operator's only signal that the retrospective changed the queue.
   const followUps = manifest.queue.filter(item => {
@@ -900,6 +1254,26 @@ function finishFailure(manifest, config, item, exitCode, message, options, conti
   return null;
 }
 
+function haltOnPreflight(manifest, config, item, preflight, options) {
+  manifest.status = 'halted';
+  saveManifest(config, manifest);
+  console.error(`\n[sdw-batch] Pre-flight halted the queue before delegating "${item.slug}": ${preflight.message}`);
+  printSummary(manifest, options);
+  return 1;
+}
+
+// AC15: a stale open run halts the queue by name instead of failing the item.
+// The item was never delegated, so it keeps its status and stays resumable once
+// the operator converges it or supersedes it.
+function haltOnStaleRun(manifest, config, item, stale, options) {
+  manifest.status = 'halted';
+  saveManifest(config, manifest);
+  console.error(`\n[sdw-batch] Stale open run blocked delegation of "${item.slug}": run "${stale.runId}" has base commit ${stale.baseCommit}, which is not an ancestor of the refreshed work lane commit ${stale.laneCommit}.`);
+  console.error(`[sdw-batch] Pass --new-run to start a fresh run and record "${stale.runId}" as the superseded run id.`);
+  printSummary(manifest, options);
+  return 1;
+}
+
 function executeQueue(manifest, config, options) {
   let anyFailed = false;
   const continueOnError = options.continueOnError !== undefined
@@ -924,7 +1298,16 @@ function executeQueue(manifest, config, options) {
       saveManifest(config, manifest);
     }
     if (item.status === 'already_implemented') {
+      // AC1/AC2: only the implementation is skipped. The base is still proved
+      // before the next delegation and the item's delivery is still merged.
       say(options, `[sdw-batch] Skipping already-implemented specification [${item.index + 1}/${manifest.total}]: ${item.slug} (${item.skipReason})`);
+      adoptDeliveryEvidence({ config, item });
+      const skipPreflight = runPreflight({ config, manifest, item, options });
+      if (skipPreflight && skipPreflight.halt) {
+        return haltOnPreflight(manifest, config, item, skipPreflight, options);
+      }
+      applyMerge({ config, manifest, item, options });
+      saveManifest(config, manifest);
       continue;
     }
 
@@ -933,11 +1316,35 @@ function executeQueue(manifest, config, options) {
     // pending and returns the failure exit code without touching the run.
     const preflight = runPreflight({ config, manifest, item, options });
     if (preflight && preflight.halt) {
-      manifest.status = 'halted';
-      saveManifest(config, manifest);
-      console.error(`\n[sdw-batch] Pre-flight halted the queue before delegating "${item.slug}": ${preflight.message}`);
-      printSummary(manifest, options);
-      return 1;
+      return haltOnPreflight(manifest, config, item, preflight, options);
+    }
+
+    // Spec 00058 AC14-AC16: an open run is resumed only while its own base
+    // commit is reachable from the refreshed lane. A stale one halts the queue
+    // with the run id, its base commit, and the remedy; `--new-run` supersedes
+    // it, records the replaced id, and starts a fresh run.
+    const openRun = resolveOpenRun({ config, item });
+    if (openRun) {
+      const stale = classifyStaleRun({ config, item, state: openRun });
+      if (options.newRun) {
+        // AC16: the flag starts a fresh run and records the run it replaced,
+        // whether or not that run is stale; a stale one is never resumed.
+        item.supersededRunId = openRun.runId;
+        item.runId = null;
+        if (stale) item.staleRun = { ...stale, superseded: true };
+        say(options, stale
+          ? `[sdw-batch] Open run "${stale.runId}" for ${item.slug} is ${stale.classification}: base ${stale.baseCommit} is not an ancestor of the refreshed lane commit ${stale.laneCommit}; superseded by --new-run.`
+          : `[sdw-batch] Open run "${openRun.runId}" for ${item.slug} superseded by --new-run.`);
+        saveManifest(config, manifest);
+      } else if (stale) {
+        item.staleRun = stale;
+        saveManifest(config, manifest);
+        return haltOnStaleRun(manifest, config, item, stale, options);
+      } else if (!item.runId) {
+        // A run whose base commit is an ancestor is not stale: resume it as today.
+        item.runId = openRun.runId;
+        saveManifest(config, manifest);
+      }
     }
 
     manifest.currentIndex = i;
@@ -959,8 +1366,21 @@ function executeQueue(manifest, config, options) {
       item.runId = runId;
       try {
         exitCode = options._invoke
-          ? options._invoke({ config, runId, specPath: item.spec, resume: Boolean(resumable), runState: prior })
-          : invokeOrchestrator({ config, runId, specPath: item.spec, resume: Boolean(resumable) });
+          ? options._invoke({
+              config,
+              runId,
+              specPath: item.spec,
+              resume: Boolean(resumable),
+              runState: prior,
+              newRun: Boolean(options.newRun)
+            })
+          : invokeOrchestrator({
+              config,
+              runId,
+              specPath: item.spec,
+              resume: Boolean(resumable),
+              newRun: Boolean(options.newRun)
+            });
       } catch (err) {
         exitCode = 1;
         failureMessage = err.message;
@@ -1001,6 +1421,7 @@ function executeQueue(manifest, config, options) {
       manifest.status = 'paused';
       saveManifest(config, manifest);
       say(options, `\n[sdw-batch] "${item.slug}" paused with ${item.status} (sdw-orch exit code ${exitCode}).`);
+      // AC12: the paused run continues from its delivery stage; no new run starts.
       say(options, `[sdw-batch] Continue that run, then resume the queue with: sdw-batch resume ${manifest.batchId}`);
       printSummary(manifest, options);
       return exitCode;
@@ -1101,6 +1522,7 @@ function formatStatus(manifest) {
 
 module.exports = {
   applyRetroFollowUp,
+  classifyStaleRun,
   createManifest,
   executeQueue,
   formatStatus,
@@ -1110,9 +1532,12 @@ module.exports = {
   loadConfig,
   loadManifest,
   manifestFilePath,
+  openRunsForSpec,
+  orchestratorArgs,
   printSummary,
   readRunState,
   recoverFollowUps,
+  resolveOpenRun,
   resolveSpec,
   resumeBatch,
   runBatch,

@@ -19,16 +19,19 @@ Coordinates a queue of specifications. Each item runs through the complete `sdw-
 
 ## Subcommands
 
-- `run <specPath...> [--no-merge]`: Creates the queue manifest and delegates specifications one by one to `sdw-orch`.
-- `resume [batchId] [--no-merge]`: Continues a paused queue from its first non-completed item, reusing that item's run.
+- `run <specPath...> [--no-merge] [--new-run]`: Creates the queue manifest and delegates specifications one by one to `sdw-orch`.
+- `resume [batchId] [--no-merge] [--new-run]`: Continues a paused queue from its first non-completed item, reusing that item's run unless `--new-run` supersedes it.
 - `status [batchId]`: Prints queue progress and per-item status.
 
 ## Behavior
 
 - One delegated run at a time: `sdw-orch run <spec>` and wait for its exit code.
 - Specs recorded as `completed` or `archived` in `index.specs.md` are skipped (`already_implemented`) before delegation, including on resume. `sdw-batch` never refines; a delivered spec is refined only by an explicit `sdw-orch run <spec> --second-pass`.
-- Exit `0` completes the item and advances; exit `4` or `5` pauses the queue with the item's `runId` recorded.
+- The skip skips the implementation only: the item's merge stage and the pre-flight before the next delegation still run. The queue advances on delivery evidence, never on a status string.
+- Delivery evidence resolves from the item's own run state, then the specification's most recent completed run with a delivery commit, then the SCM provider by recorded head branch. No evidence records `merge.status: skipped` with reason `no-delivery-evidence`, and the summary names every such item.
+- Exit `0` completes the item and advances; exit `4`, `5`, or `6` pauses the queue with the item's `runId` recorded. `6` is the delivery convergence pause (`awaiting_convergence`): the host converges the pull request and `resume` re-delegates the same run at its delivery stage, with no new run.
 - `resume` continues the paused run through `sdw-orch resume --run-id`; a run that already completed is reconciled without re-execution.
+- An open run is stale when its base commit is not an ancestor of the refreshed work lane commit. A stale run halts the queue naming the run id, its base commit, and the `--new-run` remedy, and the item is never marked `failed`; with `--new-run` the queue records `supersededRunId`, starts a fresh run, and never resumes the stale one. `--new-run` is forwarded to the delegated run.
 - A failed item halts the queue unless `--continue-on-error` is supplied.
 - After an item completes, the follow-up stage reads its `state.retro` report under `retro.followUp` (default `queue`): `critical`/`high` candidates become draft specs appended after the remaining items, `record` writes one follow-up report, and `none` reads no report. Follow-up items carry `followUpDepth: 1`: their own candidates are summarized but never queued. The stage never prompts, and a creation failure is recorded without halting the queue.
 - After the follow-up stage, the item's delivered pull request is merged through `scmProvider`. `batch.autoMerge` defaults to `true`; `--no-merge` or `batch.autoMerge: false` records `merge.status: skipped` with the reason. A failed merge records `failed` and never changes the item's `completed` status, and a resume never re-issues an attempted merge. An item without a delivered pull request records `skipped: no-pr`.
@@ -47,11 +50,11 @@ Coordinates a queue of specifications. Each item runs through the complete `sdw-
    - Done when: the manifest exists with one entry per specification and status `in_progress`.
 
 3. **Pre-flight the base**
-   Refresh `origin/{workBranch}` (falling back to `branching.integrationBranch`, then the remote default) before delegating, record `preflight` on the item, and prove that every earlier delivery commit is reachable from the refreshed base. An earlier delivery missing from the base is merged through its still-open pull request when auto-merge is enabled; a disabled policy, or a base that still misses the commit, halts the queue before delegation.
-   - Done when: the item records `preflight.status: refreshed` with a `baseCommit`, or the queue is `halted`.
+   Refresh `origin/{workBranch}` (falling back to `branching.integrationBranch`, then the remote default) before delegating, record `preflight` on the item, and prove that every earlier delivery commit is reachable from the refreshed base. Fast-forward the local work lane to the refreshed commit and record the `startPoint` the next branch uses (the remote ref over a dirty tree). An earlier delivery missing from the base is merged through its still-open pull request when auto-merge is enabled; a disabled policy, or a base that still misses the commit, halts the queue before delegation.
+   - Done when: the item records `preflight.status: refreshed` with a `baseCommit` and a `startPoint`, or the queue is `halted`.
 
 4. **Delegate one specification**
-   Invoke `sdw-orch` for the current item and wait. A pause code (`4` dispatch, `5` judgment) stops the loop and records the run id; the host agent drives the paused single run.
+   Invoke `sdw-orch` for the current item and wait, forwarding `--new-run`. A pause code (`4` dispatch, `5` judgment, `6` delivery convergence) stops the loop and records the run id; the host agent drives the paused single run.
    - Done when: the item is `completed`, `failed`, or `awaiting_*` in the manifest.
 
 5. **Apply the retro follow-up**
@@ -68,6 +71,6 @@ Coordinates a queue of specifications. Each item runs through the complete `sdw-
 
 ## Reference
 
-- Delegation contract, manifest schema (including `merge` and `preflight`), auto-merge policy, pre-flight rules, follow-up policy, pause protocol, and failure policy: [`references/batch_protocol.md`](references/batch_protocol.md)
+- Delegation contract, manifest schema (including `merge`, `preflight`, and `staleRun`), auto-merge policy, pre-flight rules, delivery-evidence rule, stale-run rule, follow-up policy, pause protocol, and failure policy: [`references/batch_protocol.md`](references/batch_protocol.md)
 - Retro candidate contract consumed by the follow-up stage: [`sdw-retro`](../sdw-retro/SKILL.md)
 - Deterministic queue: [`scripts/sdw_batch.cjs`](scripts/sdw_batch.cjs)
