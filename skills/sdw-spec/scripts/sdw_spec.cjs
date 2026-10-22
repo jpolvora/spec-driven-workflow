@@ -3,6 +3,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { spawnSync } = require('child_process');
 
 const { initIndex, listIndex, archiveSpec, resolvePaths } = require('./spec_index.cjs');
 const { createNewSpec, importRemoteSpec } = require('./spec_creator.cjs');
@@ -27,6 +28,8 @@ function parseArgs(args) {
     id: null,
     title: null,
     slug: null,
+    from: null,
+    apply: false,
     force: false,
     json: false,
     dryRun: false,
@@ -51,6 +54,9 @@ function parseArgs(args) {
     else if (arg.startsWith('--title=')) result.title = arg.slice(8);
     else if (arg === '--slug') result.slug = args[++i];
     else if (arg.startsWith('--slug=')) result.slug = arg.slice(7);
+    else if (arg === '--from') result.from = args[++i] || null;
+    else if (arg.startsWith('--from=')) result.from = arg.slice(7) || null;
+    else if (arg === '--apply') result.apply = true;
     else if (arg === '--mode') result.mode = args[++i];
     else if (arg.startsWith('--mode=')) result.mode = arg.slice(7);
     else if (!arg.startsWith('-')) positional.push(arg);
@@ -72,6 +78,7 @@ Subcommands:
   sync                     Reconcile index.specs.md against on-disk files and orchestrator run states
   validate <specPath>      Validate frontmatter, section hierarchy, and strict EARS syntax
   status <slug> <status>   Change the spec header status with defined transitions
+  update                   Propose a drift entry from changed files named by the specification
   archive <slug>           Transition completed specification to archived in index.specs.md
   help                     Show this help documentation
 
@@ -84,7 +91,9 @@ Options:
   --provider <name>        SCM provider for import (github, azure-devops)
   --id <id>                Work item or issue ID for remote import
   --title <title>          Explicit title for newly synthesized specification
-  --slug <slug>            Explicit slug for newly synthesized specification
+  --slug <slug>            Specification slug ("new" and "update" subcommands)
+  --from <commit>          Base commit for drift comparison in "update" (default: HEAD)
+  --apply                  Write the proposed drift insertion into the specification
   --mode <mode>            Validation mode (authoring | compat, default: authoring)
   --force                  Force overwrite or allow archiving incomplete specifications
   --dry-run                Preview synchronization transitions without modifying disk
@@ -360,6 +369,183 @@ function cmdStatus(options) {
   return 0;
 }
 
+// Drift repair (spec 00038) never rewrites history or lifecycle: it only proposes a
+// Notes entry for files the specification already names.
+
+const DRIFT_EXCLUDED_PREFIXES = ['.git/', '.sdw/state/', '.sdw/sandbox/', '.sdw/worktrees/'];
+
+function runGit(root, args) {
+  const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  if (result.error) throw new Error(`git ${args.join(' ')} failed: ${result.error.message}`);
+  if (result.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${(result.stderr || '').trim()}`);
+  return result.stdout;
+}
+
+function resolveCommitRef(root, ref) {
+  const result = spawnSync('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], {
+    cwd: root,
+    encoding: 'utf8'
+  });
+  return result.status === 0 ? result.stdout.trim() : null;
+}
+
+function normalizeProjectPath(filePath) {
+  return String(filePath).replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
+function isDriftExcluded(relPath) {
+  return DRIFT_EXCLUDED_PREFIXES.some((prefix) => relPath.startsWith(prefix));
+}
+
+// AC2, AC3, AC4: tracked working-tree and index changes against <base>, plus untracked
+// non-ignored files, minus ephemeral run-state, sandbox, worktree, and .git paths.
+function collectDriftFiles(root, baseRef) {
+  const changed = new Set();
+
+  const tracked = runGit(root, ['diff', '--name-status', baseRef, '--', '.']);
+  for (const line of tracked.split('\n')) {
+    if (!line.trim()) continue;
+    for (const field of line.split('\t').slice(1)) {
+      if (field.trim()) changed.add(normalizeProjectPath(field.trim()));
+    }
+  }
+
+  const untracked = runGit(root, ['ls-files', '--others', '--exclude-standard', '-z']);
+  for (const field of untracked.split('\0')) {
+    if (field.trim()) changed.add(normalizeProjectPath(field.trim()));
+  }
+
+  return [...changed].filter((relPath) => relPath && !isDriftExcluded(relPath)).sort();
+}
+
+// AC5: only an exact project-relative path mention makes a file in scope.
+function specMentionsPath(specContent, relPath) {
+  const escaped = relPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?<![A-Za-z0-9_.\\/-])${escaped}(?![A-Za-z0-9_.\\/-])`).test(specContent);
+}
+
+function driftTimestamp(now) {
+  const date = now instanceof Date ? now : new Date();
+  return date.toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+function driftRevisionLine(matchedFiles) {
+  return `${matchedFiles.length} changed file(s) named by this specification: ${matchedFiles.join(', ')}`;
+}
+
+function buildDriftInsertion(matchedFiles, baseLabel, timestamp) {
+  const lines = [`### Drift Update (${timestamp}; base ${baseLabel})`];
+  for (const relPath of matchedFiles) {
+    lines.push(`- \`${relPath}\`: named by this specification and changed in the working set`);
+  }
+  lines.push(`- Revision: ${driftRevisionLine(matchedFiles)}`);
+  return lines.join('\n');
+}
+
+// Inserts the reviewed block at the end of ## Notes; every other byte is preserved.
+function appendDriftInsertion(specContent, insertion) {
+  const notes = specContent.match(/^## Notes[ \t]*$/m);
+  if (!notes) return null;
+
+  const bodyStart = notes.index + notes[0].length;
+  const rest = specContent.slice(bodyStart);
+  const nextSection = rest.search(/^## /m);
+  const insertAt = nextSection === -1 ? specContent.length : bodyStart + nextSection;
+  const head = specContent.slice(0, insertAt);
+  const tail = specContent.slice(insertAt);
+  const separator = head.endsWith('\n\n') ? '' : head.endsWith('\n') ? '\n' : '\n\n';
+
+  return tail
+    ? `${head}${separator}${insertion}\n\n${tail}`
+    : `${head}${separator}${insertion}\n`;
+}
+
+function cmdUpdate(options) {
+  const slug = options.slug ? String(options.slug).trim() : '';
+  if (!slug) {
+    console.error('Error: --slug <slug> is required for "update" subcommand.');
+    return 1;
+  }
+
+  const { root, specsDir } = resolvePaths(options.root);
+  const specFile = findSpecFile(specsDir, slug);
+  if (!specFile) {
+    console.error(`Error: no specification file found for slug "${slug}" under ${specsDir.replace(/\\/g, '/')}.`);
+    return 1;
+  }
+
+  const specContent = fs.readFileSync(specFile, 'utf8');
+  if (!/^## Notes[ \t]*$/m.test(specContent)) {
+    console.error(`Error: ${path.basename(specFile)} has no "## Notes" section; no drift entry can be proposed.`);
+    return 1;
+  }
+
+  const baseLabel = options.from ? String(options.from) : 'HEAD';
+  const baseCommit = resolveCommitRef(root, baseLabel);
+  if (!baseCommit) {
+    console.error(`Error: unresolved reference "${baseLabel}": it does not resolve to a commit.`);
+    return 1;
+  }
+
+  let changedFiles;
+  try {
+    changedFiles = collectDriftFiles(root, baseCommit);
+  } catch (err) {
+    console.error(`[sdw-spec update] Error: ${err.message}`);
+    return 1;
+  }
+
+  const matchedFiles = [];
+  const unmatchedFiles = [];
+  for (const relPath of changedFiles) {
+    (specMentionsPath(specContent, relPath) ? matchedFiles : unmatchedFiles).push(relPath);
+  }
+
+  const specRelPath = path.relative(root, specFile).replace(/\\/g, '/');
+
+  if (matchedFiles.length === 0) {
+    if (options.json) {
+      console.log(JSON.stringify({ slug, base: baseLabel, matchedFiles, unmatchedFiles, insertion: '', revisionLine: '' }, null, 2));
+    } else {
+      console.log('No specification drift found');
+    }
+    return 0;
+  }
+
+  const revisionLine = driftRevisionLine(matchedFiles);
+  const insertion = buildDriftInsertion(matchedFiles, baseLabel, driftTimestamp(options.now));
+
+  if (options.apply) {
+    fs.writeFileSync(specFile, appendDriftInsertion(specContent, insertion), 'utf8');
+    if (options.json) {
+      console.log(JSON.stringify({ slug, base: baseLabel, matchedFiles, unmatchedFiles, insertion, revisionLine, applied: true, file: specRelPath }, null, 2));
+    } else {
+      console.log(`[sdw-spec update] Applied drift entry to ${specRelPath}.`);
+      console.log(`  Base: ${baseLabel}`);
+      console.log(`  Matched files: ${matchedFiles.length}`);
+      console.log(`  Revision line: ${revisionLine}`);
+    }
+    return 0;
+  }
+
+  if (options.json) {
+    console.log(JSON.stringify({ slug, base: baseLabel, matchedFiles, unmatchedFiles, insertion, revisionLine }, null, 2));
+    return 0;
+  }
+
+  console.log(`[sdw-spec update] ${specRelPath} (base ${baseLabel})`);
+  console.log(`Matched files (${matchedFiles.length}):`);
+  matchedFiles.forEach((relPath) => console.log(`  - ${relPath}`));
+  console.log(`Unmatched files (${unmatchedFiles.length}):`);
+  unmatchedFiles.forEach((relPath) => console.log(`  - ${relPath}`));
+  console.log('Proposed insertion:');
+  console.log(insertion);
+  console.log('');
+  console.log(`Revision line: ${revisionLine}`);
+  console.log('No files modified. Re-run with --apply to write this insertion.');
+  return 0;
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const options = parseArgs(args);
@@ -395,6 +581,9 @@ async function main() {
     case 'status':
       code = cmdStatus(options);
       break;
+    case 'update':
+      code = cmdUpdate(options);
+      break;
     default:
       console.error(`Unknown subcommand: "${options.subcommand}". Run with --help for usage.`);
       code = 1;
@@ -418,5 +607,10 @@ module.exports = {
   cmdValidate,
   cmdArchive,
   cmdStatus,
+  cmdUpdate,
+  collectDriftFiles,
+  specMentionsPath,
+  buildDriftInsertion,
+  appendDriftInsertion,
   SPEC_STATUS_TRANSITIONS
 };
