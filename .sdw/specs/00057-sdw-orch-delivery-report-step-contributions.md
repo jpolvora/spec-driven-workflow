@@ -155,7 +155,7 @@ Keep the deterministic core and let the steps feed it. Contributions are data, n
 
 | Readiness Item | Requirement | Verification Method |
 |----------------|--------------|---------------------|
-| EARS syntax | All 29 acceptance criteria conform to EARS patterns | Run `node skills/sdw-spec/scripts/validate_spec.cjs --mode=authoring .sdw/specs/00057-sdw-orch-delivery-report-judge-analysis.md` |
+| EARS syntax | All 29 acceptance criteria conform to EARS patterns | Run `node skills/sdw-spec/scripts/validate_spec.cjs --mode=authoring .sdw/specs/00057-sdw-orch-delivery-report-step-contributions.md` |
 | Scope enclosure | The contribution contract, the learning contract, the two judge sections, and the retro closure | Inspect `## Description` plus `## Out of Scope` |
 | Target inventory | Orchestrator, report writer, score evaluator, memory, retro, protocol and skill references, and tests | Inspect `## Notes` target list |
 | Dependency | Spec 00054 is delivered, so the report writer and its sections exist | Check the registry row for 00054 |
