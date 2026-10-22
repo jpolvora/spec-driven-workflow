@@ -404,8 +404,10 @@ function collectDriftFiles(root, baseRef) {
 
   // -z keeps non-ASCII, quoted, and backslash paths unquoted; --no-renames makes
   // the output strict status/path pairs, so a rename is a delete plus an add and
-  // both paths stay in the drift set.
-  const tracked = runGit(root, ['diff', '--name-status', '--no-renames', '-z', baseRef, '--', '.']);
+  // both paths stay in the drift set. --relative makes diff paths relative to
+  // the project root, matching `ls-files --others` when the root sits below the
+  // git top level.
+  const tracked = runGit(root, ['diff', '--name-status', '--no-renames', '--relative', '-z', baseRef, '--', '.']);
   const fields = tracked.split('\0').filter((field) => field !== '');
   for (let i = 0; i + 1 < fields.length; i += 2) {
     const relPath = fields[i + 1].trim();
@@ -423,9 +425,11 @@ function collectDriftFiles(root, baseRef) {
 // AC5: only an exact project-relative path mention makes a file in scope. A
 // trailing period that ends a sentence is not part of the path, while a period
 // followed by a word character continues a longer filename and stays rejected.
+// An optional `./` prefix is accepted, because the changed-path side strips it
+// through normalizeProjectPath and both sides must normalize alike.
 function specMentionsPath(specContent, relPath) {
   const escaped = relPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`(?<![A-Za-z0-9_.\\/-])${escaped}(?![A-Za-z0-9_\\/-]|\\.\\w)`).test(specContent);
+  return new RegExp(`(?<![A-Za-z0-9_.\\/-])(?:\\.\\/)?${escaped}(?![A-Za-z0-9_\\/-]|\\.\\w)`).test(specContent);
 }
 
 function driftTimestamp(now) {

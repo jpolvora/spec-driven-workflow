@@ -365,3 +365,55 @@ test('00038 review: a non-ASCII tracked path reaches the drift set', () => {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+// Review round: the changed-path side strips a leading `./`, so the mention side
+// must accept the same spelling instead of reporting the file as unmatched.
+test('00038 review: a mention written with a leading ./ still matches', () => {
+  const { root, specPath } = setupDriftRepo();
+  try {
+    const spec = fs
+      .readFileSync(specPath, 'utf8')
+      .replace(`It names \`${NAMED_PATH}\`.`, `The fix lives in ./${NAMED_PATH}.`);
+    fs.writeFileSync(specPath, spec, 'utf8');
+    fs.writeFileSync(path.join(root, NAMED_PATH), 'module.exports = "changed";\n', 'utf8');
+
+    const res = runUpdate(root, ['--slug', SLUG, '--json']);
+    assert.equal(res.status, 0, res.stderr);
+    const report = JSON.parse(res.stdout);
+    assert.ok(report.matchedFiles.includes(NAMED_PATH), 'a ./ prefix is the same project-relative path');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Review round: `git diff` prints top-level-relative paths, so a project root
+// below the git top level needed `--relative` to agree with `ls-files --others`.
+test('00038 review: a project root below the git top level still matches tracked paths', () => {
+  const top = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-spec-update-sub-'));
+  try {
+    git(top, ['init', '-q']);
+    git(top, ['config', 'user.name', 'SDW Spec Tests']);
+    git(top, ['config', 'user.email', 'spec-tests@sdw.org']);
+    git(top, ['config', 'core.autocrlf', 'false']);
+
+    const root = path.join(top, 'project');
+    const specsDir = path.join(root, '.sdw', 'specs');
+    fs.mkdirSync(specsDir, { recursive: true });
+    fs.writeFileSync(path.join(specsDir, `${SLUG}.md`), FIXTURE_SPEC, 'utf8');
+    fs.writeFileSync(path.join(specsDir, 'index.specs.md'), FIXTURE_INDEX, 'utf8');
+    const scriptPath = path.join(root, NAMED_PATH);
+    fs.mkdirSync(path.dirname(scriptPath), { recursive: true });
+    fs.writeFileSync(scriptPath, 'module.exports = "base";\n', 'utf8');
+    git(top, ['add', '-A']);
+    git(top, ['commit', '-q', '-m', 'fixture base']);
+
+    fs.writeFileSync(scriptPath, 'module.exports = "changed";\n', 'utf8');
+
+    const res = runUpdate(root, ['--slug', SLUG, '--json']);
+    assert.equal(res.status, 0, res.stderr);
+    const report = JSON.parse(res.stdout);
+    assert.ok(report.matchedFiles.includes(NAMED_PATH), 'tracked paths are relative to the project root');
+  } finally {
+    fs.rmSync(top, { recursive: true, force: true });
+  }
+});
