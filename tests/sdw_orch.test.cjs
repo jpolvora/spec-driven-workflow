@@ -1415,3 +1415,373 @@ test('00058 AC17, AC18 & AC19: the registry transition follows the delivery stag
     fs.rmSync(deliveredRoot, { recursive: true, force: true });
   }
 });
+
+// ==== Spec 00057: delivery report step contributions (task-1) ====
+
+test('00057 AC1, AC2, AC3, AC4, AC5, AC9 & AC11: step boundaries append contributions and render both report paths', () => {
+  const slug = 'contrib';
+  const tmpDir = setupDeliveryReportRepo(slug);
+  try {
+    const runId = `run-${Date.now()}-${slug}`;
+    const originalLog = console.log;
+    console.log = () => {};
+    let code;
+    try {
+      code = sdwOrch.cmdRun({
+        root: tmpDir,
+        specPath: `.sdw/specs/${slug}.md`,
+        runId,
+        minScore: 8,
+        skipReview: true,
+        skipPr: true,
+        implementation: deliveryImplementation(),
+        scoring: judgeScoring()
+      });
+    } finally {
+      console.log = originalLog;
+    }
+
+    assert.equal(code, 0, 'the fixture run completes');
+    const state = stateManager.loadRunState(tmpDir, runId);
+    assert.ok(Array.isArray(state.reportContributions), 'AC1: run state carries reportContributions');
+
+    const entriesOf = (step, kind) => state.reportContributions.filter(entry => entry.step === step && entry.kind === kind);
+    for (const [step, kind] of [[1, 'derivation'], [2, 'refinement'], [3, 'plan'], [6, 'delivery'], [7, 'review'], [8, 'gates'], [8, 'ship']]) {
+      assert.equal(entriesOf(step, kind).length, 1, `AC2: Step ${step} appended its ${kind} contribution`);
+    }
+
+    const steps = state.reportContributions.map(entry => entry.step);
+    assert.deepEqual(steps, [...steps].sort((a, b) => a - b), 'AC2: contributions are appended in pipeline order');
+
+    const taskEntries = entriesOf(4, 'task');
+    assert.equal(taskEntries.length, 1, 'AC3: one contribution per accepted task');
+    const taskBody = taskEntries[0].body;
+    assert.equal(taskBody.taskId, 'task-1');
+    assert.equal(taskBody.outcome, 'success');
+    assert.deepEqual(taskBody.filesChanged, ['README.md']);
+    assert.equal(taskBody.retries, 0);
+    assert.deepEqual(taskBody.abandonments, []);
+    assert.ok(taskEntries[0].evidence.length > 0, 'AC3: the task contribution carries its evidence path');
+
+    const verdictEntries = entriesOf(5, 'verdict');
+    assert.equal(verdictEntries.length, 1, 'AC4: Step 5 contributes the verdict');
+    assert.equal(verdictEntries[0].body.score, 10);
+    assert.equal(verdictEntries[0].body.minScore, 8);
+    assert.ok(verdictEntries[0].body.verdicts.length >= 1, 'AC4: one verdict per criterion');
+    assert.ok(
+      verdictEntries[0].body.verdicts.every(entry => entry.id && entry.verdict && entry.evidence),
+      'AC4: every criterion verdict carries its evidence'
+    );
+    assert.equal(entriesOf(5, 'judgment').length, 1, 'AC4: Step 5 contributes the judge analysis');
+
+    const deliveryEntries = entriesOf(6, 'delivery');
+    assert.match(deliveryEntries[0].body.deliveryCommit, /^[0-9a-f]{7,40}$/, 'AC5: the delivery commit is recorded');
+    assert.ok(deliveryEntries[0].body.stagedFiles.includes('README.md'), 'AC5: the staged files are recorded');
+    assert.ok(deliveryEntries[0].body.securityGate, 'AC5: the security gate outcome is recorded');
+
+    const inProgressPath = path.join(tmpDir, state.artifactsDir, 'report.md');
+    assert.ok(fs.existsSync(inProgressPath), 'AC9, AC11: the in-progress report lives under the run artifact directory');
+    const inProgress = fs.readFileSync(inProgressPath, 'utf8');
+    assert.match(inProgress, /## Step Contributions/, 'AC8: the report renders the contributions section');
+    assert.match(inProgress, /### Step 3: dag_generation[\s\S]*DAG plan: 1 task/, 'AC8: the plan contribution is rendered');
+    assert.match(inProgress, /### Step 4: implementation[\s\S]*Task task-1 accepted/, 'AC8: the task contribution is rendered');
+    assert.match(inProgress, /### Step 8: pr_preparation[\s\S]*Pre-PR gates skipped/, 'AC9: the last completed step is rendered');
+
+    const companion = fs.readFileSync(path.join(tmpDir, '.sdw', 'specs', `${slug}-report.md`), 'utf8');
+    assert.match(companion, /### Step 7: code_review[\s\S]*Code review skipped/, 'AC11: the companion is rendered from the contribution set');
+    assert.match(companion, /### Step 8: pr_preparation\n\nNot available/, 'AC8: absent contributions render Not available');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('00057 AC9: a run stopped at Step 5 leaves an in-progress report describing the steps that already ran', () => {
+  const slug = 'stopped';
+  const tmpDir = setupDeliveryReportRepo(slug);
+  const previousJudge = process.env.SDW_JUDGE_COMMAND;
+  delete process.env.SDW_JUDGE_COMMAND;
+  try {
+    const originalLog = console.log;
+    console.log = () => {};
+    let code;
+    try {
+      code = sdwOrch.cmdRun({
+        root: tmpDir,
+        specPath: `.sdw/specs/${slug}.md`,
+        skipReview: true,
+        skipPr: true,
+        implementation: deliveryImplementation(),
+        scoring: { judgeCommand: null }
+      });
+    } finally {
+      console.log = originalLog;
+    }
+
+    assert.equal(code, 5, 'the run pauses awaiting the judge');
+    const state = stateManager.findLatestRunState(tmpDir);
+    assert.equal(state.steps[5].status, 'awaiting_judgment');
+    const inProgressPath = path.join(tmpDir, state.artifactsDir, 'report.md');
+    assert.ok(fs.existsSync(inProgressPath), 'AC9: the in-progress report exists before the run finishes');
+    const markdown = fs.readFileSync(inProgressPath, 'utf8');
+    assert.match(markdown, /### Step 4: implementation[\s\S]*Task task-1 accepted/, 'AC9: the completed steps are described');
+    assert.match(markdown, /### Step 5: scoring\n\nNot available/, 'AC9: the unfinished step renders Not available');
+    assert.match(markdown, /### Step 8: pr_preparation\n\nNot available/, 'AC9: the later steps render Not available');
+  } finally {
+    if (previousJudge !== undefined) process.env.SDW_JUDGE_COMMAND = previousJudge;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('00057 AC8 & AC12: contributions render in step order, absent steps degrade, malformed entries are skipped', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-contribution-render-'));
+  try {
+    fs.mkdirSync(path.join(tmpDir, '.sdw', 'specs'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.sdw', 'specs', 'demo.md'), '---\nslug: demo\ntitle: Demo\n---\n# Demo\n', 'utf8');
+    const at = (minute) => `2026-10-22T10:${String(minute).padStart(2, '0')}:00.000Z`;
+    const state = {
+      runId: 'run-demo',
+      specSlug: 'demo',
+      specPath: '.sdw/specs/demo.md',
+      status: 'in_progress',
+      steps: {},
+      errors: [],
+      reportContributions: [
+        {
+          step: 5, stepName: 'scoring', at: at(5), kind: 'verdict',
+          title: 'Conformance score 9/10', body: { score: 9, minScore: 8, verdicts: [] }, evidence: ['a.cjs:1']
+        },
+        {
+          step: 3, stepName: 'dag_generation', at: at(3), kind: 'plan',
+          title: 'DAG plan: 2 task(s)', body: { taskIds: ['task-1', 'task-2'] }, evidence: []
+        }
+      ]
+    };
+
+    const markdown = deliveryReport.buildDeliveryReport({
+      targetRoot: tmpDir,
+      state,
+      minScore: 8,
+      now: '2026-10-22T11:00:00.000Z'
+    });
+    assert.ok(
+      markdown.indexOf('### Step 3: dag_generation') < markdown.indexOf('### Step 5: scoring'),
+      'AC8: contributions render in step order, not insertion order'
+    );
+    assert.match(markdown, /### Step 1: derivation\n\nNot available/, 'AC8: absent step renders Not available');
+    assert.match(markdown, /### Step 5: scoring[\s\S]*Conformance score 9\/10/, 'AC8: present contributions render');
+    assert.match(markdown, /Recorded: 2 contribution\(s\)/, 'AC8: the section states how many entries rendered');
+
+    state.reportContributions.push({
+      step: 6, stepName: 'delivery_commit', at: at(6),
+      title: 'missing kind', body: {}, evidence: []
+    });
+    const withMalformed = deliveryReport.buildDeliveryReport({
+      targetRoot: tmpDir,
+      state,
+      minScore: 8,
+      now: '2026-10-22T11:00:00.000Z'
+    });
+    assert.match(withMalformed, /Skipped malformed: 1 entry/, 'AC12: the malformed entry is reported, not rendered');
+    assert.match(withMalformed, /### Step 3: dag_generation[\s\S]*DAG plan: 2 task\(s\)/, 'AC12: the remaining contributions still render');
+    const selection = deliveryReport.selectContributions(state);
+    assert.equal(selection.contributions.length, 2);
+    assert.equal(selection.warnings.length, 1);
+    assert.equal(selection.warnings[0].step, 6, 'AC12: the warning names the malformed entry step');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('00057 AC12: a malformed contribution is skipped with a run-state warning and the rest still renders', () => {
+  const slug = 'malformed';
+  const tmpDir = setupDeliveryReportRepo(slug);
+  try {
+    const runId = `run-${Date.now()}-${slug}`;
+    const originalLog = console.log;
+    console.log = () => {};
+    let code;
+    try {
+      code = sdwOrch.cmdRun({
+        root: tmpDir,
+        specPath: `.sdw/specs/${slug}.md`,
+        runId,
+        minScore: 8,
+        skipReview: true,
+        skipPr: true,
+        implementation: deliveryImplementation(),
+        scoring: judgeScoring()
+      });
+    } finally {
+      console.log = originalLog;
+    }
+    assert.equal(code, 0);
+
+    const state = stateManager.loadRunState(tmpDir, runId);
+    state.reportContributions.push({
+      step: 6, stepName: 'delivery_commit', at: new Date().toISOString(),
+      title: 'missing kind', body: {}, evidence: []
+    });
+    stateManager.saveRunState(tmpDir, state);
+
+    const originalLog2 = console.log;
+    console.log = () => {};
+    let resumeCode;
+    try {
+      resumeCode = sdwOrch.cmdResume({ root: tmpDir, runId, skipReview: true, skipPr: true });
+    } finally {
+      console.log = originalLog2;
+    }
+    assert.equal(resumeCode, 0, 'AC12: the malformed entry never fails the report or the run');
+
+    const resumed = stateManager.loadRunState(tmpDir, runId);
+    assert.ok(
+      resumed.errors.some(entry => entry.warning === true && /Contribution\[\d+\] is malformed/.test(entry.error)),
+      'AC12: the warning is recorded in run state'
+    );
+    const companion = fs.readFileSync(path.join(tmpDir, '.sdw', 'specs', `${slug}-report.md`), 'utf8');
+    assert.match(companion, /Skipped malformed: 1 entry/, 'AC12: the report states the skipped entry');
+    assert.match(companion, /### Step 4: implementation[\s\S]*Task task-1 accepted/, 'AC12: the remaining contributions render');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('00057 AC10: an interrupted write leaves the previous report byte-identical', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-atomic-report-'));
+  try {
+    const reportPath = path.join(tmpDir, 'report.md');
+    fs.writeFileSync(reportPath, 'previous report\n', 'utf8');
+
+    const originalRename = fs.renameSync;
+    fs.renameSync = () => {
+      throw new Error('interrupted write');
+    };
+    let interrupted;
+    try {
+      interrupted = deliveryReport.writeReportAtomic(reportPath, 'new report\n');
+    } finally {
+      fs.renameSync = originalRename;
+    }
+
+    assert.equal(interrupted.ok, false, 'AC10: the failure is reported, not thrown');
+    assert.equal(fs.readFileSync(reportPath, 'utf8'), 'previous report\n', 'AC10: the previous report survives intact');
+    assert.deepEqual(
+      fs.readdirSync(tmpDir).filter(name => name.endsWith('.tmp')),
+      [],
+      'AC10: no temporary file is left behind'
+    );
+
+    const succeeded = deliveryReport.writeReportAtomic(reportPath, 'new report\n');
+    assert.equal(succeeded.ok, true);
+    assert.equal(fs.readFileSync(reportPath, 'utf8'), 'new report\n', 'AC10: a successful write replaces the report');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('00057 AC6 & AC7: review and convergence builders carry per-iteration findings, fixes, and ship outcomes', () => {
+  const reviewEntries = sdwOrch.buildStep7Contributions([
+    { iteration: 1, findings: { error: 0, warning: 2, suggestion: 0, info: 0 }, fixes: [], passed: false },
+    { iteration: 2, findings: { error: 0, warning: 0, suggestion: 1, info: 0 }, fixes: ['a.cjs'], passed: false },
+    { iteration: 3, findings: { error: 0, warning: 0, suggestion: 0, info: 0 }, fixes: [], passed: true }
+  ], '.sdw/state/demo/run-x/step-7.md');
+
+  assert.equal(reviewEntries.length, 3, 'AC6: one entry per review iteration');
+  assert.deepEqual(reviewEntries[0].body.findings, { error: 0, warning: 2, suggestion: 0, info: 0 });
+  assert.deepEqual(reviewEntries[0].body.fixes, [], 'AC6: a no-fix iteration is still recorded');
+  assert.deepEqual(reviewEntries[1].body.fixes, ['a.cjs'], 'AC6: the applied fix is recorded');
+  assert.ok(reviewEntries[1].evidence.includes('a.cjs'), 'AC6: the fixed file is cited as evidence');
+  assert.equal(reviewEntries[2].body.passed, true);
+
+  const convergence = sdwOrch.buildConvergenceContribution({
+    reviewConvergence: {
+      rounds: 2,
+      activeThreads: 1,
+      resolvedThreads: 2,
+      failingChecks: [{ name: 'test', status: 'failure' }],
+      issuesFixed: [{ threadId: 't1', resolution: 'Fixed in commit abc1234.' }]
+    }
+  });
+  assert.equal(convergence.kind, 'convergence');
+  assert.equal(convergence.body.iteration, 2, 'AC7: the iteration is recorded');
+  assert.deepEqual(convergence.body.failingChecks, [{ name: 'test', status: 'failure' }], 'AC7: failing checks are recorded');
+  assert.equal(convergence.body.openThreads, 1, 'AC7: open threads are recorded');
+  assert.equal(convergence.body.resolvedThreads, 2, 'AC7: resolved threads are recorded');
+  assert.equal(convergence.body.fixCommit, 'abc1234', 'AC7: the fix commit is recorded');
+  assert.equal(sdwOrch.buildConvergenceContribution({}), null, 'AC7: no convergence data means no entry');
+
+  const [gates, ship] = sdwOrch.buildStep8Contributions(
+    { pullRequest: { number: 7, url: 'https://example.test/pr/7' }, pushedBranch: 'feature/demo', shipStatus: 'delivered' },
+    { prePrBoard: [{ check: 'build', status: 'pass', evidence: 'exit code 0' }], pushed: true, head: 'feature/demo', shipStatus: 'delivered' },
+    []
+  );
+  assert.equal(gates.kind, 'gates');
+  assert.deepEqual(gates.body.gates, [{ name: 'build', status: 'pass', detail: 'exit code 0' }], 'AC7: pre-PR gate results are recorded');
+  assert.equal(ship.kind, 'ship');
+  assert.equal(ship.body.pullRequest.number, 7, 'AC7: the pull request is recorded');
+  assert.equal(ship.body.pushed, true, 'AC7: the push is recorded');
+  assert.equal(ship.body.shipStatus, 'delivered');
+});
+
+test('00057 AC13: the report writer renders recorded values without a model or network call', () => {
+  const source = fs.readFileSync(
+    path.resolve(__dirname, '..', 'skills', 'sdw-orch', 'scripts', 'delivery_report.cjs'),
+    'utf8'
+  );
+  assert.ok(!/\bfetch\s*\(/.test(source), 'AC13: the writer never calls fetch');
+  assert.ok(!/require\(['"](?:http|https|net|dns|tls)['"]\)/.test(source), 'AC13: the writer imports no network client');
+  assert.ok(!/step-5-judge\.prompt/.test(source), 'AC13: the writer never reads the judge prompt');
+  assert.ok(!/\b(?:openai|anthropic|gemini)\b/i.test(source), 'AC13: the writer references no language model');
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-pure-report-'));
+  try {
+    const markdown = deliveryReport.buildDeliveryReport({
+      targetRoot: tmpDir,
+      state: {
+        runId: 'run-pure',
+        specSlug: 'pure',
+        status: 'in_progress',
+        steps: {},
+        errors: [],
+        reportContributions: [{
+          step: 4, stepName: 'implementation', at: '2026-10-22T10:00:00.000Z', kind: 'task',
+          title: 'Task task-1 accepted', body: { marker: 'rendered-from-run-state' }, evidence: []
+        }]
+      },
+      minScore: 8,
+      now: '2026-10-22T11:00:00.000Z'
+    });
+    assert.match(markdown, /rendered-from-run-state/, 'AC13: the writer renders the recorded value verbatim');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('00057 AC14: --dry-run prints the contribution summary and writes no report', () => {
+  const slug = 'dry-contrib';
+  const tmpDir = setupDeliveryReportRepo(slug);
+  try {
+    fs.writeFileSync(
+      path.join(tmpDir, '.sdw', 'specs', `${slug}.md`),
+      validDryRunSpec(slug, 'The dry run prints the contribution summary and writes no report.'),
+      'utf8'
+    );
+    let output = '';
+    const originalLog = console.log;
+    console.log = (message) => { output += String(message) + '\n'; };
+    let code;
+    try {
+      code = sdwOrch.cmdRun({ root: tmpDir, specPath: `.sdw/specs/${slug}.md`, dryRun: true });
+    } finally {
+      console.log = originalLog;
+    }
+
+    assert.equal(code, 0);
+    assert.match(output, /Report contributions: 0 contributions recorded/, 'AC14: the contribution summary is printed');
+    assert.match(output, /no report written \(--dry-run\)/, 'AC14: the summary states that no report was written');
+    assert.ok(!fs.existsSync(path.join(tmpDir, '.sdw', 'specs', `${slug}-report.md`)), 'AC14: no companion report is written');
+    assert.ok(!fs.existsSync(path.join(tmpDir, '.sdw', 'state')), 'AC14: no run state or in-progress report is written');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

@@ -848,6 +848,318 @@ function buildBranchPlan(branching, specSlug) {
   };
 }
 
+// Spec 00057 AC9, AC12: reporting is best-effort. A malformed contribution and
+// an unwritable report are warnings on the run, never a pipeline failure.
+function recordContributionWarnings(targetRoot, state, warnings) {
+  if (!warnings || warnings.length === 0) return state;
+  let current = state;
+  for (const warning of warnings) {
+    try {
+      stateManager.recordWarning(
+        targetRoot,
+        current.runId,
+        warning.step || current.currentStep || 1,
+        `Delivery report warning: ${warning.message}`
+      );
+    } catch (e) {
+      // A warning that cannot be recorded must not stop the report either.
+    }
+  }
+  return stateManager.loadRunState(targetRoot, current.runId) || current;
+}
+
+function refreshInProgressReport(targetRoot, state) {
+  const result = deliveryReport.writeInProgressReport({ targetRoot, state });
+  if (!result.ok) {
+    console.warn(`[sdw-orch] Warning: could not write the in-progress delivery report: ${result.error}`);
+    try {
+      stateManager.recordWarning(
+        targetRoot,
+        state.runId,
+        state.currentStep || 1,
+        `Delivery report warning: in-progress report could not be written: ${result.error}`
+      );
+      return stateManager.loadRunState(targetRoot, state.runId) || state;
+    } catch (e) {
+      return state;
+    }
+  }
+  return recordContributionWarnings(targetRoot, state, result.warnings);
+}
+
+/**
+ * Spec 00057 AC2, AC9: appends the step's contribution to run state before the
+ * next step begins, then re-renders the in-progress report from the whole list.
+ * A `kind` already recorded for the step is skipped unless the caller allows
+ * duplicates, so a resumed run never duplicates its history.
+ */
+function recordStepContributions(targetRoot, state, stepNumber, entries, options = {}) {
+  let current = state;
+  let changed = false;
+  for (const entry of entries || []) {
+    if (!options.allowDuplicates && deliveryReport.hasContribution(current, stepNumber, entry.kind)) {
+      continue;
+    }
+    const contribution = deliveryReport.buildContribution({
+      step: stepNumber,
+      stepName: deliveryReport.STEP_NAMES[stepNumber],
+      ...entry
+    });
+    const appended = deliveryReport.appendContribution(current, contribution);
+    if (!appended.added) {
+      try {
+        stateManager.recordWarning(
+          targetRoot,
+          current.runId,
+          stepNumber,
+          `Delivery report warning: ${appended.warning}`
+        );
+      } catch (e) {}
+      current = stateManager.loadRunState(targetRoot, current.runId) || current;
+      continue;
+    }
+    changed = true;
+  }
+  if (changed) current = stateManager.saveRunState(targetRoot, current);
+  return refreshInProgressReport(targetRoot, current);
+}
+
+function buildStep3Contribution(state, dispatchMode) {
+  const output = (state.steps && state.steps[3] && state.steps[3].output) || {};
+  const tasks = Array.isArray(output.tasks) ? output.tasks : [];
+  const artifact = state.steps && state.steps[3] ? state.steps[3].artifact : null;
+  return {
+    kind: 'plan',
+    title: `DAG plan: ${tasks.length} task(s)`,
+    body: {
+      taskIds: tasks.map((task) => task.id),
+      dependencyOrder: tasks.map((task) => ({ id: task.id, dependencies: task.dependencies || [] })),
+      dispatchMode: dispatchMode || 'subagent',
+      complexity: output.complexity || null
+    },
+    evidence: artifact ? [artifact] : []
+  };
+}
+
+/**
+ * Spec 00057 AC3: one contribution per accepted task carrying the task id, its
+ * acceptance outcome, the files it touched, and any retry or abandonment.
+ */
+function buildStep4Contributions(state) {
+  const step4 = (state.steps && state.steps[4]) || {};
+  const tasks = step4.tasks || {};
+  const abandonments = (step4.dispatch && Array.isArray(step4.dispatch.abandonments))
+    ? step4.dispatch.abandonments
+    : [];
+  const order = new Map();
+  (Array.isArray(state.dagTasks) ? state.dagTasks : []).forEach((task, index) => order.set(task.id, index));
+  return Object.entries(tasks)
+    .filter(([, task]) => task && task.status === 'completed')
+    .sort(([idA], [idB]) => {
+      const indexA = order.has(idA) ? order.get(idA) : Number.MAX_SAFE_INTEGER;
+      const indexB = order.has(idB) ? order.get(idB) : Number.MAX_SAFE_INTEGER;
+      return indexA - indexB || idA.localeCompare(idB);
+    })
+    .map(([taskId, task]) => {
+      const taskAbandonments = abandonments
+        .filter((entry) => entry && entry.taskId === taskId)
+        .map((entry) => ({ reason: entry.reason || null, at: entry.at || null }));
+      return {
+        kind: 'task',
+        title: `Task ${taskId} accepted`,
+        body: {
+          taskId,
+          outcome: task.evidenceStatus || task.status,
+          filesChanged: Array.isArray(task.filesChanged) ? task.filesChanged : [],
+          retries: Math.max(0, Number(task.sequence || 1) - 1),
+          abandonments: taskAbandonments,
+          commit: task.commitSha || null,
+          acIds: Array.isArray(task.acIds) ? task.acIds : []
+        },
+        evidence: [task.evidencePath].filter(Boolean)
+      };
+    });
+}
+
+/**
+ * Spec 00057 AC4, AC15: the score contribution carries the number, the required
+ * minimum, and one verdict per criterion with its evidence; the judgment
+ * contribution carries the advisory analysis.
+ */
+function buildStep5Contributions(state, scoreReport, minScore) {
+  const scoring = scoreReport || (state.steps && state.steps[5] && state.steps[5].output) || {};
+  const verdict = scoring.verdict || {};
+  const analysisSource = scoring.analysis || {};
+  const verdicts = Array.isArray(verdict.verdicts)
+    ? verdict.verdicts
+    : (Array.isArray(scoring.verdicts) ? scoring.verdicts : []);
+  const analysis = {
+    summary: typeof verdict.summary === 'string'
+      ? verdict.summary
+      : (typeof analysisSource.summary === 'string' ? analysisSource.summary : null),
+    risks: Array.isArray(verdict.risks)
+      ? verdict.risks
+      : (Array.isArray(analysisSource.risks) ? analysisSource.risks : []),
+    followUps: Array.isArray(verdict.followUps)
+      ? verdict.followUps
+      : (Array.isArray(analysisSource.followUps) ? analysisSource.followUps : [])
+  };
+  const requiredMinimum = scoring.minScore !== undefined && scoring.minScore !== null
+    ? scoring.minScore
+    : minScore;
+  const artifact = state.steps && state.steps[5] ? state.steps[5].artifact : null;
+  return [
+    {
+      kind: 'verdict',
+      title: `Conformance score ${scoring.score}/${requiredMinimum}`,
+      body: {
+        score: scoring.score,
+        minScore: requiredMinimum,
+        passed: Boolean(scoring.passed),
+        verifiedCount: scoring.verifiedCount,
+        failingCount: scoring.failingCount,
+        verdicts: verdicts.map((entry) => ({
+          id: entry.id,
+          verdict: entry.verdict,
+          evidence: entry.evidence
+        }))
+      },
+      evidence: verdicts.map((entry) => entry.evidence).filter(Boolean)
+    },
+    {
+      kind: 'judgment',
+      title: 'Judge analysis',
+      body: analysis,
+      evidence: artifact ? [artifact] : []
+    }
+  ];
+}
+
+/**
+ * Spec 00057 AC5: the delivery commit, the staged files, and the security gate
+ * outcome as the step recorded them.
+ */
+function buildStep6Contribution(state, details) {
+  const detail = details || {};
+  const stagedFiles = Array.isArray(detail.stagedFiles) ? detail.stagedFiles : [];
+  return {
+    kind: 'delivery',
+    title: `Delivery commit ${detail.deliveryCommit || '(none)'}`,
+    body: {
+      deliveryCommit: detail.deliveryCommit || null,
+      deliveryCommitCreated: Boolean(detail.deliveryCommitCreated),
+      stagedFiles,
+      securityGate: state.securityGate || { bypassed: false, status: 'not run' }
+    },
+    evidence: stagedFiles
+  };
+}
+
+/**
+ * Spec 00057 AC6: one contribution per review iteration, including an iteration
+ * that applied no fix. Findings are already counted by severity.
+ */
+function buildStep7Contributions(iterations, reportRel) {
+  return (iterations || []).map((iteration) => ({
+    kind: 'review',
+    title: `Review iteration ${iteration.iteration}`,
+    body: {
+      iteration: iteration.iteration,
+      findings: iteration.findings,
+      fixes: Array.isArray(iteration.fixes) ? iteration.fixes : [],
+      passed: Boolean(iteration.passed)
+    },
+    evidence: [...(Array.isArray(iteration.fixes) ? iteration.fixes : []), reportRel].filter(Boolean)
+  }));
+}
+
+function reviewSeverityCounts(findings) {
+  const counts = { error: 0, warning: 0, suggestion: 0, info: 0 };
+  for (const finding of findings || []) {
+    const severity = String((finding && finding.severity) || 'info').toLowerCase();
+    if (Object.prototype.hasOwnProperty.call(counts, severity)) counts[severity] += 1;
+    else counts.info += 1;
+  }
+  return counts;
+}
+
+function extractConvergenceFixCommit(convergence) {
+  const fixes = convergence && Array.isArray(convergence.issuesFixed) ? convergence.issuesFixed : [];
+  for (const fix of fixes) {
+    const match = String((fix && fix.resolution) || '').match(/Fixed in commit ([0-9a-f]{6,40})/i);
+    if (match) return match[1];
+  }
+  return null;
+}
+
+/**
+ * Spec 00057 AC7: one convergence entry per delivery-stage attempt. sdw-ship-pr
+ * owns the SCM loop and reports the final round state plus each resolved-thread
+ * fix, so a paused and resumed delivery keeps one entry per attempt instead of
+ * overwriting the previous convergence.
+ */
+function buildConvergenceContribution(shipResult) {
+  const convergence = shipResult && shipResult.reviewConvergence;
+  if (!convergence) return null;
+  const failingChecks = Array.isArray(convergence.failingChecks)
+    ? convergence.failingChecks.map((check) => ({
+      name: check.name || check.context || check.check || '',
+      status: check.status || check.conclusion || ''
+    }))
+    : [];
+  return {
+    kind: 'convergence',
+    title: `Convergence iteration ${convergence.rounds || 0}`,
+    body: {
+      iteration: convergence.rounds || 0,
+      rounds: convergence.rounds || 0,
+      failingChecks,
+      openThreads: Number(convergence.activeThreads) || 0,
+      resolvedThreads: Number(convergence.resolvedThreads) || 0,
+      fixCommit: extractConvergenceFixCommit(convergence)
+    },
+    evidence: []
+  };
+}
+
+/**
+ * Spec 00057 AC7: the pre-PR gate results and the push/pull-request outcome.
+ * Gate rows come from sdw-ship-pr when it ran, otherwise from the attempts the
+ * orchestrator executed itself, so a failed-then-passed gate appears twice.
+ */
+function buildStep8Contributions(state, shipResult, gateAttempts) {
+  const ship = shipResult || {};
+  const gates = Array.isArray(ship.prePrBoard) && ship.prePrBoard.length > 0
+    ? ship.prePrBoard.map((row) => ({
+      name: row.check,
+      status: row.status,
+      detail: row.evidence || null
+    }))
+    : (Array.isArray(gateAttempts) ? gateAttempts : []);
+  const pullRequest = state.pullRequest || ship.pullRequest || null;
+  return [
+    {
+      kind: 'gates',
+      title: `Pre-PR gates: ${gates.length} result(s)`,
+      body: { gates },
+      evidence: []
+    },
+    {
+      kind: 'ship',
+      title: pullRequest ? `Pull request #${pullRequest.number !== undefined ? pullRequest.number : '?'}` : 'Delivery ship result',
+      body: {
+        pushed: Boolean(ship.pushed) || Boolean(state.pushedBranch),
+        branch: state.pushedBranch || ship.head || null,
+        pullRequest: pullRequest
+          ? { number: pullRequest.number !== undefined ? pullRequest.number : null, url: pullRequest.url || null, title: pullRequest.title || null }
+          : null,
+        shipStatus: ship.shipStatus || state.shipStatus || null
+      },
+      evidence: pullRequest && pullRequest.url ? [pullRequest.url] : []
+    }
+  ];
+}
+
 function printRunDryRunPlan(context) {
   const { targetRoot, resolvedSpec, specSlug, config, options, branching: resolvedBranching } = context;
   let branching = resolvedBranching;
@@ -921,6 +1233,12 @@ function printRunDryRunPlan(context) {
       branchPlan,
       steps,
       specObservations,
+      reportContributions: {
+        total: 0,
+        text: deliveryReport.summarizeContributions({ reportContributions: [] }).text,
+        plannedKinds: deliveryReport.PLANNED_CONTRIBUTION_KINDS,
+        written: false
+      },
       errors
     }, null, 2));
     return valid ? 0 : 1;
@@ -943,6 +1261,8 @@ function printRunDryRunPlan(context) {
   console.log(`[sdw-orch dry-run] Pull request target: ${branchPlan.pullRequestTarget}`);
   console.log(`[sdw-orch dry-run] After merge: ${branchPlan.afterMerge}`);
   console.log(`[sdw-orch dry-run] Steps: ${steps.join(' -> ')}`);
+  const contributionSummary = deliveryReport.summarizeContributions({ reportContributions: [] });
+  console.log(`[sdw-orch dry-run] Report contributions: ${contributionSummary.text}; planned kinds per step: ${deliveryReport.summarizePlannedContributions()}; no report written (--dry-run).`);
   for (const specObservation of specObservations) {
     console.log(`[sdw-orch dry-run] Spec observation (${specObservation.kind}, ${specObservation.severity}): ${specObservation.evidence}`);
   }
@@ -1394,6 +1714,13 @@ function cmdRun(options) {
     });
   }
 
+  // Spec 00057 AC1: every run carries the append-only contribution list from the
+  // first step boundary, including runs resumed from state written before it.
+  if (!Array.isArray(state.reportContributions)) {
+    state.reportContributions = [];
+    state = stateManager.saveRunState(targetRoot, state);
+  }
+
   // Persist and restore the mode so `resume` continues as a second pass.
   const refineMode = Boolean(options.refineMode || state.refineMode);
   if (refineMode && !state.refineMode) {
@@ -1435,12 +1762,28 @@ function cmdRun(options) {
       console.log(`[Step 1: Derivation] Skipped: input spec is already agent-ready.`);
       state = stateManager.updateStepState(targetRoot, state.runId, 1, 'skipped', { derivationNeeded: false });
     }
+    const step1Status = state.steps[1].status;
+    state = recordStepContributions(targetRoot, state, 1, [{
+      kind: 'derivation',
+      title: step1Status === 'skipped' ? 'Derivation skipped' : 'Specification derived for agentic execution',
+      body: {
+        status: step1Status,
+        derivationNeeded: Boolean(state.steps[1].output && state.steps[1].output.derivationNeeded)
+      },
+      evidence: []
+    }]);
   }
 
   // Step 2: Refinement (Grilling + Technical Planning) (AC1, AC2)
   if (refineMode && startStep <= 2 && state.steps[2].status !== 'completed' && state.steps[2].status !== 'skipped') {
     console.log('[Step 2: Refinement] Second pass: skipping decision-gap grilling; the implementation already exists.');
     state = stateManager.updateStepState(targetRoot, state.runId, 2, 'skipped', { mode: 'refine', reason: 'second pass reviews the delivered implementation' });
+    state = recordStepContributions(targetRoot, state, 2, [{
+      kind: 'refinement',
+      title: 'Refinement skipped on the second pass',
+      body: { status: 'skipped', mode: 'refine', reason: 'second pass reviews the delivered implementation' },
+      evidence: []
+    }]);
   } else if (startStep <= 2 && state.steps[2].status !== 'completed' && state.steps[2].status !== 'skipped') {
     state = stateManager.updateStepState(targetRoot, state.runId, 2, 'in_progress');
     const grillingResult = specGrilling.analyzeSpecificationGaps(effectiveSpecContent, { slug: specSlug });
@@ -1510,6 +1853,17 @@ function cmdRun(options) {
       artifactsDir: state.artifactsDir
     });
     state = stateManager.updateStepState(targetRoot, state.runId, 2, 'completed', refinementOutput, null, { artifact: step2Artifact });
+    state = recordStepContributions(targetRoot, state, 2, [{
+      kind: 'refinement',
+      title: grillingResult.hasGaps ? `Refinement resolved ${grillingResult.gaps.length} decision gap(s)` : 'Refinement found no decision gaps',
+      body: {
+        status: 'completed',
+        hasGaps: grillingResult.hasGaps,
+        gapsResolved: resolvedGaps,
+        specObservations
+      },
+      evidence: step2Artifact ? [step2Artifact] : []
+    }]);
   }
 
   // Step 3: Complexity Analysis & DAG Task Decomposition (AC3, AC7)
@@ -1555,6 +1909,13 @@ function cmdRun(options) {
     dagPlan = state.steps[3].output;
   } else {
     dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint });
+  }
+
+  if (state.steps[3] && state.steps[3].status === 'completed') {
+    const step3DispatchMode = options.implementationMode
+      || (config.implementation && config.implementation.mode)
+      || 'subagent';
+    state = recordStepContributions(targetRoot, state, 3, [buildStep3Contribution(state, step3DispatchMode)]);
   }
 
   // Step 4: Implementation execution (Spec 028 subagent dispatch / Spec 015 command mode)
@@ -1790,6 +2151,7 @@ function cmdRun(options) {
           commitSha,
           filesChanged: evidenceData.filesChanged,
           acIds: evidenceData.acIds,
+          evidenceStatus: evidenceData.status || 'success',
           completedAt: new Date().toISOString()
         };
         completedTaskIds.add(task.id);
@@ -1812,6 +2174,7 @@ function cmdRun(options) {
         tasks: state.steps[4].tasks,
         gates: state.steps[4].gates
       });
+      state = recordStepContributions(targetRoot, state, 4, buildStep4Contributions(state));
     }
   }
 
@@ -2072,6 +2435,7 @@ function cmdRun(options) {
     state.score = scoreReport.score;
     state.scoreIteration = (state.scoreIteration || 0) + 1;
     state = stateManager.saveRunState(targetRoot, state);
+    state = recordStepContributions(targetRoot, state, 5, buildStep5Contributions(state, state.steps[5].output, effectiveMinScore));
   } else if (state.steps[5] && state.steps[5].output) {
     scoreReport = state.steps[5].output;
     if (state.score === null && scoreReport.score !== undefined) {
@@ -2153,6 +2517,7 @@ function cmdRun(options) {
     state = stateManager.updateStepState(targetRoot, state.runId, 6, 'in_progress');
     let commitSha = null;
     let deliveryCommitCreated = false;
+    const stagedDeliveryFiles = new Set();
     try {
       // Spec 00058 AC17/AC18: the delivery commit never touches the registry.
       // A run that fails after this point must leave the registry row unchanged,
@@ -2164,6 +2529,7 @@ function cmdRun(options) {
         // Scoped delivery commit: stage only tracked spec files (evidence
         // filesChanged + spec index). Unrelated worktree changes are left alone.
         const deliveryFiles = collectDeliveryFiles(targetRoot, specSlug, state);
+        for (const file of deliveryFiles) stagedDeliveryFiles.add(file);
         if (deliveryFiles.length > 0) {
           console.log(`[Step 6: Delivery Commit] Staging scoped delivery files (${deliveryFiles.length}): ${deliveryFiles.join(', ')}`);
           const commitMessage = refineMode
@@ -2195,6 +2561,7 @@ function cmdRun(options) {
             .filter((f) => isGitTracked(targetRoot, f));
           if (unclaimed.length > 0) {
             console.log(`[Step 6: Delivery Commit] Staging unclaimed run modifications (${unclaimed.length}): ${unclaimed.join(', ')}`);
+            for (const file of unclaimed) stagedDeliveryFiles.add(file);
             const gateRes = stageAndCommitOnly(targetRoot, unclaimed, `chore(${specSlug}): include verification gate fixes`);
             if (gateRes.committed) {
               commitSha = gateRes.commitSha;
@@ -2224,6 +2591,11 @@ function cmdRun(options) {
     state.deliveryCommitCreated = deliveryCommitCreated;
     state = stateManager.saveRunState(targetRoot, state);
     state = stateManager.updateStepState(targetRoot, state.runId, 6, 'completed', { deliveryCommit: commitSha, deliveryCommitCreated });
+    state = recordStepContributions(targetRoot, state, 6, [buildStep6Contribution(state, {
+      deliveryCommit: commitSha,
+      deliveryCommitCreated,
+      stagedFiles: [...stagedDeliveryFiles].sort()
+    })]);
     if (refineMode && deliveryCommitCreated) {
       const refineTasks = Object.values(state.steps[4].tasks || {}).filter(t => t.status === 'completed');
       const refineReport = artifactWriter.writeRefineReport({
@@ -2253,6 +2625,12 @@ function cmdRun(options) {
     // sdw-code-review requires a git range to review; a non-git workspace cannot host it.
     console.log('[Step 7: Delegated Review] Non-git workspace: review skipped.');
     state = stateManager.updateStepState(targetRoot, state.runId, 7, 'skipped', { reason: 'non-git workspace' });
+    state = recordStepContributions(targetRoot, state, 7, [{
+      kind: 'review',
+      title: 'Code review skipped',
+      body: { skipped: true, reason: 'non-git workspace' },
+      evidence: []
+    }]);
   } else if (startStep <= 7 && state.steps[7].status !== 'completed' && !options.skipReview) {
     state = stateManager.updateStepState(targetRoot, state.runId, 7, 'in_progress');
     const resolvedCodeReviewScript = resolveSkillScript(targetRoot, 'sdw-code-review', path.join('scripts', 'sdw_code_review.cjs'), resolveOptions);
@@ -2331,6 +2709,13 @@ function cmdRun(options) {
       return 1;
     }
     let reviewReport = first.report;
+    const reviewIterations = [];
+    reviewIterations.push({
+      iteration: 1,
+      findings: reviewSeverityCounts(reviewReport.findings),
+      fixes: [],
+      passed: Boolean(reviewReport.passed)
+    });
     console.log(`[Step 7: Delegated Review] ${reviewReport.passed ? 'Code review passed.' : `Code review failed with ${reviewReport.blockingCount || 0} blocking finding(s).`} Report: ${reviewReport.reportPath || reportAbsPath}`);
 
     let reviewLoop = 0;
@@ -2342,6 +2727,12 @@ function cmdRun(options) {
       const fixRes = invokeReview(true);
       if (!fixRes || !fixRes.report) break;
       const fixedFiles = fixRes.report.fixedFiles || [];
+      reviewIterations.push({
+        iteration: reviewIterations.length + 1,
+        findings: reviewSeverityCounts(fixRes.report.findings),
+        fixes: fixedFiles,
+        passed: Boolean(fixRes.report.passed)
+      });
       if (fixedFiles.length === 0) {
         reviewReport = fixRes.report;
         break;
@@ -2372,14 +2763,22 @@ function cmdRun(options) {
       state = stateManager.updateStepState(targetRoot, state.runId, 7, 'review_failed', reviewReport, null, artifactRel ? { artifact: artifactRel } : undefined);
       state.status = 'failed';
       stateManager.saveRunState(targetRoot, state);
+      state = recordStepContributions(targetRoot, state, 7, buildStep7Contributions(reviewIterations, artifactRel), { allowDuplicates: true });
       options._runResult = { runId: state.runId, status: 'failed', error: 'Unresolved code review findings' };
       return 1;
     }
 
     state.reviewCommit = getBaseCommit(targetRoot);
     state = stateManager.updateStepState(targetRoot, state.runId, 7, 'completed', reviewReport, null, artifactRel ? { artifact: artifactRel } : undefined);
+    state = recordStepContributions(targetRoot, state, 7, buildStep7Contributions(reviewIterations, artifactRel), { allowDuplicates: true });
   } else if (options.skipReview) {
     state = stateManager.updateStepState(targetRoot, state.runId, 7, 'skipped', { reason: 'Skipped via --skip-review' });
+    state = recordStepContributions(targetRoot, state, 7, [{
+      kind: 'review',
+      title: 'Code review skipped',
+      body: { skipped: true, reason: 'Skipped via --skip-review' },
+      evidence: []
+    }]);
   }
 
   // Spec 00054 AC1, AC15, AC16, AC17: Step 7 has resolved, so write the delivery
@@ -2396,6 +2795,7 @@ function cmdRun(options) {
     if (writtenReport) {
       state.deliveryReport = writtenReport.relPath;
       state = stateManager.saveRunState(targetRoot, state);
+      state = recordContributionWarnings(targetRoot, state, writtenReport.warnings);
       console.log(`[sdw-orch] Delivery report written: ${writtenReport.relPath}`);
       // AC15: the report is committed whenever it is written, including
       // --skip-pr and second-pass runs; only the git-repo precondition remains.
@@ -2426,6 +2826,10 @@ function cmdRun(options) {
       state = stateManager.loadRunState(targetRoot, state.runId) || state;
     }
   }
+
+  // Spec 00057 AC9: the companion write is also a step boundary, so the
+  // in-progress report is refreshed from the same contribution list.
+  state = refreshInProgressReport(targetRoot, state);
 
   // Step 8: PR Preparation, Pre-PR Gates & Remote Comment Loop (AC5, AC6, AC7, AC8, AC9, AC10, AC11, AC12, AC14, AC15)
   const resolvedShipPrScript = resolveSkillScript(targetRoot, 'sdw-ship-pr', path.join('scripts', 'sdw_ship_pr.cjs'), resolveOptions);
@@ -2463,6 +2867,8 @@ function cmdRun(options) {
     state = stateManager.updateStepState(targetRoot, state.runId, 8, 'skipped', { reason: 'second pass produced no code to ship' });
   } else if (startStep <= 8 && state.steps[8].status !== 'completed' && !options.skipPr) {
     state = stateManager.updateStepState(targetRoot, state.runId, 8, 'in_progress');
+    const step8GateAttempts = [];
+    let step8ShipResult = null;
 
     // If sdw-ship-pr is available and no unit-test fixer hooks are passed, delegate pre-PR gates to sdw-ship-pr as single owner
     if (!hasShipPr || options.testFixer || options.buildFixer || options.prePrHook) {
@@ -2476,6 +2882,7 @@ function cmdRun(options) {
           if (config.prePrCommand) {
             console.log(`[Step 8: Pre-PR Gate] Executing pre-PR command: "${config.prePrCommand}"...`);
             execSync(config.prePrCommand, { cwd: targetRoot, stdio: 'inherit' });
+            step8GateAttempts.push({ name: 'prePrCommand', status: 'passed', detail: config.prePrCommand });
           }
           if (typeof options.prePrHook === 'function') {
             options.prePrHook(targetRoot);
@@ -2498,6 +2905,7 @@ function cmdRun(options) {
           }
         } catch (err) {
           console.error(`[Step 8: Pre-PR Gate] Pre-PR command failed: ${err.message}`);
+          step8GateAttempts.push({ name: 'prePrCommand', status: 'failed', detail: err.message });
           state.status = 'failed';
           stateManager.recordError(targetRoot, state.runId, 8, `Pre-PR command failed: ${err.message}`);
           return 1;
@@ -2526,8 +2934,10 @@ function cmdRun(options) {
             try {
               execSync(buildCmd, { cwd: targetRoot, stdio: ['ignore', 'pipe', 'pipe'], timeout: gateTimeoutMs });
               buildPassed = true;
+              step8GateAttempts.push({ name: 'build', status: 'passed', attempt: buildAttempts + 1, detail: buildCmd });
             } catch (buildErr) {
               buildAttempts++;
+              step8GateAttempts.push({ name: 'build', status: 'failed', attempt: buildAttempts, detail: buildErr.message });
               if (buildAttempts > maxFixAttempts) {
                 console.error(`[Step 8: Pre-PR Verification] Build verification failed after ${maxFixAttempts} attempt(s). Halting.`);
                 state.status = 'failed';
@@ -2575,8 +2985,10 @@ function cmdRun(options) {
             try {
               execSync(testCmd, { cwd: targetRoot, stdio: ['ignore', 'pipe', 'pipe'], timeout: gateTimeoutMs });
               testPassed = true;
+              step8GateAttempts.push({ name: 'test', status: 'passed', attempt: testAttempts + 1, detail: testCmd });
             } catch (testErr) {
               testAttempts++;
+              step8GateAttempts.push({ name: 'test', status: 'failed', attempt: testAttempts, detail: testErr.message });
               if (testAttempts > maxFixAttempts) {
                 console.error(`[Step 8: Pre-PR Verification] Test verification failed after ${maxFixAttempts} attempt(s). Halting.`);
                 state.status = 'failed';
@@ -2697,6 +3109,16 @@ function cmdRun(options) {
         }
 
         if (shipResult) {
+          step8ShipResult = shipResult;
+          // Spec 00057 AC7, AC9: record the convergence attempt before any pause
+          // decision, so a delivery stopped on failing checks still renders it.
+          const convergenceContribution = buildConvergenceContribution(shipResult);
+          if (convergenceContribution) {
+            state = recordStepContributions(targetRoot, state, 8, [convergenceContribution], { allowDuplicates: true });
+          }
+        }
+
+        if (shipResult) {
           const hasActivePr = Boolean(shipResult.pullRequest && (shipResult.pullRequest.url || shipResult.pullRequest.number));
           if (shipResult.blocking === true) {
             // Spec 00058 AC11: failing checks or open review threads are a pause,
@@ -2713,6 +3135,7 @@ function cmdRun(options) {
             });
             state.status = 'paused';
             state = stateManager.saveRunState(targetRoot, state);
+            state = refreshInProgressReport(targetRoot, state);
             const pausedPr = state.pullRequest && state.pullRequest.number !== undefined && state.pullRequest.number !== null
               ? ` #${state.pullRequest.number}`
               : '';
@@ -2760,8 +3183,13 @@ function cmdRun(options) {
     }
 
     state = stateManager.updateStepState(targetRoot, state.runId, 8, 'completed', prPayload);
+    state = recordStepContributions(targetRoot, state, 8, buildStep8Contributions(state, step8ShipResult, step8GateAttempts), { allowDuplicates: true });
   } else if (options.skipPr) {
     state = stateManager.updateStepState(targetRoot, state.runId, 8, 'skipped', { reason: 'Skipped via --skip-pr' });
+    state = recordStepContributions(targetRoot, state, 8, [
+      { kind: 'gates', title: 'Pre-PR gates skipped', body: { skipped: true, reason: 'Skipped via --skip-pr' }, evidence: [] },
+      { kind: 'ship', title: 'Delivery skipped', body: { skipped: true, reason: 'Skipped via --skip-pr' }, evidence: [] }
+    ]);
   }
 
   // AC17/AC19: one transition site, after the delivery stage reported the
@@ -3402,6 +3830,7 @@ function cmdTaskFinish(options) {
       tasks: state.steps[4].tasks,
       gates: state.steps[4].gates
     });
+    state = recordStepContributions(targetRoot, state, 4, buildStep4Contributions(state));
     console.log(`Step 4 completed successfully! Proceed to Step 5 by running:`);
     console.log(`  node "${orchCommandPath()}" resume --run-id ${state.runId}${followUpRootFlag(targetRoot)}`);
   }
@@ -3537,6 +3966,7 @@ function cmdResume(options) {
       tasks: state.steps[4].tasks,
       gates: state.steps[4].gates
     });
+    state = recordStepContributions(targetRoot, state, 4, buildStep4Contributions(state));
     state.status = 'in_progress';
     state = stateManager.saveRunState(targetRoot, state);
     console.log(`[sdw-orch resume] Step 4 completed. Advancing to Step 5 (Conformance Scoring).`);
@@ -3718,7 +4148,10 @@ function cmdScoreSubmit(options) {
   state.score = report.score;
   state.scoreIteration = (state.scoreIteration || 0) + 1;
   state.status = report.passed ? 'paused' : 'failed';
-  stateManager.saveRunState(targetRoot, state);
+  state = stateManager.saveRunState(targetRoot, state);
+  // Spec 00057 AC15: the submitted summary, risks, and follow-ups persist as the
+  // Step 5 verdict and judgment contributions before the run pauses.
+  state = recordStepContributions(targetRoot, state, 5, buildStep5Contributions(state, state.steps[5].output, minScore));
 
   console.log(`[sdw-orch score submit] Score: ${report.score}/10 (Required: ${minScore}/10). Passed: ${report.passed}`);
   console.log(`  Verified ACs: ${report.verifiedCount}/${report.totalAcs}`);
@@ -3934,5 +4367,14 @@ module.exports = {
   getStatusFiles,
   snapshotStats,
   diffSinceSnapshot,
-  resolveSkillScript
+  resolveSkillScript,
+  recordStepContributions,
+  refreshInProgressReport,
+  buildStep3Contribution,
+  buildStep4Contributions,
+  buildStep5Contributions,
+  buildStep6Contribution,
+  buildStep7Contributions,
+  buildConvergenceContribution,
+  buildStep8Contributions
 };
