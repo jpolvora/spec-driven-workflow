@@ -10,6 +10,7 @@ invocation_names:
   - sdw-spec import
   - sdw-spec sync
   - sdw-spec validate
+  - sdw-spec update
   - sdw-spec archive
 ---
 # sdw-spec
@@ -29,6 +30,7 @@ Specification lifecycle, authoring, synchronization, and formatting manager inte
 - `sync`: Reconciles `index.specs.md` against on-disk specification files and orchestrator run state files.
 - `validate <specPath>`: Enforces validation against YAML frontmatter, section hierarchy, and EARS syntax rules.
 - `status <slug> <status>`: Changes the spec header status through the defined transitions.
+- `update`: Proposes a drift entry for changed files that the target specification already names; `--from <commit>` sets the comparison base (default `HEAD`), and `--apply` writes the reviewed insertion under `## Notes` without touching the header, status, or registry row.
 - `archive <slug>`: Transitions completed specifications to `archived` in `index.specs.md`.
 
 ## Imported Item Frontmatter
