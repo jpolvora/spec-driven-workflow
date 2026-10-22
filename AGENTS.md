@@ -127,9 +127,17 @@ At session start, or when receiving task instructions, inspect and apply [`skill
 
 ---
 
-## 8. PR Checklist
+## 8. PR Checklist (feature branches)
 
-- Increment `package.json`'s version before submitting a PR.
+[`sdw-ship-pr`](skills/sdw-ship-pr/SKILL.md) owns this routine; `sdw-orch` Step 8 delegates to it. Pre-PR gates are defined in [`ship_protocol.md`](skills/sdw-ship-pr/references/ship_protocol.md) § 1 and in [spec 00050](.sdw/specs/00050-sdw-ship-pr-native-pre-pr-enforcement-ga.md) (pending: run-state evidence and discovered prepare obligations), never restated here.
+
+1. Branch `feature/<spec-slug>` from `develop`. Stage only your delivery, by path, with a `feat|fix|chore|test|docs(<spec-slug>): <intent>` subject.
+2. Ship with `node skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs --spec <slug> --push --poll-pr`, adding `--run-id <runId>` when shipping an orchestrator run. It runs the gates, publishes the branch, creates or reuses the pull request, and converges review threads.
+3. Satisfy whatever the gate output names. When it stops on a documented prepare step, complete it and re-run; do not bypass a failing gate.
+4. Base is `develop`; `master` accepts only `develop`, `release/*`, or `hotfix/*`.
+5. Merge when `test` and `review` pass and no thread is open. Keep the branch; let the configured post-merge sync fast-forward `develop`.
+
+Admins may push directly to `develop` for quick chores without a branch ([`.github/rulesets/develop.json`](.github/rulesets/develop.json)); feature work still goes through a pull request.
 
 ---
 

@@ -60,3 +60,5 @@ Central repository index tracking specification lifecycle states, metadata, and 
 | 00047 | 00047-sdw-retro-session-discovery | Host-Aware Session Transcript Discovery and Context Fallback for Retrospectives | completed | local | 2026-10-21 | PASS | - |
 | 00048 | 00048-sdw-retro-signal-precision | Transcript Signal Precision — Command Shape and Repeated Invocation Matching | completed | local | 2026-10-21 | PASS | - |
 | 00049 | 00049-sdw-retro-agnostic-discovery | Agent-Agnostic Transcript Discovery — Environment Facts and Bounded Search | completed | local | 2026-10-21 | PASS | - |
+| 00050 | 00050-sdw-ship-pr-native-pre-pr-enforcement-ga | sdw-ship-pr native pre-PR enforcement: gate shipping on run-state evidence and discovered consumer prepare obligations | pending | local | 2026-10-22 | PASS | - |
+| 00051 | 00051-issue-linkage-imported-scm-issues-close- | issue linkage: imported SCM issues close automatically when the implementing pull request references the source item id | pending | local | 2026-10-22 | PASS | - |
