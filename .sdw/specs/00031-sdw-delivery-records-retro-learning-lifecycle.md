@@ -3,10 +3,9 @@ id: null
 slug: 00031-sdw-delivery-records-retro-learning-lifecycle
 title: "SDW Delivery Records, Retrospective, Learning Loop, and Prompt-Task Lifecycle"
 source: local
-status: awaiting-approval
+status: abandoned
 specDate: 2026-10-21
 ---
-
 # Specification — SDW Delivery Records, Retrospective, Learning Loop, and Prompt-Task Lifecycle
 
 ## Description

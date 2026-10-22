@@ -30,7 +30,7 @@ Central repository index tracking specification lifecycle states, metadata, and 
 | 00017 | 00017-sdw-ac-ledger-traceability | SDW Acceptance Criteria Ledger and Traceability | pending | local | 2026-10-19 | PASS | - |
 | 00018 | 00018-sdw-fresh-verify-adversarial-audit | SDW Fresh-Context Verification and Adversarial Audit | pending | local | 2026-10-19 | PASS | - |
 | 00019 | 00019-sdw-orch-checkpoint-resume | SDW Orchestrator Checkpoint, Turn Pause, and Crash-Safe Resume | pending | local | 2026-10-19 | PASS | - |
-| 00020 | 00020-sdw-orch-branch-strategy | SDW Orchestrator Configurable Branch and Ship-Ref Strategy | pending | local | 2026-10-19 | PASS | - |
+| 00020 | 00020-sdw-orch-branch-strategy | SDW Orchestrator Configurable Branch and Ship-Ref Strategy | archived | local | 2026-10-19 | PASS | 2026-10-22 |
 | 00021 | 00021-sdw-monitor-telemetry | SDW Live Run Monitor and Append-Only Telemetry | pending | local | 2026-10-19 | PASS | - |
 | 00022 | 00022-sdw-harness-diagnostics | SDW Harness Diagnostics, Workflow Simulation, and Context Budget Audit | pending | local | 2026-10-19 | PASS | - |
 | 00023 | 00023-sdw-reporting-suite | SDW Delivery Reporting — Activity, Standup, and Spec Explanation | pending | local | 2026-10-19 | PASS | - |
@@ -41,11 +41,11 @@ Central repository index tracking specification lifecycle states, metadata, and 
 | 00028 | 00028-sdw-orch-sequential-subagent-implementation | SDW Orchestrator Sequential Subagent Implementation Dispatch | completed | local | 2026-10-19 | PASS | - |
 | 00029 | 00029-sdw-orch-sandboxed-execution | SDW Orchestrator Sandboxed Execution and Plan-Only Dry Run | completed | local | 2026-10-19 | PASS | - |
 | 00030 | 00030-sdw-micro-task-dag-planning | SDW Micro-Task DAG Planning and Sequential Dispatch Preview | pending | local | 2026-10-20 | PASS | - |
-| 00031 | 00031-sdw-delivery-records-retro-learning-lifecycle | SDW Delivery Records, Retrospective, Learning Loop, and Prompt-Task Lifecycle | pending | local | 2026-10-21 | PASS | - |
+| 00031 | 00031-sdw-delivery-records-retro-learning-lifecycle | SDW Delivery Records, Retrospective, Learning Loop, and Prompt-Task Lifecycle | archived | local | 2026-10-21 | PASS | 2026-10-22 |
 | 00032 | 00032-sdw-fixer-skill | SDW Fixer Skill — Shared Findings Intake, Context-Aware Remediation, and Result Reporting | completed | local | 2026-10-21 | PASS | - |
 | 00033 | 00033-sdw-orch-diagnostic-mode | SDW Orchestrator Diagnostic Run Mode — Upstream Issue Detection and Follow-up Spec Suggestion | pending | local | 2026-10-21 | PASS | - |
-| 00034 | 00034-sdw-memory-skill | SDW Memory Skill — Central Knowledge Wrapper with Pluggable Store Backends | pending | local | 2026-10-21 | PASS | - |
-| 00035 | 00035-sdw-delivery-changelog-retro-spec-update | SDW Delivery Changelog, Retrospective, and Spec-Drift Update | pending | local | 2026-10-21 | PASS | - |
+| 00034 | 00034-sdw-memory-skill | SDW Memory Skill — Central Knowledge Wrapper with Pluggable Store Backends | completed | local | 2026-10-21 | PASS | - |
+| 00035 | 00035-sdw-delivery-changelog-retro-spec-update | SDW Delivery Changelog, Retrospective, and Spec-Drift Update | archived | local | 2026-10-21 | PASS | 2026-10-22 |
 | 00036 | 00036-sdw-changelog-delivery-records | SDW Changelog Delivery Records | completed | local | 2026-10-21 | PASS | - |
 | 00037 | 00037-sdw-run-retrospective-candidates | SDW Run Retrospective Candidates | completed | local | 2026-10-21 | PASS | - |
 | 00038 | 00038-sdw-spec-drift-repair | SDW Spec Drift Repair | pending | local | 2026-10-21 | PASS | - |

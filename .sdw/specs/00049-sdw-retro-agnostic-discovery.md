@@ -3,10 +3,9 @@ id: "49"
 slug: 00049-sdw-retro-agnostic-discovery
 title: "Agent-Agnostic Transcript Discovery — Environment Facts and Bounded Search"
 source: local
-status: ready-to-implement
+status: implemented
 specDate: 2026-10-21
 ---
-
 # Specification — Agent-Agnostic Transcript Discovery — Environment Facts and Bounded Search
 
 ## Description

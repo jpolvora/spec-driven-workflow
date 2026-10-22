@@ -3,10 +3,9 @@ id: null
 slug: 00032-sdw-fixer-skill
 title: "SDW Fixer Skill — Shared Findings Intake, Context-Aware Remediation, and Result Reporting"
 source: local
-status: draft
+status: implemented
 specDate: 2026-10-21
 ---
-
 # Specification — SDW Fixer Skill — Shared Findings Intake, Context-Aware Remediation, and Result Reporting
 
 ## Description

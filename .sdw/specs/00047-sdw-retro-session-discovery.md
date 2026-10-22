@@ -3,10 +3,9 @@ id: "47"
 slug: 00047-sdw-retro-session-discovery
 title: "Host-Aware Session Transcript Discovery and Context Fallback for Retrospectives"
 source: local
-status: ready-to-implement
+status: implemented
 specDate: 2026-10-21
 ---
-
 # Specification — Host-Aware Session Transcript Discovery and Context Fallback for Retrospectives
 
 ## Description
