@@ -12,12 +12,12 @@
 | Base branch | `master` |
 | Base commit | `cf85f65838a628c7605357ccea5252d07f97d930` |
 | Delivery commit | `dd572f5be6e7004e80708826d15f2cb6ed5b6389` |
-| Ship status | pending |
+| Ship status | review_pending |
 | Score | 10/10 (scoreMin 8) |
 | Implementation start | 2026-10-22T15:05:42.227Z |
 | Implementation end | 2026-10-22T15:52:56.098Z |
 | Total wall-clock duration | 47m 13s |
-| Generated at | 2026-10-22T16:48:24.898Z |
+| Generated at | 2026-10-22T16:55:00.292Z |
 | Step 1: derivation (skipped) | 1ms |
 | Step 2: refinement (completed) | 2ms |
 | Step 3: dag_generation (completed) | 2ms |
@@ -39,6 +39,8 @@
 
 | SHA | Subject | Range |
 |---|---|---|
+| `eb70a81` | fix(00054-sdw-orch-delivery-report): skip report companions in the CI and release validation loops | base..HEAD |
+| `06e5e11` | docs(00054-sdw-orch-delivery-report-companion-file-): record delivery report | base..HEAD |
 | `ae822ec` | fix(00054-sdw-orch-delivery-report): keep report companions out of the spec registry and audit | base..HEAD |
 | `3a1daa3` | docs(00054-sdw-orch-delivery-report-companion-file-): record delivery report | base..HEAD |
 | `dd572f5` | feat(00054-sdw-orch-delivery-report-companion-file-): implement 00054-sdw-orch-delivery-report-companion-file- | base..HEAD |
@@ -77,6 +79,8 @@
 
 | File | Change |
 |---|---|
+| `.github/workflows/ci.yml` | modified |
+| `.github/workflows/release.yml` | modified |
 | `.sdw/specs/00054-sdw-orch-delivery-report-companion-file--report.md` | added |
 | `.sdw/specs/index.specs.md` | modified |
 | `skills/sdw-code-review/SKILL.md` | modified |
@@ -89,7 +93,7 @@
 ## Verification
 
 - test gate: status `passed`, exit code `0`, duration 1m 31s
-- Step 8 delivery: `failed`
+- Step 8 delivery: `failed` (ship status `review_pending`)
 
 ## Code Review
 
@@ -120,15 +124,16 @@ None.
 
 - Error (step 8, 2026-10-22T16:40:04.154Z): Pre-PR enforcement refused to push or create a pull request. runAllTests failed: Command failed: npm test
 - Error (step 8, 2026-10-22T16:40:04.205Z): Pre-PR enforcement refused to push or create a pull request. runAllTests failed: Command failed: npm test
+- Error (step 8, 2026-10-22T16:52:15.721Z): Pull request did not converge: 1 failing check(s), 0 active thread(s) remain
 - Step 1 (derivation) skipped: not recorded
 - Task task-1 abandoned at 2026-10-22T15:05:37.621Z: base refresh: 00052 merged into develop after the pre-flight skipped a stale item
 - Task task-1 accepted after re-dispatch (sequence 2)
 - Task task-2 accepted after re-dispatch (sequence 3)
-- Environment: workspace: 16 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
+- Environment: workspace: 18 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
 
 ## Outcome
 
 - Result: `failed`
 - Delivery commit: `dd572f5be6e7004e80708826d15f2cb6ed5b6389`
-- Ship status: `pending`
+- Ship status: `review_pending`
 - Duration: 47m 13s
