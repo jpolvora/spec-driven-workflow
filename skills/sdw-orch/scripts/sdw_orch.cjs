@@ -14,6 +14,7 @@ const artifactWriter = require('./artifact_writer.cjs');
 const implementationRunner = require('./implementation_runner.cjs');
 const evidenceValidator = require('./evidence_validator.cjs');
 const sandbox = require('./sandbox.cjs');
+const deliveryReport = require('./delivery_report.cjs');
 
 function resolveSkillScript(targetRoot, skillName, scriptRelPath, options = {}) {
   try {
@@ -2274,6 +2275,23 @@ function cmdRun(options) {
     state = stateManager.updateStepState(targetRoot, state.runId, 7, 'completed', reviewReport, null, artifactRel ? { artifact: artifactRel } : undefined);
   } else if (options.skipReview) {
     state = stateManager.updateStepState(targetRoot, state.runId, 7, 'skipped', { reason: 'Skipped via --skip-review' });
+  }
+
+  // Spec 00054 AC1: Step 7 has resolved, so write the delivery report as a
+  // companion file beside the specification before Step 8 delegates delivery
+  // to sdw-ship-pr. Rewriting the same path keeps a resumed run regenerating
+  // from current state instead of appending a second report.
+  {
+    const writtenReport = deliveryReport.writeDeliveryReport({
+      targetRoot,
+      state,
+      minScore: effectiveMinScore
+    });
+    if (writtenReport) {
+      state.deliveryReport = writtenReport.relPath;
+      state = stateManager.saveRunState(targetRoot, state);
+      console.log(`[sdw-orch] Delivery report written: ${writtenReport.relPath}`);
+    }
   }
 
   // Step 8: PR Preparation, Pre-PR Gates & Remote Comment Loop (AC5, AC6, AC7, AC8, AC9, AC10, AC11, AC12, AC14, AC15)

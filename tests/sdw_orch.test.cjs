@@ -13,6 +13,7 @@ const specGrilling = require('../skills/sdw-orch/scripts/spec_grilling.cjs');
 const dagPlanner = require('../skills/sdw-orch/scripts/dag_planner.cjs');
 const scoreEvaluator = require('../skills/sdw-orch/scripts/score_evaluator.cjs');
 const reviewRunner = require('../skills/sdw-orch/scripts/review_runner.cjs');
+const deliveryReport = require('../skills/sdw-orch/scripts/delivery_report.cjs');
 const sdwOrch = require('../skills/sdw-orch/scripts/sdw_orch.cjs');
 
 // Spec 027: wire the deterministic judge stub for unattended runs past Step 4.
@@ -619,6 +620,277 @@ title: Branch State
     assert.equal(state.branching.integrationBranch, defaultBranch);
     assert.equal(state.branching.syncWorkBranchAfterMerge, false);
     assert.equal(state.branchingSync, null);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('00054 AC1: Step 7 writes the delivery report beside the specification before Step 8', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-delivery-report-run-'));
+  try {
+    execSync('git init', { cwd: tmpDir, stdio: 'ignore' });
+    execSync('git config user.name "SDW Tester"', { cwd: tmpDir, stdio: 'ignore' });
+    execSync('git config user.email "tester@sdw.org"', { cwd: tmpDir, stdio: 'ignore' });
+    fs.mkdirSync(path.join(tmpDir, '.sdw', 'specs'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'README.md'), '# delivery fixture\n', 'utf8');
+    fs.writeFileSync(path.join(tmpDir, '.sdw', 'config.json'), JSON.stringify({
+      scoreMin: 8,
+      scmProvider: 'none',
+      useFeatureBranches: false,
+      useWorktrees: false,
+      pushDelivery: false
+    }, null, 2), 'utf8');
+    const slug = 'delivery';
+    fs.writeFileSync(path.join(tmpDir, '.sdw', 'specs', `${slug}.md`), `---
+slug: ${slug}
+title: Delivery Fixture
+---
+# Delivery Fixture
+## Acceptance Criteria
+- AC1: The orchestrator shall write the delivery report beside the specification.
+`, 'utf8');
+    execSync('git add -A && git commit -m "baseline"', { cwd: tmpDir, stdio: 'ignore' });
+
+    const runId = `run-${Date.now()}-${slug}`;
+    let output = '';
+    const origLog = console.log;
+    console.log = (msg) => { output += String(msg) + '\n'; };
+    let code;
+    try {
+      code = sdwOrch.cmdRun({
+        root: tmpDir,
+        specPath: `.sdw/specs/${slug}.md`,
+        runId,
+        minScore: 8,
+        skipReview: true,
+        skipPr: true,
+        implementation: {
+          mode: 'command',
+          command: 'node -e "const fs = require(\'fs\'); fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({ taskId: process.env.SDW_TASK_ID, acIds: [\'AC1\'], filesChanged: [\'README.md\'], tests: [{ name: \'fixture test\', status: \'passed\' }], summary: \'delivery fixture done\' })); fs.appendFileSync(\'README.md\', \'\\n# delivery update\');"'
+        },
+        scoring: judgeScoring()
+      });
+    } finally {
+      console.log = origLog;
+    }
+
+    assert.equal(code, 0, 'Run completes');
+    const reportPath = path.join(tmpDir, '.sdw', 'specs', 'delivery-report.md');
+    assert.ok(fs.existsSync(reportPath), 'AC1: report is the specification sibling named {specFileNameWithoutExtension}-report.md');
+    assert.ok(!fs.existsSync(path.join(tmpDir, '.sdw', 'state', 'delivery-report.md')), 'AC1: report does not live in run state');
+
+    const markdown = fs.readFileSync(reportPath, 'utf8');
+    const state = stateManager.loadRunState(tmpDir, runId);
+    assert.match(markdown, /^# Delivery Report — Delivery Fixture/m, 'AC2: report title names the specification');
+    assert.ok(markdown.includes(state.runId), 'AC2: report records the run id');
+    assert.ok(markdown.includes(`| Specification slug | ${slug} |`), 'AC2: report records the specification slug');
+    assert.match(markdown, /Score \| 10\/10 \(scoreMin 8\)/, 'AC2: report records the score against scoreMin');
+    assert.ok(markdown.includes('| Branch |'), 'AC2: report records the branch');
+    assert.ok(markdown.includes('| Base branch |'), 'AC2: report records the base branch');
+    assert.ok(markdown.includes('| Base commit |'), 'AC2: report records the base commit');
+    assert.ok(markdown.includes('| Delivery commit |'), 'AC2: report records the delivery commit');
+    assert.ok(markdown.includes('| Ship status |'), 'AC2: report records the ship status');
+    assert.ok(markdown.includes('| Implementation start |'), 'AC2: report records the implementation start');
+    assert.ok(markdown.includes('| Implementation end |'), 'AC2: report records the implementation end');
+    assert.ok(markdown.includes('| Total wall-clock duration |'), 'AC2: report records the total duration');
+    assert.ok(markdown.includes('| Step 1: derivation'), 'AC2: report records one row per step with its duration');
+    assert.ok(markdown.includes('| task-1 |'), 'AC3: report summarizes accepted tasks');
+    assert.ok(markdown.includes('| AC1 |'), 'AC3: report lists the covered acceptance criteria');
+    assert.ok(markdown.includes(state.steps[4].tasks['task-1'].commitSha), 'AC3: report records the checkpoint commit');
+    assert.ok(markdown.includes(`feat(${slug}): implement ${slug}`), 'AC4: report lists delivery commits with SHA and subject');
+    assert.ok(markdown.includes('`README.md`'), 'AC5: report lists changed files');
+    assert.match(markdown, /\| `README\.md` \| modified \|/, 'AC5: report records the change type');
+    assert.ok(markdown.includes('## Spec Observations'), 'AC10: report includes the Spec Observations section');
+    assert.ok(markdown.includes('## Notes'), 'AC9: report includes the Notes section');
+    assert.ok(markdown.includes('## Outcome'), 'Report closes with the outcome section');
+
+    assert.equal(state.deliveryReport, '.sdw/specs/delivery-report.md', 'Run state records the report path');
+    assert.equal(state.steps[7].status, 'skipped', 'Report is written after Step 7 resolves');
+    assert.match(output, /Delivery report written: \.sdw\/specs\/delivery-report\.md/, 'One console line names the written report');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('00054 AC2-AC10: report renders tasks, commits, files, gates, review, breaking changes, quality, observations and notes', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-delivery-report-render-'));
+  try {
+    execSync('git init', { cwd: tmpDir, stdio: 'ignore' });
+    execSync('git config user.name "SDW Tester"', { cwd: tmpDir, stdio: 'ignore' });
+    execSync('git config user.email "tester@sdw.org"', { cwd: tmpDir, stdio: 'ignore' });
+    fs.mkdirSync(path.join(tmpDir, '.sdw', 'specs'), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, 'skills', 'sdw-demo', 'scripts'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.sdw', 'specs', 'demo.md'), `---
+slug: demo
+title: "Demo Feature"
+---
+# Demo Feature
+## Acceptance Criteria
+- AC1: The system shall do X.
+- AC2: The system shall do Y.
+`, 'utf8');
+    fs.writeFileSync(path.join(tmpDir, '.sdw', 'config.json'), JSON.stringify({ scoreMin: 8 }, null, 2), 'utf8');
+    fs.writeFileSync(path.join(tmpDir, '.sdw', 'config.schema.json'), JSON.stringify({
+      properties: { scoreMin: { type: 'integer' } }
+    }, null, 2), 'utf8');
+    fs.writeFileSync(path.join(tmpDir, 'skills', 'sdw-demo', 'scripts', 'demo.cjs'), '// usage: --dry-run\n', 'utf8');
+    fs.writeFileSync(path.join(tmpDir, 'skills', 'sdw-demo', 'scripts', 'legacy.cjs'), '// legacy\n', 'utf8');
+    fs.writeFileSync(path.join(tmpDir, 'README.md'), 'base\n', 'utf8');
+    execSync('git add -A && git commit -m "chore: base"', { cwd: tmpDir, stdio: 'ignore' });
+    const baseCommit = execSync('git rev-parse HEAD', { cwd: tmpDir, encoding: 'utf8' }).trim();
+
+    fs.writeFileSync(path.join(tmpDir, 'README.md'), 'changed\n', 'utf8');
+    fs.writeFileSync(path.join(tmpDir, 'new-file.txt'), 'added\n', 'utf8');
+    fs.writeFileSync(path.join(tmpDir, '.sdw', 'config.json'), JSON.stringify({ scoreMin: 9, newKey: true }, null, 2), 'utf8');
+    fs.writeFileSync(path.join(tmpDir, '.sdw', 'config.schema.json'), JSON.stringify({
+      properties: { scoreMin: { type: 'integer', minimum: 1 } }
+    }, null, 2), 'utf8');
+    fs.writeFileSync(path.join(tmpDir, 'skills', 'sdw-demo', 'scripts', 'demo.cjs'), '// usage: --dry-run --new-flag\n', 'utf8');
+    fs.unlinkSync(path.join(tmpDir, 'skills', 'sdw-demo', 'scripts', 'legacy.cjs'));
+    execSync('git add -A && git commit -m "feat: delivery"', { cwd: tmpDir, stdio: 'ignore' });
+    const deliveryCommit = execSync('git rev-parse HEAD', { cwd: tmpDir, encoding: 'utf8' }).trim();
+
+    const evidenceDir = path.join(tmpDir, '.sdw', 'state', 'demo', 'run-fixture');
+    fs.mkdirSync(evidenceDir, { recursive: true });
+    fs.writeFileSync(path.join(evidenceDir, 'task-task-1.evidence.json'), JSON.stringify({
+      taskId: 'task-1',
+      tests: [{ name: 'a', status: 'passed' }, { name: 'b', status: 'failed' }]
+    }), 'utf8');
+
+    const state = {
+      runId: 'run-fixture',
+      specSlug: 'demo',
+      specPath: '.sdw/specs/demo.md',
+      status: 'completed',
+      branch: 'feature/demo',
+      baseBranch: 'develop',
+      baseCommit,
+      deliveryCommit,
+      shipStatus: 'shipped',
+      score: 9,
+      createdAt: '2026-10-22T10:00:00.000Z',
+      scoreIteration: 1,
+      reviewIteration: 0,
+      dagTasks: [
+        { id: 'task-1', title: 'Core', coveredAcs: ['AC1'] },
+        { id: 'task-2', title: 'Docs', coveredAcs: ['AC2'] }
+      ],
+      steps: {
+        1: { name: 'derivation', status: 'skipped', completedAt: '2026-10-22T10:00:10.000Z', output: { derivationNeeded: false } },
+        2: {
+          name: 'refinement', status: 'completed', startedAt: '2026-10-22T10:00:10.000Z', completedAt: '2026-10-22T10:01:10.000Z',
+          output: { specObservations: [{ kind: 'overlap', otherSpec: 'demo-old', evidence: 'shares demo.md', severity: 'high' }] }
+        },
+        3: { name: 'dag_generation', status: 'completed', startedAt: '2026-10-22T10:01:10.000Z', completedAt: '2026-10-22T10:01:40.000Z' },
+        4: {
+          name: 'implementation', status: 'completed', startedAt: '2026-10-22T10:01:40.000Z', completedAt: '2026-10-22T10:31:40.000Z',
+          gates: {
+            build: { status: 'passed', exitCode: 0, durationMs: 1200 },
+            test: { status: 'failed', exitCode: 1, durationMs: 3000 }
+          },
+          dispatch: { abandonments: [{ taskId: 'task-1', reason: 'lost worker', at: '2026-10-22T10:05:00.000Z' }] },
+          tasks: {
+            'task-1': {
+              id: 'task-1', title: 'Core', status: 'completed', acIds: ['AC1'], commitSha: deliveryCommit,
+              filesChanged: ['skills/sdw-demo/scripts/demo.cjs', '.sdw/config.json'],
+              dispatchedAt: '2026-10-22T10:01:40.000Z', completedAt: '2026-10-22T10:21:40.000Z',
+              evidencePath: '.sdw/state/demo/run-fixture/task-task-1.evidence.json', sequence: 2
+            },
+            'task-2': {
+              id: 'task-2', title: 'Docs', status: 'completed', acIds: ['AC2'], commitSha: deliveryCommit,
+              filesChanged: ['README.md'],
+              dispatchedAt: '2026-10-22T10:21:40.000Z', completedAt: '2026-10-22T10:31:40.000Z'
+            }
+          }
+        },
+        5: {
+          name: 'scoring', status: 'completed', startedAt: '2026-10-22T10:31:40.000Z', completedAt: '2026-10-22T10:32:40.000Z',
+          output: { score: 9, verdict: { verdicts: [{ id: 'AC1', status: 'verified' }, { id: 'AC2', status: 'verified' }, { id: 'AC3', status: 'failed' }] } }
+        },
+        6: { name: 'delivery_commit', status: 'completed', startedAt: '2026-10-22T10:32:40.000Z', completedAt: '2026-10-22T10:33:10.000Z' },
+        7: {
+          name: 'code_review', status: 'completed', startedAt: '2026-10-22T10:33:10.000Z', completedAt: '2026-10-22T10:35:10.000Z',
+          artifact: '.sdw/state/demo/run-fixture/demo-step-7.md',
+          output: { passed: true, errorCount: 0, warningCount: 1, suggestionCount: 2, blockingCount: 0, findings: [{ severity: 'warning' }] }
+        },
+        8: { name: 'pr_preparation', status: 'completed', startedAt: '2026-10-22T10:35:10.000Z', completedAt: '2026-10-22T10:36:10.000Z' }
+      },
+      errors: [{ step: 4, timestamp: '2026-10-22T10:05:00.000Z', error: 'Artifact persistence warning: x', warning: true }],
+      securityGate: { bypassed: true, reason: '--skip-security' },
+      worktreeSkipReason: 'single low-complexity task',
+      branchReused: true,
+      scm: { provider: 'none', skipped: true, skipReason: 'scmProvider is none' }
+    };
+
+    const markdown = deliveryReport.buildDeliveryReport({
+      targetRoot: tmpDir,
+      state,
+      minScore: 8,
+      now: '2026-10-22T11:00:00.000Z'
+    });
+
+    const sectionOrder = [
+      '## Metadata', '## Tasks', '## Commits', '## Files Changed', '## Verification',
+      '## Code Review', '## Breaking Changes', '## Quality', '## Spec Observations',
+      '## Notes', '## Outcome'
+    ];
+    let cursor = -1;
+    for (const section of sectionOrder) {
+      const index = markdown.indexOf(section);
+      assert.ok(index > cursor, `Report section ${section} appears in template order`);
+      cursor = index;
+    }
+
+    assert.match(markdown, /\| Score \| 9\/10 \(scoreMin 8\) \|/, 'AC2: score is rendered against scoreMin');
+    assert.match(markdown, /\| Base commit \| `[0-9a-f]+` \|/, 'AC2: base commit is rendered');
+    assert.match(markdown, /\| Delivery commit \| `[0-9a-f]+` \|/, 'AC2: delivery commit is rendered');
+    assert.match(markdown, /\| Ship status \| shipped \|/, 'AC2: ship status is rendered');
+    assert.match(markdown, /\| Implementation start \| 2026-10-22T10:01:40.000Z \|/, 'AC2: implementation start comes from the first dispatch');
+    assert.match(markdown, /\| Implementation end \| 2026-10-22T10:31:40.000Z \|/, 'AC2: implementation end comes from the last acceptance');
+    assert.match(markdown, /\| Total wall-clock duration \| 30m \|/, 'AC2: total duration is rendered');
+    assert.match(markdown, /\| Step 4: implementation \(completed\) \| 30m \|/, 'AC2: each step carries its duration');
+
+    assert.match(markdown, /\| task-1 \| Core \| completed \| AC1 \| `[0-9a-f]+` \| 2026-10-22T10:01:40.000Z \| 2026-10-22T10:21:40.000Z \| 20m \|/, 'AC3: task rows carry id, title, status, ACs, checkpoint, start, end and duration');
+    assert.match(markdown, /\| task-2 \| Docs \| completed \| AC2 \|/, 'AC3: every accepted task is listed');
+
+    assert.match(markdown, /`[0-9a-f]+` \| feat: delivery \| base\.\.HEAD/, 'AC4: commits list SHA and subject');
+    assert.match(markdown, /### task-1: Core/, 'AC5: files are grouped by task');
+    assert.match(markdown, /### task-2: Docs/, 'AC5: each owning task gets its own group');
+    assert.match(markdown, /\| `new-file\.txt` \| added \|/, 'AC5: added files are labelled');
+    assert.match(markdown, /\| `README\.md` \| modified \|/, 'AC5: modified files are labelled');
+    assert.match(markdown, /\| `skills\/sdw-demo\/scripts\/legacy\.cjs` \| deleted \|/, 'AC5: deleted files are labelled');
+
+    assert.match(markdown, /build gate: status `passed`, exit code `0`/, 'AC6: build gate result is recorded');
+    assert.match(markdown, /test gate: status `failed`, exit code `1`/, 'AC6: test gate result is recorded');
+    assert.match(markdown, /Result: passed/, 'AC6: code review outcome is recorded');
+    assert.match(markdown, /Findings: 0 error, 1 warning, 2 suggestion/, 'AC6: review finding counts are recorded');
+
+    assert.match(markdown, /Configuration key\*\* `newKey` added with value true in `\.sdw\/config\.json`/, 'AC7: added configuration key is a candidate');
+    assert.match(markdown, /Configuration key\*\* `scoreMin` changed from 8 to 9/, 'AC7: changed configuration key is a candidate');
+    assert.match(markdown, /Configuration schema\*\* `properties\.scoreMin\.minimum` added/, 'AC7: schema property change is a candidate');
+    assert.match(markdown, /CLI flag\*\* `--new-flag` added in `skills\/sdw-demo\/scripts\/demo\.cjs`/, 'AC7: CLI flag change is a candidate');
+    assert.match(markdown, /File layout\*\* file deleted in `skills\/sdw-demo\/scripts\/legacy\.cjs`/, 'AC7: file layout change is a candidate');
+
+    assert.match(markdown, /Judge verdicts: 2 verified, 1 failed \(3 judged\)/, 'AC8: per-criterion judge verdict counts are recorded');
+    assert.match(markdown, /Review findings: 0 error, 1 warning, 2 suggestion/, 'AC8: review counts by severity are recorded');
+    assert.match(markdown, /Executed tests: 2 recorded across 1 accepted task\(s\) \(1 passed, 1 failed, 0 skipped\)/, 'AC8: executed test totals are recorded');
+
+    assert.match(markdown, /\| overlap \| demo-old \| shares demo\.md \| high \|/, 'AC10: observations carry kind, other spec, evidence and severity');
+
+    assert.match(markdown, /Warning \(step 4, 2026-10-22T10:05:00\.000Z\): Artifact persistence warning: x/, 'AC9: warnings are recorded');
+    assert.match(markdown, /Step 1 \(derivation\) skipped/, 'AC9: skipped steps are recorded');
+    assert.match(markdown, /Task task-1 abandoned at 2026-10-22T10:05:00\.000Z: lost worker/, 'AC9: abandoned tasks are recorded');
+    assert.match(markdown, /Task task-1 accepted after re-dispatch \(sequence 2\)/, 'AC9: re-dispatched tasks are recorded');
+    assert.match(markdown, /Security gate bypassed: --skip-security/, 'AC9: security gate bypasses are recorded');
+    assert.match(markdown, /Environment: .*branch reused.*worktrees skipped: single low-complexity task/, 'AC9: environment facts are recorded');
+
+    const unchanged = deliveryReport.buildDeliveryReport({
+      targetRoot: tmpDir,
+      state: { ...state, baseCommit: deliveryCommit },
+      minScore: 8,
+      now: '2026-10-22T11:00:00.000Z'
+    });
+    assert.match(unchanged, /## Breaking Changes\n\nNone detected\./, 'AC7: no candidates renders None detected');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
