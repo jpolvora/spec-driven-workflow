@@ -309,7 +309,15 @@ test('sdw-branch-sync - AC12/AC14: sdw-ship-pr records the sync outcome in run s
     const remoteDevelop = publishDevelopAhead(repo);
     git(repo, 'switch -c feature/sync');
     fs.mkdirSync(path.dirname(stateFile), { recursive: true });
-    fs.writeFileSync(stateFile, JSON.stringify({ runId: 'run-sync', steps: {} }, null, 2), 'utf8');
+    fs.writeFileSync(stateFile, JSON.stringify({
+      runId: 'run-sync',
+      score: 9,
+      steps: {
+        4: { step: 4, name: 'code_review', status: 'completed' },
+        6: { step: 6, name: 'conformance_score', status: 'completed' },
+        7: { step: 7, name: 'delegated_review', status: 'completed' }
+      }
+    }, null, 2), 'utf8');
 
     const executor = (cmd) => {
       if (cmd.includes('where gh') || cmd.includes('command -v gh')) return '/usr/bin/gh';
