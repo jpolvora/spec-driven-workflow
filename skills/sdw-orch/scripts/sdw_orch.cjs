@@ -2316,7 +2316,7 @@ function cmdRun(options) {
   // report as a companion file beside the specification before Step 8 delegates
   // delivery to sdw-ship-pr. The same path is rewritten from current state on a
   // resumed run; a write or commit failure records a warning and never fails
-  // delivery. Second-pass runs keep their single `refine(...)` commit as HEAD.
+  // delivery.
   {
     const writtenReport = deliveryReport.writeDeliveryReport({
       targetRoot,
@@ -2327,9 +2327,9 @@ function cmdRun(options) {
       state.deliveryReport = writtenReport.relPath;
       state = stateManager.saveRunState(targetRoot, state);
       console.log(`[sdw-orch] Delivery report written: ${writtenReport.relPath}`);
-      // AC15: only a run that will ship has a delivery to attach the report to;
-      // --skip-pr and second-pass runs keep their existing HEAD.
-      if (!options.skipPr && !state.refineMode && isGitRepo(targetRoot)) {
+      // AC15: the report is committed whenever it is written, including
+      // --skip-pr and second-pass runs; only the git-repo precondition remains.
+      if (isGitRepo(targetRoot)) {
         try {
           stageAndCommitOnly(
             targetRoot,

@@ -218,6 +218,23 @@ function extractCliFlags(content) {
   return flags;
 }
 
+// AC7: commands are detected only in files that parse argv, so an unrelated
+// switch statement never produces a candidate. Two dispatch shapes are
+// recognized: `case '<name>':` and `subcommand === '<name>'`.
+function extractCliCommands(content) {
+  const commands = new Set();
+  if (!content) return commands;
+  const text = String(content);
+  if (!/process\.argv/.test(text)) return commands;
+  for (const match of text.matchAll(/^\s*case\s+'([^']+)'\s*:/gm)) {
+    commands.add(match[1]);
+  }
+  for (const match of text.matchAll(/\bsubcommand\s*===\s*'([^']+)'/g)) {
+    commands.add(match[1]);
+  }
+  return commands;
+}
+
 function isSkillsScript(relPath) {
   return /^skills\/.+\/scripts\/[^/]+\.cjs$/.test(normalizePath(relPath));
 }
@@ -282,6 +299,18 @@ function detectBreakingChanges(root, baseCommit, changes) {
     for (const flag of [...beforeFlags].sort()) {
       if (!afterFlags.has(flag)) {
         candidates.push({ kind: 'CLI flag', path: relPath, detail: `\`${flag}\` removed` });
+      }
+    }
+    const beforeCommands = extractCliCommands(beforeRaw);
+    const afterCommands = extractCliCommands(afterRaw);
+    for (const command of [...afterCommands].sort()) {
+      if (!beforeCommands.has(command)) {
+        candidates.push({ kind: 'CLI command', path: relPath, detail: `\`${command}\` added` });
+      }
+    }
+    for (const command of [...beforeCommands].sort()) {
+      if (!afterCommands.has(command)) {
+        candidates.push({ kind: 'CLI command', path: relPath, detail: `\`${command}\` removed` });
       }
     }
   }

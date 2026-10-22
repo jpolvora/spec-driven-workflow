@@ -744,7 +744,19 @@ title: "Demo Feature"
     fs.writeFileSync(path.join(tmpDir, '.sdw', 'config.schema.json'), JSON.stringify({
       properties: { scoreMin: { type: 'integer' } }
     }, null, 2), 'utf8');
-    fs.writeFileSync(path.join(tmpDir, 'skills', 'sdw-demo', 'scripts', 'demo.cjs'), '// usage: --dry-run\n', 'utf8');
+    fs.writeFileSync(path.join(tmpDir, 'skills', 'sdw-demo', 'scripts', 'demo.cjs'), [
+      '#!/usr/bin/env node',
+      'const subcommand = process.argv[2];',
+      'switch (subcommand) {',
+      "  case 'alpha':",
+      '    break;',
+      "  case 'beta':",
+      '    break;',
+      '}',
+      "if (subcommand === 'delta') {}",
+      '// usage: --dry-run',
+      ''
+    ].join('\n'), 'utf8');
     fs.writeFileSync(path.join(tmpDir, 'skills', 'sdw-demo', 'scripts', 'legacy.cjs'), '// legacy\n', 'utf8');
     fs.writeFileSync(path.join(tmpDir, 'README.md'), 'base\n', 'utf8');
     execSync('git add -A && git commit -m "chore: base"', { cwd: tmpDir, stdio: 'ignore' });
@@ -756,7 +768,18 @@ title: "Demo Feature"
     fs.writeFileSync(path.join(tmpDir, '.sdw', 'config.schema.json'), JSON.stringify({
       properties: { scoreMin: { type: 'integer', minimum: 1 } }
     }, null, 2), 'utf8');
-    fs.writeFileSync(path.join(tmpDir, 'skills', 'sdw-demo', 'scripts', 'demo.cjs'), '// usage: --dry-run --new-flag\n', 'utf8');
+    fs.writeFileSync(path.join(tmpDir, 'skills', 'sdw-demo', 'scripts', 'demo.cjs'), [
+      '#!/usr/bin/env node',
+      'const subcommand = process.argv[2];',
+      'switch (subcommand) {',
+      "  case 'alpha':",
+      '    break;',
+      "  case 'gamma':",
+      '    break;',
+      '}',
+      '// usage: --dry-run --new-flag',
+      ''
+    ].join('\n'), 'utf8');
     fs.unlinkSync(path.join(tmpDir, 'skills', 'sdw-demo', 'scripts', 'legacy.cjs'));
     execSync('git add -A && git commit -m "feat: delivery"', { cwd: tmpDir, stdio: 'ignore' });
     const deliveryCommit = execSync('git rev-parse HEAD', { cwd: tmpDir, encoding: 'utf8' }).trim();
@@ -880,6 +903,10 @@ title: "Demo Feature"
     assert.match(markdown, /Configuration key\*\* `scoreMin` changed from 8 to 9/, 'AC7: changed configuration key is a candidate');
     assert.match(markdown, /Configuration schema\*\* `properties\.scoreMin\.minimum` added/, 'AC7: schema property change is a candidate');
     assert.match(markdown, /CLI flag\*\* `--new-flag` added in `skills\/sdw-demo\/scripts\/demo\.cjs`/, 'AC7: CLI flag change is a candidate');
+    assert.match(markdown, /CLI command\*\* `gamma` added in `skills\/sdw-demo\/scripts\/demo\.cjs`/, 'AC7: an added switch subcommand is a candidate');
+    assert.match(markdown, /CLI command\*\* `beta` removed in `skills\/sdw-demo\/scripts\/demo\.cjs`/, 'AC7: a removed switch subcommand is a candidate');
+    assert.match(markdown, /CLI command\*\* `delta` removed in `skills\/sdw-demo\/scripts\/demo\.cjs`/, 'AC7: a comparison-dispatched subcommand is a candidate');
+    assert.ok(!/CLI command\*\* `alpha`/.test(markdown), 'AC7: an unchanged subcommand is never a candidate');
     assert.match(markdown, /File layout\*\* file deleted in `skills\/sdw-demo\/scripts\/legacy\.cjs`/, 'AC7: file layout change is a candidate');
 
     assert.match(markdown, /Judge verdicts: 2 verified, 1 failed \(3 judged\)/, 'AC8: per-criterion judge verdict counts are recorded');

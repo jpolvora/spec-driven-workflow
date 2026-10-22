@@ -114,11 +114,14 @@ test('scoped commits: delivery stages only evidence files, leaves unrelated dirt
     assert.ok(status.includes('unrelated.txt'), 'Unrelated untracked file must remain uncommitted');
     assert.ok(status.includes('README.md'), 'Unrelated README edit must remain uncommitted');
 
-    const headNames = execSync('git show --name-only --pretty=format: HEAD', { cwd: tmpDir, encoding: 'utf8' });
-    const headFiles = headNames.split('\n').map(l => l.trim()).filter(Boolean);
-    assert.ok(!headFiles.includes('unrelated.txt'), 'Delivery must not sweep unrelated.txt');
-    assert.ok(!headFiles.includes('README.md'), 'Delivery must not sweep unrelated README.md edit');
-    assert.ok(headFiles.includes('tracked.txt'), 'Delivery must include evidence file tracked.txt');
+    // AC15: the report commit sits on top of the delivery commit, so the scoped
+    // delivery assertion targets the commit beneath it, never HEAD.
+    const headSubject = execSync('git log -1 --format=%s', { cwd: tmpDir, encoding: 'utf8' }).trim();
+    assert.match(headSubject, /record delivery report/, 'AC15: the report is committed even with --skip-pr');
+    const deliveryNames = execSync('git show --name-only --pretty=format: HEAD~1', { cwd: tmpDir, encoding: 'utf8' });
+    assert.ok(deliveryNames.includes('tracked.txt'), 'Delivery must include evidence file tracked.txt');
+    assert.ok(!deliveryNames.includes('unrelated.txt'), 'Delivery must not sweep unrelated.txt');
+    assert.ok(!deliveryNames.includes('README.md'), 'Delivery must not sweep unrelated README.md edit');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

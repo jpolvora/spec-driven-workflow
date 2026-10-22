@@ -288,7 +288,7 @@ Re-executes an already delivered specification in refinement mode instead of imp
 
 ### Delivery Report
 
-After Step 7 resolves and before Step 8 delegates to `sdw-ship-pr`, the run writes `{specFileNameWithoutExtension}-report.md` in the specification directory (`.sdw/specs/00054-example.md` -> `.sdw/specs/00054-example-report.md`) and records its project-relative path in `state.deliveryReport`. When the run proceeds to Step 8, it commits the report with a scoped commit (`docs({specSlug}): record delivery report`) that stages only that file; the commit never rewrites the Step 6 delivery commit. A `--skip-pr` run writes and records the report without a commit, because it has no delivery to attach the report to. A second-pass run regenerates the report but keeps its single `refine({slug})` commit as `HEAD`.
+After Step 7 resolves and before Step 8 delegates to `sdw-ship-pr`, the run writes `{specFileNameWithoutExtension}-report.md` in the specification directory (`.sdw/specs/00054-example.md` -> `.sdw/specs/00054-example-report.md`) and records its project-relative path in `state.deliveryReport`. The run commits the report with a scoped commit (`docs({specSlug}): record delivery report`) that stages only that file, whenever it is written; the commit never rewrites the Step 6 delivery commit. `--skip-pr` and second-pass runs commit it too, so `HEAD` is the report commit after any run that wrote one, while the Step 6 delivery or `refine({slug})` commit stays intact beneath it.
 
 Template order:
 

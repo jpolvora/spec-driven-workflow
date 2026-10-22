@@ -31,7 +31,7 @@ Orchestrates spec execution from input requirement to delivery commit, automated
 - `sandbox report --run-id <runId>`: Regenerates and prints the sandbox report.
 - `sandbox clean --run-id <runId>`: Deletes the sandbox clone and keeps its metadata and report.
 - `task next [--run-id <runId>] [--json]`: Dispatches the next ready DAG task and emits its dispatch envelope (subagent mode).
-- `task finish --run-id <runId> --task <taskId> --evidence <evidencePath>`: Validates the dispatched task's evidence, accepts it, then saves it with one scoped checkpoint commit plus the tag `sdw-checkpoint-{runId}-{taskId}` (opt out: `--no-task-checkpoint`; second-pass runs keep their single `refine(...)` commit).
+- `task finish --run-id <runId> --task <taskId> --evidence <evidencePath>`: Validates the dispatched task's evidence, accepts it, then saves it with one scoped checkpoint commit plus the tag `sdw-checkpoint-{runId}-{taskId}` (opt out: `--no-task-checkpoint`; a second-pass run commits the refinement at Step 6 and the report at Step 7).
 - `task abandon --run-id <runId> --task <taskId> --reason <text>`: Returns the dispatched task to the queue after a lost or failed worker.
 - `score submit --run-id <runId> --verdict <path>`: Submits the Step 5 judge verdict and applies the conformance score.
 - `resume`: Resumes an interrupted or paused run from its last recorded step in `.sdw/state/{runId}.state.json`.
@@ -103,7 +103,7 @@ Orchestrates spec execution from input requirement to delivery commit, automated
 ## Delivery Report & Spec Observations
 
 - After Step 7 resolves and before Step 8 delegates, write `{specFileNameWithoutExtension}-report.md` beside the specification with: metadata (run id, slug, branch, base/delivery commit, ship status, score/`scoreMin`, timings per step), tasks, commits, files changed per task, verification, code review, breaking-change candidates, quality, spec observations, notes, and outcome.
-- Commit it with `docs({specSlug}): record delivery report`, staging only that file, when the run proceeds to Step 8; record its path in `state.deliveryReport`. A write or commit failure records a warning in run state and delivery continues. A resumed run rewrites the same path from current state instead of appending. A `--skip-pr` run writes and records the report without a commit.
+- Commit it with `docs({specSlug}): record delivery report`, staging only that file, whenever it is written; record its path in `state.deliveryReport`. A write or commit failure records a warning in run state and delivery continues. A resumed run rewrites the same path from current state instead of appending. `--skip-pr` and second-pass runs commit the report too, after their own delivery or `refine` commit.
 - Step 2 records advisory observations as `kind` (`overlap` when a delivered spec names the same target file, `superseded` when another spec names this slug/id in a supersession context, `conflict` when both declare the same configuration key differently), `otherSpec`, `evidence`, and `severity`. They never block, rewrite, or alter a run; `--dry-run` prints them without writing a report or artifact.
 
 ## References
