@@ -5,6 +5,9 @@ title: "SDW Live Run Monitor and Append-Only Telemetry"
 source: local
 status: awaiting-approval
 specDate: 2026-10-19
+priority: low
+value: "Append-only run telemetry"
+effort: M
 ---
 
 # Specification — SDW Live Run Monitor and Append-Only Telemetry

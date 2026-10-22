@@ -5,6 +5,9 @@ title: "Emphasize step number progress in sdw-orch agent output"
 source: github
 status: draft
 specDate: 2026-10-21
+priority: medium
+value: "Step-number progress output during orchestrated runs"
+effort: S
 ---
 
 # Specification — Emphasize step number progress in sdw-orch agent output

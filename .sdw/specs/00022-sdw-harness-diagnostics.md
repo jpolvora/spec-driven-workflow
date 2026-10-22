@@ -5,6 +5,9 @@ title: "SDW Harness Diagnostics, Workflow Simulation, and Context Budget Audit"
 source: local
 status: awaiting-approval
 specDate: 2026-10-19
+priority: low
+value: "Harness diagnostics beyond `sdw-doctor`: pipeline simulation and Tier-1 budget audit"
+effort: M
 ---
 
 # Specification — SDW Harness Diagnostics, Workflow Simulation, and Context Budget Audit

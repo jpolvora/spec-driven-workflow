@@ -5,6 +5,9 @@ title: "SDW Micro-Task DAG Planning and Sequential Dispatch Preview"
 source: local
 status: awaiting-approval
 specDate: 2026-10-20
+priority: high
+value: "Replaces the two-task DAG cap so large specifications stop shipping as two giant tasks"
+effort: L
 ---
 
 # Specification — SDW Micro-Task DAG Planning and Sequential Dispatch Preview

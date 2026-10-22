@@ -5,6 +5,9 @@ title: "Versioned spec files for creation, editing, and drift repair"
 source: github
 status: draft
 specDate: 2026-10-21
+priority: low
+value: "Versioned specification files; needs a design decision against the registry model"
+effort: M
 ---
 
 # Specification — Versioned spec files for creation, editing, and drift repair

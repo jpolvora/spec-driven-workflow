@@ -5,6 +5,9 @@ title: "SDW Orchestrator Checkpoint, Turn Pause, and Crash-Safe Resume"
 source: local
 status: awaiting-approval
 specDate: 2026-10-19
+priority: medium
+value: "Run lock, revision guard, and crash-safe resume"
+effort: M
 ---
 
 # Specification — SDW Orchestrator Checkpoint, Turn Pause, and Crash-Safe Resume

@@ -8,6 +8,12 @@ const PLACEHOLDER = /^(?:tbd|todo|placeholder|\?+|[-–—.]{1,3}|\.{3}|n\/?a)$/
 
 const SPEC_STATUSES = ['draft', 'awaiting-approval', 'ready-to-implement', 'implemented', 'abandoned'];
 
+// Spec 00055: declared ranking fields. `priority` defaults to `medium` when
+// absent; `effort` stays unset. Both enums are shared by the validator and the
+// list-by-priority ranking so there is one vocabulary.
+const PRIORITY_VALUES = ['high', 'medium', 'low'];
+const EFFORT_VALUES = ['S', 'M', 'L'];
+
 const EARS_PATTERNS = [
   { name: 'ubiquitous', re: /^the\s+.+\s+shall\s+.+/i },
   { name: 'event-driven', re: /^when\s+.+,\s*the\s+.+\s+shall\s+.+/i },
@@ -305,6 +311,20 @@ function validate(text, options) {
     if (['github', 'azure-devops'].includes(fm.source) && !/^### Prior Work Sweep\s*$/m.test(normalizedText)) {
       errors.push({ code: 'prior-work', message: 'Tracker specifications require ### Prior Work Sweep.' });
     }
+    // AC18: the declared ranking fields are enum-checked at authoring time so a typo
+    // fails validation instead of silently ranking as an unknown priority.
+    if (fm.priority && !PRIORITY_VALUES.includes(fm.priority)) {
+      errors.push({
+        code: 'priority',
+        message: `priority must be one of: ${PRIORITY_VALUES.join(', ')} (found "${fm.priority}").`
+      });
+    }
+    if (fm.effort && !EFFORT_VALUES.includes(fm.effort)) {
+      errors.push({
+        code: 'effort',
+        message: `effort must be one of: ${EFFORT_VALUES.join(', ')} (found "${fm.effort}").`
+      });
+    }
   }
 
   for (const heading of ['## Description', '## Acceptance Criteria']) {
@@ -409,6 +429,8 @@ if (require.main === module) {
 module.exports = {
   EARS_PATTERNS,
   SPEC_STATUSES,
+  PRIORITY_VALUES,
+  EFFORT_VALUES,
   earsViolation,
   validate,
   validateFile,

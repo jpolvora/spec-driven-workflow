@@ -5,6 +5,9 @@ title: "SDW Delivery Reporting — Activity, Standup, and Spec Explanation"
 source: local
 status: awaiting-approval
 specDate: 2026-10-19
+priority: medium
+value: "Activity, standup, and specification-explanation reporting"
+effort: M
 ---
 
 # Specification — SDW Delivery Reporting — Activity, Standup, and Spec Explanation

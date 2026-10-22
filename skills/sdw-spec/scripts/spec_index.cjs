@@ -51,6 +51,32 @@ function parseFrontmatter(content) {
   return values;
 }
 
+// Spec 00055: `priority`, `value`, `effort`, and `blockedBy` are declared only in
+// frontmatter, so this accessor is the single read path and the registry stays a
+// projection with its existing columns.
+function parseDeclaredList(value) {
+  if (value === undefined || value === null) return [];
+  const raw = String(value).trim();
+  if (!raw || raw === '[]') return [];
+  const inner = raw.startsWith('[') && raw.endsWith(']') ? raw.slice(1, -1) : raw;
+  return inner
+    .split(',')
+    .map((item) => item.trim().replace(/^['"]|['"]$/g, ''))
+    .filter(Boolean);
+}
+
+function readDeclaredFields(specPath) {
+  // A CRLF checkout must still expose declared fields; normalize before parsing.
+  const content = fs.readFileSync(specPath, 'utf8').replace(/\r\n?/g, '\n');
+  const values = parseFrontmatter(content);
+  return {
+    priority: values.priority || null,
+    value: values.value || '',
+    effort: values.effort || null,
+    blockedBy: parseDeclaredList(values.blockedBy)
+  };
+}
+
 function readIndex(options = {}) {
   const { indexPath, specsDir } = resolvePaths(options.root);
   if (!fs.existsSync(indexPath)) {
@@ -288,6 +314,9 @@ function registerSpec(meta, options = {}) {
 
 module.exports = {
   resolvePaths,
+  parseFrontmatter,
+  parseDeclaredList,
+  readDeclaredFields,
   readIndex,
   writeIndex,
   scanSpecsDir,

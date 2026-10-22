@@ -5,6 +5,9 @@ title: "SDW Acceptance Criteria Ledger and Traceability"
 source: local
 status: awaiting-approval
 specDate: 2026-10-19
+priority: low
+value: "Acceptance-criteria ledger and traceability"
+effort: L
 ---
 
 # Specification — SDW Acceptance Criteria Ledger and Traceability

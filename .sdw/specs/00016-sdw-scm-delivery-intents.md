@@ -5,6 +5,9 @@ title: "SDW SCM Delivery Intents — GitHub and Azure DevOps Pull Request Lifecy
 source: local
 status: awaiting-approval
 specDate: 2026-10-19
+priority: low
+value: "SCM delivery intents; largely superseded by 00024, 00050, and 00051"
+effort: M
 ---
 
 # Specification — SDW SCM Delivery Intents — GitHub and Azure DevOps Pull Request Lifecycle

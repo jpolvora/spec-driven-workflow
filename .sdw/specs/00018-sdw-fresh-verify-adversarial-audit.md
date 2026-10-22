@@ -5,6 +5,9 @@ title: "SDW Fresh-Context Verification and Adversarial Audit"
 source: local
 status: awaiting-approval
 specDate: 2026-10-19
+priority: low
+value: "Fresh-context verification and adversarial audit"
+effort: L
 ---
 
 # Specification — SDW Fresh-Context Verification and Adversarial Audit

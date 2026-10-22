@@ -6,6 +6,7 @@ invocation_names:
   - sdw-spec
   - sdw-spec init
   - sdw-spec list
+  - sdw-spec list-by-priority
   - sdw-spec new
   - sdw-spec import
   - sdw-spec sync
@@ -25,6 +26,7 @@ Specification lifecycle, authoring, synchronization, and formatting manager inte
 
 - `init`: Bootstraps `{specsDir}/index.specs.md` with standard tables and status definitions.
 - `list`: Displays registered specifications with statuses and validation health.
+- `list-by-priority [--root <path>] [--limit <n>] [--json] [--collisions]`: Ranks registry-pending specifications by declared priority, blocking, readiness, effort, `specDate`, then prefix. `--limit` caps printed rows while totals keep every pending specification, `--json` prints `{ counts, items }` without a timestamp, and `--collisions` reports pending pairs naming the same `skills/` path.
 - `new <text>`: Synthesizes a canonical specification with autoincremented numerical prefix; header status `draft`.
 - `import`: Imports remote tracker items from GitHub issues or Azure DevOps work items using unified SCM contract.
 - `sync`: Reconciles `index.specs.md` against on-disk specification files and orchestrator run state files.
@@ -32,6 +34,19 @@ Specification lifecycle, authoring, synchronization, and formatting manager inte
 - `status <slug> <status>`: Changes the spec header status through the defined transitions.
 - `update`: Proposes a drift entry for changed files that the target specification already names; `--from <commit>` sets the comparison base (default `HEAD`), and `--apply` writes the reviewed insertion under `## Notes` without touching the header, status, or registry row.
 - `archive <slug>`: Transitions completed specifications to `archived` in `index.specs.md`.
+
+## Declared Ranking Fields
+
+Four optional frontmatter fields follow the six required keys. They live only in frontmatter, so `index.specs.md` stays a projection, and `list-by-priority` reads them without inferring or writing anything.
+
+| Field | Enum | Default | Meaning |
+|---|---|---|---|
+| `priority` | `high`, `medium`, `low` | `medium` | Declared delivery importance |
+| `value` | free text, one line | none | Why the specification matters |
+| `effort` | `S`, `M`, `L` | unset | Declared size, used only as a tie-break |
+| `blockedBy` | list of prefixes or slugs | empty | Specifications that must complete or archive first |
+
+`validate --mode=authoring` rejects a `priority` or `effort` value outside its enum.
 
 ## Imported Item Frontmatter
 
