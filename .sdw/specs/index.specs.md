@@ -48,7 +48,7 @@ Central repository index tracking specification lifecycle states, metadata, and 
 | 00035 | 00035-sdw-delivery-changelog-retro-spec-update | SDW Delivery Changelog, Retrospective, and Spec-Drift Update | archived | local | 2026-10-21 | PASS | 2026-10-22 |
 | 00036 | 00036-sdw-changelog-delivery-records | SDW Changelog Delivery Records | completed | local | 2026-10-21 | PASS | - |
 | 00037 | 00037-sdw-run-retrospective-candidates | SDW Run Retrospective Candidates | completed | local | 2026-10-21 | PASS | - |
-| 00038 | 00038-sdw-spec-drift-repair | SDW Spec Drift Repair | pending | local | 2026-10-21 | PASS | - |
+| 00038 | 00038-sdw-spec-drift-repair | SDW Spec Drift Repair | completed | local | 2026-10-21 | PASS | - |
 | 00039 | 00039-sdw-batch-skill | SDW Batch Skill — Multi-Spec Queue Delegating to Single sdw-orch Runs | completed | local | 2026-10-21 | PASS | - |
 | 00040 | 00040-sdw-branching-strategy | SDW Branching Strategy — Configurable Presets, Branch Lanes, and Post-Merge Sync | completed | local | 2026-10-21 | PASS | - |
 | 00041 | 00041-us-20-versioned-spec-files-for-creation | Versioned spec files for creation, editing, and drift repair | pending | github | 2026-10-21 | PASS | - |
