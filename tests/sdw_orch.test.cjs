@@ -625,7 +625,7 @@ title: Branch State
   }
 });
 
-test('00054 AC1: Step 7 writes the delivery report beside the specification before Step 8', () => {
+test('00054 AC1 & AC15: Step 7 writes the delivery report beside the specification before Step 8', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-delivery-report-run-'));
   try {
     execSync('git init', { cwd: tmpDir, stdio: 'ignore' });
@@ -663,7 +663,6 @@ title: Delivery Fixture
         runId,
         minScore: 8,
         skipReview: true,
-        skipPr: true,
         implementation: {
           mode: 'command',
           command: 'node -e "const fs = require(\'fs\'); fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({ taskId: process.env.SDW_TASK_ID, acIds: [\'AC1\'], filesChanged: [\'README.md\'], tests: [{ name: \'fixture test\', status: \'passed\' }], summary: \'delivery fixture done\' })); fs.appendFileSync(\'README.md\', \'\\n# delivery update\');"'
@@ -707,6 +706,18 @@ title: Delivery Fixture
     assert.equal(state.deliveryReport, '.sdw/specs/delivery-report.md', 'Run state records the report path');
     assert.equal(state.steps[7].status, 'skipped', 'Report is written after Step 7 resolves');
     assert.match(output, /Delivery report written: \.sdw\/specs\/delivery-report\.md/, 'One console line names the written report');
+
+    // AC15: the report lands in its own scoped commit that stages only that file.
+    assert.equal(
+      execSync('git log -1 --format=%s', { cwd: tmpDir, encoding: 'utf8' }).trim(),
+      'docs(delivery): record delivery report',
+      'AC15: the report is committed with its own scoped message'
+    );
+    const committedFiles = execSync('git show --name-only --format= HEAD', { cwd: tmpDir, encoding: 'utf8' })
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    assert.deepEqual(committedFiles, ['.sdw/specs/delivery-report.md'], 'AC15: the report commit stages only the report');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
@@ -891,6 +902,308 @@ title: "Demo Feature"
       now: '2026-10-22T11:00:00.000Z'
     });
     assert.match(unchanged, /## Breaking Changes\n\nNone detected\./, 'AC7: no candidates renders None detected');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// Spec 00054 test fixtures: a git workspace whose only contract is the report.
+function setupDeliveryReportRepo(slug) {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-delivery-report-run-'));
+  execSync('git init', { cwd: tmpDir, stdio: 'ignore' });
+  execSync('git config user.name "SDW Tester"', { cwd: tmpDir, stdio: 'ignore' });
+  execSync('git config user.email "tester@sdw.org"', { cwd: tmpDir, stdio: 'ignore' });
+  fs.mkdirSync(path.join(tmpDir, '.sdw', 'specs'), { recursive: true });
+  fs.writeFileSync(path.join(tmpDir, 'README.md'), '# delivery fixture\n', 'utf8');
+  fs.writeFileSync(path.join(tmpDir, '.sdw', 'config.json'), JSON.stringify({
+    scoreMin: 8,
+    scmProvider: 'none',
+    useFeatureBranches: false,
+    useWorktrees: false,
+    pushDelivery: false
+  }, null, 2), 'utf8');
+  fs.writeFileSync(path.join(tmpDir, '.sdw', 'specs', `${slug}.md`), `---
+slug: ${slug}
+title: Delivery Fixture
+---
+# Delivery Fixture
+## Acceptance Criteria
+- AC1: The orchestrator shall write the delivery report beside the specification.
+`, 'utf8');
+  execSync('git add -A && git commit -m "baseline"', { cwd: tmpDir, stdio: 'ignore' });
+  return tmpDir;
+}
+
+function deliveryImplementation() {
+  return {
+    mode: 'command',
+    command: 'node -e "const fs = require(\'fs\'); fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({ taskId: process.env.SDW_TASK_ID, acIds: [\'AC1\'], filesChanged: [\'README.md\'], tests: [{ name: \'fixture test\', status: \'passed\' }], summary: \'delivery fixture done\' })); fs.appendFileSync(\'README.md\', \'\\n# delivery update\');"'
+  };
+}
+
+function validDryRunSpec(slug, body) {
+  return `---
+id: null
+slug: ${slug}
+title: "Dry Observation"
+source: local
+status: draft
+specDate: 2026-10-22
+---
+
+# Specification - Dry Observation
+
+## Description
+
+${body}
+
+## Acceptance Criteria
+
+- AC1: The system shall record the observation.
+
+## Out of Scope
+
+| Feature | Feature reason |
+|---|---|
+| None | None |
+
+## Assumptions & Open Questions
+
+| Assumption | Chosen default | Rationale | Confirmed |
+|---|---|---|---|
+| None | None | None | y |
+
+## Definition of Ready (DoR)
+
+| Readiness Item | Requirement | Verification Method |
+|---|---|---|
+| Ready | Valid | node validate |
+
+## Validation & Observation Notes
+
+### Negative & Failing Test Scenarios
+
+- Scenario 1: An invalid input fails.
+`;
+}
+
+test('00054 AC11-AC14: observations name overlaps, supersessions, and config conflicts without blocking', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-spec-observations-'));
+  try {
+    const specsDir = path.join(tmpDir, '.sdw', 'specs');
+    fs.mkdirSync(specsDir, { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.sdw', 'config.json'), JSON.stringify({ scoreMin: 8 }, null, 2), 'utf8');
+    fs.writeFileSync(path.join(specsDir, 'index.specs.md'), [
+      '# Specification Index',
+      '',
+      '| Prefix | Slug | Title | Status | Source | Spec Date | Validation | Archival Date |',
+      '|---|---|---|---|---|---|---|---|',
+      '| 00010 | 00010-delivered | Delivered | completed | local | 2026-10-20 | PASS | - |',
+      '| 00060 | 00060-newer | Newer | pending | local | 2026-10-22 | PASS | - |',
+      '| 00070 | 00070-conflict | Conflict | pending | local | 2026-10-22 | PASS | - |',
+      ''
+    ].join('\n'), 'utf8');
+    const targetPath = path.join(specsDir, '00054-target.md');
+    fs.writeFileSync(targetPath, `---
+id: 54
+slug: 00054-target
+status: draft
+---
+# Target
+Touches \`skills/sdw-orch/scripts/sdw_orch.cjs\` and declares scoreMin: 9.
+`, 'utf8');
+    fs.writeFileSync(path.join(specsDir, '00010-delivered.md'), `---
+slug: 00010-delivered
+status: completed
+---
+# Delivered
+Also touches \`skills/sdw-orch/scripts/sdw_orch.cjs\`.
+`, 'utf8');
+    fs.writeFileSync(path.join(specsDir, '00060-newer.md'), `---
+slug: 00060-newer
+status: pending
+---
+# Newer
+This specification supersedes \`00054-target\`.
+`, 'utf8');
+    fs.writeFileSync(path.join(specsDir, '00070-conflict.md'), `---
+slug: 00070-conflict
+status: pending
+---
+# Conflict
+It fixes scoreMin: 7.
+`, 'utf8');
+
+    const observations = specGrilling.analyzeSpecObservations({ targetRoot: tmpDir, specPath: targetPath });
+    for (const item of observations) {
+      assert.ok(['overlap', 'superseded', 'conflict'].includes(item.kind), 'AC14: kind is one of the documented kinds');
+      assert.ok(item.otherSpec, 'AC14: every observation names the other specification');
+      assert.ok(item.evidence, 'AC14: every observation carries evidence');
+      assert.ok(item.severity, 'AC14: every observation carries severity');
+    }
+
+    const overlap = observations.find((item) => item.kind === 'overlap' && item.otherSpec === '00010-delivered');
+    assert.ok(overlap, 'AC11: a delivered specification sharing a target file is an overlap');
+    assert.match(overlap.evidence, /00054-target/);
+    assert.match(overlap.evidence, /00010-delivered/);
+    assert.match(overlap.evidence, /skills\/sdw-orch\/scripts\/sdw_orch\.cjs/);
+    assert.equal(overlap.severity, 'high', 'AC11: a delivered overlapping specification is high severity');
+
+    const superseded = observations.find((item) => item.kind === 'superseded' && item.otherSpec === '00060-newer');
+    assert.ok(superseded, 'AC12: a supersession reference to the target slug is recorded');
+    assert.match(superseded.evidence, /00054-target/, 'AC12: the matched reference is named');
+
+    const conflict = observations.find((item) => item.kind === 'conflict' && item.otherSpec === '00070-conflict');
+    assert.ok(conflict, 'AC13: two specifications declaring the same key differently is a conflict');
+    assert.match(conflict.evidence, /scoreMin/);
+    assert.match(conflict.evidence, /9/);
+    assert.match(conflict.evidence, /7/);
+
+    // AC14: the analysis degrades to no observations instead of failing the run.
+    assert.deepEqual(
+      specGrilling.analyzeSpecObservations({ targetRoot: path.join(tmpDir, 'missing'), specPath: targetPath }),
+      [],
+      'AC14: an unreadable specification directory yields no observations and no error'
+    );
+
+    const noFilesPath = path.join(specsDir, '00054-nofiles.md');
+    fs.writeFileSync(noFilesPath, `---
+slug: 00054-nofiles
+---
+# No Files
+No target paths are named here.
+`, 'utf8');
+    const noFileObservations = specGrilling.analyzeSpecObservations({ targetRoot: tmpDir, specPath: noFilesPath });
+    assert.ok(!noFileObservations.some((item) => item.kind === 'overlap'), 'AC11: no target files means no overlap');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('00054 AC18: --dry-run prints the observations and writes no report or artifact', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-observations-dry-'));
+  try {
+    const specsDir = path.join(tmpDir, '.sdw', 'specs');
+    fs.mkdirSync(specsDir, { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.sdw', 'config.json'), JSON.stringify({
+      scoreMin: 8, scmProvider: 'none', useFeatureBranches: false, useWorktrees: false, pushDelivery: false
+    }, null, 2), 'utf8');
+    fs.writeFileSync(path.join(specsDir, 'index.specs.md'), [
+      '# Specification Index',
+      '',
+      '| Prefix | Slug | Title | Status | Source | Spec Date | Validation | Archival Date |',
+      '|---|---|---|---|---|---|---|---|',
+      '| 00010 | 00010-delivered | Delivered | completed | local | 2026-10-20 | PASS | - |',
+      ''
+    ].join('\n'), 'utf8');
+    fs.writeFileSync(
+      path.join(specsDir, '00054-dry.md'),
+      validDryRunSpec('00054-dry', 'Names `skills/sdw-orch/scripts/sdw_orch.cjs` as a target.')
+    );
+    fs.writeFileSync(path.join(specsDir, '00010-delivered.md'), `---
+slug: 00010-delivered
+status: completed
+---
+# Delivered
+Names \`skills/sdw-orch/scripts/sdw_orch.cjs\`.
+`, 'utf8');
+
+    let output = '';
+    const origLog = console.log;
+    console.log = (msg) => { output += String(msg) + '\n'; };
+    let code;
+    try {
+      code = sdwOrch.cmdRun({ root: tmpDir, specPath: '.sdw/specs/00054-dry.md', dryRun: true });
+    } finally {
+      console.log = origLog;
+    }
+
+    assert.equal(code, 0, 'AC18: a valid specification plans cleanly');
+    assert.match(output, /Spec observation \(overlap, high\)/, 'AC18: observations are printed');
+    assert.match(output, /No steps executed \(--dry-run\)/);
+    assert.ok(!fs.existsSync(path.join(specsDir, '00054-dry-report.md')), 'AC18: no report is written');
+    assert.ok(!fs.existsSync(path.join(tmpDir, '.sdw', 'state')), 'AC18: no run state or Step 2 artifact is written');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('00054 AC16: an unwritable report path records a warning and delivery still succeeds', () => {
+  const slug = 'delivery';
+  const tmpDir = setupDeliveryReportRepo(slug);
+  try {
+    const reportPath = path.join(tmpDir, '.sdw', 'specs', `${slug}-report.md`);
+    fs.mkdirSync(reportPath);
+
+    const runId = `run-${Date.now()}-${slug}`;
+    const origWarn = console.warn;
+    console.warn = () => {};
+    let code;
+    try {
+      code = sdwOrch.cmdRun({
+        root: tmpDir,
+        specPath: `.sdw/specs/${slug}.md`,
+        runId,
+        minScore: 8,
+        skipReview: true,
+        skipPr: true,
+        implementation: deliveryImplementation(),
+        scoring: judgeScoring()
+      });
+    } finally {
+      console.warn = origWarn;
+    }
+
+    assert.equal(code, 0, 'AC16: a report failure never fails the delivery');
+    const state = stateManager.loadRunState(tmpDir, runId);
+    assert.equal(state.status, 'completed', 'AC16: the run completes');
+    assert.ok(
+      state.errors.some((entry) => entry.warning === true && /Delivery report warning/.test(entry.error)),
+      'AC16: the warning is recorded in run state'
+    );
+    assert.ok(fs.statSync(reportPath).isDirectory(), 'AC16: the report path stayed unwritable');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('00054 AC17: a resumed run rewrites the report from current state instead of appending', () => {
+  const slug = 'delivery';
+  const tmpDir = setupDeliveryReportRepo(slug);
+  try {
+    const runId = `run-${Date.now()}-${slug}`;
+    const code = sdwOrch.cmdRun({
+      root: tmpDir,
+      specPath: `.sdw/specs/${slug}.md`,
+      runId,
+      minScore: 8,
+      skipReview: true,
+      skipPr: true,
+      implementation: deliveryImplementation(),
+      scoring: judgeScoring()
+    });
+    assert.equal(code, 0);
+
+    const reportPath = path.join(tmpDir, '.sdw', 'specs', `${slug}-report.md`);
+    assert.ok(fs.existsSync(reportPath), 'the first run wrote the report');
+    fs.appendFileSync(reportPath, '\nSTALE APPENDIX\n', 'utf8');
+
+    const state = stateManager.loadRunState(tmpDir, runId);
+    state.score = 6;
+    stateManager.saveRunState(tmpDir, state);
+
+    const resumeCode = sdwOrch.cmdResume({ root: tmpDir, runId, skipReview: true, skipPr: true });
+    assert.equal(resumeCode, 0, 'AC17: a resumed run regenerates the report and completes');
+
+    const markdown = fs.readFileSync(reportPath, 'utf8');
+    assert.ok(!markdown.includes('STALE APPENDIX'), 'AC17: the previous content is replaced, not appended');
+    assert.match(markdown, /\| Score \| 6\/10 \(scoreMin 8\) \|/, 'AC17: the report reflects current run state');
+    assert.equal((markdown.match(/# Delivery Report — /g) || []).length, 1, 'AC17: exactly one report is written');
+    assert.equal(
+      stateManager.loadRunState(tmpDir, runId).deliveryReport,
+      '.sdw/specs/delivery-report.md',
+      'AC17: the regenerated report keeps the same recorded path'
+    );
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

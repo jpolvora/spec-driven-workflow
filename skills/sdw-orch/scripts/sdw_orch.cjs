@@ -854,6 +854,18 @@ function printRunDryRunPlan(context) {
     branching: branchPlan.strategy
   };
 
+  // Spec 00054 AC18: the plan prints the same advisory observations the real
+  // ingestion would record. It writes no report and no Step 2 artifact.
+  let specObservations = [];
+  try {
+    specObservations = specGrilling.analyzeSpecObservations({
+      targetRoot,
+      specPath: resolvedSpec
+    });
+  } catch (observationErr) {
+    specObservations = [];
+  }
+
   if (options.json) {
     console.log(JSON.stringify({
       mode: 'dry-run',
@@ -865,6 +877,7 @@ function printRunDryRunPlan(context) {
       settings,
       branchPlan,
       steps,
+      specObservations,
       errors
     }, null, 2));
     return valid ? 0 : 1;
@@ -887,6 +900,9 @@ function printRunDryRunPlan(context) {
   console.log(`[sdw-orch dry-run] Pull request target: ${branchPlan.pullRequestTarget}`);
   console.log(`[sdw-orch dry-run] After merge: ${branchPlan.afterMerge}`);
   console.log(`[sdw-orch dry-run] Steps: ${steps.join(' -> ')}`);
+  for (const specObservation of specObservations) {
+    console.log(`[sdw-orch dry-run] Spec observation (${specObservation.kind}, ${specObservation.severity}): ${specObservation.evidence}`);
+  }
   console.log('[sdw-orch dry-run] No steps executed (--dry-run).');
   return 0;
 }
@@ -1382,11 +1398,29 @@ function cmdRun(options) {
       chosenOption: g.defaultChoice
     }));
 
+    // Spec 00054 AC11-AC14: the ingestion analysis only reads sibling
+    // specifications. A failure degrades to no observations; it never blocks,
+    // rewrites, or changes the run.
+    let specObservations = [];
+    try {
+      specObservations = specGrilling.analyzeSpecObservations({
+        targetRoot,
+        specPath: resolvedSpec,
+        specContent: effectiveSpecContent
+      });
+    } catch (observationErr) {
+      console.warn(`[Step 2: Refinement] Spec observation analysis skipped: ${observationErr.message}`);
+    }
+    for (const specObservation of specObservations) {
+      console.log(`[sdw-orch] Spec observation (${specObservation.kind}, ${specObservation.severity}): ${specObservation.evidence}`);
+    }
+
     const refinementOutput = {
       hasGaps: grillingResult.hasGaps,
       gaps: grillingResult.gaps,
       gapsResolved: resolvedGaps,
-      blueprint: grillingResult.blueprint
+      blueprint: grillingResult.blueprint,
+      specObservations
     };
 
     console.log(`[Step 2: Refinement] Refinement complete. Blueprint generated for ${grillingResult.blueprint.targetFiles.length} target file(s).`);
@@ -1396,6 +1430,7 @@ function cmdRun(options) {
       runId: state.runId,
       grillingResult,
       effectiveSpecContent,
+      specObservations,
       artifactsDir: state.artifactsDir
     });
     state = stateManager.updateStepState(targetRoot, state.runId, 2, 'completed', refinementOutput, null, { artifact: step2Artifact });
@@ -2277,10 +2312,11 @@ function cmdRun(options) {
     state = stateManager.updateStepState(targetRoot, state.runId, 7, 'skipped', { reason: 'Skipped via --skip-review' });
   }
 
-  // Spec 00054 AC1: Step 7 has resolved, so write the delivery report as a
-  // companion file beside the specification before Step 8 delegates delivery
-  // to sdw-ship-pr. Rewriting the same path keeps a resumed run regenerating
-  // from current state instead of appending a second report.
+  // Spec 00054 AC1, AC15, AC16, AC17: Step 7 has resolved, so write the delivery
+  // report as a companion file beside the specification before Step 8 delegates
+  // delivery to sdw-ship-pr. The same path is rewritten from current state on a
+  // resumed run; a write or commit failure records a warning and never fails
+  // delivery. Second-pass runs keep their single `refine(...)` commit as HEAD.
   {
     const writtenReport = deliveryReport.writeDeliveryReport({
       targetRoot,
@@ -2291,6 +2327,33 @@ function cmdRun(options) {
       state.deliveryReport = writtenReport.relPath;
       state = stateManager.saveRunState(targetRoot, state);
       console.log(`[sdw-orch] Delivery report written: ${writtenReport.relPath}`);
+      // AC15: only a run that will ship has a delivery to attach the report to;
+      // --skip-pr and second-pass runs keep their existing HEAD.
+      if (!options.skipPr && !state.refineMode && isGitRepo(targetRoot)) {
+        try {
+          stageAndCommitOnly(
+            targetRoot,
+            [writtenReport.relPath],
+            `docs(${specSlug}): record delivery report`
+          );
+        } catch (reportCommitErr) {
+          stateManager.recordWarning(
+            targetRoot,
+            state.runId,
+            7,
+            `Delivery report warning: report could not be committed: ${reportCommitErr.message}`
+          );
+          state = stateManager.loadRunState(targetRoot, state.runId) || state;
+        }
+      }
+    } else {
+      stateManager.recordWarning(
+        targetRoot,
+        state.runId,
+        7,
+        `Delivery report warning: report could not be written at the companion path of "${state.specPath || '(no specification path)'}"`
+      );
+      state = stateManager.loadRunState(targetRoot, state.runId) || state;
     }
   }
 

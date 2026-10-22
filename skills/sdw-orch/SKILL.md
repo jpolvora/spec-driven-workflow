@@ -24,7 +24,7 @@ Orchestrates spec execution from input requirement to delivery commit, automated
 ## Subcommands
 
 - `run <specPath>`: Executes the full 8-step workflow pipeline for one specification.
-- `run <specPath> --dry-run`: Validates the specification and prints the execution plan; executes nothing and writes no state.
+- `run <specPath> --dry-run`: Validates the specification, prints the execution plan and the spec observations it found; executes nothing and writes no state, report, or artifact.
 - `run <specPath> --second-pass` (alias `--refine`): Refines an already implemented specification: audits how it was delivered, fills acceptance criteria that are missing or drifted from the spec, then applies clear simplification or quality gains. Writes a `{slug}-refine.md` report, commits only when the pass changed code, and runs Step 8 only when that commit exists. Producing no change is valid only when every criterion already holds and no drift remains.
 - `run <specPath> --sandbox`: Executes the whole pipeline against an isolated local clone of `HEAD`; never pushes or opens a pull request.
 - `sandbox list`: Lists isolated sandboxes with status, branch, and age.
@@ -64,8 +64,8 @@ Orchestrates spec execution from input requirement to delivery commit, automated
    - Done when: Run state exists on disk, branch is active, and derivation status recorded.
 
 2. **Conduct Refinement Round**
-   Walk decision tree paths for input bounds, failure recovery, and concurrency, producing a technical blueprint. In single-spec mode, query user via `ask_question` if ambiguous gaps remain. In batch mode, auto-resolve gaps using recommended defaults.
-   - Done when: Decision gaps resolved, blueprint generated, and refinement artifact `{slug}-step-2.md` persisted.
+   Walk decision tree paths for input bounds, failure recovery, and concurrency, producing a technical blueprint. In single-spec mode, query user via `ask_question` if ambiguous gaps remain. In batch mode, auto-resolve gaps using recommended defaults. Record advisory spec observations (`overlap`, `superseded`, `conflict`) over sibling specifications in `steps[2].output.specObservations` and the Step 2 artifact; they never block the run.
+   - Done when: Decision gaps resolved, blueprint generated, observations recorded, and refinement artifact `{slug}-step-2.md` persisted.
 
 3. **Decompose into DAG Tasks**
    Analyze complexity and emit DAG execution units with context prompts and dependency graphs.
@@ -99,6 +99,12 @@ Orchestrates spec execution from input requirement to delivery commit, automated
    Delegate pull request preparation, pre-PR verification gates, remote publishing, SCM submission, and post-PR review convergence to `sdw-ship-pr`. Pass active run ID, specification slug, and CLI options (`--push`, `--poll-pr`, `--dry-run`).
    - Run: `node skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs --run-id <runId> --spec <specSlug> [options]`
    - Done when: `sdw-ship-pr` completes with exit code 0, delivery outcome is recorded in `.sdw/state/{runId}.state.json`, and specification is marked completed in index.
+
+## Delivery Report & Spec Observations
+
+- After Step 7 resolves and before Step 8 delegates, write `{specFileNameWithoutExtension}-report.md` beside the specification with: metadata (run id, slug, branch, base/delivery commit, ship status, score/`scoreMin`, timings per step), tasks, commits, files changed per task, verification, code review, breaking-change candidates, quality, spec observations, notes, and outcome.
+- Commit it with `docs({specSlug}): record delivery report`, staging only that file, when the run proceeds to Step 8; record its path in `state.deliveryReport`. A write or commit failure records a warning in run state and delivery continues. A resumed run rewrites the same path from current state instead of appending. A `--skip-pr` run writes and records the report without a commit.
+- Step 2 records advisory observations as `kind` (`overlap` when a delivered spec names the same target file, `superseded` when another spec names this slug/id in a supersession context, `conflict` when both declare the same configuration key differently), `otherSpec`, `evidence`, and `severity`. They never block, rewrite, or alter a run; `--dry-run` prints them without writing a report or artifact.
 
 ## References
 
