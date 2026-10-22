@@ -3,7 +3,7 @@ id: null
 slug: 00051-issue-linkage-imported-scm-issues-close-
 title: "issue linkage: imported SCM issues close automatically when the implementing pull request references the source item id"
 source: local
-status: draft
+status: implemented
 specDate: 2026-10-22
 ---
 

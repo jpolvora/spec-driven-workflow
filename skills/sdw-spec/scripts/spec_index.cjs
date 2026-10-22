@@ -51,6 +51,82 @@ function parseFrontmatter(content) {
   return values;
 }
 
+// Spec 00058 AC19: the registry owns lifecycle status and the header is its
+// projection. `completed` means "implemented" in the header, so the same
+// transition that writes the registry row canonicalizes the header.
+const HEADER_STATUS_FOR_REGISTRY = {
+  completed: 'implemented'
+};
+
+// An archived specification was delivered (`implemented`) or retired without
+// delivery (`abandoned`); both are coherent, so archiving repairs nothing.
+const ARCHIVED_HEADER_STATUSES = ['implemented', 'abandoned'];
+
+// Spec 00058 AC20: a `pending` registry row carries no specific authored status,
+// so only the authored statuses can agree with it.
+const PENDING_HEADER_STATUSES = ['draft', 'awaiting-approval', 'ready-to-implement'];
+
+function normalizeHeaderValue(value) {
+  const raw = String(value === undefined || value === null ? '' : value).trim();
+  return raw ? raw.replace(/^['"]|['"]$/g, '') : null;
+}
+
+// The specification a registry row projects. Companions (`{slug}-report.md`) are
+// delivery artifacts, never registry targets (spec 00054).
+function specFileForSlug(specsDir, slug) {
+  if (!slug) return null;
+  const direct = path.join(specsDir, `${slug}.md`);
+  if (fs.existsSync(direct) && fs.statSync(direct).isFile()) return direct;
+  return null;
+}
+
+function isSpecificationFile(fileName) {
+  return typeof fileName === 'string'
+    && fileName.endsWith('.md')
+    && fileName !== 'index.specs.md'
+    && !/-report\.md$/.test(fileName);
+}
+
+function readHeaderStatus(content) {
+  const fm = String(content || '').replace(/\r\n?/g, '\n').match(/^---\s*\n([\s\S]*?)\n---\s*\n?/);
+  if (!fm) return null;
+  const line = fm[1].match(/^status:\s*(.*)$/m);
+  return line ? normalizeHeaderValue(line[1]) : null;
+}
+
+// Rewrites the header `status:` line in place and preserves every other byte,
+// including the line ending style. Returns the previous value, or null when the
+// file has no frontmatter status line to rewrite.
+function writeHeaderStatus(specPath, status) {
+  const next = normalizeHeaderValue(status);
+  if (!next) return null;
+  const content = fs.readFileSync(specPath, 'utf8');
+  const fm = content.match(/^---(\r?\n)([\s\S]*?)(\r?\n)---/);
+  if (!fm) return null;
+  const block = fm[2];
+  const line = block.match(/^status:\s*(.*)$/m);
+  if (!line) return null;
+  const previous = normalizeHeaderValue(line[1]);
+  if (previous === next) return previous;
+  const nextBlock = block.replace(/^status:\s*.*$/m, `status: ${next}`);
+  fs.writeFileSync(specPath, content.replace(block, () => nextBlock), 'utf8');
+  return previous;
+}
+
+// AC20 projection: the header status the registry row expects, or null when the
+// registry value authorizes no single authored status.
+function expectedHeaderStatus(registryStatus) {
+  return HEADER_STATUS_FOR_REGISTRY[String(registryStatus || '').toLowerCase()] || null;
+}
+
+function headerStatusAgrees(registryStatus, headerStatus) {
+  const status = String(registryStatus || '').toLowerCase();
+  if (status === 'pending') return PENDING_HEADER_STATUSES.includes(headerStatus);
+  if (status === 'archived') return ARCHIVED_HEADER_STATUSES.includes(headerStatus);
+  const expected = expectedHeaderStatus(status);
+  return expected === null || expected === headerStatus;
+}
+
 // Spec 00055: `priority`, `value`, `effort`, and `blockedBy` are declared only in
 // frontmatter, so this accessor is the single read path and the registry stays a
 // projection with its existing columns.
@@ -283,6 +359,21 @@ function updateSpecStatus(slugOrPrefix, newStatus, options = {}) {
     entry.validation = options.validation;
   }
   writeIndex(entries, options);
+  // AC19: the header follows the registry in the same transition, so a row can
+  // never claim a delivery its own specification does not declare.
+  const headerStatus = expectedHeaderStatus(newStatus);
+  if (headerStatus) {
+    const { specsDir } = resolvePaths(options.root);
+    const specFile = specFileForSlug(specsDir, entry.slug);
+    if (specFile) {
+      try {
+        writeHeaderStatus(specFile, headerStatus);
+      } catch (e) {
+        // A missing or unreadable specification is reported by sync, never an
+        // error that rolls back the registry transition the caller owns.
+      }
+    }
+  }
   return entry;
 }
 
@@ -317,6 +408,12 @@ module.exports = {
   parseFrontmatter,
   parseDeclaredList,
   readDeclaredFields,
+  readHeaderStatus,
+  writeHeaderStatus,
+  expectedHeaderStatus,
+  headerStatusAgrees,
+  isSpecificationFile,
+  specFileForSlug,
   readIndex,
   writeIndex,
   scanSpecsDir,

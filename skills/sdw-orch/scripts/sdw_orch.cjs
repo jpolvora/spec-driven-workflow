@@ -2133,15 +2133,9 @@ function cmdRun(options) {
     let commitSha = null;
     let deliveryCommitCreated = false;
     try {
-      // Mark spec as completed in index.specs.md prior to staging delivery commit (AC24).
-      // A second pass never rewrites the index: the spec is already completed there, and
-      // rewriting it would manufacture a diff that turns a no-change pass into a commit.
-      if (specIndex && !refineMode) {
-        try {
-          specIndex.updateSpecStatus(specSlug, 'completed', { root: targetRoot });
-        } catch (e) {}
-      }
-
+      // Spec 00058 AC17/AC18: the delivery commit never touches the registry.
+      // A run that fails after this point must leave the registry row unchanged,
+      // so the row flips only after the delivery stage in Step 8.
       if (!isGitRepo(targetRoot)) {
         console.log(`[Step 6: Delivery Commit] Non-git workspace: delivery commit skipped.`);
         commitSha = null;
@@ -2418,6 +2412,18 @@ function cmdRun(options) {
   const hasShipPr = fs.existsSync(shipPrScript);
 
   const refineSkipShip = refineMode && state.deliveryCommitCreated === false;
+
+  // Spec 00058 AC17/AC18/AC19: the registry row is the last record the delivery
+  // owns. It flips only once the delivery stage reported the delivery, or when
+  // `--skip-pr` is in effect, and the specification header follows it in the
+  // same transition. A run that failed earlier leaves both untouched.
+  const markSpecCompleted = () => {
+    if (!specIndex || refineMode || typeof specIndex.updateSpecStatus !== 'function') return;
+    try {
+      specIndex.updateSpecStatus(specSlug, 'completed', { root: targetRoot });
+    } catch (e) {}
+  };
+
   if (refineSkipShip && state.steps[8].status !== 'completed' && state.steps[8].status !== 'skipped') {
     console.log('[Step 8: PR Preparation] Second pass produced no new commit; nothing to ship.');
     state = stateManager.updateStepState(targetRoot, state.runId, 8, 'skipped', { reason: 'second pass produced no code to ship' });
@@ -2720,21 +2726,14 @@ function cmdRun(options) {
     }
 
     state = stateManager.updateStepState(targetRoot, state.runId, 8, 'completed', prPayload);
-
-    // Mark spec as completed in index.specs.md after successful delivery (AC24)
-    if (specIndex) {
-      try {
-        specIndex.updateSpecStatus(specSlug, 'completed', { root: targetRoot });
-      } catch (e) {}
-    }
   } else if (options.skipPr) {
     state = stateManager.updateStepState(targetRoot, state.runId, 8, 'skipped', { reason: 'Skipped via --skip-pr' });
-    if (specIndex) {
-      try {
-        specIndex.updateSpecStatus(specSlug, 'completed', { root: targetRoot });
-      } catch (e) {}
-    }
   }
+
+  // AC17/AC19: one transition site, after the delivery stage reported the
+  // delivery (or --skip-pr skipped it). Idempotent, so a resumed run that
+  // already passed Step 8 converges on the same row.
+  markSpecCompleted();
 
   // Remote Push / Branch Publishing (--push or config.pushDelivery) fallback
   const shouldPush = options.push !== undefined ? options.push : (config && config.pushDelivery);

@@ -31,14 +31,15 @@ function writeState(root, runId, status, extra = {}) {
   fs.writeFileSync(path.join(stateDir, `${runId}.state.json`), JSON.stringify({
     runId,
     status,
-    specSlug: 'fixture',
+    specSlug: extra.specSlug || 'fixture',
     deliveryCommit: extra.deliveryCommit || null,
     branch: extra.branch || 'develop',
+    baseCommit: extra.baseCommit || null,
     pullRequest,
     shipStatus,
     // Step 8 output is the delivery record sdw-orch writes for the item.
     steps: {
-      8: { name: 'pr_preparation', status: 'completed', output: { pullRequest, shipStatus } }
+      8: { name: 'pr_preparation', status: extra.step8Status || 'completed', output: { pullRequest, shipStatus } }
     }
   }, null, 2), 'utf8');
 }
@@ -677,6 +678,32 @@ test('cli: run parses a specification list and batch options', () => {
   assert.equal(options.noSync, true);
   assert.equal(options.batchId, 'batch-x');
   assert.equal(cli.parseArgs(['resume', 'batch-x']).batchId, 'batch-x');
+  // Spec 00058 AC13: run and resume accept the same passthrough flag.
+  assert.equal(cli.parseArgs(['run', 'a.md', '--new-run']).newRun, true);
+  assert.equal(cli.parseArgs(['resume', 'batch-x', '--new-run']).newRun, true);
+  assert.equal(cli.parseArgs(['resume', 'batch-x']).newRun, false);
+});
+
+test('00058 AC13: the delegated invocation forwards --new-run to the orchestrator', () => {
+  const config = { root: process.cwd() };
+  const withFlag = queue.orchestratorArgs({
+    config,
+    runId: 'run-1',
+    specPath: '.sdw/specs/00001-alpha.md',
+    resume: false,
+    newRun: true
+  });
+  const withoutFlag = queue.orchestratorArgs({
+    config,
+    runId: 'run-2',
+    specPath: '.sdw/specs/00001-alpha.md',
+    resume: false,
+    newRun: false
+  });
+  assert.ok(withFlag.includes('--new-run'), 'a fresh delegated run carries --new-run');
+  assert.ok(!withoutFlag.includes('--new-run'), 'the flag is absent when it was not requested');
+  assert.equal(withFlag[1], 'run');
+  assert.ok(withFlag.includes('--run-id') && withFlag.includes('run-1'));
 });
 
 // Spec 00053 AC1-AC7: the queue merges each delivered pull request before it
@@ -1213,3 +1240,387 @@ test('AC13: a refreshed base missing the previous delivery commit halts and name
   }
 });
 
+
+// Spec 00058 AC1-AC4: the skip path skips the implementation only. The merge
+// stage still runs on adopted delivery evidence, and an item without any
+// evidence is recorded `no-delivery-evidence` and named in the summary.
+test('00058 AC1 & AC3 & AC4: the skip path merges adopted evidence and names the item without any', () => {
+  const { root, specs } = setup();
+  let remote = null;
+  try {
+    writeConfig(root, {
+      scmProvider: 'github',
+      batch: { autoMerge: true },
+      branching: { workBranch: 'develop', integrationBranch: 'develop' }
+    });
+    remote = initRepoWithRemote(root);
+    const initial = git(root, ['rev-parse', 'refs/remotes/origin/develop']);
+    writeRegistry(root, [
+      { prefix: '00001', slug: '00001-alpha', status: 'completed' },
+      { prefix: '00002', slug: '00002-beta', status: 'completed' }
+    ]);
+    // Recorded evidence for alpha only: a completed run with a delivery commit
+    // already reachable from the base and a delivered pull request.
+    writeState(root, 'run-alpha-delivered', 'completed', {
+      specSlug: '00001-alpha',
+      deliveryCommit: initial,
+      pullRequest: { number: 61, url: 'https://example.test/pull/61' },
+      shipStatus: 'delivered'
+    });
+
+    let delegations = 0;
+    const mergeCalls = [];
+    const { result, logs } = captureLogs(() => queue.runBatch(specs, {
+      root,
+      noSync: true,
+      _invoke: () => { delegations += 1; return 0; },
+      _mergePr: ({ prNumber }) => { mergeCalls.push(prNumber); return { merged: true }; }
+    }));
+
+    assert.equal(result, 0, 'a fully skipped queue completes');
+    assert.equal(delegations, 0, 'neither specification is delegated');
+    assert.deepEqual(mergeCalls, [61], 'the skipped item with evidence still merges its pull request');
+    const manifest = queue.loadManifest(queue.loadConfig(root));
+    assert.deepEqual(manifest.queue.map(item => item.status), ['already_implemented', 'already_implemented']);
+    assert.equal(manifest.queue[0].runId, 'run-alpha-delivered', 'the completed run is adopted onto the item');
+    assert.equal(manifest.queue[0].deliveryCommit, initial, 'the recorded delivery commit is adopted');
+    assert.equal(manifest.queue[0].merge.status, 'merged');
+    assert.equal(manifest.queue[0].merge.prNumber, 61);
+    assert.equal(manifest.queue[1].merge.status, 'skipped');
+    assert.equal(manifest.queue[1].merge.reason, 'no-delivery-evidence');
+    assert.equal(manifest.queue[1].deliveryCommit, null);
+    const output = logs.join('\n');
+    assert.match(output, /Merge skipped \(no delivery evidence\): 00002-beta/, 'the summary names the unproven item');
+    assert.doesNotMatch(output, /Merge skipped \(no delivery evidence\): 00001-alpha/, 'the proven item is never named');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    if (remote) fs.rmSync(remote, { recursive: true, force: true });
+  }
+});
+
+// Spec 00058 AC7: a local work lane behind the refreshed remote lane is
+// fast-forwarded, and the commit it reached is the recorded start point.
+test('00058 AC7: the pre-flight fast-forwards the local work lane and records the start point', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-batch-lane-'));
+  const alpha = writeSpec(root, '00001-alpha.md', '00001-alpha');
+  let remote = null;
+  try {
+    writeConfig(root, {
+      scmProvider: 'none',
+      batch: { autoMerge: true },
+      branching: { workBranch: 'develop', integrationBranch: 'develop' }
+    });
+    remote = initRepoWithRemote(root);
+    const behind = git(root, ['rev-parse', 'refs/heads/develop']);
+    git(root, ['commit', '-q', '--allow-empty', '-m', 'advance the remote lane']);
+    const advanced = git(root, ['rev-parse', 'HEAD']);
+    git(root, ['push', '-q', 'origin', 'develop']);
+    git(root, ['reset', '-q', '--hard', behind]);
+    assert.equal(git(root, ['rev-parse', 'refs/heads/develop']), behind, 'the local lane starts behind the remote');
+
+    const { result } = captureLogs(() => queue.runBatch([alpha], {
+      root,
+      noSync: true,
+      _invoke: ({ runId, specPath }) => {
+        writeState(root, runId, 'completed', {
+          specSlug: '00001-alpha',
+          deliveryCommit: advanced,
+          branch: path.basename(specPath, '.md')
+        });
+        return 0;
+      }
+    }));
+
+    assert.equal(result, 0);
+    const manifest = queue.loadManifest(queue.loadConfig(root));
+    const preflight = manifest.queue[0].preflight;
+    assert.equal(preflight.status, 'refreshed');
+    assert.equal(preflight.baseCommit, advanced, 'the refreshed base is the advanced remote commit');
+    assert.equal(preflight.startPoint, advanced, 'the start point is the fast-forwarded commit');
+    assert.equal(preflight.startPointSource, 'fast-forwarded');
+    assert.equal(git(root, ['rev-parse', 'refs/heads/develop']), advanced, 'the local work lane moved onto the refreshed commit');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    if (remote) fs.rmSync(remote, { recursive: true, force: true });
+  }
+});
+
+// Spec 00058 AC8: a dirty tree is never a halt. The branch start point falls back
+// to the refreshed remote lane commit, and the recorded source says why.
+test('00058 AC8: a dirty tree defers the lane update and records the remote ref as the start point', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-batch-dirty-'));
+  const alpha = writeSpec(root, '00001-alpha.md', '00001-alpha');
+  let remote = null;
+  try {
+    writeConfig(root, {
+      scmProvider: 'none',
+      batch: { autoMerge: true },
+      branching: { workBranch: 'develop', integrationBranch: 'develop' }
+    });
+    remote = initRepoWithRemote(root);
+    const behind = git(root, ['rev-parse', 'refs/heads/develop']);
+    fs.writeFileSync(path.join(root, 'README.md'), '# batch fixture\n\nremote advance\n', 'utf8');
+    git(root, ['commit', '-q', '-am', 'advance the remote lane']);
+    const advanced = git(root, ['rev-parse', 'HEAD']);
+    git(root, ['push', '-q', 'origin', 'develop']);
+    git(root, ['reset', '-q', '--hard', behind]);
+    // Dirt over the same file the fast-forward must rewrite.
+    fs.writeFileSync(path.join(root, 'README.md'), '# batch fixture\n\nlocal uncommitted edit\n', 'utf8');
+
+    const { result, logs } = captureLogs(() => queue.runBatch([alpha], {
+      root,
+      noSync: true,
+      _invoke: ({ runId }) => {
+        writeState(root, runId, 'completed', { specSlug: '00001-alpha', deliveryCommit: behind, branch: 'feature/00001-alpha' });
+        return 0;
+      }
+    }));
+
+    assert.equal(result, 0, 'a dirty tree never halts the queue');
+    const manifest = queue.loadManifest(queue.loadConfig(root));
+    const preflight = manifest.queue[0].preflight;
+    assert.equal(preflight.status, 'refreshed');
+    assert.equal(preflight.baseCommit, advanced);
+    assert.equal(preflight.startPointSource, 'deferred');
+    assert.equal(preflight.startPoint, 'origin/develop', 'the refreshed remote ref is the start point');
+    assert.equal(preflight.laneCommit, behind, 'the stale local lane commit is recorded');
+    assert.equal(git(root, ['rev-parse', 'refs/heads/develop']), behind, 'the blocked lane stays where it was');
+    assert.match(logs.join('\n'), /start origin\/develop/, 'the summary prints the start point used');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    if (remote) fs.rmSync(remote, { recursive: true, force: true });
+  }
+});
+
+// Spec 00058 AC9 & AC10: the provider is the last resolution source, and its
+// merged state proves a delivery even when the run stopped at review_pending.
+test('00058 AC9 & AC10: the provider resolves the pull request and proves a review_pending delivery merged', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-batch-provider-'));
+  const alpha = writeSpec(root, '00001-alpha.md', '00001-alpha');
+  try {
+    writeConfig(root, {
+      scmProvider: 'github',
+      batch: { autoMerge: true },
+      branching: { workBranch: 'develop', integrationBranch: 'develop' }
+    });
+    const findCalls = [];
+    const mergeCalls = [];
+    const { result } = captureLogs(() => queue.runBatch([alpha], {
+      root,
+      noSync: true,
+      _invoke: ({ runId }) => {
+        writeState(root, runId, 'completed', {
+          specSlug: '00001-alpha',
+          deliveryCommit: 'delivery-abc',
+          branch: 'feature/00001-alpha',
+          shipStatus: 'review_pending'
+        });
+        return 0;
+      },
+      _findPr: ({ head }) => { findCalls.push(head); return { number: 77, url: 'https://example.test/pull/77' }; },
+      _isPrMerged: ({ prNumber }) => prNumber === 77,
+      _mergePr: (args) => { mergeCalls.push(args); return { merged: true }; }
+    }));
+
+    assert.equal(result, 0);
+    assert.deepEqual(findCalls, ['feature/00001-alpha'], 'the provider is queried by the recorded head branch');
+    assert.equal(mergeCalls.length, 0, 'no merge is issued for a pull request the provider reports merged');
+    const manifest = queue.loadManifest(queue.loadConfig(root));
+    assert.equal(manifest.queue[0].merge.status, 'merged');
+    assert.equal(manifest.queue[0].merge.prNumber, 77);
+    assert.equal(manifest.queue[0].merge.source, 'provider');
+    assert.equal(manifest.queue[0].merge.observed, 'merged');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Spec 00058 AC11 & AC12: exit 6 is a pause. The item awaits convergence, and
+// resume continues that exact run at the delivery stage.
+test('00058 AC11 & AC12: a delivery convergence pause records awaiting_convergence and resume continues the same run', () => {
+  const { root, specs } = setup();
+  try {
+    let firstRunId = null;
+    const code = captureLogs(() => queue.runBatch(specs, {
+      root,
+      noSync: true,
+      _invoke: ({ runId }) => {
+        firstRunId = runId;
+        writeState(root, runId, 'paused', {
+          specSlug: '00001-alpha',
+          pullRequest: { number: 88, url: 'https://example.test/pull/88' },
+          shipStatus: 'review_pending',
+          step8Status: 'blocked_convergence'
+        });
+        return 6;
+      }
+    })).result;
+
+    assert.equal(code, 6, 'the convergence pause is propagated as exit code 6');
+    let manifest = queue.loadManifest(queue.loadConfig(root));
+    assert.equal(manifest.status, 'paused');
+    assert.equal(manifest.queue[0].status, 'awaiting_convergence');
+    assert.equal(manifest.queue[0].runId, firstRunId);
+    assert.equal(manifest.queue[1].status, 'pending');
+
+    const observed = [];
+    const resumeCode = captureLogs(() => queue.resumeBatch(manifest.batchId, {
+      root,
+      noSync: true,
+      _invoke: ({ runId, resume }) => {
+        observed.push({ runId, resume });
+        if (runId === firstRunId) {
+          writeState(root, runId, 'completed', { specSlug: '00001-alpha', deliveryCommit: 'delivered-88' });
+          return 0;
+        }
+        writeState(root, runId, 'paused');
+        return 4;
+      }
+    })).result;
+
+    assert.equal(resumeCode, 4, 'the queue advances to the next item and pauses there');
+    assert.deepEqual(observed[0], { runId: firstRunId, resume: true }, 'resume continues the paused run from the delivery stage');
+    manifest = queue.loadManifest(queue.loadConfig(root), manifest.batchId);
+    assert.equal(manifest.queue[0].status, 'completed');
+    assert.equal(manifest.queue[0].runId, firstRunId, 'no new run is started for the converged delivery');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Spec 00058 AC13-AC16: a stale open run is named, halts without failing the
+// item, and is superseded by --new-run instead of resumed.
+function staleRunFixture() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-batch-stale-'));
+  const alpha = writeSpec(root, '00001-alpha.md', '00001-alpha');
+  writeConfig(root, {
+    scmProvider: 'none',
+    batch: { autoMerge: true },
+    branching: { workBranch: 'develop', integrationBranch: 'develop' }
+  });
+  const remote = initRepoWithRemote(root);
+  // A commit that never reached the work lane: exactly the paused run left from
+  // a previous day, whose base predates every delivery merged since.
+  git(root, ['commit', '-q', '--allow-empty', '-m', 'stale base']);
+  const staleBase = git(root, ['rev-parse', 'HEAD']);
+  git(root, ['reset', '-q', '--hard', 'HEAD~1']);
+  writeState(root, 'run-stale-alpha', 'paused', { specSlug: '00001-alpha', baseCommit: staleBase });
+  return { root, alpha, remote, staleBase, laneCommit: git(root, ['rev-parse', 'refs/heads/develop']) };
+}
+
+test('00058 AC14 & AC15: a stale open run halts naming the run, its base commit, and the --new-run remedy', () => {
+  const fixture = staleRunFixture();
+  try {
+    let delegations = 0;
+    const { result, logs, errors } = captureAll(() => queue.runBatch([fixture.alpha], {
+      root: fixture.root,
+      noSync: true,
+      _invoke: () => { delegations += 1; return 0; }
+    }));
+
+    assert.equal(result, 1, 'a stale open run halts the queue');
+    assert.equal(delegations, 0, 'nothing is delegated onto an unproven base');
+    const manifest = queue.loadManifest(queue.loadConfig(fixture.root));
+    assert.equal(manifest.status, 'halted');
+    assert.equal(manifest.queue[0].status, 'pending', 'the item is never marked failed');
+    assert.equal(manifest.queue[0].staleRun.classification, 'stale');
+    assert.equal(manifest.queue[0].staleRun.runId, 'run-stale-alpha');
+    assert.equal(manifest.queue[0].staleRun.baseCommit, fixture.staleBase);
+    assert.equal(manifest.queue[0].staleRun.laneCommit, fixture.laneCommit);
+    const output = errors.join('\n');
+    assert.match(output, /Stale open run blocked delegation of "00001-alpha"/);
+    assert.ok(output.includes('run-stale-alpha'), 'the halt names the run id');
+    assert.ok(output.includes(fixture.staleBase), 'the halt names the run base commit');
+    assert.ok(output.includes(fixture.laneCommit), 'the halt names the refreshed lane commit');
+    assert.match(output, /--new-run/, 'the halt names the remedy');
+    assert.match(logs.join('\n'), /Stale open runs/);
+    assert.match(logs.join('\n'), /stale \| run run-stale-alpha/, 'the summary names the classification');
+    assert.ok(logs.join('\n').includes(fixture.staleBase), 'the summary names the run base commit');
+    assert.ok(logs.join('\n').includes(fixture.laneCommit), 'the summary names the refreshed lane commit');
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+    fs.rmSync(fixture.remote, { recursive: true, force: true });
+  }
+});
+
+test('00058 AC13 & AC16: --new-run supersedes the stale run, records its id, and never resumes it', () => {
+  const fixture = staleRunFixture();
+  try {
+    const invocations = [];
+    const { result, logs } = captureLogs(() => queue.runBatch([fixture.alpha], {
+      root: fixture.root,
+      noSync: true,
+      newRun: true,
+      _invoke: ({ runId, resume, newRun }) => {
+        invocations.push({ runId, resume, newRun });
+        writeState(fixture.root, runId, 'completed', { specSlug: '00001-alpha', deliveryCommit: 'fresh-delivery' });
+        return 0;
+      }
+    }));
+
+    assert.equal(result, 0, 'the queue advances on a fresh run');
+    assert.equal(invocations.length, 1);
+    assert.notEqual(invocations[0].runId, 'run-stale-alpha', 'a fresh run id is used');
+    assert.equal(invocations[0].resume, false, 'the stale run is never resumed');
+    assert.equal(invocations[0].newRun, true, 'the flag is forwarded to the delegated run');
+    const manifest = queue.loadManifest(queue.loadConfig(fixture.root));
+    assert.equal(manifest.queue[0].supersededRunId, 'run-stale-alpha', 'the superseded run id is recorded on the item');
+    assert.equal(manifest.queue[0].staleRun.superseded, true);
+    assert.equal(manifest.queue[0].status, 'completed');
+    const staleState = queue.readRunState(queue.loadConfig(fixture.root), 'run-stale-alpha');
+    assert.equal(staleState.status, 'paused', 'the stale run state is left untouched');
+    assert.match(logs.join('\n'), /superseded by --new-run/);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+    fs.rmSync(fixture.remote, { recursive: true, force: true });
+  }
+});
+
+// Spec 00058 AC6: when no open pull request can deliver the missing commit, the
+// pre-flight halts naming the commit and the branch instead of delegating.
+test('00058 AC6: a missing delivery with no open pull request halts naming the commit and the branch', () => {
+  const { root, specs } = setup();
+  let remote = null;
+  try {
+    writeConfig(root, {
+      scmProvider: 'github',
+      batch: { autoMerge: true },
+      branching: { workBranch: 'develop', integrationBranch: 'develop' }
+    });
+    remote = initRepoWithRemote(root);
+    // A delivery commit the base never received, with no pull request recorded.
+    git(root, ['commit', '-q', '--allow-empty', '-m', 'delivery that never landed']);
+    const lostDelivery = git(root, ['rev-parse', 'HEAD']);
+    git(root, ['reset', '-q', '--hard', 'HEAD~1']);
+
+    let delegations = 0;
+    const { result, errors } = captureAll(() => queue.runBatch(specs, {
+      root,
+      noSync: true,
+      _invoke: ({ runId, specPath }) => {
+        delegations += 1;
+        writeState(root, runId, 'completed', {
+          specSlug: path.basename(specPath, '.md'),
+          deliveryCommit: lostDelivery,
+          shipStatus: 'delivered'
+        });
+        return 0;
+      }
+    }));
+
+    assert.equal(result, 1, 'the queue halts');
+    assert.equal(delegations, 1, 'the next specification is never delegated');
+    const manifest = queue.loadManifest(queue.loadConfig(root));
+    assert.equal(manifest.status, 'halted');
+    assert.deepEqual(manifest.queue.map(item => item.status), ['completed', 'pending']);
+    const preflight = manifest.queue[1].preflight;
+    assert.equal(preflight.status, 'halted');
+    assert.ok(preflight.reason.includes(lostDelivery), 'the halt names the missing delivery commit');
+    assert.match(preflight.reason, /base branch "develop"/, 'the halt names the branch');
+    assert.match(preflight.reason, /no open pull request can deliver it/);
+    assert.match(errors.join('\n'), /Pre-flight halted the queue before delegating "00002-beta"/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    if (remote) fs.rmSync(remote, { recursive: true, force: true });
+  }
+});

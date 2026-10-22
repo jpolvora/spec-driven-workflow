@@ -3,7 +3,7 @@ id: null
 slug: 00052-sdw-fresh-subagent-code-review
 title: "SDW Fresh-Subagent Code Review Isolation"
 source: local
-status: draft
+status: implemented
 specDate: 2026-10-22
 ---
 

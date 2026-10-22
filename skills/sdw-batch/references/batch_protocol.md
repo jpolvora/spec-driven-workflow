@@ -18,9 +18,14 @@ The child process inherits stdio and is awaited. Its exit code is the queue deci
 | `0` | Single-spec pipeline completed | Mark item completed, record delivery commit, sync index, next item |
 | `4` | Dispatch pause (`awaiting_implementation`) | Record item + `runId`, manifest `paused`, exit `4` |
 | `5` | Judge pause (`awaiting_judgment`) | Record item + `runId`, manifest `paused`, exit `5` |
+| `6` | Delivery convergence pause (`awaiting_convergence`) | Record item + `runId`, manifest `paused`, exit `6` |
 | other | Failure | Halt (default) or record and advance (`--continue-on-error`) |
 
 Exit `3` (`--abort-on-gaps` grilling cancellation) is not a batch pause: the queue delegates unattended and never requests that flag, so a `3` is handled as a failure.
+
+Exit `6` is the convergence pause: the delivery stage could not converge because checks are failing or review threads are open. The item is recorded `awaiting_convergence` with its `runId`, the manifest is `paused`, and `sdw-batch resume` re-delegates that exact run at its delivery stage so the host converges the pull request without a new run.
+
+The delegated invocation carries `--new-run` when the operator passes it, so the orchestrator starts a fresh run instead of reusing an open one.
 
 The host agent owns the paused single run: `task next`, `task finish`, `score submit`, then `sdw-batch resume`.
 
@@ -72,13 +77,25 @@ Path: `.sdw/state/batch-{batchId}.json` (gitignored run state).
 }
 ```
 
-Statuses: `pending`, `already_implemented`, `in_progress`, `awaiting_implementation`, `awaiting_judgment`, `completed`, `failed`.
+Statuses: `pending`, `already_implemented`, `in_progress`, `awaiting_implementation`, `awaiting_judgment`, `awaiting_convergence`, `completed`, `failed`.
 Manifest statuses: `in_progress`, `paused`, `halted`, `completed`, `completed_with_errors`.
-Item fields: `retroFollowUp` records the follow-up outcome of a completed item; `followUpDepth: 1` and `origin` mark a queued follow-up item. `merge` records the pull request merge outcome of a completed item (§ 4); `preflight` records the base refresh that preceded its delegation (§ 4).
+Item fields: `retroFollowUp` records the follow-up outcome of a completed item; `followUpDepth: 1` and `origin` mark a queued follow-up item. `merge` records the pull request merge outcome of a completed item (§ 4); `preflight` records the base refresh and the start point that preceded its delegation (§ 4); `staleRun` records the stale classification (§ 5); `supersededRunId` records the stale run a `--new-run` replaced.
 
 ### Already-implemented skip
 
 Before an item is delegated, `sdw-batch` reads the specification registry (`{specsDir}/index.specs.md`) and skips every spec recorded as `completed` or `archived`, recording the queue item as `already_implemented` with a `skipReason`. The check runs when the manifest is created and again per item before delegation, so a spec completed since the batch started (or during a resume) is never implemented twice. A registry that cannot be read warns and never blocks the queue.
+
+A skip skips the implementation only. The item's merge stage and the pre-flight before the next delegation still run, so a delivered specification is never left with an open pull request or a base that omits its delivery.
+
+### Delivery-evidence rule
+
+The queue advances on evidence, never on a status string. The registry decides only whether a specification still needs implementation; whether its delivery reached the base is a git question, and whether its pull request is open is a provider question. Delivery evidence is read from recorded values in this order, and nothing is inferred from a title:
+
+1. The queue item's own `runId` state (`deliveryCommit`, `branch`, step 8 `pullRequest`).
+2. The most recent run state for the specification whose status is `completed` and which carries a `deliveryCommit`.
+3. The SCM provider's pull request for the recorded head branch.
+
+An item with no evidence records `merge.status: skipped` with reason `no-delivery-evidence`; the queue advances and the summary names every such item. An item with evidence runs the merge even when its implementation was skipped.
 
 A batch never refines a delivered specification. Refinement is an explicit single-spec call: `sdw-orch run <specPath> --second-pass` (alias `--refine`).
 
@@ -147,6 +164,8 @@ Before an item is delegated, the queue refreshes the base lane without checking 
   "remote": "origin",
   "baseBranch": "develop",
   "baseCommit": "0dc5ce6...",
+  "startPoint": "0dc5ce6...",
+  "startPointSource": "fast-forwarded",
   "reason": null,
   "at": "2026-10-21T12:05:00.000Z"
 }
@@ -154,7 +173,9 @@ Before an item is delegated, the queue refreshes the base lane without checking 
 
 `status` is `refreshed`, `halted`, `failed`, `no-remote`, `no-base-branch`, or `unavailable` (no git repository). Without a repository, a remote, or a resolvable base lane there is nothing shared to prove, so `no-remote`, `no-base-branch`, and `unavailable` record the condition and the queue proceeds. A failed fetch halts instead, because the queue cannot prove the base it would delegate onto.
 
-With a refreshed base, every earlier completed item's `deliveryCommit` must be reachable from it (`git merge-base --is-ancestor`). A missing delivery is handled before delegating:
+The pre-flight also moves the local work lane onto the refreshed remote commit: `status: current` when it already matches, `fast-forwarded` when it moved, and `deferred` when a dirty work tree blocks the update. A lane that cannot reach the refreshed commit halts naming the lane and both commits. `startPoint` is the commit the next feature branch actually starts from, and `startPointSource` names why: over a dirty tree it is the refreshed remote ref (`origin/<lane>`), so a stale local lane never seeds the branch. Both values are recorded on the item and printed in the summary.
+
+With a refreshed base, every earlier item that carries a delivery commit is a delivery to prove, whatever that item's status (`already_implemented`, `completed`, or any other): its commit must be reachable from the base (`git merge-base --is-ancestor`). A missing delivery is handled before delegating:
 
 | Missing delivery | Action |
 |---|---|
@@ -175,17 +196,41 @@ A halt prints `[sdw-batch] Pre-flight halted the queue before delegating "<slug>
 - A resume never re-issues a merge already recorded on an item through the per-item path. The pre-flight re-issues one only for an earlier pull request that is still open while its delivery is missing from the refreshed base, and never for a record whose status is `merged`.
 - The manifest policy (`continueOnError`, `syncIndex`) is preserved unless the resuming invocation overrides it.
 
+### Stale-run rule
+
+An open run (`paused` or `in_progress`) found for the item is resumed only while it is still valid. It is **stale** when its recorded base commit is not an ancestor of the refreshed work lane commit: `git merge-base --is-ancestor <run.baseCommit> <preflight.baseCommit>` fails. The predicate is the same one the base proof already uses.
+
+The classification is recorded on the item as `staleRun` and named in the summary with both commits:
+
+```json
+"staleRun": {
+  "classification": "stale",
+  "runId": "run-1792587734077-00038-sdw-spec-drift-repair",
+  "baseCommit": "6b2a568...",
+  "laneCommit": "f00d1a2...",
+  "superseded": true
+}
+```
+
+| Situation | Action |
+|---|---|
+| Stale open run, `--new-run` absent | Halt the queue naming the run id, its base commit, the refreshed lane commit, and the `--new-run` remedy. The item is never marked `failed`: it was never delegated. |
+| Stale open run, `--new-run` present | Record `supersededRunId`, start a fresh run, and never resume the stale one. |
+| Open run whose base commit is an ancestor | Not stale: resume it as today. |
+
+The operator decides, because a pause can be intentional. `--new-run` on `run` or `resume` is forwarded to the delegated invocation; the queue also accepts it on `resume` so a stale run left by a previous day never blocks an unattended queue.
+
 ## 6. Failure Policy
 
 - Default: the item is marked `failed`, the manifest becomes `halted`, remaining items stay `pending`, and the command exits `1`.
 - A pre-flight halt also exits `1` and sets the manifest to `halted`, but the item is never marked `failed`: it was never delegated.
 - `--continue-on-error`: the failure is recorded and the queue advances; the final manifest becomes `completed_with_errors` and the command exits `1`.
-- Batch exit codes are `0` (completed), `1` (failure or finished with errors), `4`/`5` (propagated pauses). A delegated failure code is recorded in `error`, never re-emitted, so no caller can mistake a failure for a pause.
+- Batch exit codes are `0` (completed), `1` (failure or finished with errors), `4`/`5`/`6` (propagated pauses). A delegated failure code is recorded in `error`, never re-emitted, so no caller can mistake a failure for a pause.
 - Resuming a batch whose manifest is `completed_with_errors` returns `1` and leaves the manifest unchanged; it never re-labels the batch as `completed`.
 
 ## 7. Summary
 
-After completion, halt, or pause, `sdw-batch` prints one table: index, slug, status, duration, delivery commit, and merge outcome (`merged #<n>`, `failed`, `skipped: <reason>`, or `-`). A follow-up section below the table lists the queued specifications and every creation failure with its candidate id. `--json` prints the manifest instead. Per-spec artifacts and state remain in the single run's directory.
+After completion, halt, or pause, `sdw-batch` prints one table: index, slug, status, duration, delivery commit, and merge outcome (`merged #<n>`, `failed`, `skipped: <reason>`, or `-`). Below the table it names every merge skipped for `no-delivery-evidence`, the `preflight.baseCommit` and `startPoint` each item used, and every stale open run with its classification and both commits (and whether `--new-run` superseded it). A follow-up section lists the queued specifications and every creation failure with its candidate id. `--json` prints the manifest instead. Per-spec artifacts and state remain in the single run's directory.
 
 ## 8. Boundaries
 

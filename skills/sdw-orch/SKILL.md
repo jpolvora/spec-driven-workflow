@@ -100,6 +100,12 @@ Orchestrates spec execution from input requirement to delivery commit, automated
    - Run: `node skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs --run-id <runId> --spec <specSlug> [options]`
    - Done when: `sdw-ship-pr` completes with exit code 0, delivery outcome is recorded in `.sdw/state/{runId}.state.json`, and specification is marked completed in index.
 
+## Delivery Pause, Registry Truth & Stale Runs
+
+- An unconverged delivery pauses with exit code `6`: run `paused`, Step 8 `blocked_convergence`. Converge the pull request, then `resume`; nothing is marked failed or completed.
+- Step 6 never writes the registry. Only after the delivery stage reports the delivery, or with `--skip-pr`, does Step 8 mark the specification `completed` and set its header `status: implemented` in the same transition; a run that fails earlier leaves both unchanged.
+- An open run whose recorded base commit is not an ancestor of the refreshed work lane is stale and is never resumed: `--new-run` starts a fresh run and records the superseded id.
+
 ## Delivery Report & Spec Observations
 
 - After Step 7 resolves and before Step 8 delegates, write `{specFileNameWithoutExtension}-report.md` beside the specification with: metadata (run id, slug, branch, base/delivery commit, ship status, score/`scoreMin`, timings per step), tasks, commits, files changed per task, verification, code review, breaking-change candidates, quality, spec observations, notes, and outcome.

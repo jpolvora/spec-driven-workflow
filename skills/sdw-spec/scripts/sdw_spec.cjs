@@ -81,7 +81,7 @@ Subcommands:
   list-by-priority         Rank pending specifications by declared priority, readiness, and effort
   new <requirements>      Synthesize canonical specification with autoincremented numerical prefix
   import                   Import remote tracker item from GitHub or Azure DevOps
-  sync                     Reconcile index.specs.md against on-disk files and orchestrator run states
+  sync                     Reconcile index.specs.md against on-disk files and orchestrator run states, report and repair header-status drift
   validate <specPath>      Validate frontmatter, section hierarchy, and strict EARS syntax
   status <slug> <status>   Change the spec header status with defined transitions
   update                   Propose a drift entry from changed files named by the specification
@@ -488,6 +488,21 @@ function cmdSync(options) {
       } else {
         report.transitions.forEach(t => {
           console.log(`  * [${t.slug}] ${t.field}: "${t.from || 'none'}" -> "${t.to}" (${t.reason})`);
+        });
+      }
+      // Spec 00058 AC20: every registry row whose header disagrees is named with
+      // its file, its registry value, and its header value.
+      if (report.headerDriftCount === 0) {
+        console.log('  Header drift (registry vs specification header): none');
+      } else {
+        console.log(`  Header drift (registry vs specification header): ${report.headerDriftCount} disagreement(s)`);
+        report.headerDrift.forEach(d => {
+          const action = d.repaired
+            ? `repaired -> ${d.expectedHeaderStatus}`
+            : d.expectedHeaderStatus
+              ? `would repair -> ${d.expectedHeaderStatus} (--dry-run)`
+              : 'unresolved (the registry row authorizes no single header status)';
+          console.log(`  ! ${d.file}: registry "${d.registryStatus}" vs header "${d.headerStatus || 'none'}" (${action})`);
         });
       }
     }

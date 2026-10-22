@@ -3,7 +3,7 @@ id: null
 slug: 00055-sdw-spec-list-by-priority
 title: "SDW Spec Priority Ranking — Declared Priority Fields and the list-by-priority Subcommand"
 source: local
-status: draft
+status: implemented
 specDate: 2026-10-22
 priority: high
 value: "Ranks pending specifications for the next batch run instead of re-deriving the list by hand"

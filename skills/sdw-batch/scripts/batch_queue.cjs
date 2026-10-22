@@ -207,6 +207,61 @@ function readRunState(config, runId) {
   }
 }
 
+// Spec 00058 AC14: an open run left by an earlier invocation still owns the
+// specification. The queue resumes it when it is still valid and names it when
+// it is not, instead of delegating into the orchestrator's own block.
+function openRunsForSpec(config, slug) {
+  if (!slug) return [];
+  let names = [];
+  try {
+    names = fs.readdirSync(runStateDir(config));
+  } catch (e) {
+    return [];
+  }
+  const runs = [];
+  for (const name of names) {
+    if (!name.endsWith('.state.json')) continue;
+    const file = path.join(config.stateDir, name);
+    let state;
+    try {
+      state = JSON.parse(fs.readFileSync(file, 'utf8'));
+    } catch (e) {
+      continue;
+    }
+    if (!state || state.specSlug !== slug) continue;
+    if (state.status !== 'paused' && state.status !== 'in_progress') continue;
+    runs.push({ state, mtimeMs: fs.statSync(file).mtimeMs });
+  }
+  // Newest first: the most recent invocation owns the specification.
+  return runs.sort((a, b) => b.mtimeMs - a.mtimeMs).map(entry => entry.state);
+}
+
+function resolveOpenRun({ config, item } = {}) {
+  if (!item) return null;
+  const own = readRunState(config, item.runId);
+  if (own && (own.status === 'paused' || own.status === 'in_progress')) return own;
+  const candidates = openRunsForSpec(config, item.slug);
+  return candidates.length > 0 ? candidates[0] : null;
+}
+
+// AC14: a run is stale when its recorded base commit is not an ancestor of the
+// refreshed work lane commit the next branch starts from. Both commits are
+// recorded on the classification, which the summary prints verbatim.
+function classifyStaleRun({ config, item, state } = {}) {
+  if (!state) return null;
+  const laneCommit = item && item.preflight ? item.preflight.baseCommit : null;
+  const runBaseCommit = state.baseCommit || null;
+  if (!laneCommit || !runBaseCommit) return null;
+  if (baseContains(config, runBaseCommit, laneCommit)) return null;
+  return {
+    classification: 'stale',
+    runId: state.runId,
+    baseCommit: runBaseCommit,
+    laneCommit,
+    classifiedAt: new Date().toISOString()
+  };
+}
+
 // AC3: delivery evidence is read from recorded values only. The item's own run
 // comes first; then the most recent completed run for the specification that
 // carries a delivery commit. Nothing is inferred from a title.
@@ -1060,11 +1115,27 @@ function orchestratorScript() {
   return path.resolve(__dirname, '..', '..', 'sdw-orch', 'scripts', 'sdw_orch.cjs');
 }
 
-function invokeOrchestrator({ config, runId, specPath, resume }) {
+// AC13: `--new-run` is forwarded to the delegated run, so the orchestrator
+// starts a fresh run instead of blocking on the open run it would otherwise
+// consider resumable. A resume has no such flag: the queue supersedes first.
+function orchestratorArgs({ config, runId, specPath, resume, newRun }) {
   const script = orchestratorScript();
-  const args = resume
-    ? [script, 'resume', '--run-id', runId, '--root', config.root]
-    : [script, 'run', path.resolve(config.root, specPath), '--run-id', runId, '--unattended', '--root', config.root];
+  if (resume) return [script, 'resume', '--run-id', runId, '--root', config.root];
+  return [
+    script,
+    'run',
+    path.resolve(config.root, specPath),
+    '--run-id',
+    runId,
+    '--unattended',
+    ...(newRun ? ['--new-run'] : []),
+    '--root',
+    config.root
+  ];
+}
+
+function invokeOrchestrator({ config, runId, specPath, resume, newRun }) {
+  const args = orchestratorArgs({ config, runId, specPath, resume, newRun });
   const result = spawnSync(process.execPath, args, { cwd: config.root, stdio: 'inherit' });
   if (result.error) throw result.error;
   return typeof result.status === 'number' ? result.status : 1;
@@ -1127,6 +1198,19 @@ function printSummary(manifest, options = {}) {
       console.log(`${String(item.slug || item.spec).padEnd(30).slice(0, 30)} | base ${base} | start ${preflight.startPoint}`);
     });
   }
+  // AC14: every stale open run is named with its classification and both commits.
+  const staleRuns = manifest.queue.filter(item => item.staleRun);
+  if (staleRuns.length > 0) {
+    console.log('------------------------------------------------------------');
+    console.log('Stale open runs');
+    staleRuns.forEach(item => {
+      const stale = item.staleRun;
+      const action = stale.superseded || item.supersededRunId === stale.runId
+        ? `superseded by --new-run (${item.supersededRunId})`
+        : 'halted: pass --new-run to supersede';
+      console.log(`${String(item.slug || item.spec).padEnd(30).slice(0, 30)} | ${stale.classification} | run ${stale.runId} | base ${stale.baseCommit} | lane ${stale.laneCommit} | ${action}`);
+    });
+  }
   // Follow-up outcomes stay visible: queued specs and creation failures are
   // the operator's only signal that the retrospective changed the queue.
   const followUps = manifest.queue.filter(item => {
@@ -1178,6 +1262,18 @@ function haltOnPreflight(manifest, config, item, preflight, options) {
   return 1;
 }
 
+// AC15: a stale open run halts the queue by name instead of failing the item.
+// The item was never delegated, so it keeps its status and stays resumable once
+// the operator converges it or supersedes it.
+function haltOnStaleRun(manifest, config, item, stale, options) {
+  manifest.status = 'halted';
+  saveManifest(config, manifest);
+  console.error(`\n[sdw-batch] Stale open run blocked delegation of "${item.slug}": run "${stale.runId}" has base commit ${stale.baseCommit}, which is not an ancestor of the refreshed work lane commit ${stale.laneCommit}.`);
+  console.error(`[sdw-batch] Pass --new-run to start a fresh run and record "${stale.runId}" as the superseded run id.`);
+  printSummary(manifest, options);
+  return 1;
+}
+
 function executeQueue(manifest, config, options) {
   let anyFailed = false;
   const continueOnError = options.continueOnError !== undefined
@@ -1223,6 +1319,34 @@ function executeQueue(manifest, config, options) {
       return haltOnPreflight(manifest, config, item, preflight, options);
     }
 
+    // Spec 00058 AC14-AC16: an open run is resumed only while its own base
+    // commit is reachable from the refreshed lane. A stale one halts the queue
+    // with the run id, its base commit, and the remedy; `--new-run` supersedes
+    // it, records the replaced id, and starts a fresh run.
+    const openRun = resolveOpenRun({ config, item });
+    if (openRun) {
+      const stale = classifyStaleRun({ config, item, state: openRun });
+      if (options.newRun) {
+        // AC16: the flag starts a fresh run and records the run it replaced,
+        // whether or not that run is stale; a stale one is never resumed.
+        item.supersededRunId = openRun.runId;
+        item.runId = null;
+        if (stale) item.staleRun = { ...stale, superseded: true };
+        say(options, stale
+          ? `[sdw-batch] Open run "${stale.runId}" for ${item.slug} is ${stale.classification}: base ${stale.baseCommit} is not an ancestor of the refreshed lane commit ${stale.laneCommit}; superseded by --new-run.`
+          : `[sdw-batch] Open run "${openRun.runId}" for ${item.slug} superseded by --new-run.`);
+        saveManifest(config, manifest);
+      } else if (stale) {
+        item.staleRun = stale;
+        saveManifest(config, manifest);
+        return haltOnStaleRun(manifest, config, item, stale, options);
+      } else if (!item.runId) {
+        // A run whose base commit is an ancestor is not stale: resume it as today.
+        item.runId = openRun.runId;
+        saveManifest(config, manifest);
+      }
+    }
+
     manifest.currentIndex = i;
     item.status = 'in_progress';
     saveManifest(config, manifest);
@@ -1242,8 +1366,21 @@ function executeQueue(manifest, config, options) {
       item.runId = runId;
       try {
         exitCode = options._invoke
-          ? options._invoke({ config, runId, specPath: item.spec, resume: Boolean(resumable), runState: prior })
-          : invokeOrchestrator({ config, runId, specPath: item.spec, resume: Boolean(resumable) });
+          ? options._invoke({
+              config,
+              runId,
+              specPath: item.spec,
+              resume: Boolean(resumable),
+              runState: prior,
+              newRun: Boolean(options.newRun)
+            })
+          : invokeOrchestrator({
+              config,
+              runId,
+              specPath: item.spec,
+              resume: Boolean(resumable),
+              newRun: Boolean(options.newRun)
+            });
       } catch (err) {
         exitCode = 1;
         failureMessage = err.message;
@@ -1385,6 +1522,7 @@ function formatStatus(manifest) {
 
 module.exports = {
   applyRetroFollowUp,
+  classifyStaleRun,
   createManifest,
   executeQueue,
   formatStatus,
@@ -1394,9 +1532,12 @@ module.exports = {
   loadConfig,
   loadManifest,
   manifestFilePath,
+  openRunsForSpec,
+  orchestratorArgs,
   printSummary,
   readRunState,
   recoverFollowUps,
+  resolveOpenRun,
   resolveSpec,
   resumeBatch,
   runBatch,

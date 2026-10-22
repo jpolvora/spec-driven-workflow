@@ -3,7 +3,7 @@ id: null
 slug: 00053-batch-auto-merge-sdw-batch-merges-each-d
 title: "batch auto-merge: sdw-batch merges each delivered pull request before advancing to the next specification"
 source: local
-status: draft
+status: implemented
 specDate: 2026-10-22
 ---
 

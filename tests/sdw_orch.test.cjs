@@ -1262,3 +1262,144 @@ test('00054 AC17: a resumed run rewrites the report from current state instead o
 });
 
 
+
+// Spec 00058 AC17, AC18 & AC19: the registry row flips only after the delivery
+// stage reports the delivery, and the specification header follows it in the
+// same transition. A run that fails before delivery leaves both untouched.
+function setupRegistryTransitionRepo(slug) {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-registry-transition-'));
+  execSync('git init', { cwd: tmpDir, stdio: 'ignore' });
+  execSync('git config user.name "SDW Tester"', { cwd: tmpDir, stdio: 'ignore' });
+  execSync('git config user.email "tester@sdw.org"', { cwd: tmpDir, stdio: 'ignore' });
+  fs.mkdirSync(path.join(tmpDir, '.sdw', 'specs'), { recursive: true });
+  fs.writeFileSync(path.join(tmpDir, 'README.md'), '# registry fixture\n', 'utf8');
+  fs.writeFileSync(path.join(tmpDir, '.sdw', 'config.json'), JSON.stringify({
+    scoreMin: 8,
+    scmProvider: 'none',
+    useFeatureBranches: false,
+    useWorktrees: false,
+    pushDelivery: false
+  }, null, 2), 'utf8');
+  fs.writeFileSync(path.join(tmpDir, '.sdw', 'specs', `${slug}.md`), `---
+slug: ${slug}
+title: Registry Fixture
+source: local
+status: ready-to-implement
+---
+# Registry Fixture
+## Acceptance Criteria
+- AC1: The orchestrator shall transition the registry after delivery.
+`, 'utf8');
+  fs.writeFileSync(path.join(tmpDir, '.sdw', 'specs', 'index.specs.md'), [
+    '# Specification Index',
+    '',
+    '| Prefix | Slug | Title | Status | Source | Spec Date | Validation | Archival Date |',
+    '|---|---|---|---|---|---|---|---|',
+    `| ${slug.slice(0, 5)} | ${slug} | Registry Fixture | pending | local | 2026-10-22 | PASS | - |`,
+    ''
+  ].join('\n'), 'utf8');
+  execSync('git add -A && git commit -m "baseline"', { cwd: tmpDir, stdio: 'ignore' });
+  return tmpDir;
+}
+
+function registryFixtureImplementation() {
+  return {
+    mode: 'command',
+    command: 'node -e "const fs = require(\'fs\'); fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({ taskId: process.env.SDW_TASK_ID, acIds: [\'AC1\'], filesChanged: [\'README.md\'], tests: [{ name: \'fixture test\', status: \'passed\' }], summary: \'registry fixture done\' })); fs.appendFileSync(\'README.md\', \'\\n# delivery update\');"'
+  };
+}
+
+function silenceConsole(fn) {
+  const originalLog = console.log;
+  const originalError = console.error;
+  console.log = () => {};
+  console.error = () => {};
+  try {
+    return fn();
+  } finally {
+    console.log = originalLog;
+    console.error = originalError;
+  }
+}
+test('00058 AC17, AC18 & AC19: the registry transition follows the delivery stage and the header follows the registry', () => {
+  const slug = '00001-transition-fixture';
+
+  // AC18: a failure after the delivery commit but before the delivery stage
+  // leaves the registry row and the header exactly as they were.
+  const failingRoot = setupRegistryTransitionRepo(slug);
+  try {
+    const fakeSkillsRoot = path.join(failingRoot, 'fake-skills');
+    fs.mkdirSync(path.join(fakeSkillsRoot, 'sdw-code-review', 'scripts'), { recursive: true });
+    fs.writeFileSync(path.join(fakeSkillsRoot, 'sdw-code-review', 'SKILL.md'), '# fake sdw-code-review\n', 'utf8');
+    fs.writeFileSync(
+      path.join(fakeSkillsRoot, 'sdw-code-review', 'scripts', 'sdw_code_review.cjs'),
+      'process.stdout.write(JSON.stringify({ passed: false, blockingCount: 1, findings: [] }));\nprocess.exit(1);\n',
+      'utf8'
+    );
+    const runId = `run-${Date.now()}-${slug}`;
+    const code = silenceConsole(() => sdwOrch.cmdRun({
+      root: failingRoot,
+      specPath: `.sdw/specs/${slug}.md`,
+      runId,
+      minScore: 8,
+      skillsRoot: fakeSkillsRoot,
+      implementation: registryFixtureImplementation(),
+      scoring: judgeScoring()
+    }));
+
+    assert.equal(code, 1, 'a failed review ends the run with exit 1');
+    const state = stateManager.loadRunState(failingRoot, runId);
+    assert.equal(state.steps[6].status, 'completed', 'the delivery commit was created before the failure');
+    assert.ok(state.deliveryCommit, 'the delivery commit is recorded');
+    assert.match(execSync('git log -1 --format=%s', { cwd: failingRoot, encoding: 'utf8' }).trim(), /^feat\(/, 'the delivery commit is HEAD');
+    assert.match(
+      fs.readFileSync(path.join(failingRoot, '.sdw', 'specs', 'index.specs.md'), 'utf8'),
+      new RegExp(`\\| ${slug} \\| Registry Fixture \\| pending \\|`),
+      'AC18: the registry row is unchanged when the run fails before delivery'
+    );
+    assert.match(
+      fs.readFileSync(path.join(failingRoot, '.sdw', 'specs', `${slug}.md`), 'utf8'),
+      /^status: ready-to-implement$/m,
+      'AC18: the header is unchanged when the run fails before delivery'
+    );
+  } finally {
+    fs.rmSync(failingRoot, { recursive: true, force: true });
+  }
+
+  // AC17/AC19: once the delivery stage reports the delivery (here `--skip-pr`),
+  // the row and the header change together, after the delivery commit exists.
+  const deliveredRoot = setupRegistryTransitionRepo(slug);
+  try {
+    const runId = `run-${Date.now()}-${slug}`;
+    const code = silenceConsole(() => sdwOrch.cmdRun({
+      root: deliveredRoot,
+      specPath: `.sdw/specs/${slug}.md`,
+      runId,
+      minScore: 8,
+      skipReview: true,
+      skipPr: true,
+      implementation: registryFixtureImplementation(),
+      scoring: judgeScoring()
+    }));
+
+    assert.equal(code, 0, 'the run completes');
+    const state = stateManager.loadRunState(deliveredRoot, runId);
+    assert.equal(state.steps[8].status, 'skipped', '--skip-pr skips the delivery stage');
+    assert.equal(state.status, 'completed');
+    assert.match(
+      fs.readFileSync(path.join(deliveredRoot, '.sdw', 'specs', 'index.specs.md'), 'utf8'),
+      new RegExp(`\\| ${slug} \\| Registry Fixture \\| completed \\|`),
+      'AC17: the registry row flips to completed'
+    );
+    assert.match(
+      fs.readFileSync(path.join(deliveredRoot, '.sdw', 'specs', `${slug}.md`), 'utf8'),
+      /^status: implemented$/m,
+      'AC19: the header follows the registry in the same transition'
+    );
+    const dirt = execSync('git status --porcelain', { cwd: deliveredRoot, encoding: 'utf8' });
+    assert.ok(dirt.includes('.sdw/specs/index.specs.md'), 'the registry change happens after the delivery commit is created');
+    assert.ok(dirt.includes(`.sdw/specs/${slug}.md`), 'the header change happens after the delivery commit is created');
+  } finally {
+    fs.rmSync(deliveredRoot, { recursive: true, force: true });
+  }
+});
