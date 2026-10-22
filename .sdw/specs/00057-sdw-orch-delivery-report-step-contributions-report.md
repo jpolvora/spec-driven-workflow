@@ -12,12 +12,12 @@
 | Base branch | `master` |
 | Base commit | `fb3d8494d41fea5a3a6a9cf77066f93507f260c4` |
 | Delivery commit | `8396afbf6cc8a63cbd774ec54154ef1bf66c5626` |
-| Ship status | pending |
+| Ship status | review_pending |
 | Score | 9/10 (scoreMin 8) |
 | Implementation start | 2026-10-22T21:29:08.835Z |
 | Implementation end | 2026-10-22T23:04:00.074Z |
 | Total wall-clock duration | 1h 34m 51s |
-| Generated at | 2026-10-22T23:35:00.298Z |
+| Generated at | 2026-10-22T23:46:53.517Z |
 | Step 1: derivation (skipped) | 2ms |
 | Step 2: refinement (completed) | 36ms |
 | Step 3: dag_generation (completed) | 2ms |
@@ -25,7 +25,7 @@
 | Step 5: scoring (completed) | 27m 43s |
 | Step 6: delivery_commit (completed) | 327ms |
 | Step 7: code_review (completed) | 1s |
-| Step 8: pr_preparation (pending) | n/a |
+| Step 8: pr_preparation (blocked_convergence) | n/a |
 
 
 ## Tasks
@@ -39,6 +39,8 @@
 
 | SHA | Subject | Range |
 |---|---|---|
+| `f879353` | fix(00057-sdw-orch-delivery-report-step-contributions): pass the apply options object so the CLI records an applied learning | base..HEAD |
+| `7315a0f` | docs(00057-sdw-orch-delivery-report-step-contributions): record delivery report | base..HEAD |
 | `8396afb` | fix(00057-sdw-orch-delivery-report-step-contributions): record per-round convergence and commit the final report | base..HEAD |
 | `445b8e9` | task(00057-sdw-orch-delivery-report-step-contributions): task-2 | base..HEAD |
 | `a9316b0` | task(00057-sdw-orch-delivery-report-step-contributions): task-1 | base..HEAD |
@@ -80,12 +82,14 @@
 | File | Change |
 |---|---|
 | `.sdw/directory-structure.md` | modified |
+| `.sdw/specs/00057-sdw-orch-delivery-report-step-contributions-report.md` | added |
 | `.sdw/specs/00057-sdw-orch-delivery-report-step-contributions.md` | modified |
 | `skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs` | modified |
 
 ## Verification
 
 - test gate: status `passed`, exit code `0`, duration 1m 54s
+- Step 8 delivery: `blocked_convergence` (ship status `review_pending`)
 
 ## Code Review
 
@@ -277,18 +281,18 @@ Not available
 
 - Step 1 (derivation) skipped: not recorded
 - Task task-2 accepted after re-dispatch (sequence 2)
-- Environment: workspace: 18 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
+- Environment: workspace: 19 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
 
 ## Outcome
 
 - Result: `paused`
 - Delivery commit: `8396afbf6cc8a63cbd774ec54154ef1bf66c5626`
-- Ship status: `pending`
+- Ship status: `review_pending`
 - Duration: 1h 34m 51s
 
 ## Step Contributions
 
-- Recorded: 6 contribution(s)
+- Recorded: 8 contribution(s)
 
 ### Step 1: derivation
 
@@ -332,7 +336,10 @@ Not available
 
 ### Step 8: pr_preparation
 
-Not available
+- **convergence** 2026-10-22T23:39:55.985Z - Convergence iteration 1
+  - Body: `{"iteration":1,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":false}`
+- **convergence** 2026-10-22T23:39:56.957Z - Convergence iteration 2
+  - Body: `{"iteration":2,"rounds":2,"failingChecks":[{"name":"review","status":""}],"openThreads":1,"resolvedThreads":0,"fixCommit":null,"converged":false}`
 
 ### Step 9: retrospective
 
