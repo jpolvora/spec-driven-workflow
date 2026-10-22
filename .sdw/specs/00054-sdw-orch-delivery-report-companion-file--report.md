@@ -17,7 +17,7 @@
 | Implementation start | 2026-10-22T15:05:42.227Z |
 | Implementation end | 2026-10-22T15:52:56.098Z |
 | Total wall-clock duration | 47m 13s |
-| Generated at | 2026-10-22T16:55:00.292Z |
+| Generated at | 2026-10-22T17:06:24.682Z |
 | Step 1: derivation (skipped) | 1ms |
 | Step 2: refinement (completed) | 2ms |
 | Step 3: dag_generation (completed) | 2ms |
@@ -39,6 +39,8 @@
 
 | SHA | Subject | Range |
 |---|---|---|
+| `d2cee0b` | fix(00054-sdw-orch-delivery-report): scope the shared commit helper to the requested paths | base..HEAD |
+| `af4c448` | docs(00054-sdw-orch-delivery-report-companion-file-): record delivery report | base..HEAD |
 | `eb70a81` | fix(00054-sdw-orch-delivery-report): skip report companions in the CI and release validation loops | base..HEAD |
 | `06e5e11` | docs(00054-sdw-orch-delivery-report-companion-file-): record delivery report | base..HEAD |
 | `ae822ec` | fix(00054-sdw-orch-delivery-report): keep report companions out of the spec registry and audit | base..HEAD |
@@ -105,7 +107,7 @@
 
 ## Breaking Changes
 
-None detected.
+- **CLI flag** `--only` added in `skills/sdw-orch/scripts/sdw_orch.cjs`
 
 ## Quality
 
@@ -125,6 +127,7 @@ None.
 - Error (step 8, 2026-10-22T16:40:04.154Z): Pre-PR enforcement refused to push or create a pull request. runAllTests failed: Command failed: npm test
 - Error (step 8, 2026-10-22T16:40:04.205Z): Pre-PR enforcement refused to push or create a pull request. runAllTests failed: Command failed: npm test
 - Error (step 8, 2026-10-22T16:52:15.721Z): Pull request did not converge: 1 failing check(s), 0 active thread(s) remain
+- Error (step 8, 2026-10-22T17:00:56.133Z): Pull request did not converge: 1 failing check(s), 1 active thread(s) remain
 - Step 1 (derivation) skipped: not recorded
 - Task task-1 abandoned at 2026-10-22T15:05:37.621Z: base refresh: 00052 merged into develop after the pre-flight skipped a stale item
 - Task task-1 accepted after re-dispatch (sequence 2)
