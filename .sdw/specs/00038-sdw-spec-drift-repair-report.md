@@ -17,7 +17,7 @@
 | Implementation start | 2026-10-22T17:11:29.580Z |
 | Implementation end | 2026-10-22T17:25:08.274Z |
 | Total wall-clock duration | 13m 38s |
-| Generated at | 2026-10-22T17:41:08.732Z |
+| Generated at | 2026-10-22T17:52:44.014Z |
 | Step 1: derivation (skipped) | 1ms |
 | Step 2: refinement (completed) | 34ms |
 | Step 3: dag_generation (completed) | 3ms |
@@ -39,6 +39,8 @@
 
 | SHA | Subject | Range |
 |---|---|---|
+| `ac03bff` | fix(00038-sdw-spec-drift-repair): match sentence-final mentions and unquoted git paths | base..HEAD |
+| `7a235a8` | docs(00038-sdw-spec-drift-repair): record delivery report | base..HEAD |
 | `3a007ea` | fix(00038-sdw-spec-drift-repair): keep the registry row pending until the delivery ships | base..HEAD |
 | `9239e0c` | docs(00038-sdw-spec-drift-repair): record delivery report | base..HEAD |
 | `d16074f` | feat(00038-sdw-spec-drift-repair): implement 00038-sdw-spec-drift-repair | base..HEAD |
@@ -86,6 +88,7 @@
 - **CLI flag** `--exclude-standard` added in `skills/sdw-spec/scripts/sdw_spec.cjs`
 - **CLI flag** `--from` added in `skills/sdw-spec/scripts/sdw_spec.cjs`
 - **CLI flag** `--name-status` added in `skills/sdw-spec/scripts/sdw_spec.cjs`
+- **CLI flag** `--no-renames` added in `skills/sdw-spec/scripts/sdw_spec.cjs`
 - **CLI flag** `--others` added in `skills/sdw-spec/scripts/sdw_spec.cjs`
 - **CLI flag** `--quiet` added in `skills/sdw-spec/scripts/sdw_spec.cjs`
 - **CLI flag** `--verify` added in `skills/sdw-spec/scripts/sdw_spec.cjs`
@@ -139,6 +142,7 @@
 ## Notes
 
 - Error (step 8, 2026-10-22T17:38:52.493Z): Pull request did not converge: 1 failing check(s), 1 active thread(s) remain
+- Error (step 8, 2026-10-22T17:46:23.944Z): Pull request did not converge: 1 failing check(s), 2 active thread(s) remain
 - Step 1 (derivation) skipped: not recorded
 - Task task-2 accepted after re-dispatch (sequence 2)
 - Environment: workspace: 4 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
