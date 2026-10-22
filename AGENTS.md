@@ -175,6 +175,45 @@ npm run review:dry
 
 `opencode/claude-haiku-5-5` (Zen provider) is not the default because the OS `OPENCODE_API_KEY` is a Go key; the Zen provider returns HTTP `402 Insufficient account funds`.
 
+---
+
+## 10. Tests
+
+`npm test` runs `node --test tests/*.test.cjs` end to end in about 80 seconds with zero runtime dependencies. Tests are the product's evidence: they prove behavior at the boundary a consumer actually calls, and they are what a reviewer reads to trust a diff.
+
+**Layout and shape.**
+
+- One file per skill or concern: `tests/<skill>_<concern>.test.cjs` (`sdw_ship_pr.test.cjs`, `sdw_batch_retro.test.cjs`). Add cases to the owning file; never open a parallel suite for the same surface.
+- Node's built-in runner (`node:test`) with `node:assert/strict`. No new dev dependency, no network, no real SCM remote.
+- Name each test after the acceptance criteria it proves (`test('AC1 & AC3: ...')`) so a specification's evidence stays greppable.
+- Call the helper by `require` when the contract is its return value; spawn the CLI (`spawnSync`) when the contract is the exit code, stdout, or argument parsing. Both paths exist in the suite and neither replaces the other.
+
+**What to assert.**
+
+- Every exit path of a deterministic helper: success, each documented failure, and one negative case.
+- Documents only at load-bearing lines (step names, gate names, cross-skill references), never whole-file equality.
+- A fresh temp directory per case (`fs.mkdtempSync`); never write into the repository tree, `.sdw/state/`, or another test's fixture.
+- Secret-shaped fixtures use a documented placeholder or a runtime-assembled literal (`'AKIA' + 'J7X4QZX2LMNOPQRS'`); one contiguous realistic key trips the repository leak scan.
+- Nothing wall-clock-, locale-, timezone-, or absolute-OS-path-shaped: inject or freeze every clock the code reads.
+
+**When to run what.**
+
+| Change | Run |
+|---|---|
+| Specification or registry only (`.sdw/specs/**`) | `node skills/sdw-spec/scripts/validate_spec.cjs --mode=authoring <spec>` plus `node skills/sdw-spec/scripts/sdw_spec.cjs list --status pending`; no suite |
+| One skill's scripts, references, or `SKILL.md` | `node --test tests/<skill>*.test.cjs` while iterating |
+| A shared helper (`sdw_ship_pr.cjs`, `spec_index.cjs`, `state_manager.cjs`, `dag_planner.cjs`) | The owning files first, then the full suite |
+| Anything under `skills/` or `tests/`, before the delivery commit | `npm test` |
+| Pull request | The full suite again through the `sdw-ship-pr` pre-PR gate (`runAllTests`) |
+
+**Discipline.**
+
+- A focused run buys iteration speed only; it never replaces the full suite before a delivery commit.
+- Never skip, delete, weaken, or `.only` a test to make a suite pass. Fix the defect or report the failure with its output.
+- Never commit a skipped test. A flake is a defect with an owner: fix it in the same change or file it as its own specification.
+- `evals/usecases.md` (see §3) is not a test: nothing executes it, and it never substitutes for a case here.
+
+---
 
 # Communication/Response style and format
 
