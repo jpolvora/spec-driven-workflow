@@ -7,7 +7,7 @@
 | Specification file | `.sdw/specs/00054-sdw-orch-delivery-report-companion-file-.md` |
 | Specification slug | 00054-sdw-orch-delivery-report-companion-file- |
 | Run ID | run-1792681460114-00054-sdw-orch-delivery-report |
-| Run status | paused |
+| Run status | failed |
 | Branch | `feature/00054-sdw-orch-delivery-report-companion-file-` |
 | Base branch | `master` |
 | Base commit | `cf85f65838a628c7605357ccea5252d07f97d930` |
@@ -17,7 +17,7 @@
 | Implementation start | 2026-10-22T15:05:42.227Z |
 | Implementation end | 2026-10-22T15:52:56.098Z |
 | Total wall-clock duration | 47m 13s |
-| Generated at | 2026-10-22T16:38:18.097Z |
+| Generated at | 2026-10-22T16:48:24.898Z |
 | Step 1: derivation (skipped) | 1ms |
 | Step 2: refinement (completed) | 2ms |
 | Step 3: dag_generation (completed) | 2ms |
@@ -25,7 +25,7 @@
 | Step 5: scoring (completed) | 43m 20s |
 | Step 6: delivery_commit (completed) | 381ms |
 | Step 7: code_review (completed) | 837ms |
-| Step 8: pr_preparation (pending) | n/a |
+| Step 8: pr_preparation (failed) | n/a |
 
 
 ## Tasks
@@ -39,6 +39,8 @@
 
 | SHA | Subject | Range |
 |---|---|---|
+| `ae822ec` | fix(00054-sdw-orch-delivery-report): keep report companions out of the spec registry and audit | base..HEAD |
+| `3a1daa3` | docs(00054-sdw-orch-delivery-report-companion-file-): record delivery report | base..HEAD |
 | `dd572f5` | feat(00054-sdw-orch-delivery-report-companion-file-): implement 00054-sdw-orch-delivery-report-companion-file- | base..HEAD |
 | `e7c0d0d` | fix(00054-sdw-orch-delivery-report): read the live verdict field in the quality counters | base..HEAD |
 | `24b5804` | fix(00054-sdw-orch-delivery-report): detect CLI command changes and always commit the report | base..HEAD |
@@ -75,14 +77,19 @@
 
 | File | Change |
 |---|---|
+| `.sdw/specs/00054-sdw-orch-delivery-report-companion-file--report.md` | added |
 | `.sdw/specs/index.specs.md` | modified |
 | `skills/sdw-code-review/SKILL.md` | modified |
+| `skills/sdw-doctor/scripts/sdw_doctor.cjs` | modified |
+| `skills/sdw-spec/scripts/spec_index.cjs` | modified |
 | `tests/sdw_orch_refine.test.cjs` | modified |
 | `tests/sdw_scoped_commit.test.cjs` | modified |
+| `tests/sdw_spec.test.cjs` | modified |
 
 ## Verification
 
 - test gate: status `passed`, exit code `0`, duration 1m 31s
+- Step 8 delivery: `failed`
 
 ## Code Review
 
@@ -111,15 +118,17 @@ None.
 
 ## Notes
 
+- Error (step 8, 2026-10-22T16:40:04.154Z): Pre-PR enforcement refused to push or create a pull request. runAllTests failed: Command failed: npm test
+- Error (step 8, 2026-10-22T16:40:04.205Z): Pre-PR enforcement refused to push or create a pull request. runAllTests failed: Command failed: npm test
 - Step 1 (derivation) skipped: not recorded
 - Task task-1 abandoned at 2026-10-22T15:05:37.621Z: base refresh: 00052 merged into develop after the pre-flight skipped a stale item
 - Task task-1 accepted after re-dispatch (sequence 2)
 - Task task-2 accepted after re-dispatch (sequence 3)
-- Environment: workspace: 12 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
+- Environment: workspace: 16 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
 
 ## Outcome
 
-- Result: `paused`
+- Result: `failed`
 - Delivery commit: `dd572f5be6e7004e80708826d15f2cb6ed5b6389`
 - Ship status: `pending`
 - Duration: 47m 13s
