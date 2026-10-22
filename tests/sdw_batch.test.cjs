@@ -1033,6 +1033,13 @@ test('AC12: the pre-flight merges an earlier open pull request when auto-merge i
         mergeCalls.push(prNumber);
         if (mergeCalls.length === 1) throw new Error('branch protection blocks the merge');
         if (mergeCalls.length === 2) {
+          // The first attempt threw before the provider merged anything, so the
+          // recorded attempt is a failure and this retry is the first effective
+          // merge of the pull request (AC12), never a re-issue of a merge that
+          // already happened (AC6).
+          const attempt = queue.loadManifest(queue.loadConfig(root));
+          assert.equal(attempt.queue[0].merge.attempted, true);
+          assert.equal(attempt.queue[0].merge.status, 'failed', 'the first attempt merged nothing');
           // The provider merge lands the delivery on the remote base.
           git(root, ['push', '-q', '--force', 'origin', 'refs/heads/feature/00001-alpha:refs/heads/develop']);
         }
@@ -1042,7 +1049,7 @@ test('AC12: the pre-flight merges an earlier open pull request when auto-merge i
 
     assert.equal(result, 0, 'the queue continues after the pre-flight merge');
     assert.equal(delegations, 2);
-    assert.deepEqual(mergeCalls, ['71', '71', '72'], 'the open pull request is merged before the second item is delegated');
+    assert.deepEqual(mergeCalls, ['71', '71', '72'], 'the failed attempt is retried once by the pre-flight, then the second item merges its own pull request');
     const manifest = queue.loadManifest(queue.loadConfig(root));
     assert.equal(manifest.queue[1].status, 'completed');
     assert.equal(manifest.queue[0].merge.status, 'merged', 'the pre-flight merge is recorded on the earlier item');
@@ -1050,6 +1057,57 @@ test('AC12: the pre-flight merges an earlier open pull request when auto-merge i
     assert.equal(manifest.queue[0].merge.prNumber, '71');
     assert.equal(manifest.queue[1].preflight.status, 'refreshed');
     assert.equal(manifest.queue[1].preflight.baseCommit, delivery, 'the base is refreshed again after the merge');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    if (remote) fs.rmSync(remote, { recursive: true, force: true });
+  }
+});
+
+test('AC6 & AC12: the pre-flight never re-merges a pull request whose manifest records a merged attempt', () => {
+  const { root, specs } = setup();
+  let remote = null;
+  try {
+    writeConfig(root, {
+      scmProvider: 'github',
+      batch: { autoMerge: true },
+      branching: { workBranch: 'develop', integrationBranch: 'develop' }
+    });
+    remote = initRepoWithRemote(root);
+    git(root, ['switch', '-q', '-c', 'feature/00001-alpha']);
+    fs.writeFileSync(path.join(root, 'delivery.txt'), 'alpha delivery\n', 'utf8');
+    git(root, ['add', '-A']);
+    git(root, ['commit', '-q', '-m', 'alpha delivery']);
+    const delivery = git(root, ['rev-parse', 'HEAD']);
+    git(root, ['switch', '-q', 'develop']);
+
+    const mergeCalls = [];
+    let delegations = 0;
+    const { result, errors } = captureAll(() => queue.runBatch(specs, {
+      root,
+      noSync: true,
+      _invoke: ({ runId, specPath }) => {
+        delegations += 1;
+        const alpha = path.basename(specPath).includes('alpha');
+        writeDeliveredCommit(root, runId, delivery, alpha ? '91' : '92');
+        return 0;
+      },
+      // The merge is recorded but never reaches the remote base, so the
+      // pre-flight finds the delivery missing while the record says merged.
+      _mergePr: ({ prNumber }) => { mergeCalls.push(prNumber); return { merged: true }; }
+    }));
+
+    assert.equal(result, 1, 'a recorded merge whose delivery is missing halts instead of re-merging');
+    assert.equal(delegations, 1, 'the second specification is never delegated');
+    assert.deepEqual(mergeCalls, ['91'], 'the pre-flight never re-issues a recorded merge');
+    const manifest = queue.loadManifest(queue.loadConfig(root));
+    assert.equal(manifest.status, 'halted');
+    assert.equal(manifest.queue[0].merge.status, 'merged');
+    const preflight = manifest.queue[1].preflight;
+    assert.equal(preflight.status, 'halted');
+    assert.match(preflight.reason, /#91/);
+    assert.match(preflight.reason, /records merged pull request/);
+    assert.ok(preflight.reason.includes(delivery), 'the halt names the missing delivery commit');
+    assert.match(errors.join('\n'), /Pre-flight halted the queue/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
     if (remote) fs.rmSync(remote, { recursive: true, force: true });

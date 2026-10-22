@@ -713,11 +713,21 @@ function runPreflight({ config, manifest, item, options = {} } = {}) {
   let mergedAny = false;
   for (const prior of missing) {
     const pullRequest = deliveredPullRequest(config, prior);
+    // AC6 makes the per-item merge idempotent: a record that already merged is
+    // never re-merged, here or on resume. AC12 governs this pre-flight path:
+    // while the pull request is still open the base cannot contain the
+    // delivery, so the merge is issued now. A recorded attempt whose status is
+    // "failed" threw before the provider merged anything, so retrying it is
+    // recovery rather than a duplicate merge; a record with status "merged"
+    // whose delivery is still missing halts instead of merging again.
+    const alreadyMerged = Boolean(prior.merge && prior.merge.status === 'merged');
     const open = pullRequest.prNumber !== null
       && pullRequest.shipStatus === 'delivered'
-      && !(prior.merge && prior.merge.status === 'merged');
+      && !alreadyMerged;
     if (!open) {
-      const message = `${missingDeliveryMessage(prior, baseBranch)} and no open pull request can deliver it`;
+      const message = alreadyMerged
+        ? `${missingDeliveryMessage(prior, baseBranch)} although its manifest records merged pull request #${pullRequest.prNumber}`
+        : `${missingDeliveryMessage(prior, baseBranch)} and no open pull request can deliver it`;
       store('halted', { baseCommit, reason: message });
       return { halt: true, message };
     }
