@@ -370,7 +370,10 @@ function updateSpecStatus(slugOrPrefix, newStatus, options = {}) {
         writeHeaderStatus(specFile, headerStatus);
       } catch (e) {
         // A missing or unreadable specification is reported by sync, never an
-        // error that rolls back the registry transition the caller owns.
+        // error that rolls back the registry transition the caller owns. It is
+        // never silent either: an unreported divergence is the registry-truth
+        // failure this transition exists to prevent.
+        console.warn(`[sdw-spec] Warning: header status for "${entry.slug}" was not written to ${specFile}: ${e.message}`);
       }
     }
   }

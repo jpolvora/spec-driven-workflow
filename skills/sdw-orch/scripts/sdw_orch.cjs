@@ -2421,7 +2421,20 @@ function cmdRun(options) {
     if (!specIndex || refineMode || typeof specIndex.updateSpecStatus !== 'function') return;
     try {
       specIndex.updateSpecStatus(specSlug, 'completed', { root: targetRoot });
-    } catch (e) {}
+    } catch (e) {
+      // AC17: this transition owns the registry truth, so a failed write is
+      // surfaced on the run instead of leaving a stale row behind silently. The
+      // delivery already shipped, so the row is repaired by `sdw-spec sync`,
+      // which reports the drift; the run records why it is stale.
+      const message = `registry transition to completed failed for "${specSlug}": ${e.message}`;
+      console.warn(`[sdw-orch] Warning: ${message}`);
+      try {
+        stateManager.recordWarning(targetRoot, state.runId, 8, message);
+        state = stateManager.loadRunState(targetRoot, state.runId) || state;
+      } catch (warnErr) {
+        console.warn(`[sdw-orch] Warning: could not record the registry transition failure: ${warnErr.message}`);
+      }
+    }
   };
 
   if (refineSkipShip && state.steps[8].status !== 'completed' && state.steps[8].status !== 'skipped') {

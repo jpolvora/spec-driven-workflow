@@ -7,17 +7,17 @@
 | Specification file | `.sdw/specs/00058-sdw-batch-delivery-integrity.md` |
 | Specification slug | 00058-sdw-batch-delivery-integrity |
 | Run ID | run-1792699991836-00058-sdw-batch-delivery-integ |
-| Run status | paused |
+| Run status | completed |
 | Branch | `feature/00058-sdw-batch-delivery-integrity` |
 | Base branch | `master` |
 | Base commit | `827fbe3632db6697dde9d82d0a97a5c143094d72` |
 | Delivery commit | `f8acbd5ea3d9bdc8d38f62d9fc1e462f07c067c6` |
-| Ship status | pending |
+| Ship status | delivered |
 | Score | 10/10 (scoreMin 8) |
 | Implementation start | 2026-10-22T20:13:13.309Z |
 | Implementation end | 2026-10-22T20:53:00.344Z |
 | Total wall-clock duration | 39m 47s |
-| Generated at | 2026-10-22T21:05:14.085Z |
+| Generated at | 2026-10-22T21:14:46.041Z |
 | Step 1: derivation (skipped) | 1ms |
 | Step 2: refinement (completed) | 36ms |
 | Step 3: dag_generation (completed) | 3ms |
@@ -25,7 +25,7 @@
 | Step 5: scoring (completed) | 8m 54s |
 | Step 6: delivery_commit (completed) | 680ms |
 | Step 7: code_review (completed) | 1s |
-| Step 8: pr_preparation (pending) | n/a |
+| Step 8: pr_preparation (completed) | 2m 44s |
 
 
 ## Tasks
@@ -39,6 +39,8 @@
 
 | SHA | Subject | Range |
 |---|---|---|
+| `1f2ec8c` | chore(00058-sdw-batch-delivery-integrity): mark the specification completed in the registry | base..HEAD |
+| `b581c33` | docs(00058-sdw-batch-delivery-integrity): record delivery report | base..HEAD |
 | `f8acbd5` | feat(00058-sdw-batch-delivery-integrity): implement 00058-sdw-batch-delivery-integrity | base..HEAD |
 | `6800a21` | task(00058-sdw-batch-delivery-integrity): task-2 | base..HEAD |
 | `ecb656e` | task(00058-sdw-batch-delivery-integrity): task-1 | base..HEAD |
@@ -81,11 +83,14 @@
 
 | File | Change |
 |---|---|
+| `.sdw/specs/00058-sdw-batch-delivery-integrity-report.md` | added |
 | `.sdw/specs/00058-sdw-batch-delivery-integrity.md` | modified |
+| `.sdw/specs/index.specs.md` | modified |
 
 ## Verification
 
 - test gate: status `passed`, exit code `0`, duration 1m 36s
+- Step 8 delivery: `completed` (ship status `delivered`)
 
 ## Code Review
 
@@ -201,11 +206,11 @@
 
 - Step 1 (derivation) skipped: not recorded
 - Task task-2 accepted after re-dispatch (sequence 2)
-- Environment: workspace: 21 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
+- Environment: workspace: 23 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
 
 ## Outcome
 
-- Result: `paused`
+- Result: `completed`
 - Delivery commit: `f8acbd5ea3d9bdc8d38f62d9fc1e462f07c067c6`
-- Ship status: `pending`
+- Ship status: `delivered`
 - Duration: 39m 47s
