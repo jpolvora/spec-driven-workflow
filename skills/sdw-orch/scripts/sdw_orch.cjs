@@ -464,12 +464,19 @@ function checkpointTask(targetRoot, { specSlug, runId, taskId, files = [], commi
   let sha = commitSha;
   if (!sha) {
     const res = stageAndCommitOnly(targetRoot, files, `task(${specSlug}): ${taskId}`);
-    if (!res.committed) return { commitSha: res.commitSha, tag: null };
+    if (!res.committed) return { commitSha: res.commitSha, tag: null, tagError: null };
     sha = res.commitSha;
   }
   const tag = checkpointRefName(runId, taskId);
-  git(targetRoot, ['tag', '-f', tag, sha], { stdio: 'ignore' });
-  return { commitSha: sha, tag };
+  try {
+    git(targetRoot, ['tag', '-f', tag, sha], { stdio: 'ignore' });
+  } catch (tagErr) {
+    // PR #34 review finding: the commit (or the integrated cherry-pick) is already
+    // durable, and committed work can never be re-corroborated on retry. A tag that
+    // cannot be written is reported, not raised, so the task is still accepted.
+    return { commitSha: sha, tag: null, tagError: tagErr.message };
+  }
+  return { commitSha: sha, tag, tagError: null };
 }
 
 function collectDeliveryFiles(targetRoot, specSlug, state) {
@@ -3102,18 +3109,14 @@ function cmdTaskFinish(options) {
       });
       commitSha = checkpoint.commitSha || commitSha;
       checkpointTag = checkpoint.tag;
-    } catch (cpErr) {
-      // Worktree mode: integration already committed the work to the primary branch
-      // and deleted the worktree, so a failed tag costs no durability and must not
-      // strand the task in a retry loop that can never corroborate the clean tree.
-      if (effectiveUseWorktrees) {
-        console.warn(`[sdw-orch task finish] Warning: checkpoint tag for "${taskId}" was not created: ${cpErr.message}. The integrated commit already saves the work.`);
-        commitSha = getBaseCommit(targetRoot);
-        checkpointTag = null;
-      } else {
-        console.error(`Error: Failed to checkpoint task "${taskId}": ${cpErr.message}`);
-        return 1;
+      if (checkpoint.tagError) {
+        console.warn(`[sdw-orch task finish] Warning: checkpoint tag for "${taskId}" was not created: ${checkpoint.tagError}. The saved commit already covers the work.`);
       }
+    } catch (cpErr) {
+      // Only a failed commit reaches this branch: the work is still uncommitted, so
+      // rejecting the task keeps a meaningful retry path.
+      console.error(`Error: Failed to checkpoint task "${taskId}": ${cpErr.message}`);
+      return 1;
     }
   } else if (!effectiveUseWorktrees) {
     commitSha = getBaseCommit(targetRoot);

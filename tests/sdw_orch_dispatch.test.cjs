@@ -339,6 +339,30 @@ test('AC3: worktree mode accepts the task when the checkpoint tag cannot be crea
   }
 });
 
+test('AC3: primary-tree mode accepts the task when the checkpoint tag cannot be created', () => {
+  const root = setupRepo();
+  try {
+    assert.equal(pauseAtDispatch(root), 4);
+    const state = stateManager.findLatestRunState(root);
+    const taskId = state.steps[4].dispatch.activeTaskId;
+    const tagRef = path.join(root, '.git', 'refs', 'tags', `sdw-checkpoint-${state.runId}-${taskId}`);
+    fs.mkdirSync(tagRef, { recursive: true });
+    fs.writeFileSync(path.join(tagRef, 'junk'), 'x', 'utf8');
+
+    const { evidencePath } = submitEvidence(root, taskId);
+    assert.equal(sdwOrch.cmdTaskFinish({ root, runId: state.runId, taskId, evidencePath }), 0, 'The committed task is still accepted');
+
+    const after = stateManager.loadRunState(root, state.runId);
+    const record = after.steps[4].tasks[taskId];
+    assert.equal(record.status, 'completed', 'The task is accepted');
+    assert.ok(!record.checkpointTag, 'No tag is recorded');
+    assert.equal(record.commitSha, gitOut(root, 'rev-parse HEAD'), 'The checkpoint commit exists');
+    assert.equal(gitOut(root, 'log --format=%s -1'), `task(dispatch-demo): ${taskId}`, 'The scoped commit is still the save');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('AC9-AC10: task finish rejects a non-dispatched task and names the active one', () => {
   const root = setupRepo();
   try {
