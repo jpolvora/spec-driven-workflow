@@ -41,7 +41,11 @@ jobs:
           echo "Starting specification validation loop..."
           count=0
           for spec in .sdw/specs/*.md; do
-            if [ -f "$spec" ] && [ "$(basename "$spec")" != "index.specs.md" ]; then
+            base="$(basename "$spec")"
+            case "$base" in
+              index.specs.md|*-report.md) continue ;;
+            esac
+            if [ -f "$spec" ]; then
               echo "Validating $spec..."
               node skills/sdw-spec/scripts/validate_spec.cjs --mode=authoring --repo-root . "$spec"
               count=$((count + 1))
