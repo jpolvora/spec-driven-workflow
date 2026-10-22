@@ -86,11 +86,13 @@ Orchestrates spec execution from input requirement to delivery commit, automated
    Refuse delivery commit if Step 4 is incomplete, any task unaccepted, or any gate failed. Run pre-commit secret leak scan (`sdw-security-checks`) when enabled. Stage and commit only tracked spec files (accepted evidence `filesChanged` + `index.specs.md`); unrelated worktree changes are never staged. Per-task checkpoint commits already cover accepted files, so Step 6 commits what remains and records `HEAD` when nothing is left.
    - Done when: Step 4 quality guards pass, pre-commit security check passes, and scoped delivery commit exists.
 
-7. **Delegated Code Review via sdw-code-review**
-   Dispatch subagent or CLI runner for `sdw-code-review`; inspect generated report to advance to Step 8 or trigger fix iteration.
-   - Run: `node skills/sdw-code-review/scripts/sdw_code_review.cjs run --target <root> [--base <ref>] --report <artifact> [--fix] [--json]`
+7. **Fresh-Subagent Code Review via sdw-code-review**
+   Spawn one context-fresh reviewer subagent session for `sdw-code-review`; the reviewer sees only the delivered diff, never the reasoning that produced it. A Step 7 verdict exists only inside that session: running the review CLI in this orchestrator session is forbidden and is not a verdict. Standalone `doctor` and `--dry-run` remain valid outside this rule.
+   - Reviewer brief carries only target root, base reference, report path, and scope fence; never the implementation transcript, prior worker reasoning, DAG prompts, or judge verdicts.
+   - Run inside the reviewer session: `node skills/sdw-code-review/scripts/sdw_code_review.cjs run --target <root> [--base <ref>] --report <artifact> [--fix] [--json]`
    - `sdw-code-review` is the sole code review authority; no duplicated internal review instructions.
-   - When remediation is required, delegate the findings batch to `sdw-fixer` through a subagent brief carrying the findings file and report path (`node skills/sdw-fixer/scripts/sdw_fixer.cjs run --findings <path> --report <path>`); reviewer and fixer stay separate, never self-approve.
+   - When remediation is required, delegate the findings batch to `sdw-fixer` in a fresh subagent session distinct from the reviewer session; its brief carries only the findings file, target root, and report path (`node skills/sdw-fixer/scripts/sdw_fixer.cjs run --findings <path> --report <path>`).
+   - The reviewer session never approves fixer output: a fixer delivery is re-reviewed in a new context-fresh reviewer session, so no session approves its own output.
    - Done when: Report shows 0 blocking findings (`critical`/`warning`) or fix ceiling reached with residual recorded.
 
 8. **PR Preparation, Delivery & Review Convergence**
