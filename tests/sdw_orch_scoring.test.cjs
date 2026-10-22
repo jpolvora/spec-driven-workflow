@@ -10,6 +10,7 @@ const { execSync } = require('child_process');
 const stateManager = require('../skills/sdw-orch/scripts/state_manager.cjs');
 const dagPlanner = require('../skills/sdw-orch/scripts/dag_planner.cjs');
 const scoreEvaluator = require('../skills/sdw-orch/scripts/score_evaluator.cjs');
+const deliveryReport = require('../skills/sdw-orch/scripts/delivery_report.cjs');
 const sdwOrch = require('../skills/sdw-orch/scripts/sdw_orch.cjs');
 const { JUDGE_STUB, installJudgeEnv, clearJudgeEnv } = require('./fixtures/judge_env.cjs');
 
@@ -461,6 +462,20 @@ test('00057 AC15: score submit persists the analysis as the Step 5 contribution'
     const markdown = fs.readFileSync(reportPath, 'utf8');
     assert.match(markdown, /Judge analysis/, 'AC15: the analysis renders in the report');
     assert.match(markdown, /cover the resume failure path/);
+
+    // Spec 00057 AC16, AC17: the persisted verdict and judgment render as their
+    // own report sections, with the per-criterion rows and the advisory fence.
+    const judgmentSection = markdown.slice(markdown.indexOf('## Conformance Judgment'), markdown.indexOf('## Judge Analysis'));
+    assert.match(judgmentSection, /- Score: 10\/10 \(required minimum 8\/10\)/, 'AC16: the persisted score renders');
+    assert.match(judgmentSection, /- Criteria: \d+ verified, 0 failed/, 'AC16: the persisted counts render');
+    for (const id of acIds) {
+      assert.match(judgmentSection, new RegExp(`\\| ${id} \\| verified \\| app\\.cjs:1 \\|`), `AC16: criterion ${id} renders with its verdict and evidence`);
+    }
+    const analysisSection = markdown.slice(markdown.indexOf('## Judge Analysis'), markdown.indexOf('## Learnings'));
+    assert.match(analysisSection, /Source: Step 5 judge .*advisory/, 'AC17: the analysis is attributed and marked advisory');
+    assert.match(analysisSection, /Summary: Delivery implements both criteria\./, 'AC17: the persisted summary renders');
+    assert.match(analysisSection, /\| low \| app\.cjs:1 \| single file change \|/, 'AC17: the persisted risk renders');
+    assert.match(analysisSection, /- cover the resume failure path/, 'AC17: the persisted follow-up renders');
   } finally {
     withJudgeEnv(previous);
     fs.rmSync(tmpDir, { recursive: true, force: true });

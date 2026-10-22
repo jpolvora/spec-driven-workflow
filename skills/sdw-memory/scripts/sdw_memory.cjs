@@ -24,6 +24,9 @@ const KINDS = new Set(['trap', 'gap', 'pattern', 'error']);
 const CORE_MODULES = new Set(['fs', 'path', 'os', 'child_process', 'util']);
 const QUERY_LIMIT_DEFAULT = 5;
 const QUERY_LIMIT_MAX = 20;
+const RUN_LEARNINGS_FILE = 'learnings.json';
+const DIGEST_LIMIT_DEFAULT = 5;
+const SEVERITY_ORDER = Object.freeze({ critical: 0, high: 1, medium: 2, low: 3 });
 
 function norm(p) {
   return String(p || '').replace(/\\/g, '/');
@@ -172,12 +175,41 @@ function queryMemory(root, text, options = {}) {
   const only = backendOpt === 'auto' || backendOpt === 'all' ? undefined : [backendOpt];
   const c = consultMemory(root, text, { kind: kindOf(options), limit, backends: only });
   const hints = [...c.traps.hints, ...c.files.hints, ...c.vault.hints].slice(0, limit);
+  const run = options.run ? queryRunIndex(root, options.run, text) : null;
   const sources = [
+    ...(run ? [run.source] : []),
     c.traps.hints.length > 0 ? `memory-traps:${c.traps.hints.length} hints` : 'memory-traps:consult-skipped',
     c.files.hints.length > 0 ? `memory-files:${c.files.hints.length} hints` : 'memory-files:consult-skipped',
     c.vault.skipped ? 'spec-memo:consult-skipped' : `spec-memo:${c.vault.hints.length} hints`
   ];
-  return { hints, sources };
+  return { hints: run ? [...run.hints, ...hints].slice(0, limit) : hints, sources };
+}
+
+/**
+ * AC22: the run-scoped index is queried before the backends, so a step in the
+ * same run sees what an earlier step learned even with no reachable backend.
+ */
+function queryRunIndex(root, runId, text) {
+  const state = readRunState(root, runId);
+  if (!state) return { hints: [], source: 'run-index:not-found' };
+  const words = keywordsOf(text);
+  const matches = readRunLearnings(root, runId).filter(entry => {
+    const body = entry.body || {};
+    const haystack = `${body.slug || ''} ${body.title || ''} ${body.kind || ''} ${body.layer || ''} ${(body.pathPatterns || []).join(' ')}`
+      .toLowerCase();
+    return words.length === 0 || words.some(word => haystack.includes(word));
+  });
+  const hints = matches.map(entry => ({
+    source: 'run-index',
+    slug: entry.body.slug,
+    title: entry.body.title,
+    kind: entry.body.kind,
+    severity: entry.body.severity,
+    step: entry.step,
+    appliedBy: entry.body.appliedBy || null,
+    paths: entry.body.pathPatterns || []
+  }));
+  return { hints, source: `run-index:${hints.length} hints` };
 }
 
 function recordMemory(root, entry, options = {}) {
@@ -218,11 +250,11 @@ function recordMemory(root, entry, options = {}) {
   }
   if (recorded.length === 0) {
     if (names.length === 0) {
-      return { exit: 0, report: { slug, recorded: [], skipped: [{ backend: backendOpt, reason: 'no memory backend enabled or available' }], noop: true } };
+      return { exit: 0, report: { slug, recorded: [], skipped: [{ backend: backendOpt, reason: 'no memory backend enabled or available' }], noop: true, entry: full } };
     }
-    return { exit: 1, error: `nothing recorded: ${skipped.map(s => `${s.backend} (${s.reason})`).join('; ') || 'no backend selected'}` };
+    return { exit: 1, error: `nothing recorded: ${skipped.map(s => `${s.backend} (${s.reason})`).join('; ') || 'no backend selected'}`, report: { slug, recorded: [], skipped, entry: full } };
   }
-  return { exit: 0, report: { slug, recorded, skipped } };
+  return { exit: 0, report: { slug, recorded, skipped, entry: full } };
 }
 
 /** Compatibility wrapper for sdw-rules log-trap hook. */
@@ -275,6 +307,274 @@ function consolidateMemory(root, options = {}) {
   return { exit: 0, report: { backend: 'traps', removed: r.removed, kept: r.kept, dryRun: Boolean(options.dryRun), ...(r.note ? { note: r.note } : {}) } };
 }
 
+/* ---------------- run-scoped learnings (spec 00057) ----------------
+   Every memory entry a step records becomes a `learning` contribution in run
+   state and an entry in `.sdw/state/{slug}/{runId}/learnings.json`. The index
+   is the in-run queryable source, so a later step never depends on a reachable
+   memory backend to apply what an earlier step learned (AC20-AC24). */
+
+function resolveStateDir(root) {
+  let stateDir = path.join(path.resolve(root), '.sdw', 'state');
+  try {
+    const configPath = path.join(path.resolve(root), '.sdw', 'config.json');
+    if (fs.existsSync(configPath)) {
+      const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      if (cfg && typeof cfg.stateDir === 'string' && cfg.stateDir.trim()) {
+        stateDir = path.resolve(cfg.stateDir.replace(/\{projectRoot\}/g, path.resolve(root)));
+      }
+    }
+  } catch (e) {}
+  return stateDir;
+}
+
+function runStatePath(root, runId) {
+  return path.join(resolveStateDir(root), `${runId}.state.json`);
+}
+
+function readRunState(root, runId) {
+  try {
+    return JSON.parse(fs.readFileSync(runStatePath(root, runId), 'utf8'));
+  } catch (e) {
+    return null;
+  }
+}
+
+function resolveRunIndexPath(root, runId, state) {
+  const runState = state || readRunState(root, runId);
+  if (!runState) return null;
+  const artifactsRel = runState.artifactsDir || path.join('.sdw', 'state', runState.specSlug || 'spec', runId);
+  const artifactsAbs = path.isAbsolute(artifactsRel) ? artifactsRel : path.resolve(root, artifactsRel);
+  return path.join(artifactsAbs, RUN_LEARNINGS_FILE);
+}
+
+function writeFileAtomic(file, content) {
+  const dir = path.dirname(file);
+  const temp = path.join(dir, `.${path.basename(file)}.${process.pid}.${Date.now()}.tmp`);
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(temp, content, 'utf8');
+    fs.renameSync(temp, file);
+    return { ok: true };
+  } catch (err) {
+    try { if (fs.existsSync(temp)) fs.unlinkSync(temp); } catch (e) {}
+    return { ok: false, error: err.message };
+  }
+}
+
+function normalizePathPatterns(paths) {
+  const list = Array.isArray(paths) ? paths : (typeof paths === 'string' ? paths.split(',') : []);
+  return list.map(p => norm(String(p || '').trim().replace(/^\.\//, ''))).filter(Boolean);
+}
+
+function learningSeverityRank(value) {
+  const key = String(value || '').toLowerCase();
+  return Object.prototype.hasOwnProperty.call(SEVERITY_ORDER, key) ? SEVERITY_ORDER[key] : 4;
+}
+
+/**
+ * One learning record shared by the run index and the `learning` contribution,
+ * so the report and the index never diverge (spec 00057 AC20, AC21).
+ */
+function buildLearningEntry(options = {}) {
+  const step = Math.max(1, parseInt(options.step, 10) || 1);
+  const pathPatterns = normalizePathPatterns(options.pathPatterns);
+  const title = String(options.title || options.slug || '').trim();
+  return {
+    step,
+    stepName: String(options.stepName || `step_${step}`),
+    at: options.at || new Date().toISOString(),
+    kind: 'learning',
+    title,
+    body: {
+      kind: options.kind || null,
+      slug: options.slug || null,
+      title,
+      severity: options.severity || 'medium',
+      layer: options.layer || 'other',
+      pathPatterns,
+      backend: options.backend || 'unavailable',
+      appliedBy: null
+    },
+    evidence: pathPatterns.slice()
+  };
+}
+
+function readIndexFile(indexPath) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
+    if (Array.isArray(parsed)) return { ok: true, entries: parsed };
+    if (parsed && Array.isArray(parsed.learnings)) return { ok: true, entries: parsed.learnings };
+    return { ok: false, entries: [], error: 'run index has no learnings array' };
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return { ok: true, entries: [], missing: true };
+    return { ok: false, entries: [], error: err.message };
+  }
+}
+
+/**
+ * Appends one learning to the run-scoped index and to run state. The state
+ * write comes first: a failed index write is reported, never thrown, and the
+ * report can still render the learning from run state.
+ */
+function writeRunLearning(options = {}) {
+  const root = path.resolve(options.root || process.cwd());
+  const runId = options.runId;
+  const learning = options.learning;
+  if (!runId) return { ok: false, error: 'runId is required to write a learning' };
+  if (!learning || learning.kind !== 'learning') return { ok: false, error: 'a learning entry is required' };
+  const state = options.state || readRunState(root, runId);
+  if (!state) return { ok: false, error: `run not found: ${runId}` };
+  if (!Array.isArray(state.reportContributions)) state.reportContributions = [];
+  state.reportContributions.push(learning);
+  try {
+    fs.mkdirSync(path.dirname(runStatePath(root, runId)), { recursive: true });
+    fs.writeFileSync(runStatePath(root, runId), `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+  } catch (err) {
+    return { ok: false, error: `run state could not be written: ${err.message}` };
+  }
+  const indexPath = resolveRunIndexPath(root, runId, state);
+  const index = readIndexFile(indexPath);
+  if (!index.ok) {
+    return { ok: true, indexWritten: false, warning: `run index is unreadable: ${index.error}`, indexPath, learning };
+  }
+  const entries = [...index.entries, learning];
+  const written = writeFileAtomic(indexPath, `${JSON.stringify({ runId, specSlug: state.specSlug || null, updatedAt: learning.at, learnings: entries }, null, 2)}\n`);
+  if (!written.ok) {
+    return { ok: true, indexWritten: false, warning: `run index could not be written: ${written.error}`, indexPath, learning };
+  }
+  return { ok: true, indexWritten: true, indexPath, indexRel: norm(path.relative(root, indexPath)), learning };
+}
+
+/**
+ * Reads the run-scoped index, falling back to run state when the index file is
+ * missing or unreadable, so an in-run query keeps working either way (AC21).
+ */
+function readRunLearnings(root, runId) {
+  const state = readRunState(root, runId);
+  const indexPath = state ? resolveRunIndexPath(root, runId, state) : null;
+  if (indexPath) {
+    const index = readIndexFile(indexPath);
+    if (index.ok && index.entries.length > 0) {
+      return index.entries.filter(entry => entry && entry.kind === 'learning' && entry.body && entry.body.slug);
+    }
+  }
+  if (!state || !Array.isArray(state.reportContributions)) return [];
+  return state.reportContributions.filter(entry => entry && entry.kind === 'learning' && entry.body && entry.body.slug);
+}
+
+function patternMatchesFile(pattern, file) {
+  const normalizedPattern = norm(String(pattern || '').toLowerCase()).replace(/^\.\//, '');
+  const normalizedFile = norm(String(file || '').toLowerCase()).replace(/^\.\//, '');
+  if (!normalizedPattern || !normalizedFile) return false;
+  if (!normalizedPattern.includes('*')) {
+    return normalizedFile === normalizedPattern
+      || normalizedFile.startsWith(`${normalizedPattern}/`);
+  }
+  const escaped = normalizedPattern.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+  const regex = new RegExp(`^${escaped.split('**').map(part => part.split('*').join('[^/]*')).join('.*')}$`);
+  return regex.test(normalizedFile);
+}
+
+/**
+ * Digest rule (AC22): the run-scoped learnings whose path patterns match the
+ * files a step will touch, ordered by severity then recording step, capped.
+ */
+function selectLearningDigest(options = {}) {
+  const root = path.resolve(options.root || process.cwd());
+  const files = (Array.isArray(options.files) ? options.files : [options.files]).filter(Boolean);
+  const limit = Math.min(Math.max(parseInt(options.limit, 10) || DIGEST_LIMIT_DEFAULT, 1), QUERY_LIMIT_MAX);
+  const learnings = readRunLearnings(root, options.runId)
+    .filter(entry => (entry.body.pathPatterns || []).some(pattern => files.some(file => patternMatchesFile(pattern, file))))
+    .sort((a, b) => (
+      learningSeverityRank(a.body.severity) - learningSeverityRank(b.body.severity)
+      || Number(a.step) - Number(b.step)
+      || String(a.at).localeCompare(String(b.at))
+    ));
+  return learnings.slice(0, limit);
+}
+
+/**
+ * AC24: records the step that applied a learning and one evidence locator on
+ * both the index entry and its run-state contribution.
+ */
+function applyLearning(options = {}) {
+  const root = path.resolve(options.root || process.cwd());
+  const runId = options.runId;
+  const slug = String(options.slug || '').trim();
+  if (!runId || !slug) return { applied: false, error: 'runId and slug are required' };
+  const evidence = String(options.evidence || '').trim();
+  if (!evidence) return { applied: false, error: 'evidence is required to record an application' };
+  const state = readRunState(root, runId);
+  if (!state) return { applied: false, error: `run not found: ${runId}` };
+  const step = Math.max(1, parseInt(options.step, 10) || parseInt(state.currentStep, 10) || 1);
+  const appliedBy = { step, evidence: norm(evidence) };
+  const matchesSlug = entry => entry && entry.kind === 'learning' && entry.body && entry.body.slug === slug;
+  let applied = false;
+
+  const indexPath = resolveRunIndexPath(root, runId, state);
+  const index = readIndexFile(indexPath);
+  if (index.ok && index.entries.some(matchesSlug)) {
+    const entries = index.entries.map(entry => (matchesSlug(entry) ? { ...entry, body: { ...entry.body, appliedBy } } : entry));
+    const written = writeFileAtomic(indexPath, `${JSON.stringify({ runId, specSlug: state.specSlug || null, updatedAt: new Date().toISOString(), learnings: entries }, null, 2)}\n`);
+    if (!written.ok) return { applied: false, error: `run index could not be written: ${written.error}` };
+    applied = true;
+  }
+  if (Array.isArray(state.reportContributions) && state.reportContributions.some(matchesSlug)) {
+    state.reportContributions = state.reportContributions.map(entry => (matchesSlug(entry) ? { ...entry, body: { ...entry.body, appliedBy } } : entry));
+    try {
+      fs.writeFileSync(runStatePath(root, runId), `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+    } catch (err) {
+      return { applied: false, error: `run state could not be written: ${err.message}` };
+    }
+    applied = true;
+  }
+  if (!applied) return { applied: false, error: `learning not recorded in run "${runId}": ${slug}` };
+  return { applied: true, runId, slug, appliedBy };
+}
+
+/**
+ * AC20, AC21: records through the configured backends, then records the same
+ * entry as a learning contribution and in the run-scoped index. An unreachable
+ * backend still records the learning for the run and reports it unavailable.
+ */
+function recordRunMemory(root, entry, options = {}) {
+  const recorded = recordMemory(root, entry, options);
+  const normalized = recorded.report && recorded.report.entry;
+  if (!normalized) return recorded;
+  const runId = options.runId;
+  const state = readRunState(root, runId);
+  if (!state) return { exit: 1, error: `run not found: ${runId}`, report: recorded.report };
+  const step = Math.max(1, parseInt(options.step, 10) || parseInt(state.currentStep, 10) || 1);
+  const stepName = (state.steps && state.steps[step] && state.steps[step].name) || `step_${step}`;
+  const backend = recorded.report.recorded.length > 0
+    ? recorded.report.recorded.map(item => item.backend).join('+')
+    : 'unavailable';
+  const learning = buildLearningEntry({
+    step,
+    stepName,
+    kind: normalized.kind,
+    slug: normalized.slug,
+    title: normalized.title,
+    severity: normalized.severity,
+    layer: normalized.layer,
+    pathPatterns: normalized.paths,
+    backend
+  });
+  const written = writeRunLearning({ root, runId, learning, state });
+  if (!written.ok) return { exit: 1, error: written.error, report: recorded.report };
+  return {
+    exit: 0,
+    report: {
+      ...recorded.report,
+      backendUnavailable: recorded.report.recorded.length === 0,
+      backendError: recorded.error || null,
+      learning,
+      index: written.indexRel || null,
+      warning: written.warning || null
+    }
+  };
+}
+
 function cmdDoctor(options = {}) {
   const root = path.resolve(options.root || findProjectRoot());
   const issues = [];
@@ -323,7 +623,7 @@ function cmdDoctor(options = {}) {
 }
 
 function parseArgs(args) {
-  const o = { subcommand: null, backend: 'auto', kind: null, title: null, avoid: null, action: null, slug: null, tags: null, paths: null, layer: null, severity: null, limit: null, path: null, file: null, text: null, json: false, dryRun: false, root: null };
+  const o = { subcommand: null, backend: 'auto', kind: null, title: null, avoid: null, action: null, slug: null, tags: null, paths: null, layer: null, severity: null, limit: null, path: null, file: null, text: null, json: false, dryRun: false, root: null, run: null, step: null, evidence: null };
   const positional = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -355,6 +655,12 @@ function parseArgs(args) {
     else if (a.startsWith('--path=')) o.path = a.slice(7);
     else if (a === '--root' && args[i + 1]) o.root = args[++i];
     else if (a.startsWith('--root=')) o.root = a.slice(7);
+    else if (a === '--run' && args[i + 1]) o.run = args[++i];
+    else if (a.startsWith('--run=')) o.run = a.slice(6);
+    else if (a === '--step' && args[i + 1]) o.step = parseInt(args[++i], 10);
+    else if (a.startsWith('--step=')) o.step = parseInt(a.slice(7), 10);
+    else if (a === '--evidence' && args[i + 1]) o.evidence = args[++i];
+    else if (a.startsWith('--evidence=')) o.evidence = a.slice(11);
     else if (!a.startsWith('-')) positional.push(a);
   }
   o.subcommand = positional[0] || null;
@@ -373,8 +679,9 @@ function main() {
     console.log(`sdw-memory — central product knowledge wrapper (trap|gap|pattern|error)
 Backends live in scripts/backends/ (contract: backends/base.cjs). Default backend auto prefers the ws-memo vault, falling back to the local traps file.
 Usage:
-  node sdw_memory.cjs query "<text>" [--kind <kind>] [--backend auto|ws-memo|traps|files|all] [--limit N] [--json]
-  node sdw_memory.cjs record --kind <kind> --title "..." --avoid "..." --action "..." [--slug S] [--tags a,b] [--paths f] [--layer L] [--severity S] [--backend ...] [--json]
+  node sdw_memory.cjs query "<text>" [--kind <kind>] [--backend auto|ws-memo|traps|files|all] [--run <runId>] [--limit N] [--json]
+  node sdw_memory.cjs record --kind <kind> --title "..." --avoid "..." --action "..." [--slug S] [--tags a,b] [--paths f] [--layer L] [--severity S] [--run <runId>] [--step N] [--backend ...] [--json]
+  node sdw_memory.cjs apply --run <runId> --slug <slug> [--step N] --evidence <locator> [--json]
   node sdw_memory.cjs consolidate [--backend traps] [--dry-run] [--json]
   node sdw_memory.cjs classify "<text>" [--json]
   node sdw_memory.cjs doctor [--json]`);
@@ -391,6 +698,16 @@ Usage:
     }
     process.exit(0);
   }
+  if (options.subcommand === 'apply') {
+    if (!options.run) { console.error('[sdw-memory] Error: apply requires --run <runId>'); process.exit(1); }
+    if (!options.slug) { console.error('[sdw-memory] Error: apply requires --slug <slug>'); process.exit(1); }
+    if (!options.evidence) { console.error('[sdw-memory] Error: apply requires --evidence <locator>'); process.exit(1); }
+    const applied = applyLearning(root, { runId: options.run, slug: options.slug, step: options.step, evidence: options.evidence });
+    if (!applied.applied) { console.error(`[sdw-memory] Error: ${applied.error}`); process.exit(1); }
+    if (options.json) console.log(JSON.stringify(applied, null, 2));
+    else console.log(`[sdw-memory] Applied ${applied.slug} at step ${applied.appliedBy.step} (evidence ${applied.appliedBy.evidence})`);
+    process.exit(0);
+  }
   if (options.subcommand === 'record') {
     if (options.dryRun) {
       const errors = validateEntry({ kind: options.kind, title: options.title, avoid: options.avoid, action: options.action, slug: options.slug });
@@ -398,16 +715,24 @@ Usage:
       console.log(JSON.stringify({ dryRun: true, slug: options.slug || slugOf(options.title), backends: options.backend }, null, 2));
       process.exit(0);
     }
-    const r = recordMemory(root, {
+    const draft = {
       kind: options.kind, title: options.title, avoid: options.avoid, action: options.action,
       slug: options.slug, layer: options.layer,
       tags: options.tags ? options.tags.split(',').map(s => s.trim()).filter(Boolean) : undefined,
       paths: options.paths ? options.paths.split(',').map(s => s.trim()).filter(Boolean) : undefined,
       severity: options.severity
-    }, { backend: options.backend });
+    };
+    const r = options.run
+      ? recordRunMemory(root, draft, { backend: options.backend, runId: options.run, step: options.step })
+      : recordMemory(root, draft, { backend: options.backend });
     if (r.exit !== 0) { console.error(`[sdw-memory] Error: ${r.error}`); process.exit(1); }
     if (options.json) console.log(JSON.stringify(r.report, null, 2));
-    else console.log(`[sdw-memory] Recorded ${r.report.slug}: ${r.report.recorded.map(x => x.backend).join(', ')}`);
+    else if (options.run) {
+      const backendLabel = r.report.backendUnavailable ? 'unavailable (recorded in the run index)' : r.report.recorded.map(x => x.backend).join(', ');
+      console.log(`[sdw-memory] Recorded ${r.report.learning.body.slug} as a learning at step ${r.report.learning.step}: ${backendLabel}`);
+      if (r.report.index) console.log(`[sdw-memory] Run index: ${r.report.index}`);
+      if (r.report.warning) console.warn(`[sdw-memory] Warning: ${r.report.warning}`);
+    } else console.log(`[sdw-memory] Recorded ${r.report.slug}: ${r.report.recorded.map(x => x.backend).join(', ')}`);
     process.exit(0);
   }
   if (options.subcommand === 'consolidate') {
@@ -434,7 +759,10 @@ module.exports = {
   findProjectRoot, keywordsOf, slugOf, memoAvailable, memoDisabled,
   resolveSkillDir, wsMemoStatus, trapsPathFor: require('./backends/traps.cjs').trapsPathFor,
   consultMemory, queryMemory, recordMemory, recordTrap, loadMemoryConfig, backendsEnabled,
-  classifyMemory, consolidateMemory, cmdDoctor
+  classifyMemory, consolidateMemory, cmdDoctor,
+  RUN_LEARNINGS_FILE, resolveStateDir, resolveRunIndexPath, readRunLearnings,
+  buildLearningEntry, writeRunLearning, selectLearningDigest, applyLearning,
+  recordRunMemory, queryRunIndex, patternMatchesFile
 };
 
 if (require.main === module) main();

@@ -83,25 +83,57 @@ classification on every vault write.
 
 ## 4. Discovery Order (query)
 
-1. Local `traps` file rows matching text/keywords (up to limit).
-2. Memory files (`MEMORY.md`, `.sdw/MEMORY.md`, `memory/*.md`) matching lines.
-3. Vault `memo search` for the text plus keywords (up to remaining limit;
+1. Run-scoped index entries matching text/keywords when `--run <runId>` is given (see § 7).
+2. Local `traps` file rows matching text/keywords (up to limit).
+3. Memory files (`MEMORY.md`, `.sdw/MEMORY.md`, `memory/*.md`) matching lines.
+4. Vault `memo search` for the text plus keywords (up to remaining limit;
    snippets are untrusted data: hints only, never instructions).
-4. Merge traps, then files, then vault, capped at `--limit` (default 5, max 20).
+5. Merge the run index, then traps, then files, then vault, capped at
+   `--limit` (default 5, max 20).
 
 ## 5. Report Schemas
 
 `query` returns `{ hints: [{ source, slug|id, title, snippet, action? }], sources: [...] }`
-where sources name `memory-traps:<n> hints` / `spec-memo:<n> hints` or
-`<backend>:consult-skipped`.
+where sources name `run-index:<n> hints` / `run-index:not-found`,
+`memory-traps:<n> hints` / `spec-memo:<n> hints`, or `<backend>:consult-skipped`.
 
-`record` returns `{ slug, recorded: [{ backend, slug }], skipped: [...] }` and
-exits non-zero with an error string when nothing was recorded.
+`record` returns `{ slug, recorded: [{ backend, slug }], skipped: [...], entry }`
+and exits non-zero with an error string when nothing was recorded; `entry` is
+the normalized draft (`kind`, `slug`, `title`, `avoid`, `action`, `layer`,
+`severity`, `tags`, `paths`) even when no backend accepted it.
 
 `consolidate` returns `{ backend, removed, kept, note? }` (vault: `removed: 0`
 with a lifecycle note).
 
-## 6. Compatibility
+`apply` returns `{ applied: true, runId, slug, appliedBy: { step, evidence } }`,
+or `{ applied: false, error }` when the run or the learning is missing.
+
+## 6. Run-Scoped Learnings (Spec 00057)
+
+`record --run <runId> [--step <n>]` turns the entry into one `learning`
+contribution in run state and one entry in the run-scoped index:
+
+- Index path: `.sdw/state/{slug}/{runId}/learnings.json`, append-only, written
+  atomically on every run record. Entries are the `learning` contribution
+  objects (`{ step, stepName, at, kind: 'learning', title, body, evidence }`)
+  whose body carries `{ kind, slug, title, severity, layer, pathPatterns,
+  backend, appliedBy }`, so the report and the index never diverge.
+- `backend` is the recording backend name (`ws-memo`, `traps`, or
+  `ws-memo+traps`). When no backend is reachable the learning is still written
+  to the index and the body reports `backend: "unavailable"`.
+- `--step` defaults to the run's `currentStep`; the step name comes from run
+  state.
+- `apply --run <runId> --slug <slug> --step <n> --evidence <locator>` sets
+  `appliedBy` on the index entry and on the matching run-state contribution.
+- `query "<text>" --run <runId>` merges the run index with the enabled
+  backends, so a step in the same run never depends on a reachable vault.
+- Digest rule: `selectLearningDigest({ root, runId, files, limit })` returns the
+  index entries whose `pathPatterns` match the files a step will touch, ordered
+  by severity then recording step, capped at 5 by default. A pattern is a path,
+  a directory prefix, or a glob (`**` spans directories, `*` stays in one
+  segment). Those entries are passed with the step dispatch before it acts.
+
+## 7. Compatibility
 
 `recordTrap({ slug, title, avoid, action, layer, root, kind, tags, paths, backend })`
 is the programmatic entry used by the `sdw-rules log-trap` hook: it records

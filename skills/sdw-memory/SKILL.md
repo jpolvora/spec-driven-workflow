@@ -20,8 +20,9 @@ Central source of truth for product knowledge. Wraps every memory read and write
 
 ## Subcommands
 
-- `query "<text>" [--kind trap|gap|pattern|error] [--backend auto|ws-memo|traps] [--limit N] [--json]`: Search backends for related knowledge; merged hints, capped.
-- `record --kind <kind> --title "..." --avoid "..." --action "..." [--slug S] [--tags a,b] [--paths f] [--layer L] [--severity S] [--backend ...] [--json]`: Validate and persist one entry; deduplicated.
+- `query "<text>" [--kind trap|gap|pattern|error] [--backend auto|ws-memo|traps] [--run <runId>] [--limit N] [--json]`: Search backends for related knowledge; with `--run`, the run-scoped index is merged first.
+- `record --kind <kind> --title "..." --avoid "..." --action "..." [--slug S] [--tags a,b] [--paths f] [--layer L] [--severity S] [--run <runId>] [--step N] [--backend ...] [--json]`: Validate and persist one entry; deduplicated. With `--run`, the entry also becomes a `learning` contribution and a run-scoped index entry.
+- `apply --run <runId> --slug <slug> [--step N] --evidence <locator> [--json]`: Record the applying step and evidence on a run learning.
 - `consolidate [--backend traps] [--dry-run] [--json]`: Merge duplicate local rows; vault records are reported, never auto-deleted.
 - `classify "<text>" [--json]`: Deterministically suggest `kind`, slug, tags, layer for free text.
 - `doctor [--json]`: Validate skill layout, script syntax, zero-dependency guarantee, vault reachability.
@@ -47,6 +48,11 @@ Central source of truth for product knowledge. Wraps every memory read and write
    Compact the local traps file by merging same-slug rows; vault lifecycle stays with `memo gc` / `forget`.
    - Run: `node skills/sdw-memory/scripts/sdw_memory.cjs consolidate [--dry-run]`
    - Done when: Report states removed vs kept counts.
+
+5. **Carry Learnings Through a Run**
+   Inside an `sdw-orch` run, record with `--run <runId> --paths <files>`: the same entry becomes a `learning` contribution and an append-only entry in `.sdw/state/{slug}/{runId}/learnings.json`, even when no backend is reachable. A later step applies it and records `apply --step <n> --evidence <locator>`; the digest rule passes the matching index entries to the step before it acts.
+   - Run: `node skills/sdw-memory/scripts/sdw_memory.cjs record ... --run <runId> --step <n> --paths <file>` then `apply --run <runId> --slug <slug> --step <n> --evidence <locator>`
+   - Done when: The run index names the learning with its backend and the applying step, and `query --run <runId>` answers from the index merged with the backends.
 
 ## Backend Configuration
 

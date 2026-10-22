@@ -307,11 +307,16 @@ Template order:
 5. `## Files Changed`: change type from `git diff --name-status <baseCommit>..HEAD`, grouped by the task whose `filesChanged` names the path; a file owned by several tasks lists under each.
 6. `## Verification`: Step 4 gate status, exit code, and duration, plus the Step 8 delivery status.
 7. `## Code Review`: Step 7 status, result, findings by severity, blocking count, and report path.
-8. `## Breaking Changes`: deterministic candidates from `.sdw/config.json` and `.sdw/config.schema.json` key diffs, added or removed CLI flags in `skills/*/scripts/*.cjs`, configuration schema property changes, and renamed or deleted files under `skills/`; each cites its diff path, and an empty set renders `None detected`.
-9. `## Quality`: conformance score, judge verdict counts, review findings by severity, executed test totals from task evidence, and gate statuses.
-10. `## Spec Observations`: the Step 2 observations.
-11. `## Notes`: `state.errors`, skipped steps, abandoned and re-dispatched tasks, security-gate bypasses, and recorded environment facts.
-12. `## Outcome`: run status, delivery commit, ship status, and duration.
+8. `## Conformance Judgment`: the Step 5 score, the required minimum, the verified and failed counts, and one row per criterion with its verdict and evidence.
+9. `## Judge Analysis`: the Step 5 judge `summary`, `risks`, and `followUps`, attributed to the judge and marked advisory.
+10. `## Learnings`: every `learning` contribution with its kind, slug, severity, recording step, applying step with its evidence, and path patterns.
+11. `## Retrospective`: the retrospective status, signals, candidates with their routes, applied fixes, and queued specifications.
+12. `## Breaking Changes`: deterministic candidates from `.sdw/config.json` and `.sdw/config.schema.json` key diffs, added or removed CLI flags in `skills/*/scripts/*.cjs`, configuration schema property changes, and renamed or deleted files under `skills/`; each cites its diff path, and an empty set renders `None detected`.
+13. `## Quality`: conformance score, judge verdict counts, review findings by severity, executed test totals from task evidence, and gate statuses.
+14. `## Spec Observations`: the Step 2 observations.
+15. `## Notes`: `state.errors`, skipped steps, abandoned and re-dispatched tasks, security-gate bypasses, and recorded environment facts.
+16. `## Outcome`: run status, delivery commit, ship status, and duration.
+17. `## Step Contributions`: one subsection per step in pipeline order (`1`-`9`), each listing its contributions, with `Not available` for a step that contributed nothing.
 
 The report reads recorded evidence only; it never re-runs a gate or a review. A write or commit failure appends a warning to `state.errors` and the run continues without failing delivery. A resumed run rewrites the same companion path from current run state; it never appends a second report.
 
@@ -324,6 +329,61 @@ Step 2 records advisory `specObservations` in `steps[2].output` and in the `{slu
 - `conflict`: this specification and another declare the same key (a key present in `.sdw/config.json`) with different values, for example `scoreMin: 9` versus `scoreMin: 7`. `evidence` names both specifications, the key, and both values.
 
 Target files are the backticked project-relative paths that contain a `/` and a file extension, the same extraction [`spec_grilling.cjs`](../scripts/spec_grilling.cjs) supplies to the Step 2 blueprint. `severity` is `high` only when the other specification is already delivered and shares target files; otherwise `medium`. Observations never fail validation, rewrite a specification, or block or alter a run. `--dry-run` prints each observation and writes no report or Step 2 artifact.
+
+## 12. Step Contributions, Learnings & Retro Closure (Spec 00057)
+
+### Contribution Contract
+
+The report is incremental: each step appends one entry to `state.reportContributions` as the step happens, and both report paths are re-rendered from the whole list at that boundary (`refreshInProgressReport`). An entry is `{ step, stepName, at, kind, title, body, evidence: [] }`; it is appended, never rewritten, and ordered by `step` ascending, then `at`, then insertion order. Step `9` is `retrospective`, the post-delivery contribution.
+
+Kinds and owning steps: `derivation` (1), `refinement` (2), `plan` (3), `task` (4, one per accepted task), `verdict` and `judgment` (5), `learning` (any step that records memory), `delivery` (6), `review` (7, one per iteration), `gates` and `ship` (8), `convergence` (8, one per delivery attempt), `retro` (9), and `warning` (any step).
+
+- A malformed entry is skipped by the renderer, recorded once as a warning in `state.errors`, and the remaining contributions still render.
+- A section whose contributions are absent renders `Not available`; reporting never blocks delivery.
+- The writer is atomic (sibling temp file, then rename), deterministic, and offline: it renders recorded values only and never calls a language model.
+- `--dry-run` prints the contribution summary and the planned kinds per step, and writes no report, state, or artifact.
+- `report re-render --run-id <runId>` refreshes both paths from run state. It never commits, pushes, or amends: when the branch was already pushed, the refreshed companion stays uncommitted and the pushed commit is untouched.
+
+### Judge Verdict & Analysis
+
+`score submit` accepts a verdict file with `score`, `verdicts[]`, and the optional advisory fields:
+
+```json
+{
+  "score": 9,
+  "verdicts": [{ "id": "AC1", "verdict": "verified", "evidence": "path:line" }],
+  "summary": "One paragraph on what the delivery did and how well it honours the specification.",
+  "risks": [{ "severity": "medium", "evidence": "path:line", "note": "what a reviewer should scrutinize" }],
+  "followUps": ["candidate next step"]
+}
+```
+
+The score derives from the per-criterion verdicts alone. The analysis is persisted as the `verdict` and `judgment` contributions; the report renders it under `## Judge Analysis`, attributed to the Step 5 judge and marked advisory, and it never feeds the score, a gate, the review, or a halt decision.
+
+### Learning Contract
+
+Every `sdw-memory record` a run performs names the run:
+
+```bash
+node skills/sdw-memory/scripts/sdw_memory.cjs record --kind trap --title "..." --avoid "..." --action "..." \
+  --paths skills/sdw-orch/scripts/sdw_orch.cjs --run <runId> --step <n>
+```
+
+The record appends one `learning` contribution (`{ step, stepName, at, kind: 'learning', title, body, evidence }`) whose body carries `{ kind, slug, title, severity, layer, pathPatterns, backend, appliedBy }`, and writes the same entry to the run-scoped index `.sdw/state/{slug}/{runId}/learnings.json`. The index is append-only and is the queryable source while the run is in progress, including when no memory backend is reachable (the body's `backend` is then `unavailable`).
+
+- Digest rule: before a step acts, the orchestrator selects the run-scoped learnings whose `pathPatterns` match the files the step will touch, orders them by severity then recording step, caps the list, and passes it with the dispatch prompt (`## Run Learnings (apply before acting)`) and the dispatch envelope. A step with no matching learning proceeds unchanged.
+- Application evidence: the step that applies a learning records the applying step and one evidence locator with `sdw-memory apply --run <runId> --slug <slug> --step <n> --evidence <locator>`. The `## Learnings` section distinguishes a recorded learning from one that changed the run.
+- `sdw-memory query "<text>" --run <runId>` answers from the run-scoped index merged with the enabled backends, so a step sees the in-run entries before the durable vault.
+
+### Retrospective Contribution
+
+When `sdw-retro` completes, the run appends the `retro` contribution with the signals, the candidates, the applied fixes, and the queued specifications, and re-renders both report paths. The retrospective applies every fix its routes allow: it records the memory entries its candidates call for, consolidates duplicate entries, and queues a follow-up specification for each candidate that needs a code change. A candidate that needs a change under `skills/` or `tests/` is routed to a specification and named; the file is never edited. The applied fixes and each routed candidate are recorded on the retro report under `fixes` and `routedCandidates`.
+
+### Reference
+
+- Pre-PR gate contract, convergence, and the merge policy: [`../../sdw-ship-pr/references/ship_protocol.md`](../../sdw-ship-pr/references/ship_protocol.md)
+- Memory entry kinds, backends, and the run-scoped index: [`../../sdw-memory/references/memory_protocol.md`](../../sdw-memory/references/memory_protocol.md)
+- Candidate shape, routes, and the specification boundary: [`../../sdw-retro/references/candidate_contract.md`](../../sdw-retro/references/candidate_contract.md)
 
 
 

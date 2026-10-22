@@ -15,6 +15,7 @@ const implementationRunner = require('./implementation_runner.cjs');
 const evidenceValidator = require('./evidence_validator.cjs');
 const sandbox = require('./sandbox.cjs');
 const deliveryReport = require('./delivery_report.cjs');
+const memory = require('../../sdw-memory/scripts/sdw_memory.cjs');
 
 function resolveSkillScript(targetRoot, skillName, scriptRelPath, options = {}) {
   try {
@@ -163,7 +164,8 @@ function parseArgs(args) {
     'task finish': 'task-finish',
     'task next': 'task-next',
     'task abandon': 'task-abandon',
-    'score submit': 'score-submit'
+    'score submit': 'score-submit',
+    'report re-render': 'report-re-render'
   };
   const combinedMatch = COMBINED[positional.slice(0, 2).join(' ')];
   if (combinedMatch) {
@@ -174,7 +176,7 @@ function parseArgs(args) {
     if (!result.taskId && rest[0]) result.taskId = rest[0];
     if (combinedMatch === 'task-finish' && !result.evidencePath && rest[1]) result.evidencePath = rest[1];
     if (combinedMatch === 'task-abandon' && !result.reason && rest[1]) result.reason = rest[1];
-  } else if (['task-finish', 'task-next', 'task-abandon', 'score-submit'].includes(positional[0])) {
+  } else if (['task-finish', 'task-next', 'task-abandon', 'score-submit', 'report-re-render'].includes(positional[0])) {
     result.subcommand = positional[0];
     const rest = positional.slice(1);
     result.specPaths = [];
@@ -1158,6 +1160,135 @@ function buildStep8Contributions(state, shipResult, gateAttempts) {
       evidence: pullRequest && pullRequest.url ? [pullRequest.url] : []
     }
   ];
+}
+
+/**
+ * Spec 00057 AC22: the digest of run-scoped learnings whose path patterns match
+ * the files a step will touch. It is passed with the dispatch, so a later step
+ * applies what an earlier step learned without a reachable memory backend.
+ */
+function buildLearningDigest(targetRoot, state, files) {
+  try {
+    return memory.selectLearningDigest({ root: targetRoot, runId: state.runId, files });
+  } catch (e) {
+    return [];
+  }
+}
+
+function formatLearningDigest(learnings) {
+  if (!Array.isArray(learnings) || learnings.length === 0) return '';
+  const lines = ['## Run Learnings (apply before acting)', '',
+    'Recorded earlier in this run and matching the files this step touches. Apply each one you act on, then record it with `sdw-memory apply --run <runId> --slug <slug> --step <n> --evidence <locator>`:', ''];
+  for (const entry of learnings) {
+    const body = entry.body || {};
+    const paths = (body.pathPatterns || []).join(', ');
+    lines.push(`- [${body.severity}] \`${body.slug}\` (${body.kind}, recorded at step ${entry.step}): ${body.title}${paths ? ` - paths: ${paths}` : ''}`);
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+// The digest belongs before the finish command, so the actionable tail of the
+// prompt stays last. A prompt without that heading gets the section appended.
+function attachLearningDigest(promptFileAbs, digestText) {
+  if (!digestText) return false;
+  try {
+    const content = fs.readFileSync(promptFileAbs, 'utf8');
+    if (content.includes('## Run Learnings')) return false;
+    const marker = '\n## Finish Command';
+    const updated = content.includes(marker)
+      ? content.replace(marker, `\n${digestText}${marker}`)
+      : `${content.trimEnd()}\n\n${digestText}`;
+    fs.writeFileSync(promptFileAbs, updated, 'utf8');
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
+ * Spec 00057 AC25: the retrospective contribution carries the signals, the
+ * candidates, and the fixes the retro applied, so the report can render them.
+ */
+function buildRetroContribution(state, targetRoot) {
+  const retro = (state && state.retro) || {};
+  if (retro.status !== 'passed' || !retro.reportJson) return null;
+  const root = path.resolve(targetRoot || state.projectRoot || process.cwd());
+  let report = null;
+  try {
+    report = JSON.parse(fs.readFileSync(path.resolve(root, retro.reportJson), 'utf8'));
+  } catch (e) {
+    report = null;
+  }
+  if (!report || typeof report !== 'object') return null;
+  const signals = report.signals && typeof report.signals === 'object' ? report.signals : {};
+  const candidates = Array.isArray(report.candidates) ? report.candidates : [];
+  const routed = Array.isArray(report.routedCandidates) ? report.routedCandidates : [];
+  const routeById = new Map(routed.map(entry => [entry && entry.id, entry]));
+  return {
+    kind: 'retro',
+    title: `Retrospective ${retro.status}: ${candidates.length} candidate(s)`,
+    body: {
+      status: retro.status,
+      runStatus: report.status || null,
+      signals: {
+        retries: signals.retries || null,
+        leftoverRuns: Array.isArray(signals.leftover_run) ? signals.leftover_run.length : 0,
+        missingArtifacts: Array.isArray(signals.missingArtifacts) ? signals.missingArtifacts.length : 0,
+        reviewFindings: signals.reviewFindings
+          ? { total: signals.reviewFindings.total || 0, open: signals.reviewFindings.open || 0 }
+          : { total: 0, open: 0 }
+      },
+      candidates: candidates.map(candidate => {
+        const route = routeById.get(candidate && candidate.id);
+        return {
+          id: candidate && candidate.id ? candidate.id : null,
+          title: candidate && candidate.title ? candidate.title : null,
+          severity: candidate && candidate.severity ? candidate.severity : null,
+          category: candidate && candidate.category ? candidate.category : null,
+          route: route ? route.route : null,
+          status: route ? route.status : null
+        };
+      }),
+      fixes: report.fixes && typeof report.fixes === 'object'
+        ? report.fixes
+        : { recorded: [], consolidated: null, queuedSpecifications: [], failures: [] },
+      routedCandidates: routed,
+      reportMd: retro.reportMd || null,
+      reportJson: retro.reportJson || null
+    },
+    evidence: [retro.reportMd, retro.reportJson].filter(Boolean)
+  };
+}
+
+// AC25: appends the retro contribution once and re-renders the in-progress
+// report, so the run state carries the retrospective without duplicating it.
+function recordRetroContribution(targetRoot, state) {
+  const contribution = buildRetroContribution(state, targetRoot);
+  if (!contribution) return state;
+  return recordStepContributions(targetRoot, state, 9, [contribution]);
+}
+
+/**
+ * Spec 00057 AC28: refreshes the committed companion from run state. It never
+ * commits and never amends: when the branch was already pushed, the refreshed
+ * file stays uncommitted and the pushed commit is left untouched.
+ */
+function reRenderCompanionReport(targetRoot, state, options = {}) {
+  const result = deliveryReport.writeDeliveryReport({
+    targetRoot,
+    state,
+    minScore: options.minScore
+  });
+  if (!result) {
+    return { ok: false, relPath: null, changed: false, pushed: Boolean(state.pushedBranch || state.registryCommit), amended: false };
+  }
+  return {
+    ok: true,
+    relPath: result.relPath,
+    changed: Boolean(result.changed),
+    pushed: Boolean(state.pushedBranch || state.registryCommit),
+    amended: false
+  };
 }
 
 function printRunDryRunPlan(context) {
@@ -3268,6 +3399,16 @@ function cmdRun(options) {
     if (state.retro.status === 'passed') {
       console.log(`[sdw-retro] Retrospective report: ${state.retro.reportMd}`);
       console.log(`[sdw-retro] Retrospective data: ${state.retro.reportJson}`);
+      // Spec 00057 AC25, AC28: the retro contribution joins run state and both
+      // report paths are re-rendered. The companion refresh never commits and
+      // never amends the pushed delivery, so a pushed commit stays untouched.
+      state = recordRetroContribution(targetRoot, state);
+      const reRendered = reRenderCompanionReport(targetRoot, state, { minScore: effectiveMinScore });
+      if (reRendered.ok) {
+        console.log(`[sdw-orch] Delivery report re-rendered after the retrospective: ${reRendered.relPath}${reRendered.changed ? ' (updated)' : ' (unchanged)'}${reRendered.pushed ? '; the pushed commit was not amended' : ''}`);
+      } else {
+        console.warn('[sdw-orch] Warning: the delivery report could not be re-rendered after the retrospective.');
+      }
     } else {
       console.warn(`[sdw-retro] Retrospective failed; run "${state.runId}" stays completed: ${state.retro.error}`);
     }
@@ -3382,6 +3523,23 @@ function dispatchNextTask(context) {
   const evidenceArg = sandboxed ? `"${displayEvidence}"` : displayEvidence;
   const rootFlag = sandboxed ? ` --root "${normalizePath(targetRoot)}"` : '';
 
+  // Spec 00057 AC22: the learnings recorded earlier in this run reach the step
+  // before it acts, both inside the prompt file and in the dispatch envelope.
+  const digest = buildLearningDigest(targetRoot, state, [
+    ...(Array.isArray(ready.targetFiles) ? ready.targetFiles : []),
+    specPath || state.specPath
+  ].filter(Boolean));
+  const digestText = formatLearningDigest(digest);
+  if (digestText) attachLearningDigest(rendered.promptFileAbs, digestText);
+  const digestEnvelope = digest.map(entry => ({
+    slug: entry.body.slug,
+    kind: entry.body.kind,
+    severity: entry.body.severity,
+    title: entry.body.title,
+    pathPatterns: entry.body.pathPatterns || [],
+    step: entry.step
+  }));
+
   const previous = tasks[ready.id] || {};
   dispatch.activeTaskId = ready.id;
   dispatch.sequence = (dispatch.sequence || 0) + 1;
@@ -3416,7 +3574,8 @@ function dispatchNextTask(context) {
     workingDir: displayWorkingDir,
     acIds: ready.coveredAcs || [],
     dependencies: ready.dependencies || [],
-    subagentBrief: `Spawn one subagent for this task only. Give it: read ${sandboxed ? `"${displayPrompt}"` : displayPrompt} and execute it exactly as written, then report back per its report contract.${sandboxed ? ` Run every command with cwd "${displayWorkingDir}".` : ''}`,
+    learnings: digestEnvelope,
+    subagentBrief: `Spawn one subagent for this task only. Give it: read ${sandboxed ? `"${displayPrompt}"` : displayPrompt} and execute it exactly as written, then report back per its report contract.${digestEnvelope.length > 0 ? ` The prompt carries ${digestEnvelope.length} run learning(s) recorded earlier in this run; require the worker to apply them and record each application with \`sdw-memory apply --run ${state.runId} --slug <slug> --step <n> --evidence <locator>\`.` : ''}${sandboxed ? ` Run every command with cwd "${displayWorkingDir}".` : ''}`,
     finishCommand: `node "${orchCommandPath()}" task finish --run-id ${state.runId} --task ${ready.id} --evidence ${evidenceArg}${rootFlag}`
   };
 
@@ -4170,6 +4329,58 @@ function cmdScoreSubmit(options) {
   return 2;
 }
 
+/**
+ * Spec 00057 AC28: refreshes the companion and the in-progress report from run
+ * state on demand. It records a pending retro contribution when the retro ran
+ * but its contribution is missing, and it never commits, pushes, or amends.
+ */
+function cmdReportReRender(options) {
+  const targetRoot = options.root ? path.resolve(options.root) : process.cwd();
+  let state = null;
+  try {
+    state = options.runId
+      ? stateManager.loadRunState(targetRoot, options.runId)
+      : stateManager.findLatestRunState(targetRoot);
+  } catch (err) {
+    console.error(`[sdw-orch report re-render] ${err.message}`);
+    return 1;
+  }
+  if (!state) {
+    console.error('[sdw-orch report re-render] No run state found to re-render from.');
+    return 1;
+  }
+  if (!state.specPath) {
+    console.error(`[sdw-orch report re-render] Run "${state.runId}" records no specification path; nothing to refresh.`);
+    return 1;
+  }
+
+  state = recordRetroContribution(targetRoot, state);
+  state = refreshInProgressReport(targetRoot, state);
+  const companion = reRenderCompanionReport(targetRoot, state, { minScore: options.minScore });
+  const inProgressPath = deliveryReport.resolveInProgressReportPath(targetRoot, state);
+  const result = {
+    ok: companion.ok,
+    runId: state.runId,
+    companion: companion.relPath,
+    inProgress: inProgressPath ? normalizeRel(path.relative(targetRoot, inProgressPath)) : null,
+    changed: companion.changed,
+    pushed: companion.pushed,
+    amended: false
+  };
+  if (options.json) {
+    console.log(JSON.stringify(result, null, 2));
+  } else if (!companion.ok) {
+    console.error(`[sdw-orch report re-render] The companion report could not be written for run "${state.runId}".`);
+  } else {
+    console.log(`[sdw-orch report re-render] Companion report refreshed: ${companion.relPath}${companion.changed ? ' (updated)' : ' (unchanged)'}.`);
+    console.log(`[sdw-orch report re-render] In-progress report refreshed: ${result.inProgress}.`);
+    if (companion.pushed) {
+      console.log('[sdw-orch report re-render] The delivery branch was already pushed; the refreshed companion stays uncommitted and no commit was amended.');
+    }
+  }
+  return companion.ok ? 0 : 1;
+}
+
 function cmdSandbox(options) {
   const sourceRoot = options.root ? path.resolve(options.root) : process.cwd();
   const action = String((options.specPaths && options.specPaths[0]) || options.target || 'list').trim().split(/\s+/)[0] || 'list';
@@ -4247,6 +4458,7 @@ Subcommands:
   task finish            Submit accepted evidence for the dispatched DAG task
   task abandon           Return the dispatched DAG task to the queue
   score submit           Submit a judge verdict for Step 5 conformance scoring
+  report re-render       Refresh the delivery report and the in-progress report from run state (never commits)
   status                 Check status of current or specified run state
   sandbox list           List isolated sandboxes created by --sandbox
   sandbox report         Regenerate and print the report for a sandbox (--run-id)
@@ -4325,6 +4537,9 @@ function main() {
     case 'score-submit':
       code = cmdScoreSubmit(options);
       break;
+    case 'report-re-render':
+      code = cmdReportReRender(options);
+      break;
     case 'status':
       code = cmdStatus(options);
       break;
@@ -4357,6 +4572,7 @@ module.exports = {
   cmdTaskAbandon,
   cmdTaskFinish,
   cmdScoreSubmit,
+  cmdReportReRender,
   cmdSandbox,
   printRunDryRunPlan,
   showHelp,
@@ -4376,5 +4592,10 @@ module.exports = {
   buildStep6Contribution,
   buildStep7Contributions,
   buildConvergenceContribution,
-  buildStep8Contributions
+  buildStep8Contributions,
+  buildLearningDigest,
+  formatLearningDigest,
+  buildRetroContribution,
+  recordRetroContribution,
+  reRenderCompanionReport
 };

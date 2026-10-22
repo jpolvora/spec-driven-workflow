@@ -27,13 +27,12 @@ Orchestrates spec execution from input requirement to delivery commit, automated
 - `run <specPath> --dry-run`: Validates the specification, prints the execution plan and the spec observations it found; executes nothing and writes no state, report, or artifact.
 - `run <specPath> --second-pass` (alias `--refine`): Refines an already implemented specification: audits how it was delivered, fills acceptance criteria that are missing or drifted from the spec, then applies clear simplification or quality gains. Writes a `{slug}-refine.md` report, commits only when the pass changed code, and runs Step 8 only when that commit exists. Producing no change is valid only when every criterion already holds and no drift remains.
 - `run <specPath> --sandbox`: Executes the whole pipeline against an isolated local clone of `HEAD`; never pushes or opens a pull request.
-- `sandbox list`: Lists isolated sandboxes with status, branch, and age.
-- `sandbox report --run-id <runId>`: Regenerates and prints the sandbox report.
-- `sandbox clean --run-id <runId>`: Deletes the sandbox clone and keeps its metadata and report.
+- `sandbox list | report --run-id <runId> | clean --run-id <runId>`: Lists isolated sandboxes with status, branch, and age; regenerates and prints a sandbox report; or deletes the clone keeping its metadata and report.
 - `task next [--run-id <runId>] [--json]`: Dispatches the next ready DAG task and emits its dispatch envelope (subagent mode).
 - `task finish --run-id <runId> --task <taskId> --evidence <evidencePath>`: Validates the dispatched task's evidence, accepts it, then saves it with one scoped checkpoint commit plus the tag `sdw-checkpoint-{runId}-{taskId}` (opt out: `--no-task-checkpoint`; a second-pass run commits the refinement at Step 6 and the report at Step 7).
 - `task abandon --run-id <runId> --task <taskId> --reason <text>`: Returns the dispatched task to the queue after a lost or failed worker.
-- `score submit --run-id <runId> --verdict <path>`: Submits the Step 5 judge verdict and applies the conformance score.
+- `score submit --run-id <runId> --verdict <path>`: Submits the Step 5 judge verdict, applies the conformance score, and persists the optional `summary`, `risks`, and `followUps` as the judgment contribution.
+- `report re-render --run-id <runId>`: Refreshes the delivery report and the in-progress report from run state; never commits or amends a pushed commit.
 - `resume`: Resumes an interrupted or paused run from its last recorded step in `.sdw/state/{runId}.state.json`.
 - `status`: Displays current execution progress, conformance score, and step status.
 
@@ -44,10 +43,8 @@ Orchestrates spec execution from input requirement to delivery commit, automated
 ## Second Pass (`--second-pass`)
 
 - Requires an already delivered spec (registry `completed`/`archived`, or a completed run with a delivery commit); otherwise it refuses with exit `1`.
-- Steps 2 and 3 are skipped in favor of one `task-refine` task, and `task finish` accepts an empty `filesChanged` for it.
-- Gap closure is the first mandate: each acceptance criterion is audited against the delivered code, tests, configuration, and docs, and missing, partial, or drifted behavior is implemented. Simplification and quality passes follow, inside the same specification scope.
-- No code change: Steps 5-8 are `skipped`, the refinement report is written, and the command exits `0` with `refineOutcome: "no-change"`. This is honest only when every criterion already holds and no drift remains.
-- Code change: scoring, review, and shipping run normally. The commit is `refine({slug}): second pass refinement`, and shipping runs only because that commit exists.
+- Steps 2 and 3 are skipped in favor of one `task-refine` task, and `task finish` accepts an empty `filesChanged` for it. Gap closure comes first: each acceptance criterion is audited against the delivered code, tests, configuration, and docs, and missing, partial, or drifted behavior is implemented; simplification and quality passes follow inside the same specification scope.
+- No code change: Steps 5-8 are `skipped`, the refinement report is written, and the command exits `0` with `refineOutcome: "no-change"` (honest only when every criterion already holds and no drift remains). Code change: scoring, review, and shipping run normally, the commit is `refine({slug}): second pass refinement`, and shipping runs only because that commit exists.
 
 ## Dry Run vs Sandbox
 
@@ -107,9 +104,11 @@ Orchestrates spec execution from input requirement to delivery commit, automated
 - Step 6 never writes the registry. Only after the delivery stage reports the delivery, or with `--skip-pr`, does Step 8 mark the specification `completed` and set its header `status: implemented` in the same transition; a run that fails earlier leaves both unchanged.
 - An open run whose recorded base commit is not an ancestor of the refreshed work lane is stale and is never resumed: `--new-run` starts a fresh run and records the superseded id.
 
-## Delivery Report & Spec Observations
+## Delivery Report, Contributions & Spec Observations
 
-- After Step 7 resolves and before Step 8 delegates, write `{specFileNameWithoutExtension}-report.md` beside the specification with: metadata (run id, slug, branch, base/delivery commit, ship status, score/`scoreMin`, timings per step), tasks, commits, files changed per task, verification, code review, breaking-change candidates, quality, spec observations, notes, and outcome.
+- After Step 7 resolves and before Step 8 delegates, write `{specFileNameWithoutExtension}-report.md` beside the specification with: metadata (run id, slug, branch, base/delivery commit, ship status, score/`scoreMin`, timings per step), tasks, commits, files changed per task, verification, code review, conformance judgment (score, minimum, verified/failed counts, one row per criterion), advisory judge analysis (summary, risks, follow-ups), learnings, retrospective, breaking-change candidates, quality, spec observations, notes, and outcome; a section whose contributions are absent renders `Not available`.
+- Every step appends one entry to `state.reportContributions` (`step`, `stepName`, `at`, `kind`, `title`, `body`, `evidence`) before the next step begins, and both report paths re-render from the whole list at that boundary; entries are ordered by step then time, malformed entries are skipped with a recorded warning, the write is atomic, and `--dry-run` prints the contribution summary instead of writing.
+- Every `sdw-memory record --run <runId>` becomes a `learning` contribution and an append-only `.sdw/state/{slug}/{runId}/learnings.json` entry; before a step acts it receives the matching learnings digest, and `sdw-memory apply` names the step that applied each one. When the retrospective completes, its `retro` contribution is appended and the report re-renders; `report re-render` refreshes the companion from run state without amending a pushed commit.
 - Commit it with `docs({specSlug}): record delivery report`, staging only that file, whenever it is written; record its path in `state.deliveryReport`. A write or commit failure records a warning in run state and delivery continues. A resumed run rewrites the same path from current state instead of appending. `--skip-pr` and second-pass runs commit the report too, after their own delivery or `refine` commit.
 - Step 2 records advisory observations as `kind` (`overlap` when a delivered spec names the same target file, `superseded` when another spec names this slug/id in a supersession context, `conflict` when both declare the same configuration key differently), `otherSpec`, `evidence`, and `severity`. They never block, rewrite, or alter a run; `--dry-run` prints them without writing a report or artifact.
 

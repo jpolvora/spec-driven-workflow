@@ -16,8 +16,10 @@ const STEP_NAMES = {
   5: 'scoring',
   6: 'delivery_commit',
   7: 'code_review',
-  8: 'pr_preparation'
+  8: 'pr_preparation',
+  9: 'retrospective'
 };
+const CONTRIBUTION_STEP_COUNT = 9;
 
 /**
  * Spec 00057 AC1, AC8: every step renders a section, even when it contributed
@@ -203,7 +205,7 @@ function renderContributionsSection(context) {
     markdown += `- Skipped malformed: ${selection.warnings.length} entry(ies)\n`;
   }
   markdown += '\n';
-  for (let stepNumber = 1; stepNumber <= 8; stepNumber++) {
+  for (let stepNumber = 1; stepNumber <= CONTRIBUTION_STEP_COUNT; stepNumber++) {
     markdown += `### Step ${stepNumber}: ${STEP_NAMES[stepNumber]}\n\n`;
     const entries = selection.contributions.filter((entry) => entry.step === stepNumber);
     if (entries.length === 0) {
@@ -274,6 +276,14 @@ function writeReportAtomic(reportPath, content) {
       // The report path is already intact; a leftover temp file is not fatal.
     }
     return { ok: false, error: err.message, reportPath };
+  }
+}
+
+function readReportFile(reportPath) {
+  try {
+    return fs.readFileSync(reportPath, 'utf8');
+  } catch (e) {
+    return null;
   }
 }
 
@@ -879,6 +889,160 @@ function renderCodeReviewSection(context) {
   return markdown.trimEnd();
 }
 
+function contributionsOfKind(state, kind) {
+  return selectContributions(state).contributions.filter((entry) => entry.kind === kind);
+}
+
+/**
+ * Spec 00057 AC16: the score, the required minimum, the verified and failed
+ * counts, and one row per criterion with its verdict and evidence. The numbers
+ * come from the Step 5 verdict contribution; an absent contribution degrades to
+ * `Not available` instead of recomputing anything.
+ */
+function renderConformanceJudgmentSection(context) {
+  const { state } = context;
+  const entries = contributionsOfKind(state, 'verdict');
+  let markdown = '## Conformance Judgment\n\n';
+  if (entries.length === 0) return `${markdown}Not available`;
+  const body = (entries[entries.length - 1].body && typeof entries[entries.length - 1].body === 'object')
+    ? entries[entries.length - 1].body
+    : {};
+  const verdicts = Array.isArray(body.verdicts) ? body.verdicts : [];
+  const verified = body.verifiedCount !== undefined && body.verifiedCount !== null
+    ? Number(body.verifiedCount)
+    : verdicts.filter((entry) => entry && entry.verdict === 'verified').length;
+  const failed = body.failingCount !== undefined && body.failingCount !== null
+    ? Number(body.failingCount)
+    : verdicts.filter((entry) => entry && entry.verdict && entry.verdict !== 'verified').length;
+  const score = body.score === undefined || body.score === null ? '(not scored)' : `${body.score}/10`;
+  const minimum = body.minScore === undefined || body.minScore === null ? '(not recorded)' : `${body.minScore}/10`;
+  markdown += `- Score: ${score} (required minimum ${minimum})\n`;
+  markdown += `- Criteria: ${verified} verified, ${failed} failed (${verdicts.length} judged)\n`;
+  markdown += `- Result: ${body.passed === true ? 'passed' : 'below the required minimum'}\n`;
+  markdown += `- Source: Step 5 verdict contribution\n\n`;
+  if (verdicts.length === 0) {
+    return `${markdown}No criterion verdicts recorded.`;
+  }
+  markdown += '| Criterion | Verdict | Evidence |\n|---|---|---|\n';
+  for (const entry of verdicts) {
+    markdown += `| ${escapeCell(entry && entry.id)} | ${escapeCell(entry && entry.verdict)} | ${escapeCell(entry && entry.evidence)} |\n`;
+  }
+  return markdown.trimEnd();
+}
+
+/**
+ * Spec 00057 AC17: the judge summary, risks, and follow-ups, attributed to the
+ * Step 5 judge and marked advisory. The section is read-only prose: it never
+ * feeds the score, a gate, the review, or a halt decision.
+ */
+function renderJudgeAnalysisSection(context) {
+  const { state } = context;
+  const entries = contributionsOfKind(state, 'judgment');
+  let markdown = '## Judge Analysis\n\n';
+  if (entries.length === 0) return `${markdown}Not available`;
+  const body = (entries[entries.length - 1].body && typeof entries[entries.length - 1].body === 'object')
+    ? entries[entries.length - 1].body
+    : {};
+  const risks = Array.isArray(body.risks) ? body.risks : [];
+  const followUps = Array.isArray(body.followUps) ? body.followUps : [];
+  markdown += '- Source: Step 5 judge (advisory; it never changes the score, a gate, the review, or a halt decision)\n';
+  markdown += `- Summary: ${body.summary ? escapeCell(body.summary) : '(not recorded)'}\n`;
+  if (risks.length === 0) {
+    markdown += '- Risks: none recorded\n';
+  } else {
+    markdown += '\n| Severity | Evidence | Risk |\n|---|---|---|\n';
+    for (const risk of risks) {
+      markdown += `| ${escapeCell(risk && risk.severity)} | ${escapeCell(risk && risk.evidence)} | ${escapeCell(risk && risk.note)} |\n`;
+    }
+  }
+  if (followUps.length === 0) {
+    markdown += '- Follow-ups: none recorded\n';
+  } else {
+    markdown += '\nFollow-ups:\n';
+    for (const followUp of followUps) markdown += `- ${escapeCell(followUp)}\n`;
+  }
+  return markdown.trimEnd();
+}
+
+/**
+ * Spec 00057 AC23: every learning contribution with its kind, slug, severity,
+ * recording step, and the step that applied it.
+ */
+function renderLearningsSection(context) {
+  const { state } = context;
+  const entries = contributionsOfKind(state, 'learning');
+  let markdown = '## Learnings\n\n';
+  if (entries.length === 0) return `${markdown}Not available`;
+  markdown += '| Kind | Slug | Severity | Recorded at step | Applied by | Evidence |\n|---|---|---|---|---|---|\n';
+  for (const entry of entries) {
+    const body = (entry.body && typeof entry.body === 'object') ? entry.body : {};
+    const appliedBy = body.appliedBy && body.appliedBy.step
+      ? `step ${body.appliedBy.step} (${escapeCell(body.appliedBy.evidence)})`
+      : 'not applied';
+    markdown += `| ${escapeCell(body.kind)} | ${escapeCell(body.slug)} | ${escapeCell(body.severity)} | step ${entry.step} (${escapeCell(entry.stepName)}) | ${appliedBy} | ${escapeCell((body.pathPatterns || []).join(', '))} |\n`;
+  }
+  return markdown.trimEnd();
+}
+
+/**
+ * Spec 00057 AC25: the retrospective signals, candidates, and the fixes it
+ * applied, plus the candidates it routed and the specifications it queued.
+ */
+function renderRetrospectiveSection(context) {
+  const { state } = context;
+  const entries = contributionsOfKind(state, 'retro');
+  let markdown = '## Retrospective\n\n';
+  if (entries.length === 0) return `${markdown}Not available`;
+  const body = (entries[entries.length - 1].body && typeof entries[entries.length - 1].body === 'object')
+    ? entries[entries.length - 1].body
+    : {};
+  const candidates = Array.isArray(body.candidates) ? body.candidates : [];
+  const fixes = (body.fixes && typeof body.fixes === 'object') ? body.fixes : {};
+  const signals = (body.signals && typeof body.signals === 'object') ? body.signals : {};
+  markdown += `- Status: \`${escapeCell(body.status || 'unknown')}\`\n`;
+  if (body.reportMd) markdown += `- Report: \`${escapeCell(body.reportMd)}\`\n`;
+  if (body.reportJson) markdown += `- Data: \`${escapeCell(body.reportJson)}\`\n`;
+  const signalParts = [];
+  if (signals.retries) signalParts.push(`retries ${signals.retries.total} (score ${signals.retries.scoreIterations}, review ${signals.retries.reviewIterations}, rounds ${signals.retries.reviewRounds}, abandonments ${signals.retries.dispatchAbandonments})`);
+  if (signals.leftoverRuns !== undefined) signalParts.push(`leftover runs ${signals.leftoverRuns}`);
+  if (signals.missingArtifacts !== undefined) signalParts.push(`missing artifacts ${signals.missingArtifacts}`);
+  if (signals.reviewFindings) signalParts.push(`review findings ${signals.reviewFindings.total} (${signals.reviewFindings.open} open)`);
+  markdown += `- Signals: ${signalParts.length > 0 ? signalParts.join('; ') : 'none recorded'}\n`;
+  markdown += `- Candidates: ${candidates.length}\n`;
+  for (const candidate of candidates) {
+    const route = candidate.route ? ` -> route \`${escapeCell(candidate.route)}\`` : '';
+    const status = candidate.status ? ` (${escapeCell(candidate.status)})` : '';
+    markdown += `  - ${escapeCell(candidate.id)} [${escapeCell(candidate.severity)}] ${escapeCell(candidate.title)}${route}${status}\n`;
+  }
+  const recorded = Array.isArray(fixes.recorded) ? fixes.recorded : [];
+  const queued = Array.isArray(fixes.queuedSpecifications) ? fixes.queuedSpecifications : [];
+  const failures = Array.isArray(fixes.failures) ? fixes.failures : [];
+  markdown += '- Applied fixes:\n';
+  if (recorded.length === 0 && queued.length === 0 && !fixes.consolidated && failures.length === 0) {
+    markdown += '  - none\n';
+  }
+  for (const fix of recorded) {
+    markdown += `  - memory record \`${escapeCell(fix.slug)}\` via \`${escapeCell(fix.backend)}\`${fix.candidateId ? ` (candidate ${escapeCell(fix.candidateId)})` : ''}\n`;
+  }
+  if (fixes.consolidated) {
+    markdown += `  - consolidate: removed ${fixes.consolidated.removed}, kept ${fixes.consolidated.kept}\n`;
+  }
+  for (const fix of queued) {
+    markdown += `  - queued specification \`${escapeCell(fix.spec)}\`${fix.candidateId ? ` (candidate ${escapeCell(fix.candidateId)})` : ''}\n`;
+  }
+  for (const failure of failures) {
+    markdown += `  - failed route \`${escapeCell(failure.route)}\`${failure.candidateId ? ` (candidate ${escapeCell(failure.candidateId)})` : ''}: ${escapeCell(failure.error)}\n`;
+  }
+  const routed = Array.isArray(body.routedCandidates) ? body.routedCandidates : [];
+  if (routed.length > 0) {
+    markdown += '- Routed candidates:\n';
+    for (const candidate of routed) {
+      markdown += `  - ${escapeCell(candidate.id)} -> \`${escapeCell(candidate.route)}\` (${escapeCell(candidate.status)})${candidate.spec ? `: \`${escapeCell(candidate.spec)}\`` : ''}\n`;
+    }
+  }
+  return markdown.trimEnd();
+}
+
 function renderBreakingChangesSection(breaking) {
   let markdown = '## Breaking Changes\n\n';
   if (!breaking.available) {
@@ -1067,6 +1231,10 @@ function buildDeliveryReport(options) {
     renderFilesChangedSection(context),
     renderVerificationSection(context),
     renderCodeReviewSection(context),
+    renderConformanceJudgmentSection(context),
+    renderJudgeAnalysisSection(context),
+    renderLearningsSection(context),
+    renderRetrospectiveSection(context),
     renderBreakingChangesSection(breaking),
     renderQualitySection(context),
     renderSpecObservationsSection(context),
@@ -1098,6 +1266,7 @@ function writeDeliveryReport(options) {
     console.warn(`[sdw-orch] Warning: Could not render the delivery report at "${toProjectRelative(root, reportPath)}": ${err.message}`);
     return null;
   }
+  const previous = readReportFile(reportPath);
   const writeResult = writeReportAtomic(reportPath, content);
   if (!writeResult.ok) {
     console.warn(`[sdw-orch] Warning: Could not write the delivery report at "${toProjectRelative(root, reportPath)}": ${writeResult.error}`);
@@ -1106,6 +1275,7 @@ function writeDeliveryReport(options) {
   return {
     reportPath,
     relPath: toProjectRelative(root, reportPath),
+    changed: previous !== content,
     warnings: selectContributions(state).warnings
   };
 }
@@ -1142,6 +1312,7 @@ module.exports = {
   IN_PROGRESS_REPORT_NAME,
   REPORT_CONTRIBUTIONS_KEY,
   STEP_NAMES,
+  CONTRIBUTION_STEP_COUNT,
   PLANNED_CONTRIBUTION_KINDS,
   resolveReportPath,
   resolveInProgressReportPath,
@@ -1152,9 +1323,14 @@ module.exports = {
   appendContribution,
   hasContribution,
   selectContributions,
+  contributionsOfKind,
   summarizeContributions,
   summarizePlannedContributions,
   renderContributionsSection,
+  renderConformanceJudgmentSection,
+  renderJudgeAnalysisSection,
+  renderLearningsSection,
+  renderRetrospectiveSection,
   writeReportAtomic,
   buildDeliveryReport,
   writeDeliveryReport,

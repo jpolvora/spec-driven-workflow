@@ -12,8 +12,8 @@ invocation_names:
 
 Reviews one `sdw-orch` run after delivery. It reads the run state file, the step
 artifacts that state declares, and the transcript the finder resolves or the
-operator explicitly names. It reports deterministic friction signals and leaves
-every improvement judgment to an explicit operator decision.
+operator explicitly names. It reports deterministic friction signals and applies
+every fix its routes allow; a code change still needs a specification.
 
 > **Rules:** apply [`sdw-rules`](../sdw-rules/SKILL.md) before acting.
 
@@ -29,7 +29,9 @@ every improvement judgment to an explicit operator decision.
 - The run writes `<runId>.retro.md` and `<runId>.retro.json` inside the run artifact directory.
 - A report with signals and no candidates is valid for a smooth delivery.
 - `scripts/validate_candidates.cjs` accepts only complete candidates ordered `critical` -> `low`; rejections carry a stable reason code.
-- Memory candidates emit an `sdw-memory` record draft; a retro never records it and never edits `skills/` directly.
+- Memory candidates emit an `sdw-memory` record draft; the retro records it when it runs with candidates and reports the slug and backend.
+- The retro applies only what its routes allow: memory records and duplicate consolidation run immediately, a candidate that needs a change under `skills/` or `tests/` is queued as a follow-up specification and named, and the file is never edited.
+- The report carries `fixes` (recorded entries, consolidation counts, queued specifications, failures) and `routedCandidates` (one route and status per candidate).
 
 ## Signals
 
@@ -60,10 +62,10 @@ every improvement judgment to an explicit operator decision.
 
 3. **Run the analysis**
    ```bash
-   node skills/sdw-retro/scripts/retro.cjs run [--run-id <runId>] [--root <projectRoot>] [--transcript <path>]... [--transcript-mode <host|captured>] [--json]
+   node skills/sdw-retro/scripts/retro.cjs run [--run-id <runId>] [--root <projectRoot>] [--candidates <file>] [--transcript <path>]... [--transcript-mode <host|captured>] [--json]
    ```
-   Name transcripts with `retro.transcripts` or repeated `--transcript`; the script never discovers them and decodes zstd frames in memory. `--transcript-mode <host|captured>` defaults to `host` and labels every transcript input in both reports.
-   - Done when: the command exits `0` and writes both report files, even when a transcript is unreadable.
+   Name transcripts with `retro.transcripts` or repeated `--transcript`; the script never discovers them and decodes zstd frames in memory. `--transcript-mode <host|captured>` defaults to `host` and labels every transcript input in both reports. Name candidates with `--candidates <file>` (an array or a saved report's `candidates`), and the run applies their routes before it writes the reports.
+   - Done when: the command exits `0`, writes both report files, and reports `fixes` plus `routedCandidates` for every candidate handed in, even when a transcript is unreadable.
 
 4. **Review signals and record candidates**
    Read the deterministic signals. A candidate is an operator- or agent-supplied judgment with `id`, `title`, `severity`, `category`, `evidence`, and `proposedChange`.
@@ -75,9 +77,9 @@ every improvement judgment to an explicit operator decision.
    ```
    - Done when: the command exits `0` with every candidate complete and ordered `critical` -> `low`; memory candidates carry an `sdw-memory` draft.
 
-6. **Decide the follow-up**
-   Route an accepted candidate to a specification, an `sdw-memory` record, or an operator edit. A retro never applies changes; a direct `skills/` edit is rejected with `skills-requires-spec` and the specification route.
-   - Done when: the operator knows the route for each candidate or accepts an empty candidate list.
+6. **Apply the routes**
+   Pass the accepted candidates with `--candidates`; the retro records the memory entries, consolidates duplicate entries, and queues a follow-up specification for every candidate that needs a code change. A candidate that needs a change under `skills/` or `tests/` is queued and named (`queuedSpecifications`), never edited; a route that cannot be applied is reported under `fixes.failures`.
+   - Done when: every candidate has a `routedCandidates` entry, each applied fix is named on the report, and an empty candidate list still yields a valid report.
 
 ## Reference
 

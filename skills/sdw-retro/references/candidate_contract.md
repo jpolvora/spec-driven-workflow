@@ -4,6 +4,19 @@ A candidate is one operator- or agent-supplied improvement judgment produced
 while reviewing a completed run. Candidates are proposals, not automatic
 changes. A retro report may contain no candidates at all.
 
+Since spec 00057 the retrospective applies every fix its routes allow: it
+records the memory entries its candidates call for, consolidates duplicate
+entries, and queues a follow-up specification for each candidate that needs a
+code change. A candidate that needs a change under `skills/` or `tests/` is
+routed to a specification and named; the file itself is never edited. Each
+applied fix and each routed candidate is recorded on the retro report under
+`fixes` and `routedCandidates`.
+
+Hand candidates to a run with `retro.cjs run --run-id <id> --candidates <file>`.
+The file is an array of candidate records or a saved report's `candidates`
+array. Invalid candidates are listed as `rejectedCandidates` and are never
+applied.
+
 ## Record Shape
 
 | Field | Type | Meaning |
@@ -45,6 +58,16 @@ next. A direct `skills/` edit is never proposed: it is rejected with
 through sdw-orch`). A target naming a non-`skills/` path such as
 `.sdw/specs/<slug>.md` is accepted.
 
+## Retro Routes
+
+| `proposedChange.target` | Route | Applied by the retro |
+|---|---|---|
+| `sdw-memory` on a `memory` candidate with a draft | `memory` | Yes: `sdw-memory record`, reporting the slug and the backend |
+| Duplicate memory entries after recording | `consolidate` | Yes: `sdw-memory consolidate`, reporting removed and kept |
+| A path under `skills/` or `tests/` | `specification` | Yes: queues a follow-up specification through `sdw-spec` and names it; the file is never edited |
+| An existing `.sdw/specs/*.md` path | `specification` | Yes: names the queued specification |
+| Anything else | `operator` | No: reported as an open candidate |
+
 ## Severity
 
 Only these four values are accepted, ordered from most to least urgent:
@@ -84,9 +107,10 @@ repository modification. It is the only category that uses this shape:
 The draft requires `kind` (`trap`, `gap`, `pattern`, or `error`), `title`,
 `avoid`, and `action`; `slug` is optional kebab-case, and `paths` is an
 optional list of project-relative paths. The validator emits every accepted
-draft under `memoryDrafts`; it never records it and never imports a host-memory
-API. A missing draft is rejected with `missing-memory-draft`, an incomplete
-draft with `invalid-memory-draft`, and a repository target with
+draft under `memoryDrafts` and never records it. The retro records the draft
+itself when it runs with candidates, and reports the slug and backend it
+recorded; a missing draft is rejected with `missing-memory-draft`, an
+incomplete draft with `invalid-memory-draft`, and a repository target with
 `memory-target-not-route`.
 
 ## Validation
