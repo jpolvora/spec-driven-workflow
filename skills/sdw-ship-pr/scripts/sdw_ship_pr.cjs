@@ -780,6 +780,8 @@ async function runShipPr(options = {}, customExecutor = null) {
     head,
     base,
     scmProvider: scmProviderName,
+    // AC8: the resolved linkage is observable on success and failure runs.
+    issueLink,
     pushed: false,
     prePrPassed: false,
     pullRequest: null,
@@ -807,6 +809,13 @@ async function runShipPr(options = {}, customExecutor = null) {
 
   const log = options.json ? console.error : console.log;
   const warn = options.json ? console.error : console.warn;
+
+  // AC7: dry-run prints the assembled body, closing keyword included, and the
+  // simulated PR path issues no create or edit command.
+  if (dryRun) {
+    log('[sdw-ship-pr] (dry-run) Assembled pull request body:');
+    log(body);
+  }
 
   try {
     // Step 1: Pre-PR Verification Gates
@@ -1819,7 +1828,12 @@ if (require.main === module) {
     .catch(err => {
       console.error(`\n[sdw-ship-pr] Error: ${err.message}`);
       if (options.json) {
-        process.stdout.write(JSON.stringify({ success: false, error: err.message }, null, 2) + '\n');
+        // AC8: the failure report keeps the resolved `issueLink`; only failures
+        // raised before a report exists fall back to the bare error payload.
+        const failureReport = err.report && typeof err.report === 'object'
+          ? err.report
+          : { success: false, error: err.message };
+        process.stdout.write(JSON.stringify(failureReport, null, 2) + '\n');
       }
       process.exit(1);
     });

@@ -45,6 +45,14 @@ Before publishing branches or creating remote pull requests, `sdw-ship-pr` evalu
 3. **Creation Payload:**
    - `title`: Enriched by default from `git log {base}..{head}` and spec title (`feat({specSlug}): deliver {specTitle} ({n} commits)` or `feat({head}): {firstSubject} (+n more)`); explicit `--title` overrides.
    - `body`: Markdown with `## Summary`, `## Commits` (sha/subject/author/date), `## Features` grouped (Features/Fixes/Other), `## Files changed` (`git diff --name-status`), and `## Verification` (gates from config). Explicit `--body` overrides; empty git context falls back to legacy one-liner.
+4. **Issue Linkage (spec 00051):**
+   - Looks up `.sdw/specs/<specSlug>.md` from `--spec`; `id` and `source` come from the frontmatter and are parsed with a regex, with no YAML dependency.
+   - Provider mapping lives in one table: `github` → `Closes #<id>`, `azure-devops` → `Fixes AB#<id>`; `local`, `null`, and any other `source` emit nothing.
+   - The closing line ends the `## Summary` block, before `## Commits`; no placeholder exists when the link is absent.
+   - On reuse, every existing `^(Closes|Fixes|Resolves)\s+(AB)?#\d+\b` line is dropped before the current keyword is appended, so the body carries it exactly once. When the existing body cannot be read, the amendment is appended with exactly one keyword.
+   - A missing or unreadable specification, or an unsupported provider, omits the keyword, records `issueLink.present: false`, and never fails the ship.
+   - `--dry-run` prints the assembled body, keyword included, and issues no pull-request create or edit command.
+   - `--json` reports `issueLink: { id, provider, keyword, present }` on success and failure.
 
 ---
 
@@ -124,6 +132,12 @@ When invoked with `--json`, `sdw-ship-pr` emits JSON with the following structur
   "head": "develop",
   "base": "master",
   "scmProvider": "github",
+  "issueLink": {
+    "id": "51",
+    "provider": "github",
+    "keyword": "Closes #51",
+    "present": true
+  },
   "pushed": true,
   "pullRequest": {
     "number": "3",
