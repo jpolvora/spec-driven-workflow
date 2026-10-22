@@ -1125,6 +1125,40 @@ function buildConvergenceContribution(shipResult) {
 }
 
 /**
+ * Spec 00057 AC7/AC9: one convergence contribution per recorded iteration. The
+ * ship result carries the round history; a result without it degrades to the
+ * single summary entry so an older ship contract still renders.
+ */
+function buildConvergenceContributions(shipResult) {
+  const convergence = shipResult && shipResult.reviewConvergence;
+  if (!convergence) return [];
+  const history = Array.isArray(convergence.history) ? convergence.history : [];
+  if (history.length > 0) {
+    return history.map((entry) => {
+      const failingChecks = Array.isArray(entry.failingChecks)
+        ? entry.failingChecks.map((name) => ({ name: String(name), status: '' }))
+        : [];
+      return {
+        kind: 'convergence',
+        title: `Convergence iteration ${entry.iteration || 0}`,
+        body: {
+          iteration: Number(entry.iteration) || 0,
+          rounds: Number(convergence.rounds) || history.length,
+          failingChecks,
+          openThreads: Number(entry.openThreads) || 0,
+          resolvedThreads: Number(entry.resolvedThreads) || 0,
+          fixCommit: entry.fixCommit || null,
+          converged: Boolean(entry.converged)
+        },
+        evidence: []
+      };
+    });
+  }
+  const single = buildConvergenceContribution(shipResult);
+  return single ? [single] : [];
+}
+
+/**
  * Spec 00057 AC7: the pre-PR gate results and the push/pull-request outcome.
  * Gate rows come from sdw-ship-pr when it ran, otherwise from the attempts the
  * orchestrator executed itself, so a failed-then-passed gate appears twice.
@@ -3241,11 +3275,13 @@ function cmdRun(options) {
 
         if (shipResult) {
           step8ShipResult = shipResult;
-          // Spec 00057 AC7, AC9: record the convergence attempt before any pause
-          // decision, so a delivery stopped on failing checks still renders it.
-          const convergenceContribution = buildConvergenceContribution(shipResult);
-          if (convergenceContribution) {
-            state = recordStepContributions(targetRoot, state, 8, [convergenceContribution], { allowDuplicates: true });
+          // Spec 00057 AC7, AC9: record every convergence iteration before any
+          // pause decision and re-render after each one, so a delivery stopped on
+          // failing checks still renders the rounds that already ran.
+          const convergenceContributions = buildConvergenceContributions(shipResult);
+          for (const contribution of convergenceContributions) {
+            state = recordStepContributions(targetRoot, state, 8, [contribution], { allowDuplicates: true });
+            state = refreshInProgressReport(targetRoot, state) || state;
           }
         }
 
@@ -3406,6 +3442,35 @@ function cmdRun(options) {
       const reRendered = reRenderCompanionReport(targetRoot, state, { minScore: effectiveMinScore });
       if (reRendered.ok) {
         console.log(`[sdw-orch] Delivery report re-rendered after the retrospective: ${reRendered.relPath}${reRendered.changed ? ' (updated)' : ' (unchanged)'}${reRendered.pushed ? '; the pushed commit was not amended' : ''}`);
+        // Spec 00057 AC11: the committed companion must carry the complete
+        // contribution set, including Step 8 and the retrospective, so the
+        // refresh lands as its own scoped commit and is pushed again when the
+        // branch was already published. The pushed delivery is never amended.
+        if (reRendered.changed && isGitRepo(targetRoot)) {
+          try {
+            const finalReport = stageAndCommitOnly(
+              targetRoot,
+              [reRendered.relPath],
+              `docs(${specSlug}): record the final delivery report`
+            );
+            if (finalReport && finalReport.committed) {
+              state.finalReportCommit = finalReport.commitSha;
+              state = stateManager.saveRunState(targetRoot, state);
+              console.log(`[sdw-orch] Final delivery report committed as ${finalReport.commitSha}.`);
+              const finalBranch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: targetRoot, encoding: 'utf8' }).trim();
+              if (finalBranch && finalBranch !== 'HEAD' && (state.pushedBranch || shouldPush)) {
+                git(targetRoot, ['push', 'origin', finalBranch], { stdio: 'inherit' });
+                console.log(`[sdw-orch] Final delivery report pushed to origin/${finalBranch}.`);
+              }
+            }
+          } catch (finalReportErr) {
+            console.warn(`[sdw-orch] Warning: the final delivery report could not be committed: ${finalReportErr.message}`);
+            try {
+              stateManager.recordWarning(targetRoot, state.runId, 8, `final delivery report commit failed: ${finalReportErr.message}`);
+              state = stateManager.loadRunState(targetRoot, state.runId) || state;
+            } catch (warnErr) {}
+          }
+        }
       } else {
         console.warn('[sdw-orch] Warning: the delivery report could not be re-rendered after the retrospective.');
       }

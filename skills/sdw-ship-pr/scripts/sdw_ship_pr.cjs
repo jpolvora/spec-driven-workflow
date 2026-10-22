@@ -1410,6 +1410,9 @@ async function runShipPr(options = {}, customExecutor = null) {
         let prevCheckClasses = null;
         report.reviewConvergence.preemptions = 0;
         report.reviewConvergence.supersededChecks = [];
+        // One recorded entry per convergence iteration, so the delivery report can
+        // render the history instead of only the final round.
+        report.reviewConvergence.history = [];
 
         while (round < maxRounds && !converged) {
           round++;
@@ -1432,6 +1435,15 @@ async function runShipPr(options = {}, customExecutor = null) {
 
           if (status.allPassed && reviewThreads.activeCount === 0) {
             log('[sdw-ship-pr] All checks passed and 0 active review threads detected. Review converged successfully.');
+            report.reviewConvergence.history.push({
+              iteration: round,
+              at: new Date().toISOString(),
+              failingChecks: [],
+              openThreads: 0,
+              resolvedThreads: 0,
+              fixCommit: null,
+              converged: true
+            });
             converged = true;
             report.reviewConvergence.converged = true;
             break;
@@ -1442,6 +1454,19 @@ async function runShipPr(options = {}, customExecutor = null) {
           const supersededChecks = (status.checks || []).filter(isSupersededCheck);
           report.reviewConvergence.failingChecks = failingChecks;
           report.reviewConvergence.supersededChecks = supersededChecks;
+          // The round entry is pushed before any fix, so the report carries the
+          // state that triggered the iteration; the fix commit and the resolved
+          // count are filled in as that same iteration resolves them.
+          const roundEntry = {
+            iteration: round,
+            at: new Date().toISOString(),
+            failingChecks: failingChecks.map(check => String((check && (check.name || check.context || check.check)) || '')),
+            openThreads: activeList.length,
+            resolvedThreads: 0,
+            fixCommit: null,
+            converged: false
+          };
+          report.reviewConvergence.history.push(roundEntry);
 
           // Adaptation: a check that moved from a terminal state back to pending
           // (or a changed check set between rounds) means a newer CI run replaced
@@ -1495,6 +1520,7 @@ async function runShipPr(options = {}, customExecutor = null) {
               const changed = stageChangedSince(executor, beforeCheckFix, projectRoot);
               if (changed.length > 0) {
                 executor('git commit -m "fix(review): address failing checks"');
+                try { roundEntry.fixCommit = executor('git rev-parse --short HEAD').toString().trim(); } catch (e) {}
                 executor(`git push origin ${head}`);
                 await waitForNextRound();
                 continue;
@@ -1607,6 +1633,7 @@ async function runShipPr(options = {}, customExecutor = null) {
               }
 
               executor('git commit -m "fix(review): address review feedback"');
+              try { roundEntry.fixCommit = executor('git rev-parse --short HEAD').toString().trim(); } catch (e) {}
               executor(`git push origin ${head}`);
               canResolve = true;
             } else {
@@ -1667,6 +1694,7 @@ async function runShipPr(options = {}, customExecutor = null) {
 
                 if (resolveRes.resolved) {
                   report.reviewConvergence.resolvedThreads++;
+                  roundEntry.resolvedThreads += 1;
                   report.reviewConvergence.issuesFixed.push({
                     threadId: thread.id,
                     resolution: summaryNote
@@ -1683,6 +1711,7 @@ async function runShipPr(options = {}, customExecutor = null) {
             report.reviewConvergence.activeThreads = updatedThreads.activeCount;
             if (updatedStatus.allPassed && updatedThreads.activeCount === 0) {
               log('[sdw-ship-pr] All checks passed and 0 active review threads detected after resolution pass. Review converged successfully.');
+              roundEntry.converged = true;
               converged = true;
               report.reviewConvergence.converged = true;
               break;
