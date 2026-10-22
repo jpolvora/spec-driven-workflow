@@ -41,9 +41,15 @@
    - Dependencies point one way: this harness may reference product skills and specifications; product skills may reference only other `skills/` content, their own files, and generic consumer paths.
    - Documentation may *describe* how a consumer configures its own `AGENTS.md`; it must never load one at runtime or assume it exists.
 
+6. **Spec-First Default (this harness):**
+   - Behavior-change requests default to `sdw-spec` authoring (`draft`, registry `pending`); authoring never authorizes implementation.
+   - Default posture is plan-first plus confirm-first: investigate read-only, present options, wait for explicit confirmation.
+   - Implementation (`skills/` edits, `sdw-orch run`, commits) starts only after an explicit user order naming the spec plus the action.
+   - Authoritative behavior stays in `sdw-rules` plus `interaction_modes.md`; this item only fixes the harness default.
+
 ---
 
-## 3. Skill Authoring Standard (3-Tier Progressive Disclosure)
+## 3. Skill Authoring Standard (3-Tier Progressive Disclosure + Evals)
 
 When authoring or modifying skills under `skills/<skill-name>/`, adhere to the 3-Tier layout:
 
@@ -53,6 +59,7 @@ When authoring or modifying skills under `skills/<skill-name>/`, adhere to the 3
   - Compact state-machine steps with checkable `Done when:` gates; no prompt sediment.
 - **Tier 2: `references/*.md`** — schemas, examples, edge cases, and vocabulary, loaded on demand.
 - **Tier 3: `scripts/*.cjs`** — deterministic validators/parsers/scaffolders with pass/fail exit codes.
+- **Evals: `evals/usecases.md`** — one file per skill listing its use cases, outside the progressive-disclosure tiers because nothing loads it at runtime. Each use case names the request, the expected skill behavior, the verification (command or observable outcome), and the failure signal. Add one use case per supported invocation path and at least one negative case; keep it current when behavior changes. Product scripts and `SKILL.md` must never read or reference `evals/` at runtime, and `sdw-rules doctor` does not enforce this folder yet.
 
 `sdw-spec`, `sdw-orch`, and every other skill except `sdw-rules` must reference `sdw-rules`; `sdw-rules doctor` enforces it.
 

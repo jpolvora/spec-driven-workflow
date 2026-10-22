@@ -11,7 +11,7 @@ specDate: 2026-10-22
 
 ## Description
 
-`sdw-batch` delegates each specification to `sdw-orch` and advances as soon as the item reports completion. Step 8 already converges the pull request, but it never merges it, so a queue leaves one open pull request per spec and every later item branches from an `develop` that does not contain the previous delivery. Sequential deliveries then work against a stale base, and the operator has to merge each pull request by hand before the next one is trustworthy. This specification makes the merge part of the queue contract: after an item ships, the batch merges that pull request through the configured SCM provider, then advances.
+`sdw-batch` delegates each specification to `sdw-orch` and advances as soon as the item reports completion. Step 8 already converges the pull request, but it never merges it, so a queue leaves one open pull request per spec and every later item branches from an `develop` that does not contain the previous delivery. Sequential deliveries then work against a stale base, and the operator has to merge each pull request by hand before the next one is trustworthy. This specification makes the merge part of the queue contract: after an item ships, the batch merges that pull request through the configured SCM provider, then advances. It also adds the missing pre-flight: before delegating an item, the batch refreshes the base and proves the previous delivery is reachable from it, so an item can never start on a base that omits the work it follows.
 
 ### Design Intent
 
@@ -29,6 +29,9 @@ A queue is unattended by definition. If the batch cannot trust the base branch t
 - AC8: The system shall accept `--no-merge` on both `sdw-batch run` and `sdw-batch resume`.
 - AC9: The system shall document the auto-merge policy in `references/batch_protocol.md` and `SKILL.md`.
 - AC10: The system shall add tests for merge with auto-merge enabled, the policy skip, a failed merge that continues the queue, no second merge on resume, and the summary output.
+- AC11: When a queue is about to delegate an item, the system shall run a pre-flight that refreshes the base branch from the configured remote and records the resolved base commit on that item.
+- AC12: When the pre-flight finds an earlier item whose pull request is still open, the system shall merge it before delegating the next item when `batch.autoMerge` is true, and shall halt the queue with a descriptive error when auto-merge is disabled.
+- AC13: If the refreshed base does not contain the previous item's delivery commit, then the system shall halt the queue before delegating and name both the missing commit and the branch.
 
 ## Notes
 
