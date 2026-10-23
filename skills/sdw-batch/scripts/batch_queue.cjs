@@ -967,6 +967,197 @@ function preflightMergeOpen(prior, resolved) {
   return !(prior.merge && prior.merge.status === 'merged');
 }
 
+// Spec 00066 AC1-AC3: an earlier delivery may only be merged once the required
+// checks report success. The probe is injectable (`_checksStatus`) so tests stay
+// deterministic; the production probe reads `gh pr checks` for github and yields
+// `null` (unknown) for any provider or CLI that cannot report checks, which keeps
+// today's immediate merge instead of hanging the queue.
+const CHECK_POLL_INTERVAL_MS = 5000;
+const CHECK_POLL_ATTEMPTS = 60;
+
+function normalizeChecks(value) {
+  if (!value || typeof value !== 'object') return null;
+  const state = String(value.state || '').toLowerCase().trim();
+  if (state !== 'pending' && state !== 'pass' && state !== 'fail') return null;
+  const failing = Array.isArray(value.failing)
+    ? value.failing.map(name => String(name).trim()).filter(Boolean)
+    : [];
+  return { state, failing };
+}
+
+const PASSING_CHECK_STATES = new Set(['success', 'successful', 'pass', 'passed', 'skipped', 'neutral']);
+const FAILING_CHECK_STATES = new Set([
+  'failure', 'failed', 'error', 'cancelled', 'canceled', 'timed_out', 'action_required', 'startup_failure'
+]);
+
+// `gh pr checks` exits non-zero while checks are pending (8) or failing (1), so
+// the JSON body is read whatever the exit status: only an unreadable report,
+// zero checks, or an absent CLI means the provider cannot report.
+function providerChecksStatus({ config, prNumber, provider } = {}) {
+  if (providerKind({ scmProvider: provider }) !== 'github' || !/^\d+$/.test(String(prNumber))) return null;
+  const result = spawnSync(`gh pr checks ${prNumber} --json name,state`, {
+    cwd: config.root,
+    shell: true,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore']
+  });
+  if (!result || result.error) return null;
+  let entries = null;
+  try {
+    const parsed = JSON.parse(String(result.stdout || '').trim());
+    if (Array.isArray(parsed)) entries = parsed;
+  } catch (e) {
+    entries = null;
+  }
+  if (!entries || entries.length === 0) return null;
+  const failing = [];
+  let pending = false;
+  for (const entry of entries) {
+    const state = String((entry && (entry.state || entry.conclusion || entry.status)) || '').toLowerCase();
+    if (FAILING_CHECK_STATES.has(state)) failing.push(String((entry && (entry.name || entry.context)) || '').trim() || 'unnamed check');
+    else if (!PASSING_CHECK_STATES.has(state)) pending = true;
+  }
+  if (failing.length > 0) return { state: 'fail', failing };
+  return { state: pending ? 'pending' : 'pass', failing: [] };
+}
+
+// One observation. `null` means the checks cannot be reported: the pre-flight
+// then issues today's immediate merge instead of blocking on a missing capability.
+function checksStatus({ config, prNumber, provider, options = {} } = {}) {
+  if (typeof options._checksStatus === 'function') {
+    return normalizeChecks(options._checksStatus({ prNumber, provider, config }));
+  }
+  // An injected merge hook is a test/fake seam that owns provider interaction,
+  // so the queue never shells out to a real CLI when one is supplied.
+  if (typeof options._mergePr === 'function') return null;
+  return normalizeChecks(providerChecksStatus({ config, prNumber, provider }));
+}
+
+// A synchronous queue still waits: `Atomics.wait` blocks without a timer, and a
+// test injects `_sleep` so polling runs with no wall-clock delay.
+function defaultSleep(ms) {
+  if (!(ms > 0)) return;
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+// AC1/AC2: poll the required checks to a terminal state. Both the interval and
+// the attempt count are bounded, so a provider that never settles halts the queue.
+function waitForChecks({ config, prNumber, provider, options = {} } = {}) {
+  const sleep = typeof options._sleep === 'function' ? options._sleep : defaultSleep;
+  const interval = Number.isFinite(options.pollIntervalMs) && options.pollIntervalMs >= 0
+    ? options.pollIntervalMs
+    : CHECK_POLL_INTERVAL_MS;
+  const attempts = Number.isInteger(options.pollAttempts) && options.pollAttempts > 0
+    ? options.pollAttempts
+    : CHECK_POLL_ATTEMPTS;
+  let observed = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    if (attempt > 1) sleep(interval);
+    observed = checksStatus({ config, prNumber, provider, options });
+    if (!observed) return { state: 'unavailable', attempts: attempt };
+    if (observed.state !== 'pending') return { state: observed.state, failing: observed.failing, attempts: attempt };
+  }
+  return { state: 'timeout', failing: observed ? observed.failing : [], attempts };
+}
+
+function failingChecksReason(prNumber, failing) {
+  // The names are what the operator must fix; a check that reports no name at
+  // all still identifies its state.
+  return failing.length > 0
+    ? `required checks failed for pull request #${prNumber}: ${failing.join(', ')}`
+    : `required checks failed for pull request #${prNumber}`;
+}
+
+// AC1-AC3: merge one earlier delivery pull request under the check gate. No merge
+// request is created while checks are pending; a provider refusal while checks are
+// pending records waiting, polls to a terminal state, and retries exactly once.
+// Returns `{ ok: true }` or `{ halt: reason }`; the caller adds the delivery context.
+function mergeEarlierDelivery({ config, manifest, prior, item, prNumber, command, source, options = {} } = {}) {
+  const provider = config.scmProvider;
+  const mergePr = typeof options._mergePr === 'function' ? options._mergePr : runMergeCommand;
+  const record = fields => {
+    prior.merge = {
+      requested: true,
+      attempted: false,
+      ok: null,
+      status: null,
+      reason: null,
+      prNumber,
+      source,
+      at: new Date().toISOString(),
+      ...fields
+    };
+    saveManifest(config, manifest);
+    return prior.merge;
+  };
+  const attempt = () => mergePr({ config, item: prior, prNumber, command, provider });
+
+  // AC1: the merge request is created only after the required checks pass.
+  const checks = checksStatus({ config, prNumber, provider, options });
+  if (checks && checks.state === 'fail') {
+    const reason = failingChecksReason(prNumber, checks.failing);
+    record({ ok: false, status: 'failed', reason });
+    return { halt: reason };
+  }
+  if (checks && checks.state === 'pending') {
+    // AC2's `waiting` record is written before the poll, so an interrupted queue
+    // shows why it stopped instead of a merge that looks merely failed.
+    record({ status: 'waiting', reason: 'required checks pending' });
+    say(options, `[sdw-batch] Waiting for required checks on pull request ${prNumber} before merging it.`);
+    const waited = waitForChecks({ config, prNumber, provider, options });
+    if (waited.state === 'fail') {
+      const reason = failingChecksReason(prNumber, waited.failing);
+      record({ ok: false, status: 'failed', reason });
+      return { halt: reason };
+    }
+    if (waited.state === 'timeout') {
+      const reason = `pull request #${prNumber} did not report a terminal check state after ${waited.attempts} poll(s)`;
+      record({ ok: false, status: 'failed', reason });
+      return { halt: reason };
+    }
+    // pass, or a provider that stopped reporting: fall through to the merge.
+  }
+
+  try {
+    attempt();
+    record({ attempted: true, ok: true, status: 'merged' });
+    say(options, `[sdw-batch] Merged ${prNumber} for ${prior.slug} before delegating ${item.slug}.`);
+    return { ok: true };
+  } catch (err) {
+    const detail = err && err.message ? err.message : String(err);
+    // AC2: the refusal is only a check refusal when the checks are still pending;
+    // anything else keeps the established single-attempt failure.
+    const refusal = checksStatus({ config, prNumber, provider, options });
+    if (!refusal || refusal.state !== 'pending') {
+      record({ attempted: true, ok: false, status: 'failed', reason: detail });
+      return { halt: `the pre-flight merge of pull request #${prNumber} failed: ${detail}` };
+    }
+    record({ attempted: true, ok: null, status: 'waiting', reason: detail });
+    say(options, `[sdw-batch] Merge of pull request ${prNumber} was refused while its checks are pending; waiting for them to finish.`);
+    const waited = waitForChecks({ config, prNumber, provider, options });
+    if (waited.state !== 'pass') {
+      const reason = waited.state === 'fail'
+        ? failingChecksReason(prNumber, waited.failing)
+        : waited.state === 'timeout'
+          ? `pull request #${prNumber} did not report a terminal check state after ${waited.attempts} poll(s)`
+          : `pull request #${prNumber} is not mergeable: the provider refused the merge (${detail})`;
+      record({ attempted: true, ok: false, status: 'failed', reason });
+      return { halt: reason };
+    }
+    try {
+      attempt();
+      record({ attempted: true, ok: true, status: 'merged' });
+      say(options, `[sdw-batch] Merged ${prNumber} for ${prior.slug} after its required checks passed.`);
+      return { ok: true };
+    } catch (retryErr) {
+      const retryDetail = retryErr && retryErr.message ? retryErr.message : String(retryErr);
+      const reason = `pull request #${prNumber} is not mergeable after its checks passed: ${retryDetail}`;
+      record({ attempted: true, ok: false, status: 'failed', reason });
+      return { halt: reason };
+    }
+  }
+}
+
 function runPreflight({ config, manifest, item, options = {} } = {}) {
   const at = new Date().toISOString();
   const baseBranch = baseBranchOf(config);
@@ -1047,20 +1238,25 @@ function runPreflight({ config, manifest, item, options = {} } = {}) {
       store('halted', { baseCommit, startPoint: lane.startPoint, reason: message });
       return { halt: true, message };
     }
-    const mergePr = typeof options._mergePr === 'function' ? options._mergePr : runMergeCommand;
-    const mergedAt = new Date().toISOString();
-    try {
-      mergePr({ config, item: prior, prNumber, command, provider: config.scmProvider });
-      prior.merge = { requested: true, attempted: true, ok: true, status: 'merged', reason: null, prNumber, source: resolved.source, at: mergedAt };
-      mergedAny = true;
-      say(options, `[sdw-batch] Merged ${prNumber} for ${prior.slug} before delegating ${item.slug}.`);
-    } catch (err) {
-      const detail = err && err.message ? err.message : String(err);
-      prior.merge = { requested: true, attempted: true, ok: false, status: 'failed', reason: detail, prNumber, source: resolved.source, at: mergedAt };
-      const message = `${missingDeliveryMessage(prior, baseBranch)}; the pre-flight merge of pull request #${prNumber} failed: ${detail}`;
+    // Spec 00066 AC1-AC3: the merge is gated on the required checks. A failing
+    // check, a poll that never settles, or a pull request that stays unmergeable
+    // halts the queue naming the pull request and the checks.
+    const outcome = mergeEarlierDelivery({
+      config,
+      manifest,
+      prior,
+      item,
+      prNumber,
+      command,
+      source: resolved.source,
+      options
+    });
+    if (outcome.halt) {
+      const message = `${missingDeliveryMessage(prior, baseBranch)}; ${outcome.halt}`;
       store('halted', { baseCommit, startPoint: lane.startPoint, reason: message });
       return { halt: true, message };
     }
+    mergedAny = true;
   }
 
   if (mergedAny) {
