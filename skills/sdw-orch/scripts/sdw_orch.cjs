@@ -18,6 +18,7 @@ const evidenceValidator = require('./evidence_validator.cjs');
 const sandbox = require('./sandbox.cjs');
 const deliveryReport = require('./delivery_report.cjs');
 const modelCapabilities = require('./model_capabilities.cjs');
+const diagnostics = require('./diagnostics.cjs');
 const memory = require('../../sdw-memory/scripts/sdw_memory.cjs');
 
 // Spec 00043: short, consistent step-number progress headers. Additive only:
@@ -32,10 +33,26 @@ const STEP_PROGRESS_NAMES = {
   7: 'Delegated Review',
   8: 'PR Preparation'
 };
+// Spec 00033 AC3: while a diagnostic run is active, the existing step-entry and
+// step-completion points also feed the recorder. The hook is inert when no run
+// enabled `--diagnostic`, so console output and delivery behavior stay unchanged.
+let activeDiagnosticRecorder = null;
+
+function recordDiagnosticStepTransition(step, transition) {
+  if (!activeDiagnosticRecorder) return;
+  try {
+    activeDiagnosticRecorder.recordStepTransition({ step, transition });
+  } catch (e) {
+    // Spec 00033 AC10 (design): diagnostics never fail delivery.
+  }
+}
+
 function logStepEnter(step) {
+  recordDiagnosticStepTransition(step, 'enter');
   console.log(`[Step ${step}/8] Entering Step ${step}: ${STEP_PROGRESS_NAMES[step]}.`);
 }
 function logStepDone(step) {
+  recordDiagnosticStepTransition(step, 'done');
   console.log(`[Step ${step}/8] Completed Step ${step}: ${STEP_PROGRESS_NAMES[step]}.`);
 }
 function logRunStarted(runId, specSlug, currentStep) {
@@ -119,6 +136,7 @@ function parseArgs(args) {
     specPath: null,
     specPaths: [],
     dryRun: false,
+    diagnostic: false,
     runId: null,
     root: null,
     minScore: undefined,
@@ -210,6 +228,7 @@ function parseArgs(args) {
     } else if (arg.startsWith('--ac=')) result.acIds.push(arg.slice(5));
     else if (arg === '--latest') result.latest = true;
     else if (arg === '--dry-run') result.dryRun = true;
+    else if (arg === '--diagnostic') result.diagnostic = true;
     else if (arg === '--sandbox') result.sandbox = true;
     else if (arg === '--root') result.root = args[++i];
     else if (arg.startsWith('--root=')) result.root = arg.slice(7);
@@ -714,7 +733,28 @@ function runSecurityGate(targetRoot, options = {}) {
   };
 }
 
+// Spec 00033 AC4: a failed tool execution records its exit code and a bounded
+// stderr snippet. The recorder is fail-open, so a recording error never changes
+// the gate result or the run outcome.
+function recordDiagnosticToolFailure(recorder, step, command, err) {
+  if (!recorder || typeof recorder.recordToolFailure !== 'function') return;
+  try {
+    const stderr = err && err.stderr !== undefined && err.stderr !== null
+      ? String(err.stderr)
+      : String((err && err.message) || '');
+    recorder.recordToolFailure({
+      step,
+      command,
+      exitCode: err && Number.isInteger(err.status) ? err.status : 1,
+      stderr
+    });
+  } catch (e) {
+    // Spec 00033 AC10 (design): diagnostics never fail delivery.
+  }
+}
+
 function runVerificationGates(targetRoot, config, options = {}) {
+  const diagnosticRecorder = options.diagnosticRecorder || null;
   const gates = {};
   let passed = true;
   const specSlug = options.slug || options.specSlug || (options.runId ? options.runId.replace(/^run-\d+-/, '') : 'feature');
@@ -748,6 +788,7 @@ function runVerificationGates(targetRoot, config, options = {}) {
         gates.build = { status: 'passed', exitCode: 0, durationMs };
         console.log(`[Step 4: Verification Gate] Build passed (${durationMs}ms).`);
       } catch (err) {
+        recordDiagnosticToolFailure(diagnosticRecorder, 4, buildCmd, err);
         lastErr = err;
         buildAttempts++;
         if (buildAttempts > maxFixAttempts) {
@@ -806,6 +847,7 @@ function runVerificationGates(targetRoot, config, options = {}) {
         gates.test = { status: 'passed', exitCode: 0, durationMs };
         console.log(`[Step 4: Verification Gate] Tests passed (${durationMs}ms).`);
       } catch (err) {
+        recordDiagnosticToolFailure(diagnosticRecorder, 4, testCmd, err);
         lastErr = err;
         testAttempts++;
         if (testAttempts > maxFixAttempts) {
@@ -2510,6 +2552,30 @@ function cmdRun(options) {
     });
   }
 
+  // Spec 00033 AC1/AC3: `--diagnostic` wraps this execution with a recorder
+  // bound to the run artifact directory. Off by default: without the flag there
+  // is no recorder, no state field, and no extra console line.
+  activeDiagnosticRecorder = null;
+  let diagnosticRecorder = null;
+  if (options.diagnostic) {
+    state.diagnostic = diagnostics.buildRunDiagnostic({
+      enabled: true,
+      artifactsDir: state.artifactsDir || stateManager.getArtifactsRelDir(targetRoot, state.specSlug, state.runId),
+      startedAt: state.diagnostic && state.diagnostic.startedAt
+    });
+    state = stateManager.saveRunState(targetRoot, state);
+    diagnosticRecorder = options.diagnosticRecorder || diagnostics.createRecorder({
+      enabled: true,
+      eventsPath: state.diagnostic.eventsPath,
+      targetRoot,
+      onWarn: message => console.warn(`[sdw-orch diagnostics] ${message}`)
+    });
+    activeDiagnosticRecorder = diagnosticRecorder;
+    if (!options.diagnosticRecorder) {
+      console.log(`[sdw-orch diagnostics] enabled, writing to ${state.diagnostic.eventsPath}`);
+    }
+  }
+
   // Spec 00017 AC1/AC15/AC17: the ledger exists before the first Step 1 mutation.
   // A run that already owns one loads it, so resume preserves every record. A
   // failure here fails the run before Step 1 completes instead of continuing
@@ -3090,7 +3156,7 @@ function cmdRun(options) {
         logTaskAccepted(state, task.id);
       }
 
-      const gateResults = runVerificationGates(targetRoot, config, { ...options, runId: state.runId, slug: specSlug });
+      const gateResults = runVerificationGates(targetRoot, config, { ...options, runId: state.runId, slug: specSlug, diagnosticRecorder });
       if (!gateResults.passed) {
         state = stateManager.loadRunState(targetRoot, state.runId);
         state.steps[4].status = 'failed';
@@ -5246,6 +5312,26 @@ function cmdResume(options) {
     return 1;
   }
 
+  // Spec 00033 AC1/AC3: a diagnostic resume records the same run state field and
+  // keeps appending to the run's event file, preserving the original start time.
+  let diagnosticRecorder = null;
+  if (options.diagnostic) {
+    state.diagnostic = diagnostics.buildRunDiagnostic({
+      enabled: true,
+      artifactsDir: state.artifactsDir || stateManager.getArtifactsRelDir(targetRoot, state.specSlug, state.runId),
+      startedAt: state.diagnostic && state.diagnostic.startedAt
+    });
+    state = stateManager.saveRunState(targetRoot, state);
+    diagnosticRecorder = diagnostics.createRecorder({
+      enabled: true,
+      eventsPath: state.diagnostic.eventsPath,
+      targetRoot,
+      onWarn: message => console.warn(`[sdw-orch diagnostics] ${message}`)
+    });
+    activeDiagnosticRecorder = diagnosticRecorder;
+    console.log(`[sdw-orch diagnostics] enabled, writing to ${state.diagnostic.eventsPath}`);
+  }
+
   // AC11: every step that is already completed or skipped is skipped by the
   // guards in cmdRun; a fully resolved run only refreshes its reports. Announce
   // that, so resume never implies re-executing a completed step.
@@ -5292,7 +5378,8 @@ function cmdResume(options) {
           specPath: state.specPath,
           runId: state.runId,
           startStep: 4,
-          implementationMode: 'command'
+          implementationMode: 'command',
+          diagnosticRecorder
         });
       }
 
@@ -5348,7 +5435,7 @@ function cmdResume(options) {
     // All tasks completed. Execute build and test verification gates (AC20)
     const config = loadProjectConfig(targetRoot, options);
     console.log(`[sdw-orch resume] All ${dagTasks.length} DAG task(s) completed. Running verification gates...`);
-    const gateResults = runVerificationGates(targetRoot, config, { ...options, runId: state.runId, slug: state.specSlug });
+    const gateResults = runVerificationGates(targetRoot, config, { ...options, runId: state.runId, slug: state.specSlug, diagnosticRecorder });
     state.steps[4].gates = gateResults.gates;
 
     if (!gateResults.passed) {
@@ -5380,6 +5467,7 @@ function cmdResume(options) {
     specPath: state.specPath,
     runId: state.runId,
     startStep: resumptionStep,
+    diagnosticRecorder,
     // A second pass keeps its mode and scoring base across resumes.
     ...(state.refineMode ? { refineMode: true, baseCommit: options.baseCommit || state.baseCommit } : {})
   });
@@ -5925,6 +6013,7 @@ Options:
   --format <format>      Report format for ledger report and ledger audit: md | json (default: md)
   --mode <mode>          Implementation mode (subagent | command)
   --dry-run              Print the execution plan and validate the spec; execute nothing
+  --diagnostic           Record step transitions and tool failures for run, resume
   --sandbox              Execute the whole pipeline in an isolated local clone; never pushes
   --unattended           Execute without interruption, auto-resolving grilling gaps
   --interactive          Require manual confirmation at decision gates
@@ -5963,6 +6052,14 @@ function main() {
   if (!options.subcommand || options.subcommand === 'help' || args.includes('-h') || args.includes('--help')) {
     showHelp();
     process.exit(args.includes('-h') || args.includes('--help') || options.subcommand === 'help' ? 0 : 1);
+  }
+
+  // Spec 00033 AC1: the recorder wraps execution, so the flag is meaningful only
+  // for `run` and `resume`. Every other subcommand ignores it with one warning
+  // instead of silently accepting a flag that cannot do anything.
+  if (options.diagnostic && options.subcommand !== 'run' && options.subcommand !== 'resume') {
+    console.warn(`[sdw-orch] --diagnostic applies to "run" and "resume" only; ignoring it for "${options.subcommand}".`);
+    options.diagnostic = false;
   }
 
   let code = 0;
@@ -6045,6 +6142,7 @@ if (require.main === module) {
 module.exports = {
   cmdRun,
   cmdResume,
+  parseArgs,
   cmdCheckpoint,
   cmdPauseTurn,
   cmdStatus,
@@ -6068,6 +6166,7 @@ module.exports = {
   buildReviewerBrief,
   buildFixerBrief,
   resolveSpecPath,
+  runVerificationGates,
   collectDeliveryFiles,
   stageAndCommitOnly,
   getStatusFiles,
