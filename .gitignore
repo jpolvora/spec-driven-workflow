@@ -18,6 +18,7 @@ yarn-error.log*
 !.sdw/state/.gitkeep
 .sdw/worktrees/
 .sdw/sandbox/
+.sdw/host-capabilities.json
 
 
 # Testing & Coverage
