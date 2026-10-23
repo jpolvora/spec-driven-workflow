@@ -66,7 +66,7 @@ Orchestrates spec execution from input requirement to delivery commit, automated
    - Done when: Decision gaps resolved, blueprint generated, observations recorded, and refinement artifact `{slug}-step-2.md` persisted.
 
 3. **Decompose into DAG Tasks**
-   Classify by declared criteria: <=4 low (one task), 5-10 standard (foundation plus integration), >10 complex (three to five slices of <=4 criteria and <=3 target files, at most five tasks), escalated to complex at three touchpoints with >=7 criteria. Beyond five tasks the plan is refused with `split-required tasks-needed=N cap=5` plus a two-spec split proposal. Every plan records `execMode: sequential`, wave `levels`, per-task `parallelizable` flags, and pairwise file disjointness; dispatch stays one task at a time.
+   Classify by declared criteria: <=4 low (one task), 5-10 standard (foundation plus integration), >10 complex (three to five slices of <=4 criteria and <=3 target files, at most five tasks by default via `maxTasksPerSpec` (2-8)), escalated to complex at three touchpoints with >=7 criteria. Beyond the effective cap the plan is refused with `split-required tasks-needed=N cap=5` for the default cap (`cap=<effective>` otherwise) plus a two-spec split proposal. Every plan records `execMode: sequential`, wave `levels`, per-task `parallelizable` flags, and pairwise file disjointness; dispatch stays one task at a time.
    - Done when: DAG tasks generated, and DAG artifact `{slug}-step-3.md` persisted.
 
 4. **Implementation Execution (Sequential Subagent Dispatch)**

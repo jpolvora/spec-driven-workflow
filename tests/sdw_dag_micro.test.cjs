@@ -426,3 +426,92 @@ test('AC24: the skill docs document the classifier thresholds and the cap behavi
     assert.ok(protocol.includes(token), `the protocol documents "${token}"`);
   }
 });
+
+test('AC9 & AC13: maxTasksPerSpec resolves the cap, defaults to five, and clamps to two through eight', () => {
+  const absentPlan = dagPlanner.generateDagPlan(buildSpec('cap-default-demo', 24), {
+    slug: 'cap-default-demo',
+    targetFiles: TARGET_FILES
+  });
+  assert.equal(absentPlan.refused, true, 'an absent cap refuses a 24-AC plan');
+  assert.equal(absentPlan.cap, 5, 'an absent maxTasksPerSpec keeps the five-task default');
+  assert.equal(absentPlan.tasksNeeded, 6);
+
+  const eightPlan = dagPlanner.generateDagPlan(buildSpec('cap-eight-demo', 25), {
+    slug: 'cap-eight-demo',
+    targetFiles: TARGET_FILES,
+    maxTasksPerSpec: 8
+  });
+  assert.ok(!eightPlan.refused, 'cap eight accepts the 25-AC plan');
+  assert.equal(eightPlan.taskCount, 7, '25 criteria at cap eight produce seven tasks');
+  assert.equal(eightPlan.tasks.length, 7);
+  assert.equal(eightPlan.tasks.reduce((total, task) => total + task.coveredAcs.length, 0), 25,
+    'the seven tasks cover every criterion exactly once');
+
+  const twoPlan = dagPlanner.generateDagPlan(buildSpec('cap-two-demo', 11), {
+    slug: 'cap-two-demo',
+    targetFiles: TARGET_FILES,
+    maxTasksPerSpec: 2
+  });
+  assert.equal(twoPlan.refused, true, 'cap two refuses an 11-AC plan');
+  assert.equal(twoPlan.cap, 2, 'the refusal records the effective cap');
+  assert.equal(twoPlan.tasksNeeded, 3);
+
+  const lowClamp = dagPlanner.generateDagPlan(buildSpec('cap-low-demo', 11), {
+    slug: 'cap-low-demo',
+    targetFiles: TARGET_FILES,
+    maxTasksPerSpec: 1
+  });
+  assert.equal(lowClamp.cap, 2, 'a cap below two clamps to two');
+
+  const highClamp = dagPlanner.generateDagPlan(buildSpec('cap-high-demo', 25), {
+    slug: 'cap-high-demo',
+    targetFiles: TARGET_FILES,
+    maxTasksPerSpec: 9
+  });
+  assert.ok(!highClamp.refused, 'a cap above eight clamps to eight and accepts seven tasks');
+  assert.equal(highClamp.taskCount, 7);
+
+  const nested = dagPlanner.generateDagPlan(buildSpec('cap-nested-demo', 25), {
+    slug: 'cap-nested-demo',
+    targetFiles: TARGET_FILES,
+    config: { maxTasksPerSpec: 9 }
+  });
+  assert.ok(!nested.refused, 'options.config resolves the cap and clamps it to eight');
+  assert.equal(nested.taskCount, 7);
+});
+
+test('AC13 & AC19: run and dag preview honor the configured maxTasksPerSpec', () => {
+  const wideRoot = makeRepo('cap-preview-wide', 25, { git: false });
+  try {
+    fs.writeFileSync(path.join(wideRoot, '.sdw', 'config.json'),
+      JSON.stringify({ maxTasksPerSpec: 8 }, null, 2), 'utf8');
+    const wide = runCli(wideRoot, ['dag', 'preview', '--spec', '.sdw/specs/cap-preview-wide.md']);
+    assert.equal(wide.status, 0, wide.stderr);
+    assert.match(wide.stdout, /acs=25 tasks=7/, 'preview plans seven tasks at the configured cap eight');
+  } finally {
+    fs.rmSync(wideRoot, { recursive: true, force: true });
+  }
+
+  const narrowRoot = makeRepo('cap-run-narrow', 11);
+  try {
+    fs.writeFileSync(path.join(narrowRoot, '.sdw', 'config.json'),
+      JSON.stringify({ maxTasksPerSpec: 2 }, null, 2), 'utf8');
+    const preview = runCli(narrowRoot, ['dag', 'preview', '--spec', '.sdw/specs/cap-run-narrow.md']);
+    assert.equal(preview.status, 1, 'the configured cap two refuses the preview');
+    assert.match(preview.stderr, /split-required tasks-needed=3 cap=2/,
+      'the refusal prints the effective cap, not the default');
+
+    const runCode = sdwOrch.cmdRun({
+      root: narrowRoot,
+      specPath: '.sdw/specs/cap-run-narrow.md',
+      skipReview: true,
+      skipPr: true
+    });
+    assert.equal(runCode, 1, 'the run refuses at the configured cap');
+    const state = stateManager.findLatestRunState(narrowRoot);
+    assert.match(String(state.steps[3].error || ''), /split-required tasks-needed=3 cap=2/);
+    assert.equal(state.steps[3].output.cap, 2);
+  } finally {
+    fs.rmSync(narrowRoot, { recursive: true, force: true });
+  }
+});

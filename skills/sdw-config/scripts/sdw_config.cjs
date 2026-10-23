@@ -341,6 +341,7 @@ const DEFAULT_CONFIG = {
   prePrInstructions: '',
   reviewFixCommand: '',
   maxPreemptions: 3,
+  maxTasksPerSpec: 5,
   memory: {
     backends: { wsMemo: true, traps: true, files: true }
   }
@@ -602,6 +603,13 @@ const DEFAULT_SCHEMA = {
       "minimum": 0,
       "description": "Maximum concurrent-push adaptation budget for post-PR review convergence before draining rounds.",
       "default": 3
+    },
+    "maxTasksPerSpec": {
+      "type": "integer",
+      "minimum": 2,
+      "maximum": 8,
+      "description": "Task cap per specification used by the sdw-orch DAG planner. Values outside two to eight are clamped; when absent the planner uses five.",
+      "default": 5
     },
     "memory": {
       "type": "object",
@@ -943,6 +951,13 @@ function validateConfigSchema(config) {
   if ('maxPreemptions' in config) {
     if (typeof config.maxPreemptions !== 'number' || !Number.isInteger(config.maxPreemptions) || config.maxPreemptions < 0) {
       errors.push('Property "maxPreemptions" must be a non-negative integer.');
+    }
+  }
+
+  // maxTasksPerSpec
+  if ('maxTasksPerSpec' in config) {
+    if (typeof config.maxTasksPerSpec !== 'number' || !Number.isInteger(config.maxTasksPerSpec) || config.maxTasksPerSpec < 2 || config.maxTasksPerSpec > 8) {
+      errors.push('Property "maxTasksPerSpec" must be an integer between 2 and 8.');
     }
   }
 

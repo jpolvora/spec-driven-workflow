@@ -7,11 +7,30 @@ const ESCALATION_MIN_ACS = 7;
 const ESCALATION_MIN_TOUCHPOINTS = 3;
 
 // Spec 00030 AC9-AC13: fan-out bounds. A plan needing more than the cap is
-// refused instead of merged into coarse tasks.
+// refused instead of merged into coarse tasks. Spec 00030 Notes retains
+// `maxTasksPerSpec` with a default of five and bounds two to eight.
 const MIN_COMPLEX_TASKS = 3;
-const MAX_TASKS_PER_SPEC = 5;
+const TASK_CAP_DEFAULT = 5;
+const TASK_CAP_MIN = 2;
+const TASK_CAP_MAX = 8;
 const ACS_PER_TASK = 4;
 const FILES_PER_TASK = 3;
+
+/**
+ * Spec 00030 Notes: resolves the effective task cap from `maxTasksPerSpec`
+ * (options first, then `options.config`). Absent means the documented default
+ * of five; any supplied value clamps to the documented two-to-eight bounds.
+ */
+function resolveTaskCap(options) {
+  const opts = options || {};
+  const configured = opts.maxTasksPerSpec !== undefined
+    ? opts.maxTasksPerSpec
+    : (opts.config && opts.config.maxTasksPerSpec);
+  if (configured === undefined || configured === null) return TASK_CAP_DEFAULT;
+  const value = Number(configured);
+  if (!Number.isFinite(value)) return TASK_CAP_DEFAULT;
+  return Math.min(TASK_CAP_MAX, Math.max(TASK_CAP_MIN, Math.trunc(value)));
+}
 
 function parseAcceptanceCriteria(specContent) {
   const matches = [...String(specContent || '').matchAll(/^- (AC\d+):\s*(.+)$/gm)];
@@ -343,18 +362,18 @@ function buildStandardPlan(context) {
  * decomposition that needs more than the cap is refused (AC9-AC13).
  */
 function buildComplexPlan(context) {
-  const { slug, acs, complexity, targetFiles, architecturalApproach, testPlan } = context;
+  const { slug, acs, complexity, targetFiles, architecturalApproach, testPlan, maxTasksPerSpec } = context;
   const acGroupsNeeded = Math.ceil(acs.length / ACS_PER_TASK);
   const fileSlicesNeeded = Math.ceil(targetFiles.length / FILES_PER_TASK);
   const tasksNeeded = Math.max(MIN_COMPLEX_TASKS, acGroupsNeeded, fileSlicesNeeded);
 
-  if (tasksNeeded > MAX_TASKS_PER_SPEC) {
+  if (tasksNeeded > maxTasksPerSpec) {
     return {
       refused: true,
       reason: 'split-required',
       complexity,
       tasksNeeded,
-      cap: MAX_TASKS_PER_SPEC,
+      cap: maxTasksPerSpec,
       taskCount: 0,
       execMode: 'sequential',
       levels: [],
@@ -419,7 +438,8 @@ function generateDagPlan(specContent, options) {
   }
 
   const complexity = analyzeComplexity(content, { targetFiles });
-  const context = { slug, acs, complexity, targetFiles, architecturalApproach, testPlan };
+  const maxTasksPerSpec = resolveTaskCap(opts);
+  const context = { slug, acs, complexity, targetFiles, architecturalApproach, testPlan, maxTasksPerSpec };
 
   if (complexity.level === 'complex') return buildComplexPlan(context);
   if (complexity.level === 'standard') return buildStandardPlan(context);

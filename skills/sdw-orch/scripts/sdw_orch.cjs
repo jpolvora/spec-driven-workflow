@@ -2161,7 +2161,7 @@ function cmdRun(options) {
   } else if (startStep <= 3 && state.steps[3].status !== 'completed') {
     state = stateManager.updateStepState(targetRoot, state.runId, 3, 'in_progress');
     logStepEnter(3);
-    dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint });
+    dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint, maxTasksPerSpec: config.maxTasksPerSpec });
     if (dagPlan.refused) {
       // Spec 00030 AC13/AC14: a decomposition beyond the cap is refused with a
       // split proposal, never merged into coarse tasks and never planned.
@@ -2188,7 +2188,7 @@ function cmdRun(options) {
   } else if (state.steps[3].output) {
     dagPlan = state.steps[3].output;
   } else {
-    dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint });
+    dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint, maxTasksPerSpec: config.maxTasksPerSpec });
     if (dagPlan.refused) {
       const refusal = `split-required tasks-needed=${dagPlan.tasksNeeded} cap=${dagPlan.cap}`;
       console.error(`[Step 3: DAG] ${refusal}`);
@@ -3910,7 +3910,7 @@ function cmdDagPreview(options) {
     ? slugMatch[1].trim()
     : path.basename(resolvedSpec, path.extname(resolvedSpec));
   const blueprint = specGrilling.generateRefinementBlueprint(specContent, { slug: specSlug });
-  const plan = dagPlanner.generateDagPlan(specContent, { slug: specSlug, blueprint });
+  const plan = dagPlanner.generateDagPlan(specContent, { slug: specSlug, blueprint, maxTasksPerSpec: config.maxTasksPerSpec });
 
   if (options.json) {
     console.log(JSON.stringify(buildPreviewPlan(plan), null, 2));
