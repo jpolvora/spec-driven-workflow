@@ -7,7 +7,7 @@
 | Specification file | `.sdw/specs/00033-sdw-orch-diagnostic-mode.md` |
 | Specification slug | 00033-sdw-orch-diagnostic-mode |
 | Run ID | run-1792786888273-00033-sdw-orch-diagnostic-mode |
-| Run status | paused |
+| Run status | completed |
 | Branch | `feature/00033-sdw-orch-diagnostic-mode` |
 | Base branch | `master` |
 | Base commit | `a42007b97d0896de1e13c6d72425e78375530bdc` |
@@ -17,7 +17,7 @@
 | Implementation start | 2026-10-23T20:21:30.901Z |
 | Implementation end | 2026-10-23T21:12:03.956Z |
 | Total wall-clock duration | 50m 33s |
-| Generated at | 2026-10-23T21:27:00.284Z |
+| Generated at | 2026-10-23T21:32:17.599Z |
 | Step 1: derivation (skipped) | 4ms |
 | Step 2: refinement (completed) | 39ms |
 | Step 3: dag_generation (completed) | 13ms |
@@ -25,7 +25,7 @@
 | Step 5: scoring (completed) | 24s |
 | Step 6: delivery_commit (completed) | 290ms |
 | Step 7: code_review (completed) | 916ms |
-| Step 8: pr_preparation (pending) | n/a |
+| Step 8: pr_preparation (completed) | 5m 12s |
 
 
 ## Tasks
@@ -40,6 +40,8 @@
 
 | SHA | Subject | Range |
 |---|---|---|
+| `f3b2dbd` | chore(00033-sdw-orch-diagnostic-mode): mark the specification completed in the registry | base..HEAD |
+| `ea346a3` | docs(00033-sdw-orch-diagnostic-mode): record delivery report | base..HEAD |
 | `91e0d6f` | fix(00033-sdw-orch-diagnostic-mode): route the diagnostic intents at runtime | base..HEAD |
 | `7ed9a44` | task(00033-sdw-orch-diagnostic-mode): task-3 | base..HEAD |
 | `fca0e2b` | task(00033-sdw-orch-diagnostic-mode): task-2 | base..HEAD |
@@ -77,11 +79,15 @@
 
 | File | Change |
 |---|---|
+| `.sdw/reports/00033-sdw-orch-diagnostic-mode-report.md` | added |
+| `.sdw/specs/00033-sdw-orch-diagnostic-mode.md` | modified |
+| `.sdw/specs/index.specs.md` | modified |
 | `skills/sdw-router/scripts/sdw_router.cjs` | modified |
 
 ## Verification
 
 - test gate: status `passed`, exit code `0`, duration 4m 1s
+- Step 8 delivery: `completed`
 
 ## Code Review
 
@@ -130,7 +136,13 @@ Not available
 
 ## Retrospective
 
-Not available
+- Status: `passed`
+- Report: `.sdw/state/00033-sdw-orch-diagnostic-mode/run-1792786888273-00033-sdw-orch-diagnostic-mode/run-1792786888273-00033-sdw-orch-diagnostic-mode.retro.md`
+- Data: `.sdw/state/00033-sdw-orch-diagnostic-mode/run-1792786888273-00033-sdw-orch-diagnostic-mode/run-1792786888273-00033-sdw-orch-diagnostic-mode.retro.json`
+- Signals: retries 4 (score 2, review 0, rounds 2, abandonments 0); leftover runs 0; missing artifacts 0; review findings 2 (2 open)
+- Candidates: 0
+- Applied fixes:
+  - none
 
 ## Breaking Changes
 
@@ -264,18 +276,18 @@ Not available
 - Step 1 (derivation) skipped: not recorded
 - Task task-2 accepted after re-dispatch (sequence 2)
 - Task task-3 accepted after re-dispatch (sequence 3)
-- Environment: workspace: 6 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
+- Environment: workspace: 9 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
 
 ## Outcome
 
-- Result: `paused`
+- Result: `completed`
 - Delivery commit: `91e0d6fcabb98d0de24db500f7f530d0a4cfcd5f`
 - Ship status: `pending`
 - Duration: 50m 33s
 
 ## Step Contributions
 
-- Recorded: 8 contribution(s)
+- Recorded: 13 contribution(s)
 
 ### Step 1: derivation
 
@@ -323,8 +335,18 @@ Not available
 
 ### Step 8: pr_preparation
 
-Not available
+- **convergence** 2026-10-23T21:32:11.247Z - Convergence iteration 1
+  - Body: `{"iteration":1,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":false}`
+- **convergence** 2026-10-23T21:32:12.834Z - Convergence iteration 2
+  - Body: `{"iteration":2,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":true}`
+- **gates** 2026-10-23T21:32:13.467Z - Pre-PR gates: 6 result(s)
+  - Body: `{"gates":[{"name":"prePrCommand","status":"skipped","detail":"prePrCommand is not configured"},{"name":"build","status":"skipped","detail":"requiredBuild is false"},{"name":"tests","status":"pass","detail":"npm test exited 0"},{"name":"security","status":"pass","detail":"sdw-security-checks found no blocking leak"},{"name":"runState","status":"pass","detail":"step 4, step 6 and step 7 completed; score 8 >= scoreMin 8"},{"name":"discovery","status":"pass","detail":"no prepare obligations discovered"}]}`
+- **ship** 2026-10-23T21:32:13.467Z - Pull request #60
+  - Body: `{"pushed":true,"branch":"feature/00033-sdw-orch-diagnostic-mode","pullRequest":{"number":"60","url":"https://github.com/jpolvora/spec-driven-workflow/pull/60","title":null},"shipStatus":"delivered"}`
+  - Evidence: `https://github.com/jpolvora/spec-driven-workflow/pull/60`
 
 ### Step 9: retrospective
 
-Not available
+- **retro** 2026-10-23T21:32:17.194Z - Retrospective passed: 0 candidate(s)
+  - Body: `{"status":"passed","runStatus":"completed","signals":{"retries":{"scoreIterations":2,"reviewIterations":0,"reviewRounds":2,"dispatchAbandonments":0,"total":4},"leftoverRuns":0,"missingArtifacts":0,"reviewFindings":{"total":2,"open":2}},"candidates":[],"fixes":{"recorded":[],"consolidated":null,"queuedSpecifications":[],"failures":[]},"routedCandidates":[],"reportMd":".sdw/state/00033-sdw-orch-diagnostic-mode/run-1792786888273-00033-sdw-orch-diagnostic-mode/run-1792786888273-00033-sdw-orch-diagnostic-mode.retro.md","reportJson":".sdw/state/00033-sdw-orch-diagnostic-mode/run-1792786888273-00033-sdw-orch-diagnostic-mode/run-1792786888273-00033-sdw-orch-diagnostic-mode.retro.json"}`
+  - Evidence: `.sdw/state/00033-sdw-orch-diagnostic-mode/run-1792786888273-00033-sdw-orch-diagnostic-mode/run-1792786888273-00033-sdw-orch-diagnostic-mode.retro.md`, `.sdw/state/00033-sdw-orch-diagnostic-mode/run-1792786888273-00033-sdw-orch-diagnostic-mode/run-1792786888273-00033-sdw-orch-diagnostic-mode.retro.json`
