@@ -3,7 +3,7 @@ id: null
 slug: 00057-sdw-orch-delivery-report-step-contributions
 title: "SDW Delivery Report — Incremental Step Contributions, Learnings, and Retro Closure"
 source: local
-status: ready-to-implement
+status: implemented
 specDate: 2026-10-22
 priority: medium
 value: "Turns the delivery report into a living record fed by every step, carries each recorded learning into the steps that follow, and closes the run with a retrospective that fixes what it can"
