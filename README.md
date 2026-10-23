@@ -10,9 +10,9 @@ By default, an SDW agent **investigates and proposes a plan before changing anyt
 
 ## 1. Overview & Motivation
 
-**Spec-Driven Workflow (SDW)** is a modern reimagining and simplification of the `workflow-skills` framework.
+**Spec-Driven Workflow (SDW)** is a streamlined, deterministic framework for spec-driven software development with autonomous AI coding agents.
 
-### Why the Rework?
+### Why Spec-Driven?
 - **Smarter Frontier Models:** Modern LLMs possess advanced reasoning, tool calling, and architecture comprehension out of the box. They no longer require excessive boilerplate instructions, micro-managed prompts, or multi-page rule books.
 - **Speed & Token Efficiency:** Eliminating prompt sediment drastically decreases token load per turn, lowers inference costs, minimizes API latency, and preserves precious context window space for actual project code.
 - **Repeatable Predictability:** Rather than relying on fragile prompt suggestions, SDW relies on deterministic Node.js tool anchors, structured state-machine transitions, and empirical verification gates.
@@ -86,12 +86,14 @@ flowchart TD
    - Generates an actionable Markdown fix plan (`{slug}-step-7.md`) and applies surgical fixes in an iterative loop.
 
 8. **PR Preparation, Delivery & Review Convergence (Delegated to `sdw-ship-pr`)**
+   - Compiles and commits the companion delivery report `{specFileNameWithoutExtension}-report.md` beside the specification before delegating to shipping.
    - Delegates pre-PR verification gates (`requiredBuild`, `runAllTests`, `prePrCommand`, `prePrInstructions`) and delivery publishing to `sdw-ship-pr`.
    - Targets the pull request base at `branching.integrationBranch`, so Git Flow, GitHub flow, and trunk repositories merge into their own integration lane.
    - Executes cooperative and proactive review convergence with push-before-resolve guarantees, posting structured resolution comments before closing threads.
    - Delegates active review findings to `sdw-fixer` when `reviewFixCommand` is unset, and reports `review_pending` when the fixer returns no applied fix.
    - Optionally merges the converged pull request with `--merge` / `--allow-merge` (fire and forget: a merge failure is recorded but never fails the delivery). After an observed merge, `branching.syncWorkBranchAfterMerge` fast-forwards the work lane to the integration lane and `branching.pushSyncedWorkBranch` pushes it; a dirty tree or a non-fast-forward leaves every local branch untouched and records `branchingSync.status: "blocked"`.
    - Updates the specification index to `completed` and records PR metadata, the resolved `branching` lanes, and the `branchingSync` outcome in the run state.
+   - Records completed task history via `sdw-changelog` and automatically executes post-delivery retrospective via `sdw-retro` when `retro.enabled` is true.
 
 ---
 
@@ -121,32 +123,52 @@ spec-driven-workflow/
 │   └── worktrees/                # Ephemeral per-task git worktrees for isolated subagents
 ├── skills/                       # Canonical source of truth for all skills
 │   ├── sdw-batch/                # Multi-spec queue delegating to single sdw-orch runs
+│   ├── sdw-changelog/            # Task delivery history recording into CHANGELOG.md
 │   ├── sdw-code-review/          # Standalone deep working-tree review & fix planning
 │   ├── sdw-config/               # Project configuration & verification skill
 │   ├── sdw-doctor/               # Installation & workspace health checker
 │   ├── sdw-fixer/                # Shared findings intake, scoring & surgical remediation
 │   ├── sdw-memory/               # Central knowledge wrapper (query, record, consolidate, classify)
 │   ├── sdw-orch/                 # End-to-end workflow orchestrator skill
+│   ├── sdw-retro/                # Automated post-delivery retrospective & friction mining
 │   ├── sdw-router/               # Always-autoloaded entrypoint and skill router
 │   ├── sdw-rules/                # Shared behavioral rules, simplicity & anti-overengineering
 │   ├── sdw-security-checks/      # Pre-commit secrets and credentials leak scanner
 │   ├── sdw-ship-pr/              # Standalone PR shipping & review convergence skill
 │   └── sdw-spec/                 # Spec authoring, validation, sync, and index manager
-├── tests/                        # Automated unit & integration test suites
+├── tests/                        # Automated unit & integration test suites (33 suites)
+│   ├── sdw_batch.test.cjs
+│   ├── sdw_batch_retro.test.cjs
 │   ├── sdw_branch_sync.test.cjs
 │   ├── sdw_branch_worktree.test.cjs
+│   ├── sdw_changelog.test.cjs
 │   ├── sdw_code_review.test.cjs
 │   ├── sdw_config.test.cjs
+│   ├── sdw_doctor.test.cjs
+│   ├── sdw_fixer.test.cjs
 │   ├── sdw_github_actions.test.cjs
+│   ├── sdw_hybrid_mode.test.cjs
+│   ├── sdw_memory.test.cjs
 │   ├── sdw_orch.test.cjs
+│   ├── sdw_orch_dispatch.test.cjs
 │   ├── sdw_orch_implementation.test.cjs
+│   ├── sdw_orch_refine.test.cjs
+│   ├── sdw_orch_retro.test.cjs
+│   ├── sdw_orch_scoring.test.cjs
+│   ├── sdw_packaging.test.cjs
 │   ├── sdw_refinement_gates.test.cjs
+│   ├── sdw_retro.test.cjs
+│   ├── sdw_retro_discovery.test.cjs
 │   ├── sdw_router.test.cjs
 │   ├── sdw_rules.test.cjs
+│   ├── sdw_sandbox.test.cjs
 │   ├── sdw_scm_provider.test.cjs
+│   ├── sdw_scoped_commit.test.cjs
 │   ├── sdw_security_checks.test.cjs
 │   ├── sdw_ship_pr.test.cjs
 │   ├── sdw_spec.test.cjs
+│   ├── sdw_spec_header_drift.test.cjs
+│   ├── sdw_spec_update.test.cjs
 │   └── sdw_step_artifacts.test.cjs
 ├── AGENTS.md                     # Mandatory rules and protocols for AI agents
 ├── FEATURES.md                   # Feature showcase and architecture presentation
@@ -171,7 +193,7 @@ Verify what is available before installing:
 npx skills add jpolvora/spec-driven-workflow --list
 ```
 
-Expected: `12` discoverable skills — the 11 `sdw-*` skills plus `ws-memo`:
+Expected: `15` discoverable skills (14 `sdw-*` skills plus `ws-memo`):
 
 | Skill | Purpose |
 |---|---|
@@ -187,11 +209,13 @@ Expected: `12` discoverable skills — the 11 `sdw-*` skills plus `ws-memo`:
 | `sdw-fixer` | Shared findings intake, deterministic scoring, surgical remediation (review and ship loops) |
 | `sdw-memory` | Central knowledge wrapper: query, record, consolidate, classify traps, gaps, patterns, errors |
 | `sdw-ship-pr` | Pre-PR checks, branch push, PR creation, review convergence |
+| `sdw-changelog` | Task delivery history recording and changelog maintenance |
+| `sdw-retro` | Automatic post-delivery retrospective and friction candidate mining |
 
 ### Copy-paste: install all SDW skills (recommended)
 
 ```bash
-npx skills add jpolvora/spec-driven-workflow --skill sdw-router --skill sdw-config --skill sdw-doctor --skill sdw-spec --skill sdw-orch --skill sdw-batch --skill sdw-rules --skill sdw-security-checks --skill sdw-code-review --skill sdw-fixer --skill sdw-memory --skill sdw-ship-pr -y
+npx skills add jpolvora/spec-driven-workflow --skill sdw-router --skill sdw-config --skill sdw-doctor --skill sdw-spec --skill sdw-orch --skill sdw-batch --skill sdw-rules --skill sdw-security-checks --skill sdw-code-review --skill sdw-fixer --skill sdw-memory --skill sdw-ship-pr --skill sdw-changelog --skill sdw-retro -y
 ```
 
 One-liner alternative (installs everything discoverable, including `ws-memo`):

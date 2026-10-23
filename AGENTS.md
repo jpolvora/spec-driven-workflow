@@ -74,6 +74,12 @@ When authoring or modifying skills under `skills/<skill-name>/`, adhere to the 3
 | Run state, 8-step state machine, context fencing, dispatch, worktrees, sandbox | [`skills/sdw-orch/references/orchestrator_protocol.md`](skills/sdw-orch/references/orchestrator_protocol.md) |
 | Findings intake schema, scoring rubric, remediation scope, fixer report | [`skills/sdw-fixer/references/fixer_protocol.md`](skills/sdw-fixer/references/fixer_protocol.md) |
 | Memory entry kinds, backend routing (ws-memo vault by default; select per user via `memory.backends`), consolidation, write safety | [`skills/sdw-memory/references/memory_protocol.md`](skills/sdw-memory/references/memory_protocol.md) |
+| Standalone deep working-tree review, executable fix plans, and Step 7 delegation | [`skills/sdw-code-review/references/code_review_protocol.md`](skills/sdw-code-review/references/code_review_protocol.md) |
+| Pull request shipping, pre-PR requirement checks, and review convergence | [`skills/sdw-ship-pr/references/ship_protocol.md`](skills/sdw-ship-pr/references/ship_protocol.md) |
+| Post-delivery retrospective, transcript signals, and candidate mining | [`skills/sdw-retro/references/retro_protocol.md`](skills/sdw-retro/references/retro_protocol.md) |
+| Task delivery history recording and changelog formatting | [`skills/sdw-changelog/references/entry_contract.md`](skills/sdw-changelog/references/entry_contract.md) |
+| Workspace health checker and structural audit | [`skills/sdw-doctor/references/doctor_protocol.md`](skills/sdw-doctor/references/doctor_protocol.md) |
+| Pre-commit secrets and credentials leak scanning | [`skills/sdw-security-checks/references/security_checks_protocol.md`](skills/sdw-security-checks/references/security_checks_protocol.md) |
 | Vocabulary and redefined terms | [`GLOSSARY.md`](GLOSSARY.md) |
 
 **Rule:** when one of these changes, edit the authoritative file — never create a second copy in this document or in another skill.
@@ -116,9 +122,17 @@ Instructions and skills specific to this development environment come from [`.ag
 At session start, or when receiving task instructions, inspect and apply [`skills/sdw-router/SKILL.md`](skills/sdw-router/SKILL.md).
 
 - Configuration/environment inquiries → `sdw-config`.
+- Installation/workspace health checks → `sdw-doctor`.
 - Spec authoring, formatting, validation, indexing → `sdw-spec`. **Authoring/registration never triggers `sdw-orch`.**
 - Spec implementation, orchestration, delivery → `sdw-orch`, only on an explicit implementation order (see `sdw-rules`). `sdw-orch` executes exactly one specification.
 - Multiple specifications / a spec queue → `sdw-batch`, which loops single `sdw-orch` runs.
+- Standalone code review & fix planning → `sdw-code-review`.
+- PR shipping & review convergence → `sdw-ship-pr`.
+- Shared findings remediation & defect class sweep → `sdw-fixer`.
+- Product memory & trap logging → `sdw-memory` / `sdw-rules`.
+- Pre-commit secret scanning → `sdw-security-checks`.
+- Task delivery changelog records → `sdw-changelog`.
+- Post-delivery retrospective & friction analysis → `sdw-retro`.
 - General conversational or non-SDW coding → pass through without interception.
 
 ---
@@ -126,9 +140,10 @@ At session start, or when receiving task instructions, inspect and apply [`skill
 ## 7. Development Lifecycle Sync
 
 - After every task, check whether documentation, instructions, routers, or references changed; keep paths, names, and references current.
-- When features change, keep [`README.md`](README.md), [`FEATURES.md`](FEATURES.md), and this file in sync.
+- When features change, keep [`README.md`](README.md), [`FEATURES.md`](FEATURES.md), [`skills/sdw-router`](skills/sdw-router), and this file in sync.
 - Keep [`GLOSSARY.md`](GLOSSARY.md) authoritative: update it in the same change that introduces, renames, or redefines a concept.
 - Update [`.sdw/directory-structure.md`](.sdw/directory-structure.md) when the consumer layout changes.
+- Keep skill lists, test manifests, and `npx skills` installation commands current across `README.md`, `FEATURES.md`, and `sdw-router`.
 - Never use absolute OS paths in repo files; use project-relative paths or `{projectRoot}`-style tokens.
 - When `.sdw/config.json` gains a key, add its default (and a detected value when inferable); remove keys the schema no longer defines.
 
@@ -136,7 +151,7 @@ At session start, or when receiving task instructions, inspect and apply [`skill
 
 ## 8. PR Checklist (feature branches)
 
-[`sdw-ship-pr`](skills/sdw-ship-pr/SKILL.md) owns this routine; `sdw-orch` Step 8 delegates to it. Pre-PR gates are defined in [`ship_protocol.md`](skills/sdw-ship-pr/references/ship_protocol.md) § 1 and in [spec 00050](.sdw/specs/00050-sdw-ship-pr-native-pre-pr-enforcement-ga.md) (pending: run-state evidence and discovered prepare obligations), never restated here.
+[`sdw-ship-pr`](skills/sdw-ship-pr/SKILL.md) owns this routine; `sdw-orch` Step 8 delegates to it. Pre-PR gates are defined in [`ship_protocol.md`](skills/sdw-ship-pr/references/ship_protocol.md) § 1 and in [spec 00050](.sdw/specs/00050-sdw-ship-pr-native-pre-pr-enforcement-ga.md) (implemented: run-state evidence and discovered prepare obligations), never restated here.
 
 1. Branch `feature/<spec-slug>` from `develop`. Stage only your delivery, by path, with a `feat|fix|chore|test|docs(<spec-slug>): <intent>` subject.
 2. Ship with `node skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs --spec <slug> --push --poll-pr`, adding `--run-id <runId>` when shipping an orchestrator run. It runs the gates, publishes the branch, creates or reuses the pull request, and converges review threads.

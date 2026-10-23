@@ -1,5 +1,5 @@
 ---
-id: "49"
+id: null
 slug: 00049-sdw-retro-agnostic-discovery
 title: "Agent-Agnostic Transcript Discovery — Environment Facts and Bounded Search"
 source: local

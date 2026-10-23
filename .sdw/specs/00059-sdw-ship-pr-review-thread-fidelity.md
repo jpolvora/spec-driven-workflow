@@ -3,7 +3,7 @@ id: null
 slug: 00059-sdw-ship-pr-review-thread-fidelity
 title: "SDW Review Thread Fidelity — Full Thread Content in list-threads and the Fixer Input"
 source: local
-status: ready-to-implement
+status: implemented
 specDate: 2026-10-22
 priority: high
 value: "Lets the convergence loop and the operator read the whole review thread instead of its first line, so a fix targets the reported defect and the analysis behind it"

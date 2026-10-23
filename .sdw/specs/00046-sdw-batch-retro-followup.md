@@ -1,5 +1,5 @@
 ---
-id: "46"
+id: null
 slug: 00046-sdw-batch-retro-followup
 title: "Unattended Batch Retro Follow-Up — Queued Specs From Retrospective Candidates"
 source: local

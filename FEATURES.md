@@ -163,25 +163,31 @@
 
 *Engineering rigor backed by 100% native automated tests.*
 
-- **Native Node.js Test Runner:** Built with `node:test` and `node:assert/strict` — zero third-party testing frameworks required.
-- **336 Comprehensive Test Scenarios:**
-  - `sdw_code_review.test.cjs`: Standalone execution, base auto-detection, report generation, surgical auto-fix, dry-run simulation, orchestrator delegation, router registration, and fail-closed negatives.
-  - `sdw_config.test.cjs`: Configuration parsing, schema validation, token expansion, and initialization gates.
-  - `sdw_spec.test.cjs`: Index bootstrapping, EARS validation, synthesis, SCM provider contract, state synchronization, and archival quality gates.
-  - `sdw_orch.test.cjs`: State machine transitions, derivation, grilling decision trees, DAG decomposition, scoring gates, code review auto-fixing, remote push publishing, and unattended multi-spec batch queue execution.
-  - `sdw_ship_pr.test.cjs`: Standalone PR shipping, dry-run simulation, pre-PR requirement checks, review convergence with summary comments, and orchestrator delegation.
-  - `sdw_refinement_gates.test.cjs`: Step 2 Refinement state machine naming, technical blueprint ingestion into Step 3, config schema validation, build and test quality gates, automated fix retry loops, and pre-PR lifecycle hooks.
-  - `sdw_step_artifacts.test.cjs`: Intermediate step artifact persistence (steps 2, 3, 5), directory isolation (`.sdw/state/{slug}/{runId}/`), run state linkage, deterministic overwrite on re-execution, and resilient failure handling.
-  - `sdw_branch_worktree.test.cjs`: Feature branch lifecycle, dirty-tree tolerance, branch reuse, worktree creation/cleanup, cherry-pick integration, and runtime overrides.
-  - `sdw_branch_sync.test.cjs`: Integration-lane PR/review base, same-lane and cross-lane post-merge fast-forward, optional push, dirty-tree and diverged-lane blocking, and `branchingSync` run-state recording.
-  - `sdw_scm_provider.test.cjs`: SCM provider resolution, capability checks, safe disable modes, strict CLI isolation (`gh` vs `az`), and orchestrator polling integration.
-  - `sdw_router.test.cjs`: Minimal context budget enforcement (SKILL.md ≤ 120 lines), explicit invocations, keyword classification, tied-confidence disambiguation, missing directory resolution, and pass-through non-interference.
-  - `sdw_rules.test.cjs`: Three-tier progressive disclosure, announcement banners, engineering simplicity principles, plan-before-change and authorization layering, product guarantees, doctor compliance verification, scope creep audits, and trap logging.
-  - `sdw_security_checks.test.cjs`: Secrets scanning, staged diff inspection, redaction hygiene, pragma suppression, fail-closed gate handling, and orchestrator bypass verification.
-  - `sdw_fixer.test.cjs`: Findings intake validation, deterministic severity scoring, defect-class sibling sweep, trap and vault hint injection, trivial patch application, dry-run purity, report fields, and learning deduplication.
-  - `sdw_memory.test.cjs`: Entry classification rubric, backend routing and offline fallback, duplicate-slug refusal, consolidation counts, and secret rejection.
-  - `sdw_sandbox.test.cjs`: Plan-only dry-run purity, sandbox clone creation, origin removal, spec copying, node_modules linking, report rendering, cleanup, conflicting flags, nested rejection, and absolute dispatch paths.
-- **Fast Execution:** Entire test suite runs in ~40 seconds with 100% pass rate.
+- **Native Node.js Test Runner:** Built with `node:test` and `node:assert/strict` (zero third-party testing frameworks required).
+- **33 Comprehensive Test Suites:**
+  - `sdw_batch.test.cjs` & `sdw_batch_retro.test.cjs`: Multi-spec batch queues, error policies, pause/resume continuity, and retro queue chaining.
+  - `sdw_branch_sync.test.cjs` & `sdw_branch_worktree.test.cjs`: Branching strategies, post-merge fast-forward, feature branches, and per-task git worktrees.
+  - `sdw_changelog.test.cjs`: Task delivery history recording, prompt/done/result parsing, and duplicate entry deduplication.
+  - `sdw_code_review.test.cjs`: Deep working-tree code review, baseline detection, report generation, and surgical auto-fix.
+  - `sdw_config.test.cjs`: Configuration parsing, JSON schema validation, token expansion, and initialization gates.
+  - `sdw_doctor.test.cjs`: Full workspace and installation health audit across upstream, local, global, and hybrid topologies.
+  - `sdw_fixer.test.cjs`: Findings intake validation, deterministic severity scoring, sibling defect sweeps, and surgical remediation.
+  - `sdw_github_actions.test.cjs`: Workflow linting, dry-run code review triggers, and CI test contracts.
+  - `sdw_hybrid_mode.test.cjs`: Global skills discovery, root resolution, and consumer isolation.
+  - `sdw_memory.test.cjs`: Entry classification, backend routing, vault hints, and local trap table fallback.
+  - `sdw_orch.test.cjs`, `sdw_orch_dispatch.test.cjs`, `sdw_orch_implementation.test.cjs`, `sdw_orch_refine.test.cjs`, `sdw_orch_retro.test.cjs`, `sdw_orch_scoring.test.cjs`: End-to-end 8-stage state machine, worker briefs, evidence corroboration, scoring rubrics, and delivery reports.
+  - `sdw_packaging.test.cjs`: Compatibility with `npx skills`, manifest integrity, and zero runtime dependencies.
+  - `sdw_refinement_gates.test.cjs` & `sdw_step_artifacts.test.cjs`: Blueprint ingestion, verification retry loops, and step artifacts persistence.
+  - `sdw_retro.test.cjs` & `sdw_retro_discovery.test.cjs`: Automated post-delivery retrospective, transcript discovery, friction signals, and candidate routing.
+  - `sdw_router.test.cjs`: Autoload routing, intent classification, ambiguity resolution, and pass-through non-interference.
+  - `sdw_rules.test.cjs`: Core engineering principles, context budgets, doctor compliance, and anti-regression trap logging.
+  - `sdw_sandbox.test.cjs`: Plan-only dry-run purity, shallow clone sandboxes, and execution reports.
+  - `sdw_scm_provider.test.cjs`: SCM provider resolution, capability checks, and CLI isolation.
+  - `sdw_scoped_commit.test.cjs`: Surgical staged diff hygiene and commit isolation.
+  - `sdw_security_checks.test.cjs`: Pre-commit regex secret scanning, allowlist pragmas, and fail-closed gates.
+  - `sdw_ship_pr.test.cjs`: Standalone PR shipping, review convergence loops, push-before-resolve guarantees, and pre-PR requirement checks.
+  - `sdw_spec.test.cjs`, `sdw_spec_header_drift.test.cjs`, `sdw_spec_update.test.cjs`: EARS acceptance criteria, priority ranking (`list-by-priority`), SCM sync, and drift repair.
+- **Fast Execution:** Entire test suite runs in ~80 seconds with zero runtime dependencies.
 
 ---
 
@@ -259,20 +265,46 @@
 
 ---
 
+### 17. 📝 `sdw-changelog` — Delivery Records & Prompt-Task History
+
+*Append-only delivery history tracking intent, implementation work, and verified outcomes in the project changelog.*
+
+- **Standardized Entry Contract:** Records prompt intent, work performed (`done`), and delivery outcome (`result`) with optional agent and timestamp attributes.
+- **Direct Insertion & File Hygiene:** Inserts clean markdown entries directly below `# Changelog`, creating parent directories on demand and leaving existing entries byte-identical.
+- **Configurable Workspace Gate:** Governed by `changelogEnabled` and `changelogFile` in `.sdw/config.json` (defaults to `{projectRoot}/CHANGELOG.md`).
+- **Duplicate Protection:** Automatically detects and skips identical Prompt/Done/Result blocks, reporting duplicate status without redundant file mutation.
+
+---
+
+### 18. 🔄 `sdw-retro` — Post-Delivery Retrospectives & Candidate Analysis
+
+*Automated retrospective reviewing completed orchestrator runs for friction signals, transcript slips, and improvement candidates.*
+
+- **Automated Delivery Execution:** Automatically invoked after Step 8 when `retro.enabled` is true, recording signals in run state without risking delivery completion.
+- **Deterministic Friction Signals:** Detects leftover run states, repeated run invocations without resume, and unreadable transcript inputs.
+- **Host-Agnostic Transcript Mining:** Discovers session transcripts across Antigravity, Cursor, and CLI harnesses with fallbacks for captured interactive sessions.
+- **Structured Candidate Lifecycle:** Emits and validates improvement candidates (`critical` to `low`), automatically routing memory entries to `sdw-memory` and queueing follow-up specifications for code changes.
+
+---
+
 ## 🗺️ Product Roadmap & Upcoming Horizons
 
 The following specifications are pending in the registry (`.sdw/specs/index.specs.md`):
 
-- **016 — SCM Delivery Intents:** Named pull request and issue intents for GitHub and Azure DevOps wired into Step 8.
-- **017 — AC Ledger & Traceability:** Criterion-to-evidence ledger for every delivery.
-- **018 — Fresh-Context Verification & Adversarial Audit:** Independent re-verification of claimed work.
-- **019 — Checkpoint & Crash-Safe Resume:** Turn pause, checkpoint, and resume from interruption.
-- **020 — Configurable Branch & Ship-Ref Strategy:** Branch and ship-ref strategies beyond the current defaults.
-- **021 — Live Monitor & Append-Only Telemetry:** `telemetry.jsonl` plus the read-only `monitor` command.
-- **022 — Harness Diagnostics:** `doctor`, `check-workflows`, `check-harness`, and dispatch prompt budgets.
-- **023 — Delivery Reporting:** Activity, standup, and specification explanation reports.
-- **030 — Micro-Task DAG Planning:** Registered in the backlog and explicitly deferred.
-- **031 — Delivery Records, Retrospective & Learning:** Changelog, retro candidates, `sdw-learning` adapter, and prompt-task lifecycle.
-- **033 — Orchestrator Diagnostic Mode:** Draft; upstream issue detection and follow-up spec suggestion.
+- **00016: SCM Delivery Intents:** Named pull request and issue intents for GitHub and Azure DevOps wired into Step 8.
+- **00017: AC Ledger & Traceability:** Criterion-to-evidence ledger for every delivery.
+- **00018: Fresh-Context Verification & Adversarial Audit:** Independent re-verification of claimed work.
+- **00019: Checkpoint & Crash-Safe Resume:** Turn pause, checkpoint, and resume from interruption.
+- **00021: Live Monitor & Append-Only Telemetry:** `telemetry.jsonl` plus the read-only `monitor` command.
+- **00022: Harness Diagnostics:** `doctor`, `check-workflows`, `check-harness`, and dispatch prompt budgets.
+- **00023: Delivery Reporting:** Activity, standup, and specification explanation reports.
+- **00030: Micro-Task DAG Planning:** Registered in the backlog and explicitly deferred.
+- **00033: Orchestrator Diagnostic Mode:** Upstream issue detection and follow-up spec suggestion.
+- **00041: Versioned Spec Files:** Creation, editing, and drift repair for versioned specifications.
+- **00056: Per-Role Agent Models:** Configurable agent model selection per pipeline role.
+- **00059: Review Thread Fidelity:** Full thread content in `list-threads` and fixer input.
+- **00060: Delivery Report Artifact Location:** Relocate companion report to `.sdw/reports` and exclude from spec scanners.
+- **00061: Multi-Agent Parallel Features:** Parallel feature sandboxes with coordinator merge to develop.
+- **00062: Spec-Issue Two-Way Sync:** Bi-directional synchronization with registered SCM provider.
 
 

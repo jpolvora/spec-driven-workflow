@@ -73,6 +73,34 @@ test('AC5: Route specification implementation, orchestration, and resumption to 
   }
 });
 
+test('AC5b: Route task changelog and delivery history intents to sdw-changelog', () => {
+  const prompts = [
+    'Record completed delivery in changelog',
+    'Append task delivery entry to CHANGELOG.md',
+    'Record prompt intent and done results in changelog'
+  ];
+
+  for (const p of prompts) {
+    const res = sdwRouter.routePrompt(p);
+    assert.equal(res.matched, true, `Should match prompt: "${p}"`);
+    assert.equal(res.targetSkill, 'sdw-changelog', `Expected sdw-changelog for prompt: "${p}"`);
+  }
+});
+
+test('AC5c: Route retrospective and friction analysis intents to sdw-retro', () => {
+  const prompts = [
+    'Run post-delivery retro on completed run',
+    'Analyze session transcript for friction signals and candidates',
+    'Run retrospective candidate analysis'
+  ];
+
+  for (const p of prompts) {
+    const res = sdwRouter.routePrompt(p);
+    assert.equal(res.matched, true, `Should match prompt: "${p}"`);
+    assert.equal(res.targetSkill, 'sdw-retro', `Expected sdw-retro for prompt: "${p}"`);
+  }
+});
+
 test('AC6: Explicit skill invocations honored directly', () => {
   const testCases = [
     { prompt: '/sdw-config check', expected: 'sdw-config' },

@@ -33,6 +33,11 @@ Always-autoloaded entrypoint and traffic controller routing agent tasks across a
 | Behavioral rules, simplicity, YAGNI, anti-overengineering, trap log | `sdw-rules` | Shared engineering principles, simplicity, and traps |
 | Secret scanning, credentials leak check, pre-commit leak gate | `sdw-security-checks` | Pre-commit secrets and credentials leak scanner |
 | Deep working-tree code review, review fix planning, code-review | `sdw-code-review` | Standalone review, executable fix plans, and orch Step 7 delegation |
+| Pull request shipping, pre-PR quality checks, review convergence | `sdw-ship-pr` | Remote publishing and automated review convergence |
+| Findings remediation, defect-class sweep, surgical fixes | `sdw-fixer` | Centralized fix intake and patch application |
+| Knowledge queries, trap logging, memory consolidation | `sdw-memory` | Product knowledge wrapper with pluggable backends |
+| Delivery history recording, prompt/done/result changelog entries | `sdw-changelog` | Append-only task changelog writer |
+| Post-delivery retrospective, transcript signals, candidate mining | `sdw-retro` | Retrospective analyzer and follow-up spec queueing |
 | Unrecognized or general coding / conversation | *(Pass-through)* | Allows standard agent execution without intercepting |
 
 **Rules:** apply [`sdw-rules`](../sdw-rules/SKILL.md) — planning, authorization, and scope — before routing or dispatching anything.

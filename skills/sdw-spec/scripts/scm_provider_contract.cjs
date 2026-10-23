@@ -127,19 +127,6 @@ module.exports = {
   checkScmCapability,
   extractAcceptanceCriteria,
   htmlToMarkdown,
-  assertResolutionComment
-};
-
-
-module.exports = {
-  ScmProvider,
-  GitHubProvider,
-  AzureDevOpsProvider,
-  createScmProvider,
-  resolveScmProvider,
-  checkScmCapability,
-  extractAcceptanceCriteria,
-  htmlToMarkdown,
   assertResolutionComment,
   cliFailure,
   assertSafeRef

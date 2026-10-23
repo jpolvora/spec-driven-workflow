@@ -308,8 +308,8 @@ function cmdRun(options) {
   const details = [];
   const knowledgeCache = new Map();
   const handled = new Set(); // file:line keys already patched in this batch
-  // Structured deviations from the scored plan (adapted from the ws-fix-pr
-  // amendment log): recorded when evidence changes a finding's planned action.
+  // Structured deviations from the scored plan (amendment log):
+  // recorded when evidence changes a finding's planned action.
   const amendments = [];
   const amend = (finding, from, to, reason, evidence) => {
     amendments.push({
@@ -402,7 +402,7 @@ function cmdRun(options) {
   }
 
   // Resolution comments ready for the caller to post on the matching review
-  // threads (adapted from the ws-fix-pr resolution-reply contract).
+  // threads (resolution-reply contract).
   const comments = fixed.map(f => ({
     threadId: f.threadId,
     file: f.file,
@@ -450,7 +450,7 @@ function cmdRun(options) {
   fs.writeFileSync(reportAbs, JSON.stringify(report, null, 2) + '\n', 'utf8');
   console.log(`[sdw-fixer] Report written to ${norm(path.relative(root, reportAbs))}`);
 
-  // Optional human-readable round report (adapted from the ws-fix-pr round report).
+  // Optional human-readable round report.
   if (options.markdown) {
     const mdAbs = path.isAbsolute(options.markdown) ? options.markdown : path.resolve(root, options.markdown);
     const lines = [];
