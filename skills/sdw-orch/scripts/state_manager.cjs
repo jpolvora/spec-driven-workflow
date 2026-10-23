@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const runLock = require('./run_lock.cjs');
+const deliveryReport = require('./delivery_report.cjs');
 
 function normalizePath(p) {
   return p.replace(/\\/g, '/');
@@ -89,12 +90,38 @@ function fsyncBestEffort(targetPath, flags) {
   }
 }
 
+// AC12: a crash between the temp-file write and the rename leaves a sibling
+// `{stateFile}.tmp-{pid}`. The state file is still the last valid state, so a
+// load ignores every temp file and the next successful write removes them.
+function listStaleTempFiles(stateFilePath) {
+  const dir = path.dirname(stateFilePath);
+  const prefix = `${path.basename(stateFilePath)}.tmp-`;
+  try {
+    return fs.readdirSync(dir)
+      .filter((name) => name.startsWith(prefix))
+      .map((name) => path.join(dir, name));
+  } catch (err) {
+    return [];
+  }
+}
+
+function removeStaleTempFiles(stateFilePath) {
+  for (const tempFile of listStaleTempFiles(stateFilePath)) {
+    try {
+      fs.unlinkSync(tempFile);
+    } catch (err) {
+      // Cleanup is best-effort: a leftover temp file is a warning, not a failed write.
+    }
+  }
+}
+
 function writeStateFileAtomic(stateFilePath, state) {
   const tempFile = `${stateFilePath}.tmp-${process.pid}`;
   fs.writeFileSync(tempFile, JSON.stringify(state, null, 2) + '\n', 'utf8');
   fsyncBestEffort(tempFile, 'r+');
   fs.renameSync(tempFile, stateFilePath);
   fsyncBestEffort(path.dirname(stateFilePath), 'r');
+  removeStaleTempFiles(stateFilePath);
   return stateFilePath;
 }
 
@@ -196,6 +223,14 @@ function loadRunState(targetRoot, runId) {
   const stateFilePath = getStateFilePath(targetRoot, runId);
   if (!fs.existsSync(stateFilePath)) {
     throw new Error(`State file not found for runId "${runId}" at ${normalizePath(stateFilePath)}`);
+  }
+  // AC12: an interrupted write leaves a temp file beside the last valid state.
+  // The state file wins; the leftover is reported as a warning, never a failure.
+  for (const tempFile of listStaleTempFiles(stateFilePath)) {
+    console.warn(
+      `[sdw-orch] Warning: stale state temp file "${normalizePath(tempFile)}" was left by an interrupted write; `
+      + `using the last valid state "${normalizePath(stateFilePath)}".`
+    );
   }
   try {
     const raw = fs.readFileSync(stateFilePath, 'utf8');
@@ -330,6 +365,20 @@ function recordStepArtifact(targetRoot, runId, stepNum, artifactRelPath) {
   });
 }
 
+// AC13: checkpoint and turn-pause telemetry reuse `state.reportContributions`,
+// the in-state append-only event convention, so the events are observable in
+// the run state and the delivery report without a new external log format.
+function recordTelemetry(state, step, kind, title, body) {
+  deliveryReport.appendContribution(state, deliveryReport.buildContribution({
+    step,
+    stepName: deliveryReport.STEP_NAMES[step],
+    kind,
+    title,
+    body,
+    evidence: []
+  }));
+}
+
 // AC2: store arbitrary, caller-supplied progress JSON for one step. The step's
 // current status is snapshotted so the checkpoint is readable on its own.
 function recordCheckpoint(targetRoot, runId, stepNum, progress) {
@@ -342,6 +391,12 @@ function recordCheckpoint(targetRoot, runId, stepNum, progress) {
     const stepObj = state.steps && state.steps[step];
     const checkpoint = writeStepCheckpoint(state, step, stepObj ? stepObj.status : 'unknown', new Date().toISOString());
     checkpoint.progress = progress === undefined ? null : progress;
+    recordTelemetry(state, step, 'checkpoint', `Checkpoint saved for step ${step} (revision ${checkpoint.revision})`, {
+      step,
+      revision: checkpoint.revision,
+      status: checkpoint.status,
+      progress: checkpoint.progress
+    });
     saveRunState(targetRoot, state);
     return { state, checkpoint };
   });
@@ -366,6 +421,12 @@ function recordTurnPause(targetRoot, runId, stepNum, reason, nextAction) {
       nextAction: cleanNextAction,
       recordedAt: new Date().toISOString()
     };
+    recordTelemetry(state, step, 'turn_paused', `Turn paused at step ${step}: ${cleanReason}`, {
+      step,
+      revision: nextRevision(state),
+      reason: cleanReason,
+      nextAction: cleanNextAction
+    });
     saveRunState(targetRoot, state);
     return { state, turnPause: state.turnPause };
   });

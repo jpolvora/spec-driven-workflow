@@ -565,3 +565,108 @@ test('AC11: repeated resume leaves completed steps untouched and reports the pen
     cleanup(root);
   }
 });
+
+// Spec 00019 AC12.
+test('AC12: an interrupted write leaves the last valid state and the next successful write clears stale temp files', () => {
+  const root = makeRoot();
+  try {
+    const stateFile = stateManager.getStateFilePath(root, RUN_ID);
+    const stateDir = path.dirname(stateFile);
+    const tempPrefix = `${path.basename(stateFile)}.tmp-`;
+    const validBefore = fs.readFileSync(stateFile, 'utf8');
+
+    // Two leftovers: a partial write (invalid JSON) and a complete-looking newer
+    // state from a pid that no longer exists. Neither may replace the last valid
+    // state, and neither may fail the load.
+    fs.writeFileSync(`${stateFile}.tmp-${DEAD_PID}`, '{"orchestrator": "sdw-orch", "revis', 'utf8');
+    const rogue = JSON.parse(validBefore);
+    rogue.currentStep = 8;
+    rogue.revision = 99;
+    fs.writeFileSync(`${stateFile}.tmp-${DEAD_PID + 1}`, JSON.stringify(rogue, null, 2) + '\n', 'utf8');
+
+    const warnings = [];
+    const originalWarn = console.warn;
+    console.warn = (...args) => warnings.push(args.join(' '));
+    let recovered;
+    try {
+      recovered = stateManager.loadRunState(root, RUN_ID);
+    } finally {
+      console.warn = originalWarn;
+    }
+    assert.equal(recovered.revision, 0, 'the last valid state is recovered');
+    assert.equal(recovered.currentStep, 1, 'a newer temp file never replaces the last valid state');
+    assert.equal(fs.readFileSync(stateFile, 'utf8'), validBefore, 'loading never rewrites the state file');
+    assert.ok(
+      warnings.some((line) => /Warning: stale state temp file/.test(line)),
+      'a stale temp file is a warning, not a failure'
+    );
+
+    // The next successful write lands and deletes every stale temp file, while
+    // the warning alone never fails the command.
+    const saved = runOrch(['checkpoint', '--run-id', RUN_ID, '--step', '4', '--progress', '{"note":"retry"}'], root);
+    assert.equal(saved.status, 0, `a stale temp file does not fail the write: ${saved.stderr}`);
+    assert.match(saved.stderr, /Warning: stale state temp file/);
+    assert.equal(stateManager.loadRunState(root, RUN_ID).revision, 1, 'the write landed on the recovered state');
+    assert.deepEqual(
+      fs.readdirSync(stateDir).filter((name) => name.startsWith(tempPrefix)),
+      [],
+      'the next successful write deletes stale temp files'
+    );
+  } finally {
+    cleanup(root);
+  }
+});
+
+// Spec 00019 AC13.
+test('AC13: checkpoint and pause-turn record telemetry events in run state', () => {
+  const root = makeRoot();
+  try {
+    const checkpointResult = runOrch(
+      ['checkpoint', '--run-id', RUN_ID, '--step', '4', '--progress', '{"completedTasks":["task-1"]}'],
+      root
+    );
+    assert.equal(checkpointResult.status, 0, `checkpoint exits 0: ${checkpointResult.stderr}`);
+    const pauseResult = runOrch(
+      ['pause-turn', '--run-id', RUN_ID, '--step', '4', '--reason', 'host turn ended', '--next-action', 'resume task-2 implementation'],
+      root
+    );
+    assert.equal(pauseResult.status, 0, `pause-turn exits 0: ${pauseResult.stderr}`);
+
+    const state = stateManager.loadRunState(root, RUN_ID);
+    const events = state.reportContributions.filter((entry) => entry.kind === 'checkpoint' || entry.kind === 'turn_paused');
+    assert.equal(events.length, 2, 'one event is recorded per checkpoint and turn pause');
+
+    const checkpointEvent = events.find((entry) => entry.kind === 'checkpoint');
+    assert.equal(checkpointEvent.step, 4, 'the checkpoint event names its step');
+    assert.equal(checkpointEvent.stepName, 'implementation', 'the checkpoint event names the step kind');
+    assert.equal(checkpointEvent.body.revision, 1, 'the checkpoint event carries the revision it produced');
+    assert.deepEqual(checkpointEvent.body.progress, { completedTasks: ['task-1'] }, 'the event carries the progress payload');
+    assert.ok(!Number.isNaN(Date.parse(checkpointEvent.at)), 'the event carries a parseable timestamp');
+
+    const pauseEvent = events.find((entry) => entry.kind === 'turn_paused');
+    assert.equal(pauseEvent.step, 4, 'the pause event names its step');
+    assert.equal(pauseEvent.body.reason, 'host turn ended', 'the pause event carries the reason');
+    assert.equal(pauseEvent.body.nextAction, 'resume task-2 implementation', 'the pause event carries the next action');
+    assert.equal(pauseEvent.body.revision, 2, 'the pause event carries the revision it produced');
+    assert.equal(state.revision, 2, 'both mutations are persisted');
+  } finally {
+    cleanup(root);
+  }
+});
+
+// Spec 00019 AC14.
+test('AC14: the orchestrator protocol documents the state schema, revision, lock, recovery, and pause rules', () => {
+  const protocol = fs.readFileSync(
+    path.resolve(__dirname, '../skills/sdw-orch/references/orchestrator_protocol.md'),
+    'utf8'
+  );
+  assert.match(protocol, /"revision":/, 'the state schema documents the revision field');
+  assert.match(protocol, /"stepCheckpoints":/, 'the state schema documents stepCheckpoints');
+  assert.match(protocol, /"turnPause":/, 'the state schema documents turnPause');
+  assert.match(protocol, /every persisted mutation .*advances it by exactly one/i, 'the revision rule is documented');
+  assert.match(protocol, /lockStaleMs/, 'the lock threshold key is documented');
+  assert.match(protocol, /\{stateFile\}\.lock/, 'the lock file location is documented');
+  assert.match(protocol, /\{stateFile\}\.tmp-\{pid\}/, 'the atomic write temp file is documented');
+  assert.match(protocol, /stale temp file is a warning, not a failure/i, 'the recovery failure policy is documented');
+  assert.match(protocol, /turn pause is a handoff marker, not a failure/i, 'the turn pause semantics are documented');
+});
