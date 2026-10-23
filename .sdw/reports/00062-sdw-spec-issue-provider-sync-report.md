@@ -7,7 +7,7 @@
 | Specification file | `.sdw/specs/00062-sdw-spec-issue-provider-sync.md` |
 | Specification slug | 00062-sdw-spec-issue-provider-sync |
 | Run ID | run-1792743591462-00062-sdw-spec-issue-provider- |
-| Run status | paused |
+| Run status | completed |
 | Branch | `feature/00062-sdw-spec-issue-provider-sync` |
 | Base branch | `master` |
 | Base commit | `fa17fcdaf06adee5ee5bef2cad6af06a4d711459` |
@@ -17,7 +17,7 @@
 | Implementation start | 2026-10-23T08:19:53.549Z |
 | Implementation end | 2026-10-23T09:36:42.905Z |
 | Total wall-clock duration | 1h 16m 49s |
-| Generated at | 2026-10-23T09:54:42.405Z |
+| Generated at | 2026-10-23T10:00:04.846Z |
 | Step 1: derivation (skipped) | 1ms |
 | Step 2: refinement (completed) | 47ms |
 | Step 3: dag_generation (completed) | 43ms |
@@ -25,7 +25,7 @@
 | Step 5: scoring (completed) | 14m 30s |
 | Step 6: delivery_commit (completed) | 420ms |
 | Step 7: code_review (completed) | 2s |
-| Step 8: pr_preparation (pending) | n/a |
+| Step 8: pr_preparation (completed) | 5m 16s |
 
 
 ## Tasks
@@ -42,6 +42,8 @@
 
 | SHA | Subject | Range |
 |---|---|---|
+| `3a2601a` | chore(00062-sdw-spec-issue-provider-sync): mark the specification completed in the registry | base..HEAD |
+| `7797185` | docs(00062-sdw-spec-issue-provider-sync): record delivery report | base..HEAD |
 | `1609284` | task(00062-sdw-spec-issue-provider-sync): task-5 | base..HEAD |
 | `7852ae9` | task(00062-sdw-spec-issue-provider-sync): task-4 | base..HEAD |
 | `de7e200` | task(00062-sdw-spec-issue-provider-sync): task-3 | base..HEAD |
@@ -96,9 +98,18 @@
 | `tests/sdw_spec_sync_remote.test.cjs` | added |
 | `tests/sdw_scm_provider.test.cjs` | modified |
 
+### Unattributed changes
+
+| File | Change |
+|---|---|
+| `.sdw/reports/00062-sdw-spec-issue-provider-sync-report.md` | added |
+| `.sdw/specs/00062-sdw-spec-issue-provider-sync.md` | modified |
+| `.sdw/specs/index.specs.md` | modified |
+
 ## Verification
 
 - test gate: status `passed`, exit code `0`, duration 3m 18s
+- Step 8 delivery: `completed`
 
 ## Code Review
 
@@ -165,7 +176,13 @@ Not available
 
 ## Retrospective
 
-Not available
+- Status: `passed`
+- Report: `.sdw/state/00062-sdw-spec-issue-provider-sync/run-1792743591462-00062-sdw-spec-issue-provider-/run-1792743591462-00062-sdw-spec-issue-provider-.retro.md`
+- Data: `.sdw/state/00062-sdw-spec-issue-provider-sync/run-1792743591462-00062-sdw-spec-issue-provider-/run-1792743591462-00062-sdw-spec-issue-provider-.retro.json`
+- Signals: retries 4 (score 2, review 0, rounds 2, abandonments 0); leftover runs 0; missing artifacts 0; review findings 1 (1 open)
+- Candidates: 0
+- Applied fixes:
+  - none
 
 ## Breaking Changes
 
@@ -300,18 +317,18 @@ Not available
 - Task task-3 accepted after re-dispatch (sequence 3)
 - Task task-4 accepted after re-dispatch (sequence 4)
 - Task task-5 accepted after re-dispatch (sequence 5)
-- Environment: workspace: 13 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
+- Environment: workspace: 16 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
 
 ## Outcome
 
-- Result: `paused`
+- Result: `completed`
 - Delivery commit: `1609284812278cee7b3b92f43c28fb1cb92f407d`
 - Ship status: `pending`
 - Duration: 1h 16m 49s
 
 ## Step Contributions
 
-- Recorded: 8 contribution(s)
+- Recorded: 13 contribution(s)
 
 ### Step 1: derivation
 
@@ -359,8 +376,18 @@ Not available
 
 ### Step 8: pr_preparation
 
-Not available
+- **convergence** 2026-10-23T09:59:58.548Z - Convergence iteration 1
+  - Body: `{"iteration":1,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":false}`
+- **convergence** 2026-10-23T09:59:59.562Z - Convergence iteration 2
+  - Body: `{"iteration":2,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":true}`
+- **gates** 2026-10-23T10:00:00.675Z - Pre-PR gates: 6 result(s)
+  - Body: `{"gates":[{"name":"prePrCommand","status":"skipped","detail":"prePrCommand is not configured"},{"name":"build","status":"skipped","detail":"requiredBuild is false"},{"name":"tests","status":"pass","detail":"npm test exited 0"},{"name":"security","status":"pass","detail":"sdw-security-checks found no blocking leak"},{"name":"runState","status":"pass","detail":"step 4, step 6 and step 7 completed; score 10 >= scoreMin 8"},{"name":"discovery","status":"pass","detail":"no prepare obligations discovered"}]}`
+- **ship** 2026-10-23T10:00:00.675Z - Pull request #53
+  - Body: `{"pushed":true,"branch":"feature/00062-sdw-spec-issue-provider-sync","pullRequest":{"number":"53","url":"https://github.com/jpolvora/spec-driven-workflow/pull/53","title":null},"shipStatus":"delivered"}`
+  - Evidence: `https://github.com/jpolvora/spec-driven-workflow/pull/53`
 
 ### Step 9: retrospective
 
-Not available
+- **retro** 2026-10-23T10:00:04.250Z - Retrospective passed: 0 candidate(s)
+  - Body: `{"status":"passed","runStatus":"completed","signals":{"retries":{"scoreIterations":2,"reviewIterations":0,"reviewRounds":2,"dispatchAbandonments":0,"total":4},"leftoverRuns":0,"missingArtifacts":0,"reviewFindings":{"total":1,"open":1}},"candidates":[],"fixes":{"recorded":[],"consolidated":null,"queuedSpecifications":[],"failures":[]},"routedCandidates":[],"reportMd":".sdw/state/00062-sdw-spec-issue-provider-sync/run-1792743591462-00062-sdw-spec-issue-provider-/run-1792743591462-00062-sdw-spec-issue-provider-.retro.md","reportJson":".sdw/state/00062-sdw-spec-issue-provider-sync/run-1792743591462-00062-sdw-spec-issue-provider-/run-1792743591462-00062-sdw-spec-issue-provider-.retro.json"}`
+  - Evidence: `.sdw/state/00062-sdw-spec-issue-provider-sync/run-1792743591462-00062-sdw-spec-issue-provider-/run-1792743591462-00062-sdw-spec-issue-provider-.retro.md`, `.sdw/state/00062-sdw-spec-issue-provider-sync/run-1792743591462-00062-sdw-spec-issue-provider-/run-1792743591462-00062-sdw-spec-issue-provider-.retro.json`
