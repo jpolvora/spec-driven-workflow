@@ -34,7 +34,8 @@ Orchestrates spec execution from input requirement to delivery commit, automated
 - `score submit --run-id <runId> --verdict <path>`: Submits the Step 5 judge verdict, applies the conformance score, and persists the optional `summary`, `risks`, and `followUps` as the judgment contribution.
 - `report re-render --run-id <runId>`: Refreshes the delivery report and the in-progress report from run state; never commits or amends a pushed commit.
 - `resume`: Resumes an interrupted or paused run from its last recorded step in `.sdw/state/{runId}.state.json`.
-- `status`: Displays current execution progress, conformance score, and step status.
+- `dag preview [--json] [--spec <path>]`: Prints the plan the classifier would generate, with complexity, `execMode`, wave levels, per-task criteria/files, file disjointness, and the two-spec split proposal when the cap refuses; writes no state, artifact, branch, sandbox, or registry row.
+- `status`: Displays current execution progress, conformance score, step status, and the remaining task queue.
 
 ## One Specification Per Run
 
@@ -65,7 +66,7 @@ Orchestrates spec execution from input requirement to delivery commit, automated
    - Done when: Decision gaps resolved, blueprint generated, observations recorded, and refinement artifact `{slug}-step-2.md` persisted.
 
 3. **Decompose into DAG Tasks**
-   Analyze complexity and emit DAG execution units with context prompts and dependency graphs.
+   Classify by declared criteria: <=4 low (one task), 5-10 standard (foundation plus integration), >10 complex (three to five slices of <=4 criteria and <=3 target files, at most five tasks), escalated to complex at three touchpoints with >=7 criteria. Beyond five tasks the plan is refused with `split-required tasks-needed=N cap=5` plus a two-spec split proposal. Every plan records `execMode: sequential`, wave `levels`, per-task `parallelizable` flags, and pairwise file disjointness; dispatch stays one task at a time.
    - Done when: DAG tasks generated, and DAG artifact `{slug}-step-3.md` persisted.
 
 4. **Implementation Execution (Sequential Subagent Dispatch)**

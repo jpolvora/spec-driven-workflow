@@ -68,7 +68,8 @@ function submitEvidence(root, taskId, options = {}) {
   const evidence = {
     taskId,
     status: options.status || 'success',
-    acIds: options.acIds || [state.dagTasks[0].coveredAcs[0]],
+    // Claims the target task's own criteria so AC22 keeps rejecting cross-task claims.
+    acIds: options.acIds || [(state.dagTasks.find(task => task.id === taskId) || record).coveredAcs[0]],
     filesChanged: [targetFile],
     tests: options.tests || [],
     summary: options.summary || `${taskId} implemented`

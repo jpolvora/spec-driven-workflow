@@ -141,6 +141,95 @@ function createTask(options) {
   };
 }
 
+function disjointPairKey(idA, idB) {
+  return [idA, idB].sort().join('|');
+}
+
+/**
+ * Wave level per task: the longest dependency chain that precedes it.
+ */
+function computeTaskLevels(tasks) {
+  const byId = new Map(tasks.map(task => [task.id, task]));
+  const levels = new Map();
+  const resolve = (task, stack) => {
+    if (levels.has(task.id)) return levels.get(task.id);
+    if (stack.has(task.id)) return 0;
+    stack.add(task.id);
+    let level = 0;
+    for (const depId of task.dependencies || []) {
+      const dependency = byId.get(depId);
+      if (dependency) level = Math.max(level, resolve(dependency, stack) + 1);
+    }
+    stack.delete(task.id);
+    levels.set(task.id, level);
+    return level;
+  };
+  for (const task of tasks) resolve(task, new Set());
+  return levels;
+}
+
+/**
+ * Spec 00030 AC15: pairwise file disjointness across every task pair.
+ */
+function computeFileDisjointness(tasks) {
+  const pairs = [];
+  for (let left = 0; left < tasks.length; left++) {
+    for (let right = left + 1; right < tasks.length; right++) {
+      const leftFiles = new Set((tasks[left].targetFiles || []).map(file => String(file).replace(/\\/g, '/')));
+      const sharedFiles = (tasks[right].targetFiles || [])
+        .filter(file => leftFiles.has(String(file).replace(/\\/g, '/')));
+      pairs.push({
+        pair: [tasks[left].id, tasks[right].id],
+        disjoint: sharedFiles.length === 0,
+        sharedFiles
+      });
+    }
+  }
+  return pairs;
+}
+
+/**
+ * Spec 00030 AC16/AC17: records `execMode` with wave `levels` plus per-task
+ * `level` and `parallelizable` flags. Flags are observable only; dispatch stays
+ * one task at a time. A task is parallelizable only when it shares its wave with
+ * another task whose file slice is disjoint from its own.
+ */
+function applyExecutionMetadata(tasks) {
+  const levelsById = computeTaskLevels(tasks);
+  const fileDisjointness = computeFileDisjointness(tasks);
+  const disjointByPair = new Map(fileDisjointness.map(entry => [disjointPairKey(...entry.pair), entry.disjoint]));
+  const waves = new Map();
+  for (const task of tasks) {
+    const level = levelsById.get(task.id) || 0;
+    if (!waves.has(level)) waves.set(level, []);
+    waves.get(level).push(task);
+  }
+  for (const task of tasks) {
+    task.level = levelsById.get(task.id) || 0;
+    const waveSiblings = waves.get(task.level).filter(sibling => sibling.id !== task.id);
+    task.parallelizable = waveSiblings.length > 0
+      && waveSiblings.every(sibling => disjointByPair.get(disjointPairKey(task.id, sibling.id)) === true);
+  }
+  const levels = [...waves.keys()].sort((a, b) => a - b)
+    .map(level => waves.get(level).map(task => task.id));
+  return { execMode: 'sequential', levels, fileDisjointness };
+}
+
+/**
+ * Spec 00030 AC14: a plan refused by the cap names two focused specifications,
+ * partitioning acceptance criteria and blueprint files in declaration order.
+ */
+function buildSplitProposal(slug, acs, targetFiles) {
+  const suffixes = ['a', 'b'];
+  const acHalves = splitContiguous(acs, 2);
+  const fileHalves = targetFiles.length > 0 ? splitContiguous(targetFiles, 2) : [[], []];
+  return suffixes.map((suffix, index) => ({
+    slug: `${slug}-${suffix}`,
+    acIds: (acHalves[index] || []).map(ac => ac.id),
+    targetFiles: fileHalves[index] || []
+  }));
+}
+
 function inferFallbackTargetFiles(slug) {
   if (slug.includes('orch') || slug.includes('implement')) {
     return [
@@ -189,21 +278,19 @@ function buildSingleTaskPlan(context) {
     { architecturalApproach, testPlan }
   );
 
-  return {
-    complexity,
-    totalTasks: 1,
-    tasks: [createTask({
-      id: 'task-1',
-      title: `Implement ${slug}`,
-      description: 'Execute implementation for all specified acceptance criteria in an isolated unit.',
-      acs,
-      dependencies: [],
-      targetFiles,
-      prompt,
-      architecturalApproach,
-      testPlan
-    })]
-  };
+  const tasks = [createTask({
+    id: 'task-1',
+    title: `Implement ${slug}`,
+    description: 'Execute implementation for all specified acceptance criteria in an isolated unit.',
+    acs,
+    dependencies: [],
+    targetFiles,
+    prompt,
+    architecturalApproach,
+    testPlan
+  })];
+
+  return { complexity, taskCount: tasks.length, ...applyExecutionMetadata(tasks), tasks };
 }
 
 /** Standard complexity: the foundation-plus-integration two-task split (AC8). */
@@ -222,34 +309,32 @@ function buildStandardPlan(context) {
     { testPlan }
   );
 
-  return {
-    complexity,
-    totalTasks: 2,
-    tasks: [
-      createTask({
-        id: 'task-1',
-        title: `${slug} — Core Logic & Foundation`,
-        description: 'Implement core modules, state management, and baseline logic.',
-        acs: foundationAcs,
-        dependencies: [],
-        targetFiles,
-        prompt: foundationPrompt,
-        architecturalApproach,
-        testPlan
-      }),
-      createTask({
-        id: 'task-2',
-        title: `${slug} — Workflows, Verification & PR Integration`,
-        description: 'Implement downstream workflow loops, reviews, and integrations.',
-        acs: integrationAcs,
-        dependencies: ['task-1'],
-        targetFiles,
-        prompt: integrationPrompt,
-        architecturalApproach,
-        testPlan
-      })
-    ]
-  };
+  const tasks = [
+    createTask({
+      id: 'task-1',
+      title: `${slug} — Core Logic & Foundation`,
+      description: 'Implement core modules, state management, and baseline logic.',
+      acs: foundationAcs,
+      dependencies: [],
+      targetFiles,
+      prompt: foundationPrompt,
+      architecturalApproach,
+      testPlan
+    }),
+    createTask({
+      id: 'task-2',
+      title: `${slug} — Workflows, Verification & PR Integration`,
+      description: 'Implement downstream workflow loops, reviews, and integrations.',
+      acs: integrationAcs,
+      dependencies: ['task-1'],
+      targetFiles,
+      prompt: integrationPrompt,
+      architecturalApproach,
+      testPlan
+    })
+  ];
+
+  return { complexity, taskCount: tasks.length, ...applyExecutionMetadata(tasks), tasks };
 }
 
 /**
@@ -270,7 +355,11 @@ function buildComplexPlan(context) {
       complexity,
       tasksNeeded,
       cap: MAX_TASKS_PER_SPEC,
-      totalTasks: 0,
+      taskCount: 0,
+      execMode: 'sequential',
+      levels: [],
+      fileDisjointness: [],
+      splitProposal: buildSplitProposal(slug, acs, targetFiles),
       tasks: []
     };
   }
@@ -302,7 +391,7 @@ function buildComplexPlan(context) {
     });
   });
 
-  return { complexity, totalTasks: tasks.length, tasks };
+  return { complexity, taskCount: tasks.length, ...applyExecutionMetadata(tasks), tasks };
 }
 
 function generateDagPlan(specContent, options) {
