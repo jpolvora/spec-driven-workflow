@@ -3,7 +3,7 @@ id: null
 slug: 00056-sdw-per-role-agent-models
 title: "SDW Per-Role Agent Model Configuration"
 source: local
-status: draft
+status: implemented
 specDate: 2026-10-22
 priority: medium
 value: "Lets each orchestration role run its own model instead of one model for every step"
