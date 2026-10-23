@@ -9,6 +9,10 @@ const path = require('path');
 // Spec 00033 AC4: one event holds at most 500 characters of stderr, so a
 // noisy tool can never inflate the diagnostics log with unbounded output.
 const MAX_SNIPPET_CHARS = 500;
+// Spec 00033 AC11: the recorder stops at 200 events, so a long or looping run
+// cannot grow the diagnostics file without bound. The cap spans reopens: a
+// recorder created over an existing full file appends nothing.
+const MAX_EVENTS = 200;
 const DIAGNOSTICS_FILENAME = 'diagnostics.jsonl';
 // Spec 00033 AC8: the report keeps one evidence cell readable, so an excerpt
 // that is already bounded in the event stays bounded in the Markdown table.
@@ -38,6 +42,14 @@ function boundSnippet(text, maxChars) {
   if (text === undefined || text === null) return '';
   const value = String(text).replace(/\r\n?/g, '\n').trim();
   return value.length > limit ? value.slice(0, limit) : value;
+}
+
+// Spec 00033 AC11: the report states the recorded bytes, so the run shows the
+// disk footprint of diagnostics next to the event count. One line per event is
+// the same shape the recorder appends to the JSONL file.
+function eventsBytes(events) {
+  if (!Array.isArray(events) || events.length === 0) return 0;
+  return Buffer.byteLength(events.map(event => `${JSON.stringify(event)}\n`).join(''), 'utf8');
 }
 
 // Spec 00033: `{runDir}/diagnostics.jsonl`, project-relative in the run state so
@@ -83,6 +95,28 @@ function createRecorder(options = {}) {
 
   const events = [];
   let degraded = false;
+  let capped = false;
+  let capWarned = false;
+
+  // Spec 00033 AC11: an append-only file may already hold events from earlier
+  // passes of this run, so the budget counts them before the first new event.
+  // A read failure starts the budget from zero; the append already reports a
+  // degraded recorder when it cannot write.
+  let persistedEventCount = 0;
+  if (enabled && eventsPath) {
+    try {
+      const absolutePath = path.resolve(targetRoot, eventsPath);
+      if (fs.existsSync(absolutePath)) {
+        persistedEventCount = fs.readFileSync(absolutePath, 'utf8')
+          .split(/\r?\n/)
+          .filter(line => line.trim() !== '')
+          .length;
+      }
+    } catch (e) {
+      // Best-effort budget accounting only.
+    }
+  }
+  if (persistedEventCount >= MAX_EVENTS) capped = true;
 
   function warnOnce(message) {
     if (degraded) return;
@@ -91,6 +125,18 @@ function createRecorder(options = {}) {
       warn(message);
     } catch (e) {
       // A broken warning sink must not break delivery either.
+    }
+  }
+
+  // Spec 00033 AC11: hitting the event cap warns exactly once, then the
+  // recorder silently drops later events so a noisy run stops writing.
+  function warnCapOnce() {
+    if (capWarned) return;
+    capWarned = true;
+    try {
+      warn(`diagnostics budget reached: stopped recording after ${MAX_EVENTS} events (${MAX_EVENTS}-event cap).`);
+    } catch (e) {
+      // A broken warning sink must not break delivery.
     }
   }
 
@@ -110,6 +156,13 @@ function createRecorder(options = {}) {
   function record(kind, fields = {}) {
     if (!enabled) return null;
     if (typeof kind !== 'string' || kind.trim() === '') return null;
+    // Spec 00033 AC11: the budget is hard. Once the cap is reached every later
+    // event is dropped, and the one warning explains why the file stops growing.
+    if (persistedEventCount + events.length >= MAX_EVENTS) {
+      capped = true;
+      warnCapOnce();
+      return null;
+    }
     try {
       const event = { ts: clock().toISOString(), kind };
       if (fields.step !== undefined && fields.step !== null) event.step = fields.step;
@@ -192,6 +245,7 @@ function createRecorder(options = {}) {
   return {
     enabled,
     eventsPath,
+    maxEvents: MAX_EVENTS,
     record,
     recordStepTransition,
     recordToolFailure,
@@ -199,7 +253,8 @@ function createRecorder(options = {}) {
     recordRetry,
     recordFallback,
     getEvents: () => events.slice(),
-    isDegraded: () => degraded
+    isDegraded: () => degraded,
+    isCapped: () => capped
   };
 }
 
@@ -248,6 +303,36 @@ function describeEvidence(event) {
 }
 
 /**
+ * Spec 00033 AC9: where the event stream shows follow-up work, the report
+ * proposes one issue spec draft with a title and a rationale.
+ *
+ * The proposal is report content only. Nothing here writes a file, so a spec is
+ * created under `.sdw/specs/` only after an explicit `sdw-spec new` order.
+ * Returns null when the run recorded no issue event.
+ */
+function buildFollowUpProposal(options = {}) {
+  const events = Array.isArray(options.events) ? options.events : [];
+  const issues = events.filter(event => ISSUE_SEVERITIES[event.kind]);
+  if (issues.length === 0) return null;
+  const slug = options.slug ? String(options.slug) : 'run';
+  const errorCount = issues.filter(event => ISSUE_SEVERITIES[event.kind] === 'error').length;
+  const warningCount = issues.length - errorCount;
+  const issueKinds = [...new Set(issues.map(event => event.kind))].sort();
+  const steps = [...new Set(issues
+    .map(event => event.step)
+    .filter(step => step !== undefined && step !== null)
+    .map(step => String(step)))]
+    .sort((a, b) => Number(a) - Number(b));
+  return {
+    title: `Fix upstream defects found by diagnostic run ${slug}`,
+    rationale: `${issues.length} issue event(s) across step(s) ${steps.length > 0 ? steps.join(', ') : 'unknown'} `
+      + `(${errorCount} error(s), ${warningCount} warning(s); kinds: ${issueKinds.join(', ')}). `
+      + 'Delivery continued, so the defects are contained; this draft proposes an explicit follow-up spec to fix them.',
+    proposedOnly: 'Proposed only: no file was created under `.sdw/specs/`. Create it with `sdw-spec new` after an explicit order.'
+  };
+}
+
+/**
  * Spec 00033 AC8: the Markdown run report.
  *
  * The renderer reads only the event list plus the run metadata passed in, so
@@ -260,6 +345,8 @@ function renderReport(options = {}) {
   const slug = options.slug ? String(options.slug) : 'run';
   const runId = options.runId ? String(options.runId) : '(unknown)';
   const status = options.status ? String(options.status) : 'unknown';
+  const eventBytes = Number.isInteger(options.eventBytes) ? options.eventBytes : eventsBytes(events);
+  const capped = options.capped === true;
 
   const counts = new Map();
   for (const event of events) {
@@ -283,6 +370,11 @@ function renderReport(options = {}) {
   lines.push(`| Started | ${escapeTableCell(options.startedAt || (events.length > 0 ? events[0].ts : null) || '-')} |`);
   lines.push(`| Completed | ${escapeTableCell(lastTs || '-')} |`);
   lines.push(`| Events | ${events.length} |`);
+  lines.push(`| Event bytes | ${eventBytes} |`);
+  // Spec 00033 AC11: the report states the overhead budget it stayed under, so
+  // a reader can tell a short run from a capped one without opening the JSONL.
+  lines.push(`| Overhead budget | max ${MAX_EVENTS} events, max ${MAX_SNIPPET_CHARS} chars per snippet |`);
+  lines.push(`| Budget status | ${capped ? `cap reached; recording stopped at ${MAX_EVENTS} events` : 'within budget'} |`);
   if (options.eventsPath) {
     lines.push(`| Event file | ${escapeTableCell(options.eventsPath)} |`);
   }
@@ -306,6 +398,19 @@ function renderReport(options = {}) {
       const step = event.step === undefined || event.step === null ? '-' : String(event.step);
       lines.push(`| ${ISSUE_SEVERITIES[event.kind]} | ${escapeTableCell(step)} | ${describeEvidence(event)} |`);
     }
+  }
+  // Spec 00033 AC9: follow-up work becomes one proposed issue spec draft. The
+  // report only proposes it; creating the spec stays an explicit order.
+  lines.push('', '## Suggested follow-up spec', '');
+  const proposal = buildFollowUpProposal({ events, slug });
+  if (!proposal) {
+    lines.push('No follow-up spec proposed: no upstream issues detected.');
+  } else {
+    lines.push(proposal.proposedOnly, '');
+    lines.push('| Field | Value |');
+    lines.push('| ----- | ----- |');
+    lines.push(`| Title | ${escapeTableCell(proposal.title)} |`);
+    lines.push(`| Rationale | ${escapeTableCell(proposal.rationale)} |`);
   }
   lines.push('');
   return lines.join('\n');
@@ -341,14 +446,17 @@ function writeReport(options = {}) {
 
 module.exports = {
   MAX_SNIPPET_CHARS,
+  MAX_EVENTS,
   MAX_EVIDENCE_CHARS,
   DIAGNOSTICS_FILENAME,
   ISSUE_SEVERITIES,
   boundSnippet,
+  eventsBytes,
   eventsPathFor,
   buildRunDiagnostic,
   createRecorder,
   readEvents,
+  buildFollowUpProposal,
   renderReport,
   writeReport
 };

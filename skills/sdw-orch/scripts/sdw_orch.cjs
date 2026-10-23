@@ -1025,7 +1025,13 @@ function finalizeDiagnosticRun(options) {
       status,
       startedAt: state && state.diagnostic ? state.diagnostic.startedAt : null,
       eventsPath: diagnosticRun.eventsPath,
-      events
+      events,
+      // Spec 00033 AC11: the report states whether the recorder hit its budget.
+      capped: Boolean(
+        diagnosticRun.recorder
+        && typeof diagnosticRun.recorder.isCapped === 'function'
+        && diagnosticRun.recorder.isCapped()
+      )
     });
     if (result.ok) {
       console.log(`[sdw-orch diagnostics] report written to ${result.path} (${result.eventCount} events, ${result.bytes} bytes)`);

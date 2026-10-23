@@ -14,6 +14,7 @@ const { spawnSync } = require('child_process');
 const diagnostics = require('../skills/sdw-orch/scripts/diagnostics.cjs');
 const stateManager = require('../skills/sdw-orch/scripts/state_manager.cjs');
 const sdwOrch = require('../skills/sdw-orch/scripts/sdw_orch.cjs');
+const sdwRouter = require('../skills/sdw-router/scripts/sdw_router.cjs');
 
 const ORCH = path.resolve(__dirname, '..', 'skills', 'sdw-orch', 'scripts', 'sdw_orch.cjs');
 
@@ -589,4 +590,220 @@ test('AC8: a terminal run emits the diagnostics report and an intermediate pause
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('AC9: the report proposes a follow-up issue spec draft and never creates it', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-diag-'));
+  try {
+    const specsDir = path.join(root, '.sdw', 'specs');
+    fs.mkdirSync(specsDir, { recursive: true });
+    const specsBefore = fs.readdirSync(specsDir);
+
+    const events = [
+      { ts: '2026-10-21T15:04:05.000Z', kind: 'step_transition', step: 4, note: 'enter' },
+      { ts: '2026-10-21T15:04:06.000Z', kind: 'script_failure', step: 4, command: 'npm test', exitCode: 1, snippet: 'tests failed' },
+      { ts: '2026-10-21T15:04:07.000Z', kind: 'retry', step: 4, command: 'npm test', attempt: 1, note: 'build repair attempt 1/3' }
+    ];
+
+    const proposal = diagnostics.buildFollowUpProposal({ slug: 'diag-demo', runId: 'run-1', events });
+    assert.ok(proposal, 'follow-up work is detected');
+    assert.match(proposal.title, /Fix upstream defects found by diagnostic run diag-demo/);
+    assert.match(proposal.rationale, /2 issue event\(s\)/);
+    assert.match(proposal.rationale, /step\(s\) 4/);
+    assert.match(proposal.rationale, /1 error\(s\), 1 warning\(s\)/);
+    assert.match(proposal.rationale, /kinds: retry, script_failure/);
+    assert.match(proposal.proposedOnly, /no file was created under `\.sdw\/specs\/`/);
+    assert.match(proposal.proposedOnly, /sdw-spec new/);
+
+    const report = diagnostics.renderReport({ slug: 'diag-demo', runId: 'run-1', status: 'failed', events });
+    assert.match(report, /## Suggested follow-up spec/);
+    assert.match(report, /^\| Title \| Fix upstream defects found by diagnostic run diag-demo \|$/m, 'the draft has a title');
+    assert.match(report, /^\| Rationale \| 2 issue event\(s\) across step\(s\) 4 /m, 'the draft has a rationale');
+    assert.match(report, /Proposed only: no file was created under `\.sdw\/specs\/`\./);
+    assert.match(report, /sdw-spec new/);
+
+    // Writing the report proves no follow-up spec is auto-created.
+    const written = diagnostics.writeReport({
+      targetRoot: root,
+      artifactsDir: path.join('.sdw', 'state', 'diag-demo', 'run-1'),
+      slug: 'diag-demo',
+      runId: 'run-1',
+      status: 'failed',
+      events
+    });
+    assert.equal(written.ok, true);
+    assert.deepEqual(fs.readdirSync(specsDir), specsBefore, 'the report creates no specification file');
+
+    // A clean issue set proposes nothing.
+    const clean = diagnostics.renderReport({
+      slug: 'diag-demo',
+      runId: 'run-2',
+      status: 'completed',
+      events: [{ ts: '2026-10-21T15:05:05.000Z', kind: 'step_transition', step: 1, note: 'done' }]
+    });
+    assert.match(clean, /No follow-up spec proposed: no upstream issues detected\./);
+    assert.equal(/^\| Title \|/m.test(clean), false, 'no draft is proposed without issue events');
+    assert.equal(diagnostics.buildFollowUpProposal({ slug: 'diag-demo', events: [] }), null);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC10: a diagnostics collection failure warns once and leaves the delivery outcome unchanged', () => {
+  const diagnosticRoot = makeProject();
+  const plainRoot = makeProject();
+  const warnings = [];
+  const originalWarn = console.warn;
+  const originalLog = console.log;
+  try {
+    // An unwritable diagnostics path: `blocked` is a file, so the recorder can
+    // never create the event directory under it.
+    fs.writeFileSync(path.join(diagnosticRoot, 'blocked'), 'this is a file, not a directory', 'utf8');
+    const failingRecorder = diagnostics.createRecorder({
+      enabled: true,
+      eventsPath: path.join('blocked', 'diagnostics.jsonl'),
+      targetRoot: diagnosticRoot,
+      onWarn: message => warnings.push(message)
+    });
+
+    console.warn = (...args) => warnings.push(args.join(' '));
+    console.log = () => {};
+
+    const degradedCode = sdwOrch.cmdRun({
+      root: diagnosticRoot,
+      specPath: '.sdw/specs/diag-demo.md',
+      skipReview: true,
+      skipPr: true,
+      diagnostic: true,
+      diagnosticRecorder: failingRecorder
+    });
+    const plainCode = sdwOrch.cmdRun({
+      root: plainRoot,
+      specPath: '.sdw/specs/diag-demo.md',
+      skipReview: true,
+      skipPr: true
+    });
+
+    assert.equal(degradedCode, plainCode, 'diagnostics failure never changes the run exit code');
+    assert.equal(degradedCode, 4, 'the run still pauses at its dispatched task');
+    assert.equal(failingRecorder.isDegraded(), true);
+    const degradedWarnings = warnings.filter(message => /diagnostics degraded/.test(message));
+    assert.equal(degradedWarnings.length, 1, 'the degradation warning is explicit and emitted once');
+    assert.match(degradedWarnings[0], /the run continues without an event file/);
+
+    const degradedState = stateManager.findLatestRunState(diagnosticRoot);
+    const plainState = stateManager.findLatestRunState(plainRoot);
+    assert.equal(degradedState.status, plainState.status, 'the delivery state matches a healthy run');
+    assert.equal(degradedState.currentStep, plainState.currentStep);
+    assert.deepEqual(
+      Object.keys((degradedState.steps[4] && degradedState.steps[4].tasks) || {}),
+      Object.keys((plainState.steps[4] && plainState.steps[4].tasks) || {}),
+      'the same task was dispatched'
+    );
+    assert.equal(degradedState.diagnostic.enabled, true, 'diagnostic mode stays recorded on the run');
+    assert.equal(
+      fs.existsSync(path.join(diagnosticRoot, degradedState.diagnostic.eventsPath)),
+      false,
+      'the failed recorder wrote no event file'
+    );
+    assert.equal(
+      fs.existsSync(path.join(diagnosticRoot, degradedState.artifactsDir, 'diag-demo-diagnostics.md')),
+      false,
+      'an intermediate pause writes no report'
+    );
+  } finally {
+    console.warn = originalWarn;
+    console.log = originalLog;
+    fs.rmSync(diagnosticRoot, { recursive: true, force: true });
+    fs.rmSync(plainRoot, { recursive: true, force: true });
+  }
+});
+
+test('AC11: the recorder caps at 200 events and 500 chars and the report states count plus bytes', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-diag-'));
+  try {
+    const eventsPath = path.join('.sdw', 'state', 'diag-demo', 'run-1', 'diagnostics.jsonl');
+    const warnings = [];
+    const recorder = diagnostics.createRecorder({
+      enabled: true,
+      eventsPath,
+      targetRoot: root,
+      now: () => new Date('2026-10-21T15:04:05.000Z'),
+      onWarn: message => warnings.push(message)
+    });
+
+    for (let i = 0; i < diagnostics.MAX_EVENTS + 5; i += 1) {
+      recorder.recordToolFailure({ step: 4, command: `tool ${i}`, exitCode: 1, stderr: 'E'.repeat(700) });
+    }
+
+    assert.equal(diagnostics.MAX_EVENTS, 200);
+    assert.equal(recorder.getEvents().length, 200, 'the recorder stops at the 200-event budget');
+    assert.equal(recorder.isCapped(), true);
+    assert.equal(warnings.length, 1, 'the cap warning is emitted once');
+    assert.match(warnings[0], /200-event cap/);
+
+    const content = fs.readFileSync(path.join(root, eventsPath), 'utf8');
+    const persisted = content.trim().split('\n').map(JSON.parse);
+    assert.equal(persisted.length, 200, 'the cap stops appending to the JSONL file');
+    for (const event of persisted) {
+      assert.ok(event.snippet.length <= diagnostics.MAX_SNIPPET_CHARS, 'every snippet stays bounded');
+    }
+    assert.equal(persisted[0].snippet.length, 500, 'the 500-character snippet budget is enforced');
+
+    const report = diagnostics.renderReport({
+      slug: 'diag-demo',
+      runId: 'run-1',
+      status: 'failed',
+      events: persisted,
+      eventsPath,
+      capped: recorder.isCapped()
+    });
+    const fileBytes = Buffer.byteLength(content, 'utf8');
+    assert.equal(diagnostics.eventsBytes(persisted), fileBytes, 'the reported bytes are the JSONL file bytes');
+    assert.match(report, /^\| Events \| 200 \|$/m);
+    assert.match(report, new RegExp(`^\\| Event bytes \\| ${fileBytes} \\|$`, 'm'), 'the report states the recorded bytes');
+    assert.match(report, /^\| Overhead budget \| max 200 events, max 500 chars per snippet \|$/m);
+    assert.match(report, /^\| Budget status \| cap reached; recording stopped at 200 events \|$/m);
+
+    // A reopened recorder on a full file adds nothing and warns once.
+    const reopenedWarnings = [];
+    const reopened = diagnostics.createRecorder({
+      enabled: true,
+      eventsPath,
+      targetRoot: root,
+      onWarn: message => reopenedWarnings.push(message)
+    });
+    assert.equal(reopened.isCapped(), true, 'a full file is already at budget');
+    assert.equal(reopened.recordStepTransition({ step: 5, transition: 'enter' }), null);
+    assert.equal(reopenedWarnings.length, 1);
+    assert.match(reopenedWarnings[0], /200-event cap/);
+    assert.equal(fs.readFileSync(path.join(root, eventsPath), 'utf8'), content, 'the full file is never appended to');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC12: diagnostic intents are registered in the sdw-router routing table for sdw-orch', () => {
+  const repoRoot = path.resolve(__dirname, '..');
+  const table = fs.readFileSync(path.join(repoRoot, 'skills', 'sdw-router', 'references', 'routing_table.md'), 'utf8');
+  const orchStart = table.indexOf('### Skill: `sdw-orch`');
+  const batchStart = table.indexOf('### Skill: `sdw-batch`');
+  assert.ok(orchStart >= 0 && batchStart > orchStart, 'the routing table has one sdw-orch section');
+  const orchSection = table.slice(orchStart, batchStart);
+  for (const intent of ['diagnostic run', 'diagnose run', 'run diagnostics']) {
+    assert.ok(orchSection.includes(intent), `the routing table registers "${intent}" for sdw-orch`);
+  }
+  assert.match(orchSection, /--diagnostic/, 'the routing table names the --diagnostic flag');
+
+  const routerSkill = fs.readFileSync(path.join(repoRoot, 'skills', 'sdw-router', 'SKILL.md'), 'utf8');
+  assert.ok(routerSkill.split(/\r?\n/).length <= 120, 'the router body stays within its line budget');
+  const orchRow = routerSkill.split(/\r?\n/).find(line => line.startsWith('| Spec implementation'));
+  assert.ok(orchRow, 'the router matrix keeps its sdw-orch row');
+  for (const intent of ['diagnostic run', 'diagnose run', 'run diagnostics']) {
+    assert.ok(orchRow.includes(intent), `the router matrix routes "${intent}" to sdw-orch`);
+  }
+
+  const routed = sdwRouter.routePrompt('sdw-orch run .sdw/specs/diag-demo.md --diagnostic');
+  assert.equal(routed.matched, true);
+  assert.equal(routed.targetSkill, 'sdw-orch', 'the documented diagnostic invocation routes to sdw-orch');
 });

@@ -72,16 +72,20 @@ When evaluating a user turn, the router applies four strict precedence tiers:
   - "Archive completed specification 001"
 
 ### Skill: `sdw-orch`
-- **Domain**: End-to-end specification implementation, subagent DAG orchestration, conformance scoring, code review, and delivery push.
+- **Domain**: End-to-end specification implementation, subagent DAG orchestration, conformance scoring, code review, delivery push, and diagnostic run mode.
 - **Explicit Invocations**: `/sdw-orch`, `@sdw-orch`, `sdw-orch`, `/orch`, `@orch`, `orch`
 - **Trigger Keywords**:
   - `orchestrate`, `orchestrator`, `implement spec`, `run spec`, `execute spec`, `workflow execution`
   - `resume run`, `orch status`, `dag tasks`, `conformance score`, `delivery commit`
   - `automated code review`, `review loop`, `remote push`, `pr preparation`
+  - `diagnostic run`, `diagnose run`, `run diagnostics`, `diagnostics report`
 - **Typical Prompts**:
   - "Start workflow to implement spec 00003-sdw-router-skill"
   - "Resume interrupted run run-1792396125490"
   - "Check status of the current orchestrator execution"
+  - "Run diagnostics on the last orchestrator run"
+  - "Diagnose a run and propose follow-up work"
+- **Diagnostic Flag**: `diagnostic run`, `diagnose run`, and `run diagnostics` dispatch to `sdw-orch` with `--diagnostic` on `run` or `resume` (for example `sdw-orch run .sdw/specs/<spec>.md --diagnostic`); the flag records bounded events and emits `{artifactsDir}/{slug}-diagnostics.md`, and proposing a follow-up spec draft never creates one.
 
 ### Skill: `sdw-batch`
 - **Domain**: Queue multiple specifications and run each one through the full `sdw-orch` single-spec pipeline in sequence.
