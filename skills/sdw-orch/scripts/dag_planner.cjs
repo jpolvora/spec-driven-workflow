@@ -257,8 +257,8 @@ function buildCoverageReport(tasks, acs) {
     for (const acId of task.coveredAcs || []) {
       const ac = acsById.get(acId);
       const requiredFiles = ac ? extractCriterionPaths(ac.text) : [];
+      const declared = ac ? extractNoFileReason(ac.text) : null;
       if (requiredFiles.length === 0) {
-        const declared = ac ? extractNoFileReason(ac.text) : null;
         criteria.push({
           acId,
           taskId: task.id,
@@ -272,6 +272,9 @@ function buildCoverageReport(tasks, acs) {
         taskFiles.some(file => file === required || file.endsWith(`/${required}`)));
       if (files.length > 0) {
         criteria.push({ acId, taskId: task.id, files, noFileReason: null, assumed: false });
+      } else if (declared) {
+        // AC1's alternative: the author declares why the named path is not needed.
+        criteria.push({ acId, taskId: task.id, files: [], noFileReason: declared, assumed: false });
       } else {
         criteria.push({ acId, taskId: task.id, files: [], noFileReason: null, assumed: false });
         uncovered.push({ acId, taskId: task.id, requiredFiles, taskFiles });

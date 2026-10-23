@@ -151,6 +151,22 @@ test('AC1: an author-declared (no-file: ...) reason is preserved instead of the 
   assert.equal(entry.assumed, false, 'a declared reason is not an assumption');
 });
 
+test('AC1: a declared reason also satisfies a criterion that names a path outside its slice', () => {
+  const criteria = buildCriteria({
+    AC1: 'The system shall handle skills/demo/f.cjs (no-file: the path moves to task-3 in the follow-up split).'
+  });
+  const plan = dagPlanner.generateDagPlan(buildSpec('coverage-declared-path', criteria), {
+    slug: 'coverage-declared-path',
+    targetFiles: TARGET_FILES
+  });
+
+  assert.ok(!plan.refused, 'the declared reason replaces the missing slice file');
+  const entry = plan.coverage.criteria.find(item => item.acId === 'AC1');
+  assert.deepEqual(entry.files, []);
+  assert.equal(entry.noFileReason, 'the path moves to task-3 in the follow-up split');
+  assert.equal(entry.assumed, false);
+});
+
 test('AC1: a plan with fewer files than tasks keeps its empty slices and still plans', () => {
   const criteria = buildCriteria();
   for (let index = 11; index < 25; index++) {
