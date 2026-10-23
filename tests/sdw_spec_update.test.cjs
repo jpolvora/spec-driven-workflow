@@ -417,3 +417,27 @@ test('00038 review: a project root below the git top level still matches tracked
     fs.rmSync(top, { recursive: true, force: true });
   }
 });
+
+// Spec 00060 AC5 & AC14: a prefix key used to resolve a report companion that sorts
+// first; resolution lands only on a specification file.
+test('00060 AC5 & AC14: a prefix key resolves the specification, never its report companion', () => {
+  const { root, specsDir } = setupDriftRepo();
+  try {
+    const reportPath = path.join(specsDir, `${SLUG}-report.md`);
+    const reportBody = '# Delivery Report — Drift Fixture\n\nNo frontmatter and no Notes section.\n';
+    fs.writeFileSync(reportPath, reportBody, 'utf8');
+    git(root, ['add', '-A']);
+    git(root, ['commit', '-q', '-m', 'legacy report companion']);
+
+    fs.writeFileSync(path.join(root, NAMED_PATH), 'module.exports = "changed";\n', 'utf8');
+
+    const res = runUpdate(root, ['--slug', '00099', '--json', '--apply']);
+    assert.equal(res.status, 0, res.stderr);
+    const report = JSON.parse(res.stdout);
+    assert.equal(report.file, `.sdw/specs/${SLUG}.md`, 'the prefix key selects the specification file');
+    assert.deepEqual(report.matchedFiles, [NAMED_PATH], 'the drift proposal reads the specification, not the report');
+    assert.equal(fs.readFileSync(reportPath, 'utf8'), reportBody, 'the report companion stays untouched');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

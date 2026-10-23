@@ -276,13 +276,27 @@ function checkWorkspace(root, findings) {
     return;
   }
 
-  // Spec 00054 writes `{slug}-report.md` companions beside the specification;
-  // they are delivery artifacts, not specifications, so the audit skips them.
+  // Spec 00060 AC11: a `{slug}-report.md` companion belongs to `.sdw/reports/`.
+  // One that still sits beside a specification is a legacy location, so the audit
+  // names the move target without failing: an old report is not a product defect.
+  const legacyReports = fs.readdirSync(specsDir).filter(name => /-report\.md$/.test(name)).sort();
+  for (const file of legacyReports) {
+    findings.push(finding('warning', 'spec-report-legacy-location', file,
+      `Delivery report "${file}" is in the legacy specification-directory location; move it to .sdw/reports/${file}`));
+  }
+
+  // They are delivery artifacts, not specifications, so every scanner that reads
+  // the specification directory skips them (spec 00054, kept as a second line of
+  // defense by spec 00060).
   const specFiles = fs.readdirSync(specsDir).filter(name => /^\d{5}-.*\.md$/.test(name) && !/-report\.md$/.test(name)).sort();
   const index = fs.existsSync(path.join(specsDir, 'index.specs.md'))
     ? fs.readFileSync(path.join(specsDir, 'index.specs.md'), 'utf8')
     : '';
-  const registered = [...index.matchAll(/^\|\s*\d{5}\s*\|\s*([^|]+?)\s*\|/gm)].map(m => m[1].trim());
+  // A report row is never a specification row, so a leftover one neither demands a
+  // file nor fails the audit (spec 00060 AC9, AC11).
+  const registered = [...index.matchAll(/^\|\s*\d{5}\s*\|\s*([^|]+?)\s*\|/gm)]
+    .map(m => m[1].trim())
+    .filter(slug => !/-report$/.test(slug));
 
   for (const row of registered) {
     if (!fs.existsSync(path.join(specsDir, `${row}.md`))) {

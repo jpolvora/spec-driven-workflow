@@ -1133,6 +1133,54 @@ No target paths are named here.
   }
 });
 
+// Spec 00060 AC3 & AC14: the observation scan reads specifications only, so a
+// report companion left beside one never becomes an "other specification".
+test('00060 AC3 & AC14: spec observations ignore a report companion in the specification directory', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-report-observations-'));
+  try {
+    const specsDir = path.join(tmpDir, '.sdw', 'specs');
+    fs.mkdirSync(specsDir, { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.sdw', 'config.json'), JSON.stringify({ scoreMin: 8 }, null, 2), 'utf8');
+    fs.writeFileSync(path.join(specsDir, 'index.specs.md'), [
+      '# Specification Index',
+      '',
+      '| Prefix | Slug | Title | Status | Source | Spec Date | Validation | Archival Date |',
+      '|---|---|---|---|---|---|---|---|',
+      '| 00010 | 00010-delivered | Delivered | completed | local | 2026-10-20 | PASS | - |',
+      ''
+    ].join('\n'), 'utf8');
+
+    const targetPath = path.join(specsDir, '00054-target.md');
+    fs.writeFileSync(targetPath, `---
+slug: 00054-target
+status: draft
+---
+# Target
+Touches \`skills/sdw-orch/scripts/sdw_orch.cjs\`.
+`, 'utf8');
+    fs.writeFileSync(path.join(specsDir, '00010-delivered.md'), `---
+slug: 00010-delivered
+status: completed
+---
+# Delivered
+Also touches \`skills/sdw-orch/scripts/sdw_orch.cjs\`.
+`, 'utf8');
+    fs.writeFileSync(path.join(specsDir, '00010-delivered-report.md'), `---
+slug: 00010-delivered-report
+status: completed
+---
+# Delivery Report — Delivered
+Also touches \`skills/sdw-orch/scripts/sdw_orch.cjs\`.
+`, 'utf8');
+
+    const observations = specGrilling.analyzeSpecObservations({ targetRoot: tmpDir, specPath: targetPath });
+    assert.ok(observations.some((item) => item.otherSpec === '00010-delivered'), 'the delivered specification still overlaps');
+    assert.ok(!observations.some((item) => String(item.otherSpec).endsWith('-report')), 'the report companion is never an otherSpec');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test('00054 AC18: --dry-run prints the observations and writes no report or artifact', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-observations-dry-'));
   try {
@@ -1915,6 +1963,22 @@ test('00057 AC18: the skill and the protocol document the contribution contract 
     assert.ok(protocol.includes(section), `AC18: the protocol names the ${section} section`);
   }
   assert.match(protocol, /never commits, pushes, or amends/, 'AC18: the protocol states the re-render never amends a pushed commit');
+});
+
+// Spec 00060 AC13: the artifact location and the delivery report feature are
+// documented on every surface the delivery owns.
+test('00060 AC13: the delivery report location is documented on every surface', () => {
+  const root = path.join(__dirname, '..');
+  for (const relative of [
+    'skills/sdw-orch/SKILL.md',
+    'skills/sdw-orch/references/orchestrator_protocol.md',
+    'README.md',
+    'FEATURES.md',
+    '.sdw/directory-structure.md'
+  ]) {
+    const content = fs.readFileSync(path.join(root, relative), 'utf8');
+    assert.match(content, /\.sdw\/reports\//, `${relative} documents the .sdw/reports/ location`);
+  }
 });
 
 test('00057 AC19: contributions present, absent, malformed, across steps, the atomic write, and the dry-run print', () => {

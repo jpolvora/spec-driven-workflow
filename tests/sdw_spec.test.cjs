@@ -650,6 +650,84 @@ test('Spec 00054 companions: a {slug}-report.md file is never registered as a sp
   }
 });
 
+// Spec 00060 AC4, AC10 & AC14: sync excludes a report companion, reports how many
+// files it skipped, and never registers the class in the registry.
+test('00060 AC4, AC10 & AC14: sync excludes a report companion, reports the count, and registers no report row', () => {
+  const { tmpDir } = setupTestWorkspace();
+  try {
+    const created = createNewSpec('Alpha feature', { root: tmpDir });
+    const specsDir = path.join(tmpDir, '.sdw', 'specs');
+    const companion = `${created.slug}-report.md`;
+    fs.writeFileSync(path.join(specsDir, companion), '# Delivery Report — Alpha feature\n', 'utf8');
+
+    const first = syncIndex({ root: tmpDir });
+    assert.equal(first.excludedCount, 1, 'the sync reports the excluded report file');
+    assert.deepEqual(first.excludedFiles, [companion], 'the excluded file is named');
+    assert.deepEqual(first.entries.map(e => e.slug), [created.slug], 'the report is not registered as a specification');
+
+    const second = syncIndex({ root: tmpDir });
+    assert.equal(second.excludedCount, 1, 'a second sync reports the same excluded count');
+    assert.deepEqual(second.entries.map(e => e.slug), [created.slug], 'a second sync adds no duplicate or report row');
+
+    const registered = readIndex({ root: tmpDir }).entries.map(e => e.slug);
+    assert.ok(!registered.some(slug => /-report$/.test(slug)), 'the persisted registry carries no *-report row');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// Spec 00060 AC6 & AC14: a report companion consumes no prefix.
+test('00060 AC6 & AC14: prefix allocation ignores a report companion', () => {
+  const { tmpDir, specsDir } = setupTestWorkspace();
+  try {
+    fs.writeFileSync(path.join(specsDir, '00001-first.md'), '# First\n', 'utf8');
+    fs.writeFileSync(path.join(specsDir, '00009-legacy-report.md'), '# Delivery Report — Legacy\n', 'utf8');
+    assert.equal(getNextPrefix(specsDir), '00002', 'the highest specification prefix wins, not the report');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// Spec 00060 AC8, AC9 & AC14: the delivered workspace keeps one file class per
+// directory and one row per specification.
+test('00060 AC8, AC9 & AC14: every report lives in .sdw/reports and the registry carries no report row', () => {
+  const root = path.join(__dirname, '..');
+  const specsDir = path.join(root, '.sdw', 'specs');
+  const reportsDir = path.join(root, '.sdw', 'reports');
+
+  const legacy = fs.readdirSync(specsDir).filter(name => name.endsWith('-report.md'));
+  assert.deepEqual(legacy, [], 'no *-report.md companion stays in the specification directory');
+
+  const relocated = [
+    '00038-sdw-spec-drift-repair-report.md',
+    '00043-us-17-emphasize-step-number-progress-in-report.md',
+    '00054-sdw-orch-delivery-report-companion-file--report.md',
+    '00055-sdw-spec-list-by-priority-report.md',
+    '00057-sdw-orch-delivery-report-step-contributions-report.md',
+    '00058-sdw-batch-delivery-integrity-report.md',
+    '00059-sdw-ship-pr-review-thread-fidelity-report.md'
+  ];
+  for (const name of relocated) {
+    assert.ok(fs.existsSync(path.join(reportsDir, name)), `${name} is relocated under .sdw/reports/`);
+  }
+
+  const rows = fs.readFileSync(path.join(specsDir, 'index.specs.md'), 'utf8').split(/\r?\n/);
+  const reportRows = rows.filter(line => /^\|\s*\d{5}\s*\|\s*\S+-report\s*\|/.test(line));
+  assert.deepEqual(reportRows, [], 'the registry carries no *-report row for a relocated report');
+});
+
+// Spec 00060 AC12 & AC14: the validation loops keep the report exclusion while they
+// validate specifications under .sdw/specs/.
+test('00060 AC12 & AC14: CI and release validation loops skip *-report.md', () => {
+  const root = path.join(__dirname, '..');
+  for (const workflow of ['ci.yml', 'release.yml']) {
+    const content = fs.readFileSync(path.join(root, '.github', 'workflows', workflow), 'utf8');
+    assert.match(content, /for spec in \.sdw\/specs\/\*\.md; do/, `${workflow} validates .sdw/specs/*.md only`);
+    assert.match(content, /index\.specs\.md\|\*-report\.md\) continue ;;/, `${workflow} keeps the report exclusion`);
+    assert.ok(!content.includes('.sdw/reports'), `${workflow} never validates the reports directory`);
+  }
+});
+
 // Spec 00055 fixtures: declared ranking fields live only in frontmatter; the
 // registry keeps its existing columns.
 const PRIORITY_CLI = path.join(__dirname, '..', 'skills', 'sdw-spec', 'scripts', 'sdw_spec.cjs');
