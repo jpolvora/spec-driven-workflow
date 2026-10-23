@@ -54,7 +54,8 @@ Central repository index tracking specification lifecycle states, metadata, and 
 | 00040 | 00040-sdw-branching-strategy | SDW Branching Strategy — Configurable Presets, Branch Lanes, and Post-Merge Sync | completed | local | 2026-10-21 | PASS | - |
 | 00041 | 00041-us-20-versioned-spec-files-for-creation | Versioned spec files for creation, editing, and drift repair | pending | github | 2026-10-21 | PASS | - |
 | 00042 | 00042-us-18-reduce-repeated-full-test-suite-r | Reduce repeated full test suite runs during task implementation | completed | github | 2026-10-21 | PASS | - |
-| 00043 | 00043-us-17-emphasize-step-number-progress-in | Emphasize step number progress in sdw-orch agent output | pending | github | 2026-10-21 | PASS | - |
+| 00043 | 00043-us-17-emphasize-step-number-progress-in | Emphasize step number progress in sdw-orch agent output | completed | github | 2026-10-21 | PASS | - |
+| 00043 | 00043-us-17-emphasize-step-number-progress-in-report | Delivery Report — Emphasize step number progress in sdw-orch agent output | completed | local | 2026-10-23 | FAIL | - |
 | 00044 | 00044-us-16-add-gitattributes-and-per-task-sa | Add .gitattributes and per-task save in sdw-orch DAG | completed | github | 2026-10-21 | PASS | - |
 | 00045 | 00045-sdw-retro-auto-run | Automatic Retrospective After Delivery and Delivery-Integrity Signals | completed | local | 2026-10-21 | PASS | - |
 | 00046 | 00046-sdw-batch-retro-followup | Unattended Batch Retro Follow-Up — Queued Specs From Retrospective Candidates | completed | local | 2026-10-21 | PASS | - |
@@ -71,8 +72,10 @@ Central repository index tracking specification lifecycle states, metadata, and 
 | 00055 | 00055-sdw-spec-list-by-priority-report | Delivery Report — SDW Spec Priority Ranking — Declared Priority Fields and the list-by-priority Subcommand | completed | local | 2026-10-22 | FAIL | - |
 | 00056 | 00056-sdw-per-role-agent-models | SDW Per-Role Agent Model Configuration | pending | local | 2026-10-22 | PASS | - |
 | 00057 | 00057-sdw-orch-delivery-report-step-contributions | SDW Delivery Report — Incremental Step Contributions, Learnings, and Retro Closure | completed | local | 2026-10-22 | PASS | - |
-| 00057 | 00057-sdw-orch-delivery-report-step-contributions-report | Delivery Report — SDW Delivery Report — Incremental Step Contributions, Learnings, and Retro Closure | pending | local | 2026-10-23 | FAIL | - |
+| 00057 | 00057-sdw-orch-delivery-report-step-contributions-report | Delivery Report — SDW Delivery Report — Incremental Step Contributions, Learnings, and Retro Closure | completed | local | 2026-10-23 | FAIL | - |
 | 00058 | 00058-sdw-batch-delivery-integrity | SDW Batch Delivery Integrity — Merge, Pre-Flight, Base Freshness, and Registry Truth | completed | local | 2026-10-22 | PASS | - |
-| 00058 | 00058-sdw-batch-delivery-integrity-report | Delivery Report — SDW Batch Delivery Integrity — Merge, Pre-Flight, Base Freshness, and Registry Truth | pending | local | 2026-10-23 | FAIL | - |
+| 00058 | 00058-sdw-batch-delivery-integrity-report | Delivery Report — SDW Batch Delivery Integrity — Merge, Pre-Flight, Base Freshness, and Registry Truth | completed | local | 2026-10-23 | FAIL | - |
 | 00059 | 00059-sdw-ship-pr-review-thread-fidelity | SDW Review Thread Fidelity — Full Thread Content in list-threads and the Fixer Input | pending | local | 2026-10-22 | PASS | - |
 | 00060 | 00060-sdw-delivery-report-artifact-location | SDW Delivery Report Artifact — Relocate to .sdw/reports and Exclude It From Every Specification Scanner | pending | local | 2026-10-22 | PASS | - |
+| 00061 | 00061-us-48-brainstorm-multi-agent-parallel-f | Brainstorm: multi-agent parallel features via sandboxes plus a coordinator merge to develop | pending | github | 2026-10-23 | PASS | - |
+| 00062 | 00062-sdw-spec-issue-provider-sync | SDW Spec-Issue Two-Way Sync with Registered Provider | pending | local | 2026-10-23 | PASS | - |

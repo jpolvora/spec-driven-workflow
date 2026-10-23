@@ -1,5 +1,5 @@
 ---
-id: "47"
+id: null
 slug: 00047-sdw-retro-session-discovery
 title: "Host-Aware Session Transcript Discovery and Context Fallback for Retrospectives"
 source: local

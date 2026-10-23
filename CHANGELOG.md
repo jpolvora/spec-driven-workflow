@@ -1,5 +1,15 @@
 # Changelog
 
+### [2026-10-23 00:00] Agent: agent
+- **Prompt**: sdw-spec import issues 47 and 48 from GitHub
+- **Done**: Repaired stale local spec ids 00045-00049 (retro candidate numbers shadowing GitHub issue numbers); imported issue 48 as spec 00061 draft with pending registry row; issue 47 already bound to spec 00030, no duplicate created
+- **Result**: 1 spec imported and validated PASS, 5 specs repaired, no --force overwrite; trap spec-id-collides-with-issue-number recorded
+
+### [2026-10-22 23:58] Agent: agent
+- **Prompt**: implement spec 00043 step-number progress headers via sdw-orch
+- **Done**: 8-step run green (score 10/10), reviewer skip-guard defect fixed in d78a576, PR 46 merged to develop
+- **Result**: 00043 completed; 14 pending remain; delivery report recorded
+
 ### [2026-10-22 20:35] Agent: agent
 - **Prompt**: sync spec status and reclassify all pending specs for priority+value
 - **Done**: sdw-spec sync (5 transitions) plus full 15-spec priority+value review; strengthened value strings on 00017, 00018, 00021; 3 authoring validations PASS

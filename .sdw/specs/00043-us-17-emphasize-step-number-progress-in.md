@@ -3,7 +3,7 @@ id: "17"
 slug: 00043-us-17-emphasize-step-number-progress-in
 title: "Emphasize step number progress in sdw-orch agent output"
 source: github
-status: draft
+status: implemented
 specDate: 2026-10-21
 priority: medium
 value: "Step-number progress output during orchestrated runs"

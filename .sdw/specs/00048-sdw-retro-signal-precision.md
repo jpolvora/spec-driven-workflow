@@ -1,5 +1,5 @@
 ---
-id: "48"
+id: null
 slug: 00048-sdw-retro-signal-precision
 title: "Transcript Signal Precision — Command Shape and Repeated Invocation Matching"
 source: local
