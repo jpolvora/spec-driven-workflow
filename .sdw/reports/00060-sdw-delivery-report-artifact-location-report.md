@@ -7,7 +7,7 @@
 | Specification file | `.sdw/specs/00060-sdw-delivery-report-artifact-location.md` |
 | Specification slug | 00060-sdw-delivery-report-artifact-location |
 | Run ID | run-1792731952976-00060-sdw-delivery-report-arti |
-| Run status | paused |
+| Run status | completed |
 | Branch | `feature/00060-sdw-delivery-report-artifact-location` |
 | Base branch | `master` |
 | Base commit | `988d14fa6ecbd545d3def42b039f9ec07dace5f7` |
@@ -17,7 +17,7 @@
 | Implementation start | 2026-10-23T05:05:54.411Z |
 | Implementation end | 2026-10-23T05:36:34.597Z |
 | Total wall-clock duration | 30m 40s |
-| Generated at | 2026-10-23T05:48:18.708Z |
+| Generated at | 2026-10-23T05:53:37.446Z |
 | Step 1: derivation (skipped) | 1ms |
 | Step 2: refinement (completed) | 38ms |
 | Step 3: dag_generation (completed) | 3ms |
@@ -25,7 +25,7 @@
 | Step 5: scoring (completed) | 8m 24s |
 | Step 6: delivery_commit (completed) | 911ms |
 | Step 7: code_review (completed) | 1s |
-| Step 8: pr_preparation (pending) | n/a |
+| Step 8: pr_preparation (completed) | 5m 11s |
 
 
 ## Tasks
@@ -39,6 +39,8 @@
 
 | SHA | Subject | Range |
 |---|---|---|
+| `19695db` | chore(00060-sdw-delivery-report-artifact-location): mark the specification completed in the registry | base..HEAD |
+| `8cc5890` | docs(00060-sdw-delivery-report-artifact-location): record delivery report | base..HEAD |
 | `c1231a1` | task(00060-sdw-delivery-report-artifact-location): task-2 | base..HEAD |
 | `0c2a4a0` | task(00060-sdw-delivery-report-artifact-location): task-1 | base..HEAD |
 
@@ -88,9 +90,17 @@
 | `tests/sdw_spec.test.cjs` | modified |
 | `tests/sdw_spec_update.test.cjs` | modified |
 
+### Unattributed changes
+
+| File | Change |
+|---|---|
+| `.sdw/reports/00060-sdw-delivery-report-artifact-location-report.md` | added |
+| `.sdw/specs/00060-sdw-delivery-report-artifact-location.md` | modified |
+
 ## Verification
 
 - test gate: status `passed`, exit code `0`, duration 3m 7s
+- Step 8 delivery: `completed`
 
 ## Code Review
 
@@ -150,7 +160,13 @@ Not available
 
 ## Retrospective
 
-Not available
+- Status: `passed`
+- Report: `.sdw/state/00060-sdw-delivery-report-artifact-location/run-1792731952976-00060-sdw-delivery-report-arti/run-1792731952976-00060-sdw-delivery-report-arti.retro.md`
+- Data: `.sdw/state/00060-sdw-delivery-report-artifact-location/run-1792731952976-00060-sdw-delivery-report-arti/run-1792731952976-00060-sdw-delivery-report-arti.retro.json`
+- Signals: retries 5 (score 2, review 0, rounds 3, abandonments 0); leftover runs 0; missing artifacts 0; review findings 0 (0 open)
+- Candidates: 0
+- Applied fixes:
+  - none
 
 ## Breaking Changes
 
@@ -292,18 +308,18 @@ None detected.
 
 - Step 1 (derivation) skipped: not recorded
 - Task task-2 accepted after re-dispatch (sequence 2)
-- Environment: workspace: 33 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
+- Environment: workspace: 35 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
 
 ## Outcome
 
-- Result: `paused`
+- Result: `completed`
 - Delivery commit: `c1231a1ed2830f704b6b2b462d7c291a51241c66`
 - Ship status: `pending`
 - Duration: 30m 40s
 
 ## Step Contributions
 
-- Recorded: 8 contribution(s)
+- Recorded: 14 contribution(s)
 
 ### Step 1: derivation
 
@@ -351,8 +367,20 @@ None detected.
 
 ### Step 8: pr_preparation
 
-Not available
+- **convergence** 2026-10-23T05:53:26.713Z - Convergence iteration 1
+  - Body: `{"iteration":1,"rounds":3,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":false}`
+- **convergence** 2026-10-23T05:53:28.651Z - Convergence iteration 2
+  - Body: `{"iteration":2,"rounds":3,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":false}`
+- **convergence** 2026-10-23T05:53:29.897Z - Convergence iteration 3
+  - Body: `{"iteration":3,"rounds":3,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":false}`
+- **gates** 2026-10-23T05:53:32.158Z - Pre-PR gates: 6 result(s)
+  - Body: `{"gates":[{"name":"prePrCommand","status":"skipped","detail":"prePrCommand is not configured"},{"name":"build","status":"skipped","detail":"requiredBuild is false"},{"name":"tests","status":"pass","detail":"npm test exited 0"},{"name":"security","status":"pass","detail":"sdw-security-checks found no blocking leak"},{"name":"runState","status":"pass","detail":"step 4, step 6 and step 7 completed; score 9 >= scoreMin 8"},{"name":"discovery","status":"pass","detail":"no prepare obligations discovered"}]}`
+- **ship** 2026-10-23T05:53:32.158Z - Pull request #51
+  - Body: `{"pushed":true,"branch":"feature/00060-sdw-delivery-report-artifact-location","pullRequest":{"number":"51","url":"https://github.com/jpolvora/spec-driven-workflow/pull/51","title":null},"shipStatus":"review_pending"}`
+  - Evidence: `https://github.com/jpolvora/spec-driven-workflow/pull/51`
 
 ### Step 9: retrospective
 
-Not available
+- **retro** 2026-10-23T05:53:36.679Z - Retrospective passed: 0 candidate(s)
+  - Body: `{"status":"passed","runStatus":"completed","signals":{"retries":{"scoreIterations":2,"reviewIterations":0,"reviewRounds":3,"dispatchAbandonments":0,"total":5},"leftoverRuns":0,"missingArtifacts":0,"reviewFindings":{"total":0,"open":0}},"candidates":[],"fixes":{"recorded":[],"consolidated":null,"queuedSpecifications":[],"failures":[]},"routedCandidates":[],"reportMd":".sdw/state/00060-sdw-delivery-report-artifact-location/run-1792731952976-00060-sdw-delivery-report-arti/run-1792731952976-00060-sdw-delivery-report-arti.retro.md","reportJson":".sdw/state/00060-sdw-delivery-report-artifact-location/run-1792731952976-00060-sdw-delivery-report-arti/run-1792731952976-00060-sdw-delivery-report-arti.retro.json"}`
+  - Evidence: `.sdw/state/00060-sdw-delivery-report-artifact-location/run-1792731952976-00060-sdw-delivery-report-arti/run-1792731952976-00060-sdw-delivery-report-arti.retro.md`, `.sdw/state/00060-sdw-delivery-report-artifact-location/run-1792731952976-00060-sdw-delivery-report-arti/run-1792731952976-00060-sdw-delivery-report-arti.retro.json`
