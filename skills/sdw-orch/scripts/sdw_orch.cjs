@@ -568,6 +568,20 @@ function completedTransitionFiles(targetRoot, state) {
   return [...new Set(files)].sort();
 }
 
+// True when the branch already has a remote tracking ref on origin, so a commit
+// created after the delivery stage still has a published branch to land on.
+function branchIsPublished(targetRoot, branch) {
+  if (!branch || branch === 'HEAD') return false;
+  try {
+    return spawnSync('git', ['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branch}`], {
+      cwd: targetRoot,
+      stdio: 'ignore'
+    }).status === 0;
+  } catch (e) {
+    return false;
+  }
+}
+
 function runSecurityGate(targetRoot, options = {}) {
   try {
     const scriptPath = resolveSkillScript(targetRoot, 'sdw-security-checks', path.join('scripts', 'sdw_security_checks.cjs'), options);
@@ -3407,7 +3421,10 @@ function cmdRun(options) {
   // Remote Push / Branch Publishing (--push or config.pushDelivery) fallback
   const shouldPush = options.push !== undefined ? options.push : (config && config.pushDelivery);
   const refineNothingToPush = refineMode && state.deliveryCommitCreated === false;
-  const branchPublished = Boolean(state.pushedBranch);
+  // A delivery stage that found nothing left to push still leaves the branch on
+  // the remote, so publication is proven from the remote ref, not only from the
+  // ship result. Without this the post-delivery commits never reach the branch.
+  const branchPublished = Boolean(state.pushedBranch) || branchIsPublished(targetRoot, state.branch);
   const pushForDelivery = Boolean(shouldPush) && !branchPublished;
   const pushForTransition = Boolean(state.registryCommit) && branchPublished;
   if ((pushForDelivery || pushForTransition) && !refineNothingToPush) {
@@ -3472,7 +3489,7 @@ function cmdRun(options) {
               state = stateManager.saveRunState(targetRoot, state);
               console.log(`[sdw-orch] Final delivery report committed as ${finalReport.commitSha}.`);
               const finalBranch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: targetRoot, encoding: 'utf8' }).trim();
-              if (finalBranch && finalBranch !== 'HEAD' && (state.pushedBranch || shouldPush)) {
+              if (finalBranch && finalBranch !== 'HEAD' && (state.pushedBranch || shouldPush || branchIsPublished(targetRoot, finalBranch))) {
                 git(targetRoot, ['push', 'origin', finalBranch], { stdio: 'inherit' });
                 console.log(`[sdw-orch] Final delivery report pushed to origin/${finalBranch}.`);
               }
