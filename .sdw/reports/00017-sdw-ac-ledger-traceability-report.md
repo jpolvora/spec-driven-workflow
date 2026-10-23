@@ -12,12 +12,12 @@
 | Base branch | `master` |
 | Base commit | `ebd3c4954bd66297e27bc9384b49cbd1bc101ee0` |
 | Delivery commit | `4931182b40c850e8e929419aca29d6b063e6f675` |
-| Ship status | pending |
+| Ship status | review_pending |
 | Score | 8/10 (scoreMin 8) |
 | Implementation start | 2026-10-23T17:41:04.540Z |
 | Implementation end | 2026-10-23T18:58:50.065Z |
 | Total wall-clock duration | 1h 17m 45s |
-| Generated at | 2026-10-23T19:03:44.210Z |
+| Generated at | 2026-10-23T20:16:01.319Z |
 | Step 1: derivation (skipped) | 4ms |
 | Step 2: refinement (completed) | 41ms |
 | Step 3: dag_generation (completed) | 12ms |
@@ -25,7 +25,7 @@
 | Step 5: scoring (completed) | 38s |
 | Step 6: delivery_commit (completed) | 507ms |
 | Step 7: code_review (completed) | 1s |
-| Step 8: pr_preparation (pending) | n/a |
+| Step 8: pr_preparation (blocked_convergence) | n/a |
 
 
 ## Tasks
@@ -42,6 +42,13 @@
 
 | SHA | Subject | Range |
 |---|---|---|
+| `8bc3011` | fix(00017-sdw-ac-ledger-traceability): refuse an unknown ledger action | base..HEAD |
+| `ad6e19b` | fix(00017-sdw-ac-ledger-traceability): derive status from remaining evidence and require real files | base..HEAD |
+| `7d8e037` | fix(00017-sdw-ac-ledger-traceability): a failing review finding is not proof | base..HEAD |
+| `b92797d` | fix(00017-sdw-ac-ledger-traceability): a deleted anchored ledger fails verification | base..HEAD |
+| `545a57d` | fix(00017-sdw-ac-ledger-traceability): fail Step 5 closed when the ledger cannot record verdicts | base..HEAD |
+| `ca85899` | fix(00017-sdw-ac-ledger-traceability): a failed proof never verifies a criterion | base..HEAD |
+| `97dc4b2` | docs(00017-sdw-ac-ledger-traceability): record delivery report | base..HEAD |
 | `4931182` | task(00017-sdw-ac-ledger-traceability): task-5 | base..HEAD |
 | `216444c` | task(00017-sdw-ac-ledger-traceability): task-4 | base..HEAD |
 | `8a27d42` | task(00017-sdw-ac-ledger-traceability): task-3 | base..HEAD |
@@ -90,9 +97,16 @@
 | `skills/sdw-orch/references/orchestrator_protocol.md` | modified |
 | `tests/sdw_ac_ledger.test.cjs` | added |
 
+### Unattributed changes
+
+| File | Change |
+|---|---|
+| `.sdw/reports/00017-sdw-ac-ledger-traceability-report.md` | added |
+
 ## Verification
 
 - test gate: status `passed`, exit code `0`, duration 4m 5s
+- Step 8 delivery: `blocked_convergence` (ship status `review_pending`)
 
 ## Code Review
 
@@ -339,18 +353,18 @@ Not available
 - Task task-3 accepted after re-dispatch (sequence 3)
 - Task task-4 accepted after re-dispatch (sequence 4)
 - Task task-5 accepted after re-dispatch (sequence 5)
-- Environment: workspace: 4 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
+- Environment: workspace: 5 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
 
 ## Outcome
 
 - Result: `paused`
 - Delivery commit: `4931182b40c850e8e929419aca29d6b063e6f675`
-- Ship status: `pending`
+- Ship status: `review_pending`
 - Duration: 1h 17m 45s
 
 ## Step Contributions
 
-- Recorded: 8 contribution(s)
+- Recorded: 10 contribution(s)
 
 ### Step 1: derivation
 
@@ -398,7 +412,10 @@ Not available
 
 ### Step 8: pr_preparation
 
-Not available
+- **convergence** 2026-10-23T19:13:35.643Z - Convergence iteration 1
+  - Body: `{"iteration":1,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":false}`
+- **convergence** 2026-10-23T19:13:36.439Z - Convergence iteration 2
+  - Body: `{"iteration":2,"rounds":2,"failingChecks":[{"name":"review","status":""}],"openThreads":1,"resolvedThreads":0,"fixCommit":null,"converged":false}`
 
 ### Step 9: retrospective
 
