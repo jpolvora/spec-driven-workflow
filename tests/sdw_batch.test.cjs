@@ -1593,6 +1593,29 @@ test('00066 AC1: the github check probe reads only required checks', () => {
   assert.match(probe, /--required/, 'the probe asks only for required checks');
 });
 
+// Spec 00066 AC1 & AC3: once the gate started from pending, a provider that stops
+// reporting is not evidence of green; the merge must not be requested.
+test('00066 AC1 & AC3: checks that stop reporting after a pending start halt without merging', () => {
+  let calls = 0;
+  const scenario = runCheckGate({
+    checksStatus: () => {
+      calls += 1;
+      return calls <= 3 ? { state: 'pending', failing: [] } : null;
+    },
+    merge: () => { throw new Error('branch protection blocks the merge'); }
+  });
+
+  assert.equal(scenario.result, 1, 'the queue halts');
+  assert.equal(scenario.manifest.status, 'halted');
+  assert.equal(scenario.manifest.queue[1].preflight.status, 'halted');
+  assert.match(scenario.manifest.queue[1].preflight.reason, /stopped reporting while pending/);
+  assert.notEqual(
+    scenario.manifest.queue[1].merge && scenario.manifest.queue[1].merge.status,
+    'merged',
+    'no pre-flight merge is recorded'
+  );
+});
+
 
 // Spec 00058 AC1-AC4: the skip path skips the implementation only. The merge
 // stage still runs on adopted delivery evidence, and an item without any

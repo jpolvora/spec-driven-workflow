@@ -1143,8 +1143,17 @@ function mergeEarlierDelivery({ config, manifest, prior, item, prNumber, command
       record({ ok: false, status: 'failed', reason });
       return { halt: reason };
     }
-    // pass, or a provider that stopped reporting: fall through to the merge.
-    observed = waited.state === 'pass' ? { state: 'pass', failing: [] } : null;
+    if (waited.state !== 'pass') {
+      // The gate started from pending because the checks must be green before the
+      // merge. A provider that stops reporting mid-wait is not evidence of green,
+      // so the merge is never requested (the initial-unknown degrade stays above).
+      observed = null;
+      retryOutcome = 'not-needed';
+      const reason = `pull request #${prNumber} checks stopped reporting while pending; the merge was not requested`;
+      record({ ok: false, status: 'failed', reason });
+      return { halt: reason };
+    }
+    observed = { state: 'pass', failing: [] };
   }
 
   try {
