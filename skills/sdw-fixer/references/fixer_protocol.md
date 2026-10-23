@@ -126,12 +126,11 @@ Rules outside this catalog have no deterministic patch and route to
   failed verification suppress learning). Callers stage `.sdw/memory/traps.md` when
   any entry reports `recorded: true`.
 - `verification.status` is `passed`, `failed`, or `skipped`.
-- `comments` carries one resolution comment per fixed thread (adapted from the
-  `ws-fix-pr` resolution-reply contract): it names the defect class and the
-  exact `file:line`, never a bare commit hash. `sdw-ship-pr` posts it on the
-  matching `threadId` and leaves unfixed threads open.
-- `amendments` is the structured deviation log (adapted from the `ws-fix-pr`
-  amendment protocol): `{ at, file, line, rule, from, to, reason, evidence }`.
+- `comments` carries one resolution comment per fixed thread (resolution-reply contract):
+  it names the defect class and the exact `file:line`, never a bare commit hash.
+  `sdw-ship-pr` posts it on the matching `threadId` and leaves unfixed threads open.
+- `amendments` is the structured deviation log:
+  `{ at, file, line, rule, from, to, reason, evidence }`.
   It records when evidence changes a scored finding's action, for example a
   scope-gate skip, a duplicate line covered by the batch, or a truncated
   sibling sweep.

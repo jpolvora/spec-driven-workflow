@@ -101,7 +101,7 @@ Without `--json`, each row is logged and the board prints as a Markdown table be
 
 ## 4. Cooperative & Proactive Review Convergence Protocol
 
-When `scmCodeReviewEnabled: true` or `--poll-pr` is active, `sdw-ship-pr` executes automated review convergence grounded in cooperative and proactive problem resolution (inspired by `ws-fix-pr` and `COOPERATIVE_FIX.md`):
+When `scmCodeReviewEnabled: true` or `--poll-pr` is active, `sdw-ship-pr` executes automated review convergence grounded in cooperative and proactive problem resolution:
 
 ### 4.1 Mandatory Order of Operations
 

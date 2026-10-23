@@ -90,6 +90,7 @@ function scanSkills(options) {
           }
 
           if (stat.isDirectory()) {
+            if (entry.startsWith('ws-') && entry !== 'ws-memo') continue;
             const skillMdPath = path.join(skillPath, 'SKILL.md').replace(/\\/g, '/');
             const hasSkillMd = fs.existsSync(skillMdPath);
             let metadata = {};
@@ -194,6 +195,16 @@ const INTENT_RULES = {
     primaryKeywords: ['code-review', 'code review', 'review code', 'sdw-code-review', 'deep review'],
     secondaryKeywords: ['review findings', 'fix review', 'review fix plan', 'run review', 'review working tree', 'blocking findings', 'code review report'],
     recommendedOption: 'Run deep working-tree code review and fix planning using sdw-code-review'
+  },
+  'sdw-changelog': {
+    primaryKeywords: ['sdw-changelog', 'changelog', 'task changelog', 'delivery changelog', 'append changelog'],
+    secondaryKeywords: ['changelog entry', 'delivery record', 'record delivery', 'append entry', 'prompt intent history'],
+    recommendedOption: 'Record task delivery record into project changelog using sdw-changelog'
+  },
+  'sdw-retro': {
+    primaryKeywords: ['sdw-retro', 'retrospective', 'run retro', 'post-delivery retro', 'retro analysis'],
+    secondaryKeywords: ['retro candidates', 'friction signals', 'transcript slips', 'session transcript', 'candidate mining'],
+    recommendedOption: 'Run post-delivery retrospective and candidate analysis using sdw-retro'
   }
 };
 
@@ -224,7 +235,11 @@ function routePrompt(prompt, options) {
 
     if (Array.isArray(skill.invocationNames)) {
       for (const inv of skill.invocationNames) {
-        explicitPatterns.push(new RegExp(`(?:^|\\s)[/@]?${inv}\\b`, 'i'));
+        if (/^sdw-/i.test(inv) || inv === 'ws-memo') {
+          explicitPatterns.push(new RegExp(`(?:^|\\s)[/@]?${inv}\\b`, 'i'));
+        } else {
+          explicitPatterns.push(new RegExp(`(?:^|\\s)[/@]${inv}\\b|^${inv}\\b`, 'i'));
+        }
       }
     }
 
@@ -272,7 +287,7 @@ function routePrompt(prompt, options) {
     }
   }
 
-  const knownExplicitSkills = ['sdw-config', 'sdw-doctor', 'sdw-spec', 'sdw-orch', 'sdw-router', 'sdw-rules', 'sdw-security-checks', 'sdw-ship-pr', 'sdw-code-review', 'sdw-fixer'];
+  const knownExplicitSkills = ['sdw-config', 'sdw-doctor', 'sdw-spec', 'sdw-orch', 'sdw-router', 'sdw-rules', 'sdw-security-checks', 'sdw-ship-pr', 'sdw-code-review', 'sdw-fixer', 'sdw-changelog', 'sdw-retro', 'sdw-memory', 'sdw-batch'];
   for (const s of knownExplicitSkills) {
     if (new RegExp(`(?:^|\\s)[/@]?${s}\\b`, 'i').test(lower)) {
       // It was explicitly requested but might be missing on disk

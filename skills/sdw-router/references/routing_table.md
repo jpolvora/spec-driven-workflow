@@ -127,6 +127,57 @@ When evaluating a user turn, the router applies four strict precedence tiers:
   - "Review code changes against the base branch and plan fixes"
   - "Check review findings and apply surgical fixes"
 
+### Skill: `sdw-rules`
+- **Domain**: Shared engineering principles, simplicity first (YAGNI), surgical diff hygiene, and anti-regression trap logging.
+- **Explicit Invocations**: `/sdw-rules`, `@sdw-rules`, `sdw-rules`
+- **Trigger Keywords**:
+  - `sdw-rules`, `shared rules`, `engineering principles`, `simplicity first`, `scope enclosure`, `anti-overengineering`
+  - `guideline`, `guidelines`, `yagni`, `surgical diff`, `traps log`, `audit-spec`, `log-trap`, `traps.md`
+- **Typical Prompts**:
+  - "Audit installed skills against the sdw-rules line budget"
+  - "Scan this specification for scope creep or overengineering"
+  - "Log an anti-regression trap for unexpected CLI behavior"
+
+### Skill: `sdw-security-checks`
+- **Domain**: Zero-dependency pre-commit secrets and credentials leak scanning.
+- **Explicit Invocations**: `/sdw-security-checks`, `@sdw-security-checks`, `sdw-security-checks`
+- **Trigger Keywords**:
+  - `security-checks`, `security checks`, `secret leak`, `leak scan`, `credentials check`, `pre-commit security`
+  - `secrets`, `leaks`, `pii`, `credentials`, `api keys`, `securityChecksEnabled`, `allowlist secret`, `scan --staged`
+- **Typical Prompts**:
+  - "Scan staged changes for leaked API keys or credentials"
+  - "Run security checks before making a delivery commit"
+
+### Skill: `sdw-fixer`
+- **Domain**: Shared findings intake, deterministic severity scoring, sibling defect sweeps, and surgical remediation.
+- **Explicit Invocations**: `/sdw-fixer`, `@sdw-fixer`, `sdw-fixer`
+- **Trigger Keywords**:
+  - `sdw-fixer`, `fixer`, `apply-fix`, `apply fix`, `remediate`, `remediation`
+  - `fix batch`, `fix findings`, `remediation batch`, `defect siblings`, `surgical fix`, `fixing review findings`
+- **Typical Prompts**:
+  - "Remediate active review findings batch using sdw-fixer"
+  - "Sweep and fix defect-class siblings across repository files"
+
+### Skill: `sdw-changelog`
+- **Domain**: Task delivery history recording, prompt/done/result changelog formatting, and entry deduplication.
+- **Explicit Invocations**: `/sdw-changelog`, `@sdw-changelog`, `sdw-changelog`
+- **Trigger Keywords**:
+  - `sdw-changelog`, `changelog`, `task changelog`, `delivery changelog`, `append changelog`
+  - `changelog entry`, `delivery record`, `record delivery`, `append entry`, `prompt intent history`
+- **Typical Prompts**:
+  - "Record completed task delivery in CHANGELOG.md"
+  - "Append prompt, done, and result entry for delivered feature"
+
+### Skill: `sdw-retro`
+- **Domain**: Post-delivery retrospective over completed orchestrator runs, friction signals, transcript slips, and improvement candidates.
+- **Explicit Invocations**: `/sdw-retro`, `@sdw-retro`, `sdw-retro`, `retro run`
+- **Trigger Keywords**:
+  - `sdw-retro`, `retrospective`, `run retro`, `post-delivery retro`, `retro analysis`
+  - `retro candidates`, `friction signals`, `transcript slips`, `session transcript`, `candidate mining`
+- **Typical Prompts**:
+  - "Run post-delivery retrospective on the latest completed run"
+  - "Analyze session transcript for friction signals and candidate follow-ups"
+
 ---
 
 ## 3. Disambiguation on Tied Confidence
