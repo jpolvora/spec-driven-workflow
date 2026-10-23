@@ -7,7 +7,7 @@
 | Specification file | `.sdw/specs/00066-batch-pre-flight-must-wait-for-required-.md` |
 | Specification slug | 00066-batch-pre-flight-must-wait-for-required- |
 | Run ID | run-1792793805608-00066-batch-pre-flight-must-wa |
-| Run status | paused |
+| Run status | completed |
 | Branch | `feature/00066-batch-pre-flight-must-wait-for-required-` |
 | Base branch | `master` |
 | Base commit | `71d6d366501936f514eebd6344ea4d68b5ebca26` |
@@ -17,7 +17,7 @@
 | Implementation start | 2026-10-23T22:16:47.787Z |
 | Implementation end | 2026-10-23T22:43:22.149Z |
 | Total wall-clock duration | 26m 34s |
-| Generated at | 2026-10-23T23:15:20.995Z |
+| Generated at | 2026-10-23T23:19:03.910Z |
 | Step 1: derivation (skipped) | 5ms |
 | Step 2: refinement (completed) | 31ms |
 | Step 3: dag_generation (completed) | 12ms |
@@ -25,7 +25,7 @@
 | Step 5: scoring (completed) | 2m 42s |
 | Step 6: delivery_commit (completed) | 465ms |
 | Step 7: code_review (completed) | 1s |
-| Step 8: pr_preparation (blocked_convergence) | n/a |
+| Step 8: pr_preparation (completed) | 30m 5s |
 
 
 ## Tasks
@@ -39,6 +39,8 @@
 
 | SHA | Subject | Range |
 |---|---|---|
+| `c2a9cfa` | chore(00066-batch-pre-flight-must-wait-for-required-): mark the specification completed in the registry | base..HEAD |
+| `ebd36c7` | docs(00066-batch-pre-flight-must-wait-for-required-): record delivery report | base..HEAD |
 | `0332b39` | fix(00066-batch-pre-flight-must-wait-for-required-): halt when checks stop reporting mid-wait | base..HEAD |
 | `44df1d9` | fix(00066-batch-pre-flight-must-wait-for-required-): gate the pre-flight merge on required checks only | base..HEAD |
 | `3de3e75` | docs(00066-batch-pre-flight-must-wait-for-required-): record delivery report | base..HEAD |
@@ -68,12 +70,14 @@
 | File | Change |
 |---|---|
 | `.sdw/reports/00066-batch-pre-flight-must-wait-for-required--report.md` | added |
+| `.sdw/specs/00066-batch-pre-flight-must-wait-for-required-.md` | modified |
+| `.sdw/specs/index.specs.md` | modified |
 | `skills/sdw-batch/SKILL.md` | modified |
 
 ## Verification
 
 - test gate: status `passed`, exit code `0`, duration 2m 36s
-- Step 8 delivery: `blocked_convergence` (ship status `review_pending`)
+- Step 8 delivery: `completed` (ship status `review_pending`)
 
 ## Code Review
 
@@ -115,7 +119,13 @@ Not available
 
 ## Retrospective
 
-Not available
+- Status: `passed`
+- Report: `.sdw/state/00066-batch-pre-flight-must-wait-for-required-/run-1792793805608-00066-batch-pre-flight-must-wa/run-1792793805608-00066-batch-pre-flight-must-wa.retro.md`
+- Data: `.sdw/state/00066-batch-pre-flight-must-wait-for-required-/run-1792793805608-00066-batch-pre-flight-must-wa/run-1792793805608-00066-batch-pre-flight-must-wa.retro.json`
+- Signals: retries 4 (score 2, review 0, rounds 2, abandonments 0); leftover runs 0; missing artifacts 0; review findings 0 (0 open)
+- Candidates: 0
+- Applied fixes:
+  - none
 
 ## Breaking Changes
 
@@ -138,18 +148,18 @@ None.
 
 - Step 1 (derivation) skipped: not recorded
 - Task task-2 accepted after re-dispatch (sequence 2)
-- Environment: workspace: 5 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
+- Environment: workspace: 7 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
 
 ## Outcome
 
-- Result: `paused`
+- Result: `completed`
 - Delivery commit: `c7bd91c099601bf315c7260af3235334a5d4170a`
 - Ship status: `review_pending`
 - Duration: 26m 34s
 
 ## Step Contributions
 
-- Recorded: 10 contribution(s)
+- Recorded: 13 contribution(s)
 
 ### Step 1: derivation
 
@@ -197,11 +207,18 @@ None.
 
 ### Step 8: pr_preparation
 
-- **convergence** 2026-10-23T22:55:28.743Z - Convergence iteration 1
+- **convergence** 2026-10-23T23:18:58.932Z - Convergence iteration 1
   - Body: `{"iteration":1,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":false}`
-- **convergence** 2026-10-23T22:55:29.137Z - Convergence iteration 2
-  - Body: `{"iteration":2,"rounds":2,"failingChecks":[{"name":"review","status":""}],"openThreads":1,"resolvedThreads":0,"fixCommit":null,"converged":false}`
+- **convergence** 2026-10-23T23:18:59.352Z - Convergence iteration 2
+  - Body: `{"iteration":2,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":true}`
+- **gates** 2026-10-23T23:18:59.884Z - Pre-PR gates: 6 result(s)
+  - Body: `{"gates":[{"name":"prePrCommand","status":"skipped","detail":"prePrCommand is not configured"},{"name":"build","status":"skipped","detail":"requiredBuild is false"},{"name":"tests","status":"pass","detail":"npm test exited 0"},{"name":"security","status":"pass","detail":"sdw-security-checks found no blocking leak"},{"name":"runState","status":"pass","detail":"step 4, step 6 and step 7 completed; score 8 >= scoreMin 8"},{"name":"discovery","status":"pass","detail":"no prepare obligations discovered"}]}`
+- **ship** 2026-10-23T23:18:59.884Z - Pull request #62
+  - Body: `{"pushed":true,"branch":"feature/00066-batch-pre-flight-must-wait-for-required-","pullRequest":{"number":"62","url":"https://github.com/jpolvora/spec-driven-workflow/pull/62","title":null},"shipStatus":"delivered"}`
+  - Evidence: `https://github.com/jpolvora/spec-driven-workflow/pull/62`
 
 ### Step 9: retrospective
 
-Not available
+- **retro** 2026-10-23T23:19:03.713Z - Retrospective passed: 0 candidate(s)
+  - Body: `{"status":"passed","runStatus":"completed","signals":{"retries":{"scoreIterations":2,"reviewIterations":0,"reviewRounds":2,"dispatchAbandonments":0,"total":4},"leftoverRuns":0,"missingArtifacts":0,"reviewFindings":{"total":0,"open":0}},"candidates":[],"fixes":{"recorded":[],"consolidated":null,"queuedSpecifications":[],"failures":[]},"routedCandidates":[],"reportMd":".sdw/state/00066-batch-pre-flight-must-wait-for-required-/run-1792793805608-00066-batch-pre-flight-must-wa/run-1792793805608-00066-batch-pre-flight-must-wa.retro.md","reportJson":".sdw/state/00066-batch-pre-flight-must-wait-for-required-/run-1792793805608-00066-batch-pre-flight-must-wa/run-1792793805608-00066-batch-pre-flight-must-wa.retro.json"}`
+  - Evidence: `.sdw/state/00066-batch-pre-flight-must-wait-for-required-/run-1792793805608-00066-batch-pre-flight-must-wa/run-1792793805608-00066-batch-pre-flight-must-wa.retro.md`, `.sdw/state/00066-batch-pre-flight-must-wait-for-required-/run-1792793805608-00066-batch-pre-flight-must-wa/run-1792793805608-00066-batch-pre-flight-must-wa.retro.json`
