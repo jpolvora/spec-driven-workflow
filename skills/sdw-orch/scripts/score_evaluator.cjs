@@ -7,6 +7,8 @@ const { parseAcceptanceCriteria } = require('./dag_planner.cjs');
 
 const CRITICITY_LEVELS = ['permissive', 'strict', 'perfectionist'];
 const DEFAULT_CRITICITY = 'strict';
+// Spec 00065 AC2: the single verdict contract. The judge prompt and the
+// submission validator both read this list, so they cannot disagree.
 const VERDICT_VALUES = ['verified', 'failed'];
 const DIFF_BYTE_LIMIT = 120000;
 const JUDGE_TIMEOUT_MS = 600000;
@@ -183,9 +185,12 @@ function buildJudgePrompt(options) {
   lines.push('}');
   lines.push('```');
   lines.push('');
+  lines.push(`Accepted \`verdict\` values: ${VERDICT_VALUES.map(v => `\`${v}\``).join(' or ')}.`);
+  lines.push('A criterion that is only partly met must be reported as `failed`. Any other value, including `partial`, is rejected by `score submit`.');
+  lines.push('');
   lines.push('## Rules');
   lines.push('- `score` is an integer from 0 to 10 and must equal round(verified criteria / total criteria * 10).');
-  lines.push('- Every criterion above appears exactly once in `verdicts`, with `verdict` set to `verified` or `failed`.');
+  lines.push(`- Every criterion above appears exactly once in \`verdicts\`, with \`verdict\` set to one of: ${VERDICT_VALUES.map(v => `\`${v}\``).join(', ')}.`);
   lines.push('- `evidence` cites a file path from the diff; when failing, state the missing behaviour instead.');
   lines.push('- `summary`, `risks`, and `followUps` are required. They are advisory: they never change `score`, a gate, a review outcome, or a halt decision.');
   lines.push('- Judge the criteria and the diff only. Never assume work that is not visible in the diff.');
@@ -253,7 +258,7 @@ function validateVerdict(raw, options) {
       seen.add(id);
       const verdict = typeof entry.verdict === 'string' ? entry.verdict.trim().toLowerCase() : '';
       if (!VERDICT_VALUES.includes(verdict)) {
-        errors.push(`${label}.verdict must be one of: ${VERDICT_VALUES.join(', ')} (received: ${JSON.stringify(entry.verdict)}).`);
+        errors.push(`${label}.verdict must be one of: ${VERDICT_VALUES.join(', ')} (received: ${JSON.stringify(entry.verdict)}). Use "failed" for a criterion that is only partly met.`);
       }
       const evidence = typeof entry.evidence === 'string' ? entry.evidence.trim() : '';
       if (!evidence) {

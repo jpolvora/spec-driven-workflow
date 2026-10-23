@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { execSync } = require('child_process');
+const { execSync, spawnSync } = require('child_process');
 
 const stateManager = require('../skills/sdw-orch/scripts/state_manager.cjs');
 const dagPlanner = require('../skills/sdw-orch/scripts/dag_planner.cjs');
@@ -13,6 +13,8 @@ const scoreEvaluator = require('../skills/sdw-orch/scripts/score_evaluator.cjs')
 const deliveryReport = require('../skills/sdw-orch/scripts/delivery_report.cjs');
 const sdwOrch = require('../skills/sdw-orch/scripts/sdw_orch.cjs');
 const { JUDGE_STUB, installJudgeEnv, clearJudgeEnv } = require('./fixtures/judge_env.cjs');
+
+const ORCH_CLI = path.resolve(__dirname, '..', 'skills', 'sdw-orch', 'scripts', 'sdw_orch.cjs');
 
 const SPEC_BODY = `---
 slug: score-spec
@@ -476,6 +478,154 @@ test('00057 AC15: score submit persists the analysis as the Step 5 contribution'
     assert.match(analysisSection, /Summary: Delivery implements both criteria\./, 'AC17: the persisted summary renders');
     assert.match(analysisSection, /\| low \| app\.cjs:1 \| single file change \|/, 'AC17: the persisted risk renders');
     assert.match(analysisSection, /- cover the resume failure path/, 'AC17: the persisted follow-up renders');
+  } finally {
+    withJudgeEnv(previous);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// ==== Spec 00065: the judge verdict contract forbids partial ====
+
+test('00065 AC1 & AC2: the judge prompt enumerates the exact verdict values the validator accepts', () => {
+  const acs = dagPlanner.parseAcceptanceCriteria(SPEC_BODY);
+  const diff = { text: 'diff --git a/app.cjs b/app.cjs\n+// implemented', bytes: 44, truncated: false, files: ['app.cjs'] };
+  const { prompt } = scoreEvaluator.buildJudgePrompt({ slug: 'score-spec', acs, diff, criticity: 'strict', judge: {} });
+
+  assert.deepEqual(scoreEvaluator.VERDICT_VALUES, ['verified', 'failed'], 'AC2: one constant defines the accepted values');
+
+  const contract = prompt.slice(prompt.indexOf('## Output contract'), prompt.indexOf('## Rules'));
+  assert.ok(contract.length > 0, 'AC1: the output contract section exists');
+  for (const value of scoreEvaluator.VERDICT_VALUES) {
+    assert.ok(contract.includes(`\`${value}\``), `AC1: the output contract enumerates ${value}`);
+  }
+  assert.match(contract, /only partly met must be reported as `failed`/, 'AC1: a partly met criterion is reported as failed');
+  assert.match(contract, /Any other value, including `partial`, is rejected/, 'AC1: values outside the contract are rejected, partial included');
+
+  const rules = prompt.slice(prompt.indexOf('## Rules'));
+  assert.ok(rules.includes('one of: `verified`, `failed`'), 'AC2: the rules repeat the same enumerated values');
+
+  // AC2: the validator accepts exactly the two enumerated values and nothing else.
+  const accepted = scoreEvaluator.validateVerdict({
+    score: 5,
+    verdicts: [
+      { id: acs[0].id, verdict: 'verified', evidence: 'app.cjs:1' },
+      { id: acs[1].id, verdict: 'failed', evidence: 'the resume behaviour is absent' }
+    ]
+  }, { acs });
+  assert.equal(accepted.valid, true, 'AC2: verified and failed are accepted');
+
+  for (const value of ['partial', 'maybe']) {
+    const rejected = scoreEvaluator.validateVerdict({
+      score: 0,
+      verdicts: acs.map(ac => ({ id: ac.id, verdict: value, evidence: 'app.cjs:1' }))
+    }, { acs });
+    assert.equal(rejected.valid, false, `AC2: ${value} is outside the contract and is rejected`);
+    assert.ok(rejected.errors.some(error => error.includes('verified, failed')), `AC2: the rejection of ${value} names the allowed values`);
+    assert.ok(rejected.errors.some(error => error.includes('only partly met')), `AC2: the rejection of ${value} names the partly met rule`);
+  }
+});
+
+test('00065 AC5: verified and failed verdicts submit, and only verified criteria score', () => {
+  const previous = process.env.SDW_JUDGE_COMMAND;
+  const tmpDir = setupRepo();
+  try {
+    clearJudgeEnv();
+    const runCode = sdwOrch.cmdRun({
+      root: tmpDir,
+      specPath: '.sdw/specs/score-spec.md',
+      skipReview: true,
+      skipPr: true,
+      ...implementationOptions()
+    });
+    assert.equal(runCode, 5, 'the run pauses awaiting a submitted verdict');
+
+    const state = stateManager.findLatestRunState(tmpDir);
+    const promptText = fs.readFileSync(path.resolve(tmpDir, state.steps[5].output.judgePromptPath), 'utf8');
+    assert.ok(promptText.includes('A criterion that is only partly met must be reported as `failed`'), 'AC1: the written judge prompt forbids partial');
+
+    const acIds = [...new Set([...promptText.matchAll(/^- (AC[1-9][0-9]*):/gm)].map(match => match[1]))];
+    assert.equal(acIds.length, 2, 'both specification criteria reach the judge');
+
+    const verdictFile = path.join(tmpDir, 'verdict-mixed.json');
+    fs.writeFileSync(verdictFile, JSON.stringify({
+      score: 5,
+      verdicts: [
+        { id: acIds[0], verdict: 'verified', evidence: 'app.cjs:1' },
+        { id: acIds[1], verdict: 'failed', evidence: 'The resume behaviour is absent.' }
+      ]
+    }));
+
+    const submitCode = sdwOrch.cmdScoreSubmit({ root: tmpDir, runId: state.runId, verdictPath: verdictFile, minScore: 5 });
+    assert.equal(submitCode, 0, 'AC5: a verified/failed verdict is accepted and scores above the threshold');
+
+    const submitted = stateManager.loadRunState(tmpDir, state.runId);
+    assert.equal(submitted.steps[5].status, 'judged', 'AC5: the accepted verdict completes Step 5 scoring');
+    assert.equal(submitted.score, 5, 'AC5: the single verified criterion scores 5/10');
+    assert.equal(submitted.steps[5].output.verifiedCount, 1);
+    assert.equal(submitted.steps[5].output.failingCount, 1);
+    assert.deepEqual(submitted.steps[5].output.failingAcs.map(entry => entry.id), [acIds[1]], 'AC5: the failed criterion is reported as unmet');
+    assert.deepEqual(submitted.steps[5].output.verdict.verdicts, [
+      { id: acIds[0], verdict: 'verified', evidence: 'app.cjs:1' },
+      { id: acIds[1], verdict: 'failed', evidence: 'The resume behaviour is absent.' }
+    ], 'AC5: the submitted verdict is persisted as judged, not rewritten');
+  } finally {
+    withJudgeEnv(previous);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('00065 AC4 & AC5: score submit rejects partial, names the allowed values, and persists nothing', () => {
+  const previous = process.env.SDW_JUDGE_COMMAND;
+  const tmpDir = setupRepo();
+  try {
+    clearJudgeEnv();
+    const runCode = sdwOrch.cmdRun({
+      root: tmpDir,
+      specPath: '.sdw/specs/score-spec.md',
+      skipReview: true,
+      skipPr: true,
+      ...implementationOptions()
+    });
+    assert.equal(runCode, 5, 'the run pauses awaiting a submitted verdict');
+
+    const state = stateManager.findLatestRunState(tmpDir);
+    const promptText = fs.readFileSync(path.resolve(tmpDir, state.steps[5].output.judgePromptPath), 'utf8');
+    const acIds = [...new Set([...promptText.matchAll(/^- (AC[1-9][0-9]*):/gm)].map(match => match[1]))];
+
+    const verdictFile = path.join(tmpDir, 'verdict-partial.json');
+    fs.writeFileSync(verdictFile, JSON.stringify({
+      score: 5,
+      verdicts: acIds.map(id => ({ id, verdict: 'partial', evidence: 'app.cjs:1' }))
+    }));
+
+    const messages = [];
+    const originalError = console.error;
+    console.error = (...args) => messages.push(args.map(String).join(' '));
+    let submitCode;
+    try {
+      submitCode = sdwOrch.cmdScoreSubmit({ root: tmpDir, runId: state.runId, verdictPath: verdictFile });
+    } finally {
+      console.error = originalError;
+    }
+    const output = messages.join('\n');
+    assert.equal(submitCode, 1, 'AC4: a partial verdict is rejected with a non-zero exit');
+    assert.match(output, /must be one of: verified, failed/, 'AC4: the rejection names the allowed values');
+    assert.match(output, /only partly met/, 'AC4: the rejection says to use failed for a partly met criterion');
+    assert.match(output, /"failed"/, 'AC4: the rejection names the replacement verdict');
+
+    const afterReject = stateManager.loadRunState(tmpDir, state.runId);
+    assert.equal(afterReject.steps[5].status, 'awaiting_judgment', 'AC5: nothing is persisted after a rejected verdict');
+    assert.equal(afterReject.score, state.score, 'AC5: the rejected verdict never changes the score');
+    assert.equal(afterReject.steps[5].output.judgedAt, undefined, 'AC5: no judgment timestamp is written');
+
+    // AC4: the same contract holds at the CLI boundary, not only in-process.
+    const cli = spawnSync(process.execPath, [ORCH_CLI, 'score', 'submit', '--root', tmpDir, '--run-id', state.runId, '--verdict', verdictFile], { encoding: 'utf8' });
+    assert.equal(cli.status, 1, 'AC4: the CLI exits non-zero for a partial verdict');
+    assert.match(cli.stderr, /verified, failed/, 'AC4: the CLI stderr names the allowed values');
+    assert.match(cli.stderr, /only partly met/, 'AC4: the CLI stderr tells the caller to use failed');
+
+    const afterCli = stateManager.loadRunState(tmpDir, state.runId);
+    assert.equal(afterCli.steps[5].status, 'awaiting_judgment', 'AC5: the CLI rejection persists nothing either');
   } finally {
     withJudgeEnv(previous);
     fs.rmSync(tmpDir, { recursive: true, force: true });
