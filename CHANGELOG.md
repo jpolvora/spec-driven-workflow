@@ -1,5 +1,10 @@
 # Changelog
 
+### [2026-10-23 00:09] Agent: agent
+- **Prompt**: fix duplicated exports
+- **Done**: Removed the shadowed duplicate module.exports block in skills/sdw-spec/scripts/scm_provider_contract.cjs; the effective 11-key surface (including cliFailure and assertSafeRef) is unchanged
+- **Result**: 1 file, 13 lines removed; focused suites 105/105 and full suite 508/508 pass; no commit
+
 ### [2026-10-23 00:00] Agent: agent
 - **Prompt**: sdw-spec import issues 47 and 48 from GitHub
 - **Done**: Repaired stale local spec ids 00045-00049 (retro candidate numbers shadowing GitHub issue numbers); imported issue 48 as spec 00061 draft with pending registry row; issue 47 already bound to spec 00030, no duplicate created
