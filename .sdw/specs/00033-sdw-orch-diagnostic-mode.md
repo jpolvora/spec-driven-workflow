@@ -3,7 +3,7 @@ id: null
 slug: 00033-sdw-orch-diagnostic-mode
 title: "SDW Orchestrator Diagnostic Run Mode — Upstream Issue Detection and Follow-up Spec Suggestion"
 source: local
-status: draft
+status: implemented
 specDate: 2026-10-21
 priority: medium
 value: "Diagnostic run mode that turns recurring upstream defects into follow-up specifications"
