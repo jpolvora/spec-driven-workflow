@@ -8,6 +8,7 @@ const { spawnSync } = require('child_process');
 const { initIndex, listIndex, archiveSpec, resolvePaths, readIndex, parseFrontmatter, readDeclaredFields, isSpecificationFile } = require('./spec_index.cjs');
 const { createNewSpec, importRemoteSpec } = require('./spec_creator.cjs');
 const { syncIndex } = require('./spec_sync.cjs');
+const { runSyncDirection } = require('./spec_sync_remote.cjs');
 const { validateFile, SPEC_STATUSES, PRIORITY_VALUES, EFFORT_VALUES } = require('./validate_spec.cjs');
 
 const SPEC_STATUS_TRANSITIONS = {
@@ -82,6 +83,8 @@ Subcommands:
   new <requirements>      Synthesize canonical specification with autoincremented numerical prefix
   import                   Import remote tracker item from GitHub or Azure DevOps
   sync                     Reconcile index.specs.md against on-disk files and orchestrator run states, report and repair header-status drift
+  sync-up                  Mirror local specifications to the registered SCM provider
+  sync-down                Mirror remote tracker items into local specifications
   validate <specPath>      Validate frontmatter, section hierarchy, and strict EARS syntax
   status <slug> <status>   Change the spec header status with defined transitions
   update                   Propose a drift entry from changed files named by the specification
@@ -870,6 +873,10 @@ async function main() {
       break;
     case 'sync':
       code = cmdSync(options);
+      break;
+    case 'sync-up':
+    case 'sync-down':
+      code = await runSyncDirection(options.subcommand, options);
       break;
     case 'validate':
       code = cmdValidate(options);

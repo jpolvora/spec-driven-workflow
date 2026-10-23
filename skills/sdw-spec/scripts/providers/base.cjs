@@ -34,6 +34,16 @@ class ScmProvider {
     throw new Error('queryWorkItems must be implemented by provider.');
   }
 
+  // Spec 00062: tracker write side of the work-item contract. Callers pass the
+  // title, the rendered body, and the remote state the specification needs.
+  async createWorkItem(options = {}) {
+    throw new Error('createWorkItem must be implemented by provider.');
+  }
+
+  async updateWorkItem(options = {}) {
+    throw new Error('updateWorkItem must be implemented by provider.');
+  }
+
   async createPullRequest(options = {}) {
     throw new Error('createPullRequest must be implemented by provider.');
   }
