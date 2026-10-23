@@ -17,7 +17,7 @@
 | Implementation start | 2026-10-23T03:21:35.083Z |
 | Implementation end | 2026-10-23T03:32:35.790Z |
 | Total wall-clock duration | 11m |
-| Generated at | 2026-10-23T03:35:18.825Z |
+| Generated at | 2026-10-23T03:40:36.541Z |
 | Step 1: derivation (skipped) | 1ms |
 | Step 2: refinement (completed) | 32ms |
 | Step 3: dag_generation (completed) | 3ms |
@@ -25,7 +25,7 @@
 | Step 5: scoring (completed) | 15s |
 | Step 6: delivery_commit (completed) | 353ms |
 | Step 7: code_review (completed) | 842ms |
-| Step 8: pr_preparation (pending) | n/a |
+| Step 8: pr_preparation (in_progress) | n/a |
 
 
 ## Tasks
@@ -39,6 +39,7 @@
 
 | SHA | Subject | Range |
 |---|---|---|
+| `ecac5ad` | docs(00043-us-17-emphasize-step-number-progress-in): record delivery report | base..HEAD |
 | `5b4ab52` | task(00043-us-17-emphasize-step-number-progress-in): task-2 | base..HEAD |
 | `b2cea59` | task(00043-us-17-emphasize-step-number-progress-in): task-1 | base..HEAD |
 
@@ -56,9 +57,16 @@
 |---|---|
 | `skills/sdw-orch/references/orchestrator_protocol.md` | modified |
 
+### Unattributed changes
+
+| File | Change |
+|---|---|
+| `.sdw/specs/00043-us-17-emphasize-step-number-progress-in-report.md` | added |
+
 ## Verification
 
 - test gate: status `passed`, exit code `0`, duration 2m 20s
+- Step 8 delivery: `in_progress`
 
 ## Code Review
 
@@ -154,7 +162,7 @@ None detected.
 
 - Step 1 (derivation) skipped: not recorded
 - Task task-2 accepted after re-dispatch (sequence 2)
-- Environment: workspace: 2 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
+- Environment: workspace: 3 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
 
 ## Outcome
 
