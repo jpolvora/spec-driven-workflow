@@ -143,10 +143,15 @@ Every completed item records `merge`:
 | `requested` | The policy asked for a merge (`batch.autoMerge` true and `--no-merge` absent). |
 | `attempted` | A provider merge call was issued. |
 | `ok` | `true` when the provider accepted the merge, `false` when it failed, `null` when no call was made. |
-| `status` | `merged`, `skipped`, or `failed`. |
+| `status` | `merged`, `skipped`, `failed`, or `waiting` (the pre-flight gate is waiting for required checks). |
 | `reason` | The skip reason (`--no-merge`, `batch.autoMerge is false`, `no-pr`, `invalid-pr-number`, `no scm provider`) or the provider error. |
 | `prNumber` | The targeted pull request id, when one existed. |
 | `at` | ISO timestamp of the outcome. |
+| `checks` | Pre-flight gate only: the last observed required-check state as `{ state: "pending" | "pass" | "fail", failing: [names] }`, or `null` when the provider cannot report checks. |
+| `attempts` | Pre-flight gate only: one `{ at, ok, reason }` entry per provider merge call, so the attempt count and timestamps survive on the record. |
+| `retryOutcome` | Pre-flight gate only: `not-needed` (no refusal while checks were pending), `not-attempted` (a refusal, but the poll never reached a pass), `succeeded`, `failed`, or `null` while the gate is still waiting. |
+
+The three check-gate fields are additive: a record written by the per-item merge path, or by a queue predating the gate, simply omits them and stays readable.
 
 A merge failure is an operator concern (permissions, pending approvals, branch rules): the failure is recorded, the item stays `completed`, and the queue advances.
 

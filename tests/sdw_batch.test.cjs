@@ -137,6 +137,84 @@ function writeDeliveredCommit(root, runId, deliveryCommit, prNumber) {
   });
 }
 
+// Spec 00066: the earlier delivery stays on a feature branch until a merge lands
+// it on the remote base, so the next item's pre-flight always has an open pull
+// request to merge under the required-check gate.
+function stageEarlierDelivery(root) {
+  git(root, ['switch', '-q', '-c', 'feature/00001-alpha']);
+  fs.writeFileSync(path.join(root, 'delivery.txt'), 'alpha delivery\n', 'utf8');
+  git(root, ['add', '-A']);
+  git(root, ['commit', '-q', '-m', 'alpha delivery']);
+  const delivery = git(root, ['rev-parse', 'HEAD']);
+  git(root, ['switch', '-q', 'develop']);
+  return delivery;
+}
+
+function landDelivery(root) {
+  git(root, ['push', '-q', '--force', 'origin', 'refs/heads/feature/00001-alpha:refs/heads/develop']);
+}
+
+// One batch whose second item runs the pre-flight merge path. The check probe and
+// the merge are injected, so no test case touches a provider or the network; the
+// merge hook can land the delivery on the remote base to model an accepted merge.
+function runCheckGate({ checksStatus, merge, options = {} } = {}) {
+  const { root, specs } = setup();
+  let remote = null;
+  try {
+    writeConfig(root, {
+      scmProvider: 'github',
+      batch: { autoMerge: true },
+      branching: { workBranch: 'develop', integrationBranch: 'develop' }
+    });
+    remote = initRepoWithRemote(root);
+    const delivery = stageEarlierDelivery(root);
+    const events = [];
+    const sleeps = [];
+    const mergeCalls = [];
+    const hooks = {
+      _mergePr: args => {
+        mergeCalls.push(args.prNumber);
+        events.push(`merge:${args.prNumber}`);
+        return merge(args, { root, delivery });
+      },
+      _sleep: ms => { sleeps.push(ms); }
+    };
+    if (typeof checksStatus === 'function') {
+      hooks._checksStatus = args => {
+        const observed = checksStatus(args);
+        events.push(`checks:${args.prNumber}:${observed && observed.state ? observed.state : 'unavailable'}`);
+        return observed;
+      };
+    }
+    const { result, logs, errors } = captureAll(() => queue.runBatch(specs, {
+      root,
+      noSync: true,
+      pollIntervalMs: 5,
+      ...options,
+      _invoke: ({ runId, specPath }) => {
+        const alpha = path.basename(specPath).includes('alpha');
+        writeDeliveredCommit(root, runId, delivery, alpha ? '71' : '72');
+        return 0;
+      },
+      ...hooks
+    }));
+    return {
+      root,
+      delivery,
+      result,
+      logs,
+      errors,
+      events,
+      sleeps,
+      mergeCalls,
+      manifest: queue.loadManifest(queue.loadConfig(root))
+    };
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    if (remote) fs.rmSync(remote, { recursive: true, force: true });
+  }
+}
+
 test('pre-flight: a missing specification rejects the batch before any manifest exists', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-batch-pre-'));
   try {
@@ -1238,6 +1316,304 @@ test('AC13: a refreshed base missing the previous delivery commit halts and name
     fs.rmSync(root, { recursive: true, force: true });
     if (remote) fs.rmSync(remote, { recursive: true, force: true });
   }
+});
+
+// Spec 00066 AC1-AC3: the pre-flight merge of an earlier delivery is gated on the
+// required checks. Pending checks are polled to a terminal state, a refusal while
+// pending is retried once, and failing checks or an unmergeable pull request halt
+// the queue naming both the pull request and the checks.
+
+test('00066 AC1: the pre-flight waits for pending checks to pass before it requests the merge', () => {
+  const observations = [
+    { state: 'pending', failing: [] },
+    { state: 'pending', failing: [] },
+    { state: 'pass', failing: [] }
+  ];
+  let alphaMerges = 0;
+  const scenario = runCheckGate({
+    checksStatus: () => observations.shift() || { state: 'pass', failing: [] },
+    merge: ({ prNumber }, { root }) => {
+      if (prNumber === '71') {
+        alphaMerges += 1;
+        // The completion merge is refused first, so the pre-flight owns the
+        // gated merge of the earlier delivery.
+        if (alphaMerges === 1) throw new Error('branch protection blocks the merge');
+        landDelivery(root);
+      }
+      return { merged: true };
+    }
+  });
+
+  assert.equal(scenario.result, 0, 'the queue continues after the checks pass');
+  assert.deepEqual(scenario.events, [
+    'merge:71',
+    'checks:71:pending',
+    'checks:71:pending',
+    'checks:71:pass',
+    'merge:71',
+    'merge:72'
+  ], 'the merge is requested only after the pending check reports success');
+  assert.deepEqual(scenario.sleeps, [5], 'the poll waits one injected interval between observations');
+  assert.match(scenario.logs.join('\n'), /Waiting for required checks on pull request 71/);
+  const first = scenario.manifest.queue[0];
+  assert.equal(first.merge.status, 'merged');
+  assert.equal(first.merge.ok, true);
+  assert.equal(first.merge.attempted, true);
+  // AC4: the record keeps the terminal check state and the one merge attempt.
+  assert.deepEqual(first.merge.checks, { state: 'pass', failing: [] });
+  assert.equal(first.merge.attempts.length, 1, 'the gated merge is one attempt');
+  assert.equal(typeof first.merge.attempts[0].at, 'string', 'the attempt carries its timestamp');
+  assert.equal(first.merge.attempts[0].ok, true);
+  assert.equal(first.merge.retryOutcome, 'not-needed', 'waiting before the first attempt is not a retry');
+  assert.equal(scenario.manifest.queue[1].status, 'completed', 'the next item is delegated once the delivery landed');
+});
+
+test('00066 AC1: passing checks merge at once, without waiting', () => {
+  let alphaMerges = 0;
+  const scenario = runCheckGate({
+    checksStatus: () => ({ state: 'pass', failing: [] }),
+    merge: ({ prNumber }, { root }) => {
+      if (prNumber === '71') {
+        alphaMerges += 1;
+        if (alphaMerges === 1) throw new Error('branch protection blocks the merge');
+        landDelivery(root);
+      }
+      return { merged: true };
+    }
+  });
+
+  assert.equal(scenario.result, 0);
+  assert.deepEqual(scenario.events, ['merge:71', 'checks:71:pass', 'merge:71', 'merge:72']);
+  assert.deepEqual(scenario.sleeps, [], 'green checks never sleep');
+  assert.doesNotMatch(scenario.logs.join('\n'), /Waiting for required checks/);
+  const first = scenario.manifest.queue[0].merge;
+  assert.equal(first.status, 'merged');
+  // AC4: a passing first observation is recorded with a single attempt.
+  assert.deepEqual(first.checks, { state: 'pass', failing: [] });
+  assert.equal(first.attempts.length, 1);
+  assert.equal(first.retryOutcome, 'not-needed');
+});
+
+test('00066 AC1: a provider that cannot report checks keeps the immediate merge', () => {
+  let alphaMerges = 0;
+  const scenario = runCheckGate({
+    checksStatus: () => null,
+    merge: ({ prNumber }, { root }) => {
+      if (prNumber === '71') {
+        alphaMerges += 1;
+        if (alphaMerges === 1) throw new Error('branch protection blocks the merge');
+        landDelivery(root);
+      }
+      return { merged: true };
+    }
+  });
+
+  assert.equal(scenario.result, 0, 'an unreportable provider never hangs the queue');
+  assert.deepEqual(scenario.events, ['merge:71', 'checks:71:unavailable', 'merge:71', 'merge:72']);
+  assert.deepEqual(scenario.sleeps, [], 'nothing is polled when the checks are unknown');
+  const first = scenario.manifest.queue[0].merge;
+  assert.equal(first.status, 'merged');
+  // AC4: no check information is recorded when the provider cannot report it.
+  assert.equal(first.checks, null);
+  assert.equal(first.attempts.length, 1);
+  assert.equal(first.retryOutcome, 'not-needed');
+});
+
+test('00066 AC2 & AC4: a merge refused while checks are pending records waiting, polls, and retries once', () => {
+  const observations = [null, { state: 'pending', failing: [] }, { state: 'pass', failing: [] }];
+  let alphaMerges = 0;
+  let waiting = null;
+  const scenario = runCheckGate({
+    checksStatus: ({ config }) => {
+      const observed = observations.shift();
+      if (observed && observed.state === 'pass') {
+        // The wait is already recorded when the checks finally turn green.
+        const manifest = queue.loadManifest(queue.loadConfig(config.root));
+        waiting = manifest.queue[0].merge;
+      }
+      return observed;
+    },
+    merge: ({ prNumber }, { root }) => {
+      if (prNumber === '71') {
+        alphaMerges += 1;
+        if (alphaMerges === 1) throw new Error('branch protection blocks the merge');
+        // The provider refuses the immediate merge because its checks are pending.
+        if (alphaMerges === 2) throw new Error('pull request #71 is not mergeable: required status checks are pending');
+        landDelivery(root);
+      }
+      return { merged: true };
+    }
+  });
+
+  assert.equal(scenario.result, 0, 'the retried merge lands the delivery');
+  assert.deepEqual(scenario.events, [
+    'merge:71',
+    'checks:71:unavailable',
+    'merge:71',
+    'checks:71:pending',
+    'checks:71:pass',
+    'merge:71',
+    'merge:72'
+  ], 'the refusal is followed by a check poll and exactly one retry');
+  assert.equal(waiting.status, 'waiting', 'the refused merge is recorded waiting before the poll');
+  // AC4: the waiting record names the pending state and the refused attempt.
+  assert.deepEqual(waiting.checks, { state: 'pending', failing: [] });
+  assert.equal(waiting.attempts.length, 1, 'the refused attempt is recorded');
+  assert.equal(waiting.attempts[0].ok, false);
+  assert.equal(waiting.attempts[0].reason, 'pull request #71 is not mergeable: required status checks are pending');
+  assert.equal(waiting.retryOutcome, null, 'the retry outcome is unknown until the retry runs');
+  assert.match(scenario.logs.join('\n'), /refused while its checks are pending/);
+  assert.deepEqual(scenario.mergeCalls.filter(number => number === '71').length, 3);
+  const first = scenario.manifest.queue[0].merge;
+  assert.equal(first.status, 'merged');
+  assert.equal(first.ok, true);
+  assert.equal(first.attempted, true);
+  // AC4: the terminal record carries the pass state, both attempts, and the outcome.
+  assert.deepEqual(first.checks, { state: 'pass', failing: [] });
+  assert.equal(first.attempts.length, 2, 'the initial attempt and the one retry are both recorded');
+  assert.ok(first.attempts.every(entry => typeof entry.at === 'string'), 'every attempt carries a timestamp');
+  assert.equal(first.attempts[0].ok, false);
+  assert.equal(first.attempts[1].ok, true);
+  assert.equal(first.retryOutcome, 'succeeded');
+});
+
+test('00066 AC4: a refusal whose poll ends in failing checks records the retry that never ran', () => {
+  const observations = [null, { state: 'pending', failing: [] }, { state: 'fail', failing: ['unit-tests'] }];
+  const scenario = runCheckGate({
+    checksStatus: () => observations.shift(),
+    merge: () => { throw new Error('pull request #71 is not mergeable: required status checks are pending'); }
+  });
+
+  assert.equal(scenario.result, 1, 'failing checks halt the queue');
+  const merge = scenario.manifest.queue[0].merge;
+  assert.equal(merge.status, 'failed');
+  assert.deepEqual(merge.checks, { state: 'fail', failing: ['unit-tests'] });
+  assert.equal(merge.attempts.length, 1, 'only the refused attempt was issued');
+  assert.equal(merge.retryOutcome, 'not-attempted', 'the retry never ran because the checks failed');
+  assert.match(scenario.manifest.queue[1].preflight.reason, /unit-tests/);
+});
+
+test('00066 AC3 & AC4: failing checks halt the queue naming the pull request and the failing checks', () => {
+  const scenario = runCheckGate({
+    checksStatus: () => ({ state: 'fail', failing: ['unit-tests', 'security-scan'] }),
+    merge: () => { throw new Error('branch protection blocks the merge'); }
+  });
+
+  assert.equal(scenario.result, 1, 'failing checks halt instead of merging');
+  assert.deepEqual(scenario.events, ['merge:71', 'checks:71:fail'], 'no merge is requested on a failing check');
+  assert.equal(scenario.manifest.status, 'halted');
+  assert.deepEqual(scenario.manifest.queue.map(item => item.status), ['completed', 'pending']);
+  // AC4: the halt record keeps the failing state and the failing check names.
+  const merge = scenario.manifest.queue[0].merge;
+  assert.equal(merge.status, 'failed');
+  assert.equal(merge.ok, false);
+  assert.equal(merge.attempted, false, 'no merge request is created while the checks fail');
+  assert.deepEqual(merge.checks, { state: 'fail', failing: ['unit-tests', 'security-scan'] });
+  assert.deepEqual(merge.attempts, [], 'no attempt is recorded when the gate refuses before merging');
+  assert.equal(merge.retryOutcome, 'not-needed');
+  assert.match(merge.reason, /unit-tests/);
+  const preflight = scenario.manifest.queue[1].preflight;
+  assert.equal(preflight.status, 'halted');
+  assert.match(preflight.reason, /#71/, 'the halt names the pull request');
+  assert.match(preflight.reason, /unit-tests/, 'the halt names the first failing check');
+  assert.match(preflight.reason, /security-scan/, 'the halt names the second failing check');
+  const output = scenario.errors.join('\n');
+  assert.match(output, /Pre-flight halted the queue/);
+  assert.match(output, /#71/);
+  assert.match(output, /unit-tests/);
+});
+
+test('00066 AC3: a check poll that never reaches a terminal state halts instead of hanging', () => {
+  const scenario = runCheckGate({
+    checksStatus: () => ({ state: 'pending', failing: [] }),
+    merge: () => { throw new Error('branch protection blocks the merge'); },
+    options: { pollAttempts: 2 }
+  });
+
+  assert.equal(scenario.result, 1);
+  assert.equal(scenario.manifest.status, 'halted');
+  const preflight = scenario.manifest.queue[1].preflight;
+  assert.equal(preflight.status, 'halted');
+  assert.match(preflight.reason, /#71/);
+  assert.match(preflight.reason, /2 poll\(s\)/, 'the halt names the exhausted poll bound');
+  assert.deepEqual(scenario.sleeps, [5], 'the bounded poll sleeps only between its attempts');
+  assert.equal(scenario.mergeCalls.length, 1, 'the earlier item merge is the only merge call');
+  // AC4: the exhausted poll records the last observed pending state.
+  const merge = scenario.manifest.queue[0].merge;
+  assert.equal(merge.status, 'failed');
+  assert.deepEqual(merge.checks, { state: 'pending', failing: [] });
+  assert.deepEqual(merge.attempts, [], 'no merge request is created while the checks stay pending');
+  assert.equal(merge.retryOutcome, 'not-needed');
+  assert.match(merge.reason, /did not report a terminal check state/);
+});
+
+test('00066 AC3: a pull request still not mergeable after its checks pass halts naming it', () => {
+  const observations = [null, { state: 'pending', failing: [] }, { state: 'pass', failing: [] }];
+  let alphaMerges = 0;
+  const scenario = runCheckGate({
+    checksStatus: () => observations.shift(),
+    merge: ({ prNumber }) => {
+      if (prNumber === '71') {
+        alphaMerges += 1;
+        if (alphaMerges === 3) throw new Error('the branch is not mergeable: a review is required');
+        throw new Error('pull request #71 is not mergeable: required status checks are pending');
+      }
+      return { merged: true };
+    }
+  });
+
+  assert.equal(scenario.result, 1, 'the retry fails once and the queue halts');
+  assert.equal(scenario.manifest.status, 'halted');
+  const preflight = scenario.manifest.queue[1].preflight;
+  assert.equal(preflight.status, 'halted');
+  assert.match(preflight.reason, /#71/);
+  assert.match(preflight.reason, /not mergeable after its checks passed/);
+  assert.match(preflight.reason, /a review is required/);
+  assert.equal(scenario.mergeCalls.filter(number => number === '71').length, 3, 'the merge is retried exactly once');
+  // AC4: the failed retry is recorded with both attempts and the observed pass state.
+  const merge = scenario.manifest.queue[0].merge;
+  assert.equal(merge.status, 'failed');
+  assert.deepEqual(merge.checks, { state: 'pass', failing: [] });
+  assert.equal(merge.attempts.length, 2, 'the initial attempt and the retry are both recorded');
+  assert.equal(merge.attempts[0].ok, false);
+  assert.equal(merge.attempts[1].ok, false);
+  assert.match(merge.attempts[1].reason, /a review is required/);
+  assert.equal(merge.retryOutcome, 'failed');
+});
+
+// Spec 00066 AC1: the production probe gates on the required checks only, so an
+// advisory check can neither block nor halt the queue.
+test('00066 AC1: the github check probe reads only required checks', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'skills', 'sdw-batch', 'scripts', 'batch_queue.cjs'),
+    'utf8'
+  );
+  const probe = source.split('\n').find(line => line.includes('spawnSync(`gh pr checks'));
+  assert.ok(probe, 'the pre-flight probe shells out to gh pr checks');
+  assert.match(probe, /--required/, 'the probe asks only for required checks');
+});
+
+// Spec 00066 AC1 & AC3: once the gate started from pending, a provider that stops
+// reporting is not evidence of green; the merge must not be requested.
+test('00066 AC1 & AC3: checks that stop reporting after a pending start halt without merging', () => {
+  let calls = 0;
+  const scenario = runCheckGate({
+    checksStatus: () => {
+      calls += 1;
+      return calls <= 3 ? { state: 'pending', failing: [] } : null;
+    },
+    merge: () => { throw new Error('branch protection blocks the merge'); }
+  });
+
+  assert.equal(scenario.result, 1, 'the queue halts');
+  assert.equal(scenario.manifest.status, 'halted');
+  assert.equal(scenario.manifest.queue[1].preflight.status, 'halted');
+  assert.match(scenario.manifest.queue[1].preflight.reason, /stopped reporting while pending/);
+  assert.notEqual(
+    scenario.manifest.queue[1].merge && scenario.manifest.queue[1].merge.status,
+    'merged',
+    'no pre-flight merge is recorded'
+  );
 });
 
 
