@@ -322,6 +322,18 @@ function git(targetRoot, args, options = {}) {
   return result.stdout;
 }
 
+// Spec 00063 AC1: the branch a checkpoint commit would land on. A detached HEAD
+// has no branch name, so it is reported as such instead of as a match.
+function readCheckedOutBranch(targetRoot) {
+  try {
+    const name = String(git(targetRoot, ['rev-parse', '--abbrev-ref', 'HEAD'], { stdio: ['ignore', 'pipe', 'ignore'] }) || '').trim();
+    if (!name || name === 'HEAD') return { branch: null, detached: true };
+    return { branch: name, detached: false };
+  } catch (e) {
+    return { branch: null, detached: false };
+  }
+}
+
 function normalizeRel(p) {
   return String(p || '').replace(/\\/g, '/').replace(/^\.\//, '');
 }
@@ -4520,6 +4532,38 @@ function cmdTaskFinish(options) {
       ? `Error: Task "${taskId}" is not the dispatched task. Active task: "${dispatch.activeTaskId}". Finish or abandon "${dispatch.activeTaskId}" first.`
       : `Error: No task is currently dispatched. Dispatch one with: node "${orchCommandPath()}" task next --run-id ${state.runId}${followUpRootFlag(targetRoot)}`);
     return 1;
+  }
+
+  // Spec 00063 AC1-AC3: the checkpoint commit must land on the run feature branch.
+  // Another session can switch this shared checkout, which would commit accepted
+  // task work onto the integration branch and leave the feature branch empty.
+  const expectedBranch = state.branching && state.branching.featureBranch
+    ? String(state.branching.featureBranch)
+    : null;
+  if (expectedBranch) {
+    const observed = readCheckedOutBranch(targetRoot);
+    if (observed.branch !== expectedBranch) {
+      const observedLabel = observed.detached ? 'HEAD (detached)' : (observed.branch || 'unknown');
+      const reason = `checked-out branch "${observedLabel}" does not match the run feature branch "${expectedBranch}"`;
+      state.steps[4].tasks[taskId] = {
+        ...(state.steps[4].tasks[taskId] || {}),
+        id: taskId,
+        branchGuard: {
+          observedBranch: observed.branch,
+          detached: observed.detached,
+          expectedBranch,
+          reason,
+          refusedAt: new Date().toISOString()
+        }
+      };
+      stateManager.saveRunState(targetRoot, state);
+      const evidenceArg = `"${normalizePath(path.relative(targetRoot, evidenceFileAbs))}"`;
+      console.error(`Error: Refusing to checkpoint task "${taskId}": ${reason}. The task stays dispatched and no commit was created.`);
+      console.error(`Resume the run on its feature branch, then retry:`);
+      console.error(`  git switch ${expectedBranch}`);
+      console.error(`  node "${orchCommandPath()}" task finish --run-id ${state.runId} --task ${taskId} --evidence ${evidenceArg}${followUpRootFlag(targetRoot)}`);
+      return 1;
+    }
   }
 
   const completedTaskIds = new Set(
