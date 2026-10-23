@@ -1170,3 +1170,46 @@ test('AC7 & AC8: a failed judge verdict is never promoted by later evidence', ()
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+// Spec 00017 AC7 & AC8: when the ledger exists, a ledger that cannot record the
+// verdicts must not fall back to the judge-authored score.
+test('AC7 & AC8: a ledger that cannot record verdicts fails Step 5 closed', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-ac-ledger-failclosed-'));
+  try {
+    fs.mkdirSync(path.join(root, '.sdw', 'specs'), { recursive: true });
+    fs.writeFileSync(path.join(root, SCORE_SPEC_REL), FOUR_AC_SPEC, 'utf8');
+
+    const state = seedScoringRun(root, { step5Output: { judgeAcIds: ['AC1', 'AC2', 'AC3', 'AC4'] } });
+    const init = acLedger.initLedger({
+      root,
+      artifactsDir: state.artifactsDir,
+      runId: state.runId,
+      specSlug: state.specSlug,
+      specContent: FOUR_AC_SPEC,
+      generatedAt: '2026-10-19T12:00:00.000Z'
+    });
+
+    // A criterion missing from the ledger (for example one added to the spec
+    // after the ledger was created) makes the verdict recording refuse.
+    const ledger = readLedgerFile(init.ledgerPath);
+    ledger.criteria = ledger.criteria.filter(criterion => criterion.id !== 'AC4');
+    fs.writeFileSync(init.ledgerPath, JSON.stringify(ledger, null, 2) + '\n', 'utf8');
+
+    const verdictPath = path.join(root, 'verdict.json');
+    fs.writeFileSync(verdictPath, JSON.stringify({
+      score: 10,
+      verdicts: ['AC1', 'AC2', 'AC3', 'AC4'].map(id => ({ id, verdict: 'verified', evidence: 'skills/demo.cjs:1' }))
+    }), 'utf8');
+
+    const captured = captureConsole(() => sdwOrch.cmdScoreSubmit({ root, runId: state.runId, verdictPath }));
+    assert.equal(captured.code, 2, 'the submit fails closed instead of accepting the judge score');
+    assert.match(captured.stderr, /could not be recorded/, 'the failure names the ledger problem');
+    assert.match(captured.stderr, /fails closed/, 'the failure states the policy');
+
+    const after = stateManager.loadRunState(root, state.runId);
+    assert.equal(after.score, null, 'no judge-authored score is accepted');
+    assert.notEqual(after.steps[5].status, 'judged', 'Step 5 is not marked as judged');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

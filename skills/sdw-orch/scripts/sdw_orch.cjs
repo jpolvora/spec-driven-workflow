@@ -1968,8 +1968,15 @@ function applyLedgerScore({ targetRoot, state, report, verdict, judgeResolution 
     verdicts: verdict.verdicts
   });
   if (!recorded.ok) {
-    console.warn(`[Ledger] Step 5 judge verdicts could not be recorded: ${recorded.errors.join(' ')}`);
-    return report;
+    // Spec 00017 AC7/AC8: the ledger is the only score source when it exists, so
+    // a ledger that cannot record the verdicts fails closed instead of letting
+    // the judge-authored score through.
+    return {
+      ...report,
+      score: 0,
+      passed: false,
+      ledgerError: `Step 5 judge verdicts could not be recorded: ${recorded.errors.join(' ')}`
+    };
   }
 
   // Spec 00017 AC9: recording the verdicts is an accepted ledger update, so the
@@ -3341,6 +3348,9 @@ function cmdRun(options) {
       verdict: verdictValidation.data,
       judgeResolution
     });
+    if (scoreReport.ledgerError) {
+      return failClosedScoring(scoreReport.ledgerError, judgeMeta);
+    }
 
     console.log(`[Step 5: Conformance Scoring] Score: ${scoreReport.score}/10 (Required: ${effectiveMinScore}/10). Passed: ${scoreReport.passed}`);
     console.log(`  Verified ACs: ${scoreReport.verifiedCount}/${scoreReport.totalAcs}`);
@@ -5552,6 +5562,12 @@ function cmdScoreSubmit(options) {
     verdict: validation.data,
     judgeResolution: 'submitted'
   });
+  if (report.ledgerError) {
+    // Spec 00017 AC7/AC8: no ledger-derived score means no accepted score.
+    console.error(`[sdw-orch score submit] ${report.ledgerError}`);
+    console.error(`[sdw-orch score submit] Step 5 fails closed: the ledger is the only score source when it exists.`);
+    return 2;
+  }
 
   state.steps[5] = state.steps[5] || { name: 'scoring', status: 'pending', output: null, artifact: null };
   state.steps[5].status = report.passed ? 'judged' : 'reimplementation_needed';
