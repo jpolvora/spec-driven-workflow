@@ -7,7 +7,7 @@
 | Specification file | `.sdw/specs/00019-sdw-orch-checkpoint-resume.md` |
 | Specification slug | 00019-sdw-orch-checkpoint-resume |
 | Run ID | run-1792770608264-00019-sdw-orch-checkpoint-resu |
-| Run status | paused |
+| Run status | completed |
 | Branch | `feature/00019-sdw-orch-checkpoint-resume` |
 | Base branch | `master` |
 | Base commit | `05bea08fe2a0a92fd4e58a7c01d953ea2449141b` |
@@ -17,7 +17,7 @@
 | Implementation start | 2026-10-23T15:50:09.856Z |
 | Implementation end | 2026-10-23T17:05:43.187Z |
 | Total wall-clock duration | 1h 15m 33s |
-| Generated at | 2026-10-23T17:10:24.220Z |
+| Generated at | 2026-10-23T17:16:25.526Z |
 | Step 1: derivation (skipped) | 1ms |
 | Step 2: refinement (completed) | 65ms |
 | Step 3: dag_generation (completed) | 52ms |
@@ -25,7 +25,7 @@
 | Step 5: scoring (completed) | 33s |
 | Step 6: delivery_commit (completed) | 390ms |
 | Step 7: code_review (completed) | 1s |
-| Step 8: pr_preparation (pending) | n/a |
+| Step 8: pr_preparation (completed) | 5m 54s |
 
 
 ## Tasks
@@ -42,6 +42,8 @@
 
 | SHA | Subject | Range |
 |---|---|---|
+| `e28a950` | chore(00019-sdw-orch-checkpoint-resume): mark the specification completed in the registry | base..HEAD |
+| `19ea5d9` | docs(00019-sdw-orch-checkpoint-resume): record delivery report | base..HEAD |
 | `9ef7eba` | task(00019-sdw-orch-checkpoint-resume): task-5 | base..HEAD |
 | `8a79b11` | task(00019-sdw-orch-checkpoint-resume): task-4 | base..HEAD |
 | `95371e8` | task(00019-sdw-orch-checkpoint-resume): task-3 | base..HEAD |
@@ -96,9 +98,18 @@
 | `skills/sdw-orch/scripts/state_manager.cjs` | modified |
 | `tests/sdw_state_checkpoint.test.cjs` | added |
 
+### Unattributed changes
+
+| File | Change |
+|---|---|
+| `.sdw/reports/00019-sdw-orch-checkpoint-resume-report.md` | added |
+| `.sdw/specs/00019-sdw-orch-checkpoint-resume.md` | modified |
+| `.sdw/specs/index.specs.md` | modified |
+
 ## Verification
 
 - test gate: status `passed`, exit code `0`, duration 3m 58s
+- Step 8 delivery: `completed`
 
 ## Code Review
 
@@ -152,7 +163,13 @@ Not available
 
 ## Retrospective
 
-Not available
+- Status: `passed`
+- Report: `.sdw/state/00019-sdw-orch-checkpoint-resume/run-1792770608264-00019-sdw-orch-checkpoint-resu/run-1792770608264-00019-sdw-orch-checkpoint-resu.retro.md`
+- Data: `.sdw/state/00019-sdw-orch-checkpoint-resume/run-1792770608264-00019-sdw-orch-checkpoint-resu/run-1792770608264-00019-sdw-orch-checkpoint-resu.retro.json`
+- Signals: retries 4 (score 2, review 0, rounds 2, abandonments 0); leftover runs 0; missing artifacts 0; review findings 1 (1 open)
+- Candidates: 0
+- Applied fixes:
+  - none
 
 ## Breaking Changes
 
@@ -332,18 +349,18 @@ Not available
 - Task task-3 accepted after re-dispatch (sequence 3)
 - Task task-4 accepted after re-dispatch (sequence 4)
 - Task task-5 accepted after re-dispatch (sequence 5)
-- Environment: workspace: 11 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
+- Environment: workspace: 14 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
 
 ## Outcome
 
-- Result: `paused`
+- Result: `completed`
 - Delivery commit: `9ef7ebafb5ec0450ae6981c90eadecc2a28abd31`
 - Ship status: `pending`
 - Duration: 1h 15m 33s
 
 ## Step Contributions
 
-- Recorded: 8 contribution(s)
+- Recorded: 13 contribution(s)
 
 ### Step 1: derivation
 
@@ -391,8 +408,18 @@ Not available
 
 ### Step 8: pr_preparation
 
-Not available
+- **convergence** 2026-10-23T17:16:17.480Z - Convergence iteration 1
+  - Body: `{"iteration":1,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":false}`
+- **convergence** 2026-10-23T17:16:18.590Z - Convergence iteration 2
+  - Body: `{"iteration":2,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":true}`
+- **gates** 2026-10-23T17:16:20.221Z - Pre-PR gates: 6 result(s)
+  - Body: `{"gates":[{"name":"prePrCommand","status":"skipped","detail":"prePrCommand is not configured"},{"name":"build","status":"skipped","detail":"requiredBuild is false"},{"name":"tests","status":"pass","detail":"npm test exited 0"},{"name":"security","status":"pass","detail":"sdw-security-checks found no blocking leak"},{"name":"runState","status":"pass","detail":"step 4, step 6 and step 7 completed; score 10 >= scoreMin 8"},{"name":"discovery","status":"pass","detail":"no prepare obligations discovered"}]}`
+- **ship** 2026-10-23T17:16:20.221Z - Pull request #57
+  - Body: `{"pushed":true,"branch":"feature/00019-sdw-orch-checkpoint-resume","pullRequest":{"number":"57","url":"https://github.com/jpolvora/spec-driven-workflow/pull/57","title":null},"shipStatus":"delivered"}`
+  - Evidence: `https://github.com/jpolvora/spec-driven-workflow/pull/57`
 
 ### Step 9: retrospective
 
-Not available
+- **retro** 2026-10-23T17:16:25.057Z - Retrospective passed: 0 candidate(s)
+  - Body: `{"status":"passed","runStatus":"completed","signals":{"retries":{"scoreIterations":2,"reviewIterations":0,"reviewRounds":2,"dispatchAbandonments":0,"total":4},"leftoverRuns":0,"missingArtifacts":0,"reviewFindings":{"total":1,"open":1}},"candidates":[],"fixes":{"recorded":[],"consolidated":null,"queuedSpecifications":[],"failures":[]},"routedCandidates":[],"reportMd":".sdw/state/00019-sdw-orch-checkpoint-resume/run-1792770608264-00019-sdw-orch-checkpoint-resu/run-1792770608264-00019-sdw-orch-checkpoint-resu.retro.md","reportJson":".sdw/state/00019-sdw-orch-checkpoint-resume/run-1792770608264-00019-sdw-orch-checkpoint-resu/run-1792770608264-00019-sdw-orch-checkpoint-resu.retro.json"}`
+  - Evidence: `.sdw/state/00019-sdw-orch-checkpoint-resume/run-1792770608264-00019-sdw-orch-checkpoint-resu/run-1792770608264-00019-sdw-orch-checkpoint-resu.retro.md`, `.sdw/state/00019-sdw-orch-checkpoint-resume/run-1792770608264-00019-sdw-orch-checkpoint-resu/run-1792770608264-00019-sdw-orch-checkpoint-resu.retro.json`
