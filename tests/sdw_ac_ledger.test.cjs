@@ -136,6 +136,26 @@ function readLedgerFile(ledgerPath) {
   return JSON.parse(fs.readFileSync(ledgerPath, 'utf8'));
 }
 
+// Runs an orchestrator command while collecting the lines it writes to stdout and
+// stderr, so a failing initialization can be asserted without polluting the
+// suite output.
+function captureConsole(run) {
+  const stdout = [];
+  const stderr = [];
+  const originalLog = console.log;
+  const originalError = console.error;
+  console.log = (...args) => { stdout.push(args.map(String).join(' ')); };
+  console.error = (...args) => { stderr.push(args.map(String).join(' ')); };
+  let code;
+  try {
+    code = run();
+  } finally {
+    console.log = originalLog;
+    console.error = originalError;
+  }
+  return { code, stdout: stdout.join('\n'), stderr: stderr.join('\n') };
+}
+
 // Seeds a run paused at Step 5 awaiting a judge verdict, so the scoring cases do
 // not pay for the earlier pipeline steps.
 function seedScoringRun(root, options = {}) {
@@ -898,6 +918,191 @@ test('AC14: ledger evidence paths are project-relative with forward slashes, and
     assert.match(escape.stderr, /outside the project root/);
     assert.equal(fs.readFileSync(ledgerPath, 'utf8'), before);
     assert.equal(acLedger.normalizeProjectPath('../outside-evidence.cjs', root), '');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC15: resume loads the ledger a run already owns and never re-seeds its records', () => {
+  const root = setupProject();
+  try {
+    const state = stateManager.createRunState({
+      root,
+      specPath: SPEC_REL,
+      slug: 'ac-ledger-demo',
+      runId: 'run-ledger-resume'
+    });
+    const init = acLedger.initLedger({
+      root,
+      artifactsDir: state.artifactsDir,
+      runId: state.runId,
+      specSlug: state.specSlug,
+      specContent: SPEC,
+      generatedAt: '2026-10-19T12:00:00.000Z'
+    });
+    assert.equal(init.created, true);
+    assert.equal(link(root, state.runId, ['--ac', 'AC1', '--type', 'file', '--path', 'skills/demo.cjs']).status, 0);
+    assert.equal(link(root, state.runId, ['--ac', 'AC2', '--type', 'test', '--name', 'ledger contract', '--status', 'passed']).status, 0);
+    const before = fs.readFileSync(init.ledgerPath, 'utf8');
+    const anchored = stateManager.loadRunState(root, state.runId);
+    assert.match(anchored.acLedgerSha256, /^[0-9a-f]{64}$/, 'AC9: the linked ledger is anchored');
+
+    // Re-initializing against a different specification still reads the run's
+    // ledger: resume must never re-seed the criteria or drop accepted evidence.
+    const reinit = acLedger.initLedger({
+      root,
+      artifactsDir: state.artifactsDir,
+      runId: state.runId,
+      specSlug: state.specSlug,
+      specContent: '## Acceptance Criteria\n\n- AC1: The system shall be the only criterion now.\n',
+      generatedAt: '2026-10-20T12:00:00.000Z'
+    });
+    assert.equal(reinit.created, false, 'AC15: an existing ledger is read, never re-created');
+    assert.deepEqual(
+      reinit.ledger.criteria.map(record => record.id),
+      ['AC1', 'AC2', 'AC3'],
+      'AC15: the original criteria records survive'
+    );
+    assert.equal(fs.readFileSync(init.ledgerPath, 'utf8'), before, 'AC15: re-initializing never rewrites the ledger');
+
+    // A real resume passes through run start: Steps 1-2 are resolved, so it
+    // resumes at Step 3 and must load that same ledger before doing any work.
+    stateManager.updateStepState(root, state.runId, 1, 'skipped', { derivationNeeded: false });
+    stateManager.updateStepState(root, state.runId, 2, 'completed', { hasGaps: false });
+    const resumed = captureConsole(() => sdwOrch.cmdResume({ root, runId: state.runId }));
+    assert.equal(resumed.code, 4, `AC15: resume dispatches the first task: ${resumed.stderr}`);
+    assert.match(resumed.stdout, /\[Ledger\] Loaded .*ac-ledger\.json/, 'AC15: resume reads the ledger');
+    assert.doesNotMatch(resumed.stdout, /\[Ledger\] Initialized/, 'AC15: resume never re-seeds the ledger');
+    assert.equal(
+      fs.readFileSync(init.ledgerPath, 'utf8'),
+      before,
+      'AC15: resume preserves every record and evidence entry'
+    );
+
+    const after = stateManager.loadRunState(root, state.runId);
+    assert.equal(after.acLedgerSha256, anchored.acLedgerSha256, 'AC15: resume keeps the ledger anchor');
+    assert.match(fs.readFileSync(init.ledgerPath, 'utf8'), /"name": "ledger contract"/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC15: re-linking the same evidence adds no duplicate entry and rewrites nothing', () => {
+  const root = setupProject();
+  try {
+    const { state, ledgerPath } = seedRun(root);
+    const payloads = [
+      ['--type', 'file', '--path', 'skills/demo.cjs'],
+      ['--type', 'test', '--name', 'ledger contract', '--status', 'passed'],
+      ['--type', 'commit', '--sha', 'a1b2c3d'],
+      ['--type', 'review', '--id', 'review-7'],
+      ['--type', 'sabotage', '--id', 'sabotage-2']
+    ];
+    for (const args of payloads) {
+      const first = link(root, state.runId, ['--ac', 'AC1', ...args]);
+      assert.equal(first.status, 0, `${args.join(' ')}: ${first.stderr}`);
+    }
+    const snapshot = fs.readFileSync(ledgerPath, 'utf8');
+    const anchored = stateManager.loadRunState(root, state.runId);
+    assert.equal(acLedger.hashLedgerFile(ledgerPath), anchored.acLedgerSha256);
+
+    for (const args of payloads) {
+      const duplicate = link(root, state.runId, ['--ac', 'AC1', ...args]);
+      assert.equal(duplicate.status, 0, `AC15: a duplicate link is a no-op, not an error: ${duplicate.stderr}`);
+      assert.match(duplicate.stdout, /Already linked for AC1/, 'AC15: the duplicate is reported');
+    }
+
+    assert.equal(fs.readFileSync(ledgerPath, 'utf8'), snapshot, 'AC15: duplicate links leave the ledger byte-for-byte unchanged');
+    const record = readLedgerFile(ledgerPath).criteria[0];
+    assert.deepEqual(
+      record.evidence.map(entry => entry.type),
+      ['file', 'test', 'commit', 'review', 'sabotage'],
+      'AC15: each fact exists exactly once'
+    );
+    assert.equal(stateManager.loadRunState(root, state.runId).acLedgerSha256, anchored.acLedgerSha256,
+      'AC15: a duplicate link does not re-anchor run state');
+
+    // Step 4 acceptance replay: the same accepted file and task id stay one entry.
+    const step4Link = {
+      root,
+      ledgerPath,
+      acIds: ['AC2'],
+      evidence: { type: 'file', path: 'skills/demo.cjs', taskId: 'task-1' }
+    };
+    const firstAcceptance = acLedger.linkEvidence(step4Link);
+    assert.deepEqual(firstAcceptance.linked, ['AC2']);
+    const replay = acLedger.linkEvidence(step4Link);
+    assert.equal(replay.ok, true);
+    assert.deepEqual(replay.linked, [], 'AC15: replaying the acceptance links no duplicate');
+    assert.deepEqual(replay.duplicates, ['AC2']);
+    assert.deepEqual(
+      readLedgerFile(ledgerPath).criteria[1].evidence,
+      [{ type: 'file', path: 'skills/demo.cjs', taskId: 'task-1' }],
+      'AC15: the replayed Step 4 evidence remains a single entry'
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC16: the orchestrator protocol documents the ledger schema, commands, hash, and score derivation', () => {
+  const protocolPath = path.join(__dirname, '..', 'skills', 'sdw-orch', 'references', 'orchestrator_protocol.md');
+  const protocol = fs.readFileSync(protocolPath, 'utf8');
+
+  assert.match(protocol, /## \d+\. Acceptance Criteria Ledger/, 'the protocol carries a dedicated ledger section');
+  const schemaAnchors = ['"runId"', '"specSlug"', '"generatedAt"', '"criteria"', '"id"', '"text"', '"status"', '"evidence"'];
+  for (const anchor of schemaAnchors) {
+    assert.ok(protocol.includes(anchor), `AC16: the schema documents ${anchor}`);
+  }
+  for (const command of ['ledger link', 'ledger report', 'ledger audit']) {
+    assert.ok(protocol.includes(command), `AC16: the protocol documents ${command}`);
+  }
+  assert.match(protocol, /SHA-256/, 'AC16: the hash anchor rule is documented');
+  assert.match(protocol, /canonical JSON/, 'AC16: the canonical hash input is documented');
+  assert.match(protocol, /acLedgerSha256/, 'AC16: the run-state anchor field is documented');
+  assert.match(protocol, /round\(verifiedCount \/ totalAcs \* 10\)/, 'AC16: the score formula is documented');
+  assert.match(protocol, /capped at 8/, 'AC16: the negative-scenario cap is documented');
+  assert.match(protocol, /Remediation:/, 'AC16: the fail-closed initialization remediation is documented');
+});
+
+test('AC17: ledger initialization failure fails the run before Step 1 completes', () => {
+  const root = setupProject();
+  try {
+    // A file where the run artifact directory must go makes the ledger write fail
+    // with a real filesystem error on every platform: no mock, no weakened check.
+    const stateDir = path.join(root, '.sdw', 'state');
+    fs.mkdirSync(stateDir, { recursive: true });
+    const blockedArtifacts = path.join(stateDir, 'ac-ledger-demo');
+    fs.writeFileSync(blockedArtifacts, 'this file blocks the run artifact directory\n', 'utf8');
+
+    const failed = captureConsole(() => sdwOrch.cmdRun({ root, specPath: SPEC_REL, skipReview: true, skipPr: true }));
+    assert.equal(failed.code, 1, 'AC17: the run fails instead of continuing without a ledger');
+    assert.match(failed.stderr, /\[Ledger\] Initialization failed/, 'AC17: the failure is named');
+    assert.ok(failed.stderr.includes('.sdw/state/ac-ledger-demo'), `AC17: the artifacts directory is named: ${failed.stderr}`);
+    assert.ok(failed.stderr.includes('ac-ledger.json'), 'AC17: the ledger path is named');
+    assert.match(failed.stderr, /Remediation: create the run artifact directory/, 'AC17: the remediation is actionable');
+    assert.match(failed.stderr, /Step 1 has not completed/, 'AC17: the failure precedes Step 1');
+    assert.doesNotMatch(failed.stdout, /\[Step 1/, 'AC17: no Step 1 header is printed');
+
+    const state = stateManager.findLatestRunState(root);
+    assert.equal(state.status, 'failed', 'AC17: the run state records the failure');
+    assert.equal(state.steps[1].status, 'pending', 'AC17: Step 1 never completed');
+    assert.ok(
+      state.errors.some(entry => /Acceptance criteria ledger initialization failed/.test(entry.error || '')),
+      'AC17: the run state keeps the error'
+    );
+    assert.equal(fs.statSync(blockedArtifacts).isFile(), true, 'AC17: the injected failure is still the filesystem state');
+    assert.equal(fs.existsSync(path.join(blockedArtifacts, 'ac-ledger.json')), false);
+
+    // The CLI maps the same failure to a non-zero process exit.
+    const cli = spawnSync(
+      process.execPath,
+      [ORCH, 'run', SPEC_REL, '--root', root, '--skip-review', '--skip-pr'],
+      { cwd: root, encoding: 'utf8' }
+    );
+    assert.notEqual(cli.status, 0, 'AC17: the CLI exits non-zero');
+    assert.match(cli.stderr, /\[Ledger\] Initialization failed/);
+    assert.match(cli.stderr, /Remediation:/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

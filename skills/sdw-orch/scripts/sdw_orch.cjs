@@ -1854,26 +1854,31 @@ function printRunDryRunPlan(context) {
 }
 
 // Spec 00017 AC1: every run owns an acceptance criteria ledger in its artifact
-// directory. Initialization happens before Step 1 work, keeps a ledger the run
-// already owns (resume), and never blocks a run that cannot write one yet
-// (spec 00017 AC17 owns the fail-closed rule).
+// directory. Initialization happens before Step 1 work.
+// AC15: a run that already owns a ledger reads it (resume never re-seeds the
+// criteria), so accepted evidence survives every later invocation of the run.
+// AC17: any initialization failure is reported to the caller, which fails the run
+// before Step 1 completes; it is never downgraded to a warning.
 function initializeRunLedger({ targetRoot, state, specContent }) {
+  let ledgerPath = null;
   try {
-    const artifactsDir = state.artifactsDir
-      || stateManager.getArtifactsRelDir(targetRoot, state.specSlug, state.runId);
+    if (!state.artifactsDir) {
+      state.artifactsDir = stateManager.getArtifactsRelDir(targetRoot, state.specSlug, state.runId);
+    }
+    state.artifactsDir = normalizePath(state.artifactsDir);
+    ledgerPath = path.resolve(targetRoot, state.artifactsDir, acLedger.LEDGER_FILENAME);
     const result = acLedger.initLedger({
       root: targetRoot,
-      artifactsDir,
+      artifactsDir: state.artifactsDir,
       runId: state.runId,
       specSlug: state.specSlug,
       specContent
     });
     const ledgerRel = normalizePath(path.relative(targetRoot, result.ledgerPath));
     console.log(`[Ledger] ${result.created ? 'Initialized' : 'Loaded'} ${ledgerRel} with ${result.ledger.criteria.length} acceptance criteria.`);
-    return result;
+    return { ok: true, ...result };
   } catch (err) {
-    console.warn(`[Ledger] Initialization skipped: ${err.message}`);
-    return null;
+    return { ok: false, ledgerPath: ledgerPath || path.resolve(targetRoot, acLedger.LEDGER_FILENAME), error: err.message };
   }
 }
 
@@ -1922,20 +1927,18 @@ function linkAcceptedTaskEvidence({ targetRoot, state, taskId, acIds, files, com
   if (commitSha) payloads.push({ type: 'commit', sha: commitSha, taskId });
 
   let linked = 0;
-  let accepted = 0;
   for (const evidence of payloads) {
     const result = acLedger.linkEvidence({ root: targetRoot, ledgerPath, acIds, evidence });
     if (!result.ok) {
       console.warn(`[Ledger] ${evidence.type} evidence for "${taskId}" was not linked: ${result.errors.join(' ')}`);
       continue;
     }
-    accepted += 1;
     linked += result.linked.length;
   }
-  // Spec 00017 AC9: the caller persists this state, so the accepted Step 4 links
-  // and their hash land in the same run-state write.
-  if (accepted > 0) recordLedgerAnchor(targetRoot, state, ledgerPath);
+  // Spec 00017 AC9/AC15: only a link that added an entry is an accepted update,
+  // so re-running the same acceptance re-anchors nothing and writes no duplicate.
   if (linked > 0) {
+    recordLedgerAnchor(targetRoot, state, ledgerPath);
     console.log(`[Ledger] ${taskId} linked ${linked} evidence record(s) to ${acIds.join(', ')}.`);
   }
   return linked;
@@ -2498,8 +2501,28 @@ function cmdRun(options) {
     });
   }
 
-  // Spec 00017 AC1: the ledger exists before the first Step 1 mutation.
-  initializeRunLedger({ targetRoot, state, specContent: rawSpecContent });
+  // Spec 00017 AC1/AC15/AC17: the ledger exists before the first Step 1 mutation.
+  // A run that already owns one loads it, so resume preserves every record. A
+  // failure here fails the run before Step 1 completes instead of continuing
+  // without a trustworthy evidence ledger.
+  const ledgerInit = initializeRunLedger({ targetRoot, state, specContent: rawSpecContent });
+  if (!ledgerInit.ok) {
+    const artifactsRel = normalizePath(state.artifactsDir);
+    const ledgerRel = normalizePath(path.relative(targetRoot, ledgerInit.ledgerPath));
+    const failure = `Acceptance criteria ledger initialization failed in "${artifactsRel}" (${ledgerRel}): ${ledgerInit.error}`;
+    console.error(`[Ledger] Initialization failed in "${artifactsRel}" (${ledgerRel}): ${ledgerInit.error}`);
+    console.error(`[Ledger] Remediation: create the run artifact directory "${artifactsRel}" and make it writable, or restore its ${acLedger.LEDGER_FILENAME} if it was corrupted, then re-run; resume the same run with --run-id ${state.runId}. Step 1 has not completed.`);
+    state.status = 'failed';
+    state.errors = Array.isArray(state.errors) ? state.errors : [];
+    state.errors.push({ step: 1, timestamp: new Date().toISOString(), error: failure });
+    try {
+      stateManager.saveRunState(targetRoot, state);
+    } catch (stateErr) {
+      console.error(`[Ledger] The run state could not record the initialization failure: ${stateErr.message}`);
+    }
+    options._runResult = { runId: state.runId, status: 'failed', error: failure };
+    return 1;
+  }
 
   // Spec 00057 AC1: every run carries the append-only contribution list from the
   // first step boundary, including runs resumed from state written before it.
@@ -5728,13 +5751,17 @@ function cmdLedgerLink(options) {
     return 1;
   }
 
-  // Spec 00017 AC9: every accepted link re-anchors the ledger in run state.
-  recordLedgerAnchor(targetRoot, state, result.ledgerPath);
-  try {
-    stateManager.saveRunState(targetRoot, state);
-  } catch (err) {
-    console.error(`[Ledger] The ledger was updated but its hash could not be recorded in run state: ${err.message}`);
-    return 1;
+  // Spec 00017 AC9/AC15: every accepted link re-anchors the ledger in run state.
+  // A duplicate link adds no entry, so it is not an accepted update and leaves
+  // both the ledger and its anchor untouched.
+  if (result.linked.length > 0) {
+    recordLedgerAnchor(targetRoot, state, result.ledgerPath);
+    try {
+      stateManager.saveRunState(targetRoot, state);
+    } catch (err) {
+      console.error(`[Ledger] The ledger was updated but its hash could not be recorded in run state: ${err.message}`);
+      return 1;
+    }
   }
 
   for (const id of result.linked) {

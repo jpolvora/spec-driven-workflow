@@ -465,5 +465,62 @@ When `retro.enabled` runs the analysis after delivery, the retrospective applies
 - Memory entry kinds, backends, and the run-scoped index: [`../../sdw-memory/references/memory_protocol.md`](../../sdw-memory/references/memory_protocol.md)
 - Candidate shape, routes, and the specification boundary: [`../../sdw-retro/references/candidate_contract.md`](../../sdw-retro/references/candidate_contract.md)
 
+## 13. Acceptance Criteria Ledger (Spec 00017)
+
+Every run owns one ledger at `{artifactsDir}/ac-ledger.json` (`.sdw/state/{slug}/{runId}/ac-ledger.json`). It is the single source of truth for AC status and evidence: Step 4 links task evidence into it, Step 5 derives its score from it, and nothing else may author a score.
+
+### Schema
+
+```json
+{
+  "runId": "run-1792400000000-feature",
+  "specSlug": "feature",
+  "generatedAt": "2026-10-19T12:00:00.000Z",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "The system shall support handoff and command modes.",
+      "status": "verified",
+      "evidence": [
+        { "type": "file", "path": "skills/sdw-orch/scripts/implementation_runner.cjs", "taskId": "task-1" },
+        { "type": "commit", "sha": "a1b2c3d", "taskId": "task-1" }
+      ]
+    }
+  ]
+}
+```
+
+- One record per declared criterion, in specification order. `status` is `unverified` (no evidence), `verified` (at least one evidence entry proves it), or `failed` (a Step 5 judge verdict rejected it; its evidence is kept but never counted).
+- Evidence types: `file` (`path`), `test` (`name`, `status`), `commit` (`sha`), `review`/`sabotage` (`id`, optional `status`). Any other type is refused with the allowed enum.
+- Entries are append-only and de-duplicated by type plus stable identity (`path`, test `name`, `sha`, review or sabotage `id`). Re-linking the same fact is a no-op: the ledger and its anchor stay unchanged, so replaying a link or a Step 4 acceptance never duplicates evidence.
+- File paths are stored project-relative with forward slashes; a path outside the project root is refused.
+
+### Commands
+
+```bash
+node skills/sdw-orch/scripts/sdw_orch.cjs ledger link --run-id <id> --ac AC1 AC2 --type test --name "ledger contract" --status passed
+node skills/sdw-orch/scripts/sdw_orch.cjs ledger link --run-id <id> --ac AC3 --type file --path skills/sdw-orch/scripts/ac_ledger.cjs
+node skills/sdw-orch/scripts/sdw_orch.cjs ledger report [--run-id <id>] [--format md|json]
+node skills/sdw-orch/scripts/sdw_orch.cjs ledger audit --run-id <id> [--format md|json]
+```
+
+- `ledger link` appends one typed payload to one or more declared AC ids. An unknown AC id or invalid payload leaves the ledger byte-for-byte unchanged and exits `1`.
+- `ledger report` renders every record with its status and evidence as Markdown or JSON.
+- `ledger audit` lists the criteria that carry no evidence and exits `1` while any remain, so an unproven AC is visible without reading the JSON.
+- Step 4 acceptance links each accepted `filesChanged` path and its checkpoint commit SHA with the task id; Step 5 records one `review` entry per criterion (`step5-<judge>`) and updates it on re-judge.
+
+### Hash Anchor
+
+- After every accepted update, run state stores `acLedgerPath` and `acLedgerSha256` (SHA-256 over canonical JSON: object keys sorted at every depth, array order preserved).
+- Verification compares the recorded digest with the ledger file before Step 5 scoring and at `score submit`. A mismatch fails Step 5 closed (score `0`, exit `2`, `reimplementation_needed`) and blocks Step 6. It never repairs the ledger or rewrites the anchor. A run with no ledger, or no recorded anchor, is not a mismatch.
+- Ledger initialization failure at run start fails the run before Step 1 completes: exit `1`, a message naming the artifact directory and ledger path, and a `Remediation:` line. Resume reads an existing ledger, never re-seeds its criteria, and appends new evidence.
+
+### Score Derivation
+
+- `evidencedCount` counts records with at least one evidence entry; `verifiedCount` counts those whose status is `verified`. A `failed` judge verdict is excluded even when earlier file, test, or commit evidence exists.
+- `score = round(verifiedCount / totalAcs * 10)`, clamped to 0-10. A specification with zero criteria scores `0` and fails closed.
+- Negative-scenario cap: when any criterion declares a negative scenario (its text, or a test evidence name, names a failing, invalid, rejected, unknown, missing, mismatch, or error case) and has no observed passing `test` evidence, the score is capped at 8. Step 5 reports the cap, the uncapped score, and the reasons.
+
+
 
 
