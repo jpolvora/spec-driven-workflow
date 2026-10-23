@@ -185,6 +185,8 @@ function parseArgs(args) {
     else if (arg === '--evidence' || arg === '--evidence-path') result.evidencePath = args[++i];
     else if (arg.startsWith('--evidence=')) result.evidencePath = arg.slice(11);
     else if (arg.startsWith('--evidence-path=')) result.evidencePath = arg.slice(16);
+    else if (arg === '--spec') result.specPath = args[++i];
+    else if (arg.startsWith('--spec=')) result.specPath = arg.slice(7);
     else if (arg === '--mode') result.implementationMode = args[++i];
     else if (arg.startsWith('--mode=')) result.implementationMode = arg.slice(7);
     else if (arg === '--verdict') result.verdictPath = args[++i];
@@ -203,25 +205,29 @@ function parseArgs(args) {
     'task next': 'task-next',
     'task abandon': 'task-abandon',
     'score submit': 'score-submit',
-    'report re-render': 'report-re-render'
+    'report re-render': 'report-re-render',
+    'dag preview': 'dag-preview'
   };
   const combinedMatch = COMBINED[positional.slice(0, 2).join(' ')];
   if (combinedMatch) {
     result.subcommand = combinedMatch;
     const rest = positional.slice(2);
     result.specPaths = [];
-    result.specPath = null;
+    // `dag preview` keeps its --spec path; the other combined commands have none.
+    if (combinedMatch !== 'dag-preview') result.specPath = null;
     if (!result.taskId && rest[0]) result.taskId = rest[0];
     if (combinedMatch === 'task-finish' && !result.evidencePath && rest[1]) result.evidencePath = rest[1];
     if (combinedMatch === 'task-abandon' && !result.reason && rest[1]) result.reason = rest[1];
-  } else if (['task-finish', 'task-next', 'task-abandon', 'score-submit', 'report-re-render'].includes(positional[0])) {
+    if (combinedMatch === 'dag-preview' && rest[0] && !result.specPath) result.specPath = rest[0];
+  } else if (['task-finish', 'task-next', 'task-abandon', 'score-submit', 'report-re-render', 'dag-preview'].includes(positional[0])) {
     result.subcommand = positional[0];
     const rest = positional.slice(1);
     result.specPaths = [];
-    result.specPath = null;
+    if (result.subcommand !== 'dag-preview') result.specPath = null;
     if (!result.taskId && rest[0]) result.taskId = rest[0];
     if (result.subcommand === 'task-finish' && !result.evidencePath && rest[1]) result.evidencePath = rest[1];
     if (result.subcommand === 'task-abandon' && !result.reason && rest[1]) result.reason = rest[1];
+    if (result.subcommand === 'dag-preview' && rest[0] && !result.specPath) result.specPath = rest[0];
   } else {
     result.subcommand = positional[0] || null;
     result.specPaths = positional.slice(1);
@@ -2130,14 +2136,19 @@ function cmdRun(options) {
       .map(ac => (typeof ac === 'string' ? ac : ac.id));
     dagPlan = {
       complexity: { level: 'refinement', score: 0 },
-      totalTasks: 1,
+      taskCount: 1,
+      execMode: 'sequential',
+      levels: [['task-refine']],
+      fileDisjointness: [],
       tasks: [{
         id: 'task-refine',
         title: `Second pass: ${specSlug}`,
         description: 'Audit the delivered implementation against the specification, implement acceptance criteria that are missing or drifted, then apply clear simplification or quality improvements. Changing nothing is acceptable only when every criterion already holds and no drift remains.',
         coveredAcs: refineAcIds,
         dependencies: [],
-        targetFiles: []
+        targetFiles: [],
+        level: 0,
+        parallelizable: false
       }]
     };
     state.dagTasks = dagPlan.tasks;
@@ -2150,8 +2161,19 @@ function cmdRun(options) {
   } else if (startStep <= 3 && state.steps[3].status !== 'completed') {
     state = stateManager.updateStepState(targetRoot, state.runId, 3, 'in_progress');
     logStepEnter(3);
-    dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint });
-    console.log(`[Step 3: DAG Generation] Complexity: ${dagPlan.complexity.level}. Generated ${dagPlan.totalTasks} task(s).`);
+    dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint, maxTasksPerSpec: config.maxTasksPerSpec });
+    if (dagPlan.refused) {
+      // Spec 00030 AC13/AC14: a decomposition beyond the cap is refused with a
+      // split proposal, never merged into coarse tasks and never planned.
+      const refusal = `split-required tasks-needed=${dagPlan.tasksNeeded} cap=${dagPlan.cap}${dagPlan.detail === 'criteria-undersupplied' ? ` criteria=${dagPlan.acs}` : ''}`;
+      console.error(`[Step 3: DAG] ${refusal}`);
+      printSplitProposal(dagPlan.splitProposal);
+      state = stateManager.updateStepState(targetRoot, state.runId, 3, 'failed', dagPlan, refusal);
+      options._runResult = { runId: state.runId, status: 'failed', error: refusal };
+      return 1;
+    }
+    console.log(`[Step 3: DAG Generation] Complexity: ${dagPlan.complexity.level}. Generated ${dagPlan.taskCount} task(s).`);
+    logDagPlan(dagPlan);
     state.dagTasks = dagPlan.tasks;
     state = stateManager.saveRunState(targetRoot, state);
     const step3Artifact = artifactWriter.writeStep3Artifact({
@@ -2166,7 +2188,15 @@ function cmdRun(options) {
   } else if (state.steps[3].output) {
     dagPlan = state.steps[3].output;
   } else {
-    dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint });
+    dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint, maxTasksPerSpec: config.maxTasksPerSpec });
+    if (dagPlan.refused) {
+      const refusal = `split-required tasks-needed=${dagPlan.tasksNeeded} cap=${dagPlan.cap}${dagPlan.detail === 'criteria-undersupplied' ? ` criteria=${dagPlan.acs}` : ''}`;
+      console.error(`[Step 3: DAG] ${refusal}`);
+      printSplitProposal(dagPlan.splitProposal);
+      state = stateManager.updateStepState(targetRoot, state.runId, 3, 'failed', dagPlan, refusal);
+      options._runResult = { runId: state.runId, status: 'failed', error: refusal };
+      return 1;
+    }
   }
 
   if (state.steps[3] && state.steps[3].status === 'completed') {
@@ -3615,6 +3645,71 @@ function cmdRun(options) {
   return 0;
 }
 
+/**
+ * Spec 00030 AC14: a plan refused by the task cap names two focused follow-up
+ * specifications with their acceptance criteria and file partitions.
+ */
+function printSplitProposal(splitProposal) {
+  if (!Array.isArray(splitProposal) || splitProposal.length === 0) return;
+  console.log('Split the specification into two focused specifications:');
+  for (const proposal of splitProposal) {
+    const acIds = Array.isArray(proposal.acIds) ? proposal.acIds : [];
+    const acRange = acIds.length > 0 ? `${acIds[0]}..${acIds[acIds.length - 1]}` : '(none)';
+    const files = Array.isArray(proposal.targetFiles) && proposal.targetFiles.length > 0
+      ? proposal.targetFiles.join(', ')
+      : '(none)';
+    console.log(`  - ${proposal.slug}: ${acRange} (files: ${files})`);
+  }
+}
+
+/**
+ * Spec 00030 AC15-AC17 observability: one summary line, the wave levels, one line
+ * per task, and the pairwise file-disjointness result. Flag-only: dispatch stays
+ * one task at a time.
+ */
+function logDagPlan(plan) {
+  const complexity = (plan.complexity && plan.complexity.level) || 'unknown';
+  const acCount = (plan.complexity && plan.complexity.acCount) || 0;
+  console.log(`[Step 3: DAG] complexity=${complexity} acs=${acCount} tasks=${plan.taskCount} execMode=${plan.execMode || 'sequential'}`);
+  console.log(`[Step 3: DAG] levels=${JSON.stringify(plan.levels || [])}`);
+  for (const task of plan.tasks || []) {
+    const acs = (task.coveredAcs || []).join(',') || 'none';
+    const dependencies = (task.dependencies || []).length > 0 ? task.dependencies.join(',') : 'none';
+    const files = (task.targetFiles || []).join(',') || 'none';
+    console.log(`  ${task.id} | ${acs} | deps=${dependencies} | level=${task.level} | files=${files} | parallelizable=${Boolean(task.parallelizable)}`);
+  }
+  const pairs = (plan.fileDisjointness || [])
+    .map(entry => `${entry.pair.join('/')}=${entry.disjoint ? 'disjoint' : 'shared'}`);
+  if (pairs.length > 0) console.log(`[Step 3: DAG] fileDisjointness: ${pairs.join(', ')}`);
+}
+
+/**
+ * Spec 00030 AC20: the plan emitted by `dag preview --json`.
+ */
+function buildPreviewPlan(plan) {
+  const preview = {
+    complexity: (plan.complexity && plan.complexity.level) || 'unknown',
+    execMode: plan.execMode || 'sequential',
+    taskCount: plan.taskCount || 0,
+    levels: plan.levels || [],
+    tasks: (plan.tasks || []).map(task => ({
+      id: task.id,
+      acIds: (task.coveredAcs || []).slice(),
+      targetFiles: (task.targetFiles || []).slice(),
+      dependencies: (task.dependencies || []).slice(),
+      level: task.level,
+      parallelizable: Boolean(task.parallelizable)
+    }))
+  };
+  if (plan.refused) {
+    preview.refused = true;
+    preview.tasksNeeded = plan.tasksNeeded;
+    preview.cap = plan.cap;
+    preview.splitProposal = plan.splitProposal || [];
+  }
+  return preview;
+}
+
 function getDispatchRecord(state) {
   const step4 = state.steps && state.steps[4];
   if (!step4) return { activeTaskId: null, sequence: 0, dispatchedAt: null, abandonments: [] };
@@ -3786,6 +3881,53 @@ function printDispatchEnvelope(envelope, state, options) {
   console.log(`\nWhen the worker reports back, submit its evidence with:`);
   console.log(`  ${envelope.finishCommand}`);
   console.log(`\n[Step 4: Dispatch] Status: awaiting_implementation (one task in flight).`);
+}
+
+/**
+ * Spec 00030 AC19/AC20: prints the plan the complexity classifier would generate
+ * for a specification. Pure by construction: it reads the specification and the
+ * configuration, resolves the file blueprint through refinement heuristics, and
+ * writes no run state, artifact, branch, sandbox, or registry row.
+ */
+function cmdDagPreview(options) {
+  const targetRoot = options.root ? path.resolve(options.root) : process.cwd();
+  const config = loadProjectConfig(targetRoot, options);
+
+  if (!options.specPath) {
+    console.error('[sdw-orch dag preview] A specification is required (--spec <specPath> or a positional path).');
+    return 1;
+  }
+
+  const resolvedSpec = resolveSpecPath(options.specPath, targetRoot, config);
+  if (!resolvedSpec || !fs.existsSync(resolvedSpec)) {
+    console.error(`[sdw-orch dag preview] Specification not found: "${options.specPath}".`);
+    return 1;
+  }
+
+  const specContent = fs.readFileSync(resolvedSpec, 'utf8');
+  const slugMatch = specContent.match(/slug:\s*([^\r\n]+)/);
+  const specSlug = slugMatch
+    ? slugMatch[1].trim()
+    : path.basename(resolvedSpec, path.extname(resolvedSpec));
+  const blueprint = specGrilling.generateRefinementBlueprint(specContent, { slug: specSlug });
+  const plan = dagPlanner.generateDagPlan(specContent, { slug: specSlug, blueprint, maxTasksPerSpec: config.maxTasksPerSpec });
+
+  if (options.json) {
+    console.log(JSON.stringify(buildPreviewPlan(plan), null, 2));
+    if (plan.refused) {
+      console.error(`[Step 3: DAG] split-required tasks-needed=${plan.tasksNeeded} cap=${plan.cap}${plan.detail === 'criteria-undersupplied' ? ` criteria=${plan.acs}` : ''}`);
+    }
+    return plan.refused ? 1 : 0;
+  }
+
+  console.log(`[sdw-orch dag preview] Specification: ${normalizePath(path.relative(targetRoot, resolvedSpec))} (${specSlug})`);
+  if (plan.refused) {
+    console.error(`[Step 3: DAG] split-required tasks-needed=${plan.tasksNeeded} cap=${plan.cap}`);
+    printSplitProposal(plan.splitProposal);
+    return 1;
+  }
+  logDagPlan(plan);
+  return 0;
 }
 
 function cmdTaskNext(options) {
@@ -4001,6 +4143,18 @@ function cmdTaskFinish(options) {
   }
 
   const evidenceData = evValidation.data;
+
+  // Spec 00030 AC22: a task owns only its assigned acceptance criteria. Evidence
+  // claiming a criterion assigned to another task is rejected and the task stays
+  // dispatched, so a worker cannot close a criterion it was never given.
+  const assignedAcIds = new Set(targetTask.coveredAcs || targetTask.acIds || []);
+  if (assignedAcIds.size > 0) {
+    const outOfScope = evidenceData.acIds.filter(acId => !assignedAcIds.has(acId));
+    if (outOfScope.length > 0) {
+      console.error(`Error: Task "${taskId}" reported out-of-scope acceptance evidence: ${outOfScope.join(', ')}. Its assigned acceptance criteria are: ${[...assignedAcIds].join(', ')}. The task stays dispatched.`);
+      return 1;
+    }
+  }
 
   // Spec 028 AC25/AC26: only an honest success closes a task.
   const evidenceStatus = String(evidenceData.status || '').trim().toLowerCase();
@@ -4404,6 +4558,19 @@ function cmdStatus(options) {
     }
   }
 
+  // Spec 00030 AC23: remaining queue depth while tasks are incomplete.
+  const statusDagTasks = getDagTasksForState(state);
+  if (statusDagTasks.length > 0) {
+    const completedIds = new Set(
+      Object.keys((step4 && step4.tasks) || {})
+        .filter(id => step4.tasks[id] && step4.tasks[id].status === 'completed')
+    );
+    const remaining = statusDagTasks.filter(task => !completedIds.has(task.id)).length;
+    if (remaining > 0) {
+      console.log(`\nQueue: ${remaining} remaining`);
+    }
+  }
+
   if (state.errors && state.errors.length > 0) {
     console.log('\nRecorded Errors:');
     state.errors.forEach(e => {
@@ -4654,6 +4821,7 @@ Subcommands:
   task abandon           Return the dispatched DAG task to the queue
   score submit           Submit a judge verdict for Step 5 conformance scoring
   report re-render       Refresh the delivery report and the in-progress report from run state (never commits)
+  dag preview            Print the plan the classifier would generate, without side effects
   status                 Check status of current or specified run state
   sandbox list           List isolated sandboxes created by --sandbox
   sandbox report         Regenerate and print the report for a sandbox (--run-id)
@@ -4665,6 +4833,7 @@ Options:
   --new-run              Start a new run even when another run for the same specification is open
   --task <id>            DAG task ID for task next/finish/abandon (alias: --task-id)
   --evidence <path>      Path to evidence JSON file (alias: --evidence-path)
+  --spec <path>          Specification path for dag preview (or pass it positionally)
   --reason <text>        Why the dispatched task is being abandoned
   --verdict <path>       Path to judge verdict JSON file for score submit
   --mode <mode>          Implementation mode (subagent | command)
@@ -4738,6 +4907,9 @@ function main() {
     case 'status':
       code = cmdStatus(options);
       break;
+    case 'dag-preview':
+      code = cmdDagPreview(options);
+      break;
     case 'sandbox':
       code = cmdSandbox(options);
       break;
@@ -4748,8 +4920,11 @@ function main() {
   }
 
   try {
-    const refreshRoot = options._effectiveRoot || (options.root ? path.resolve(options.root) : process.cwd());
-    sandbox.refreshReportForRoot(refreshRoot);
+    // Spec 00030 AC19: `dag preview` is pure; it never refreshes a sandbox report.
+    if (options.subcommand !== 'dag-preview') {
+      const refreshRoot = options._effectiveRoot || (options.root ? path.resolve(options.root) : process.cwd());
+      sandbox.refreshReportForRoot(refreshRoot);
+    }
   } catch (e) {}
 
   process.exit(code);
@@ -4763,6 +4938,7 @@ module.exports = {
   cmdRun,
   cmdResume,
   cmdStatus,
+  cmdDagPreview,
   cmdTaskNext,
   cmdTaskAbandon,
   cmdTaskFinish,

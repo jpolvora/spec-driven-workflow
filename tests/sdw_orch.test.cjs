@@ -102,7 +102,7 @@ Simple feature without error handling or concurrency specs.`;
   assert.ok(applied.includes(gap.dimension), 'Applies grilling resolution to spec');
 });
 
-test('AC7 & AC8: DAG Complexity Decomposition & Context Fencing', () => {
+test('AC7 & AC8 & 00030 AC9-AC12: DAG Complexity Decomposition & Context Fencing', () => {
   const complexSpec = `---
 slug: multi-step
 ---
@@ -114,11 +114,30 @@ slug: multi-step
 - AC4: The orchestrator shall prepare pr payload.
 - AC5: The orchestrator shall handle ui events.
 - AC6: The orchestrator shall dispatch subagents.
+- AC7: The orchestrator shall record the run exec mode.
+- AC8: The orchestrator shall slice target files per task.
+- AC9: The orchestrator shall refuse oversized plans.
+- AC10: The orchestrator shall report remaining queue depth.
+- AC11: The orchestrator shall preview the dag without side effects.
 `;
 
   const plan = dagPlanner.generateDagPlan(complexSpec, { slug: 'multi-step' });
   assert.equal(plan.complexity.level, 'complex', 'Identifies complex spec (AC7)');
-  assert.ok(plan.tasks.length >= 2, 'Decomposes complex spec into multiple tasks (AC7)');
+  assert.ok(plan.tasks.length >= 3 && plan.tasks.length <= 5, 'Fans out into three to five tasks (00030 AC9)');
+
+  // 00030 AC10-AC12: declaration-order chunks of at most four, full coverage, acyclic dependencies.
+  const scheduled = new Set();
+  const assigned = [];
+  for (const task of plan.tasks) {
+    assert.ok(task.coveredAcs.length > 0 && task.coveredAcs.length <= 4, 'Task owns at most four ACs (00030 AC10)');
+    for (const dependency of task.dependencies || []) {
+      assert.ok(scheduled.has(dependency), 'Dependencies precede the dependent task');
+    }
+    assigned.push(...task.coveredAcs);
+    scheduled.add(task.id);
+  }
+  assert.deepEqual(assigned, dagPlanner.parseAcceptanceCriteria(complexSpec).map(ac => ac.id), 'Every AC is assigned once in declaration order (00030 AC10, AC12)');
+  assert.equal(new Set(assigned).size, assigned.length, 'No AC is assigned twice (00030 AC12)');
 
   // Context fencing verification (AC8)
   for (const task of plan.tasks) {

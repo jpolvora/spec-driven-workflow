@@ -59,6 +59,7 @@
   "prePrDiscovery": "block",
   "reviewFixCommand": "",
   "maxPreemptions": 10,
+  "maxTasksPerSpec": 5,
   "retro": {
     "enabled": true,
     "followUp": "queue",

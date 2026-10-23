@@ -354,6 +354,13 @@
       "description": "Maximum concurrent-push adaptation budget for post-PR review convergence before draining rounds.",
       "default": 3
     },
+    "maxTasksPerSpec": {
+      "type": "integer",
+      "description": "Task cap per specification that the DAG planner enforces; out-of-range values clamp to 2-8.",
+      "minimum": 2,
+      "maximum": 8,
+      "default": 5
+    },
     "memory": {
       "type": "object",
       "description": "Product memory backend selection for sdw-memory (central knowledge wrapper). The ws-memo vault is the default integration; local traps file and memory files are fallbacks.",

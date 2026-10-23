@@ -3,7 +3,7 @@ id: "47"
 slug: 00030-sdw-micro-task-dag-planning
 title: "SDW Complexity-Gated DAG Planning with Split Advisory and Parallelizable Flag"
 source: local
-status: awaiting-approval
+status: implemented
 specDate: 2026-10-23
 priority: high
 value: "Replaces the coarse two-task cap with a classifier that emits 1, 2, or 3-5 tasks and refuses oversized specs with a split proposal"

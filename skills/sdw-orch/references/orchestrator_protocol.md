@@ -66,7 +66,7 @@ Each execution session is completely isolated within a dedicated JSON state file
 
 1. **Derivation:** Identifies whether the spec is already agent-ready (EARS ACs, DoR, YAML frontmatter). Skips derivation if ready; otherwise reformulates human stories.
 2. **Grilling:** Walks the decision tree covering input bounds, failure scenarios, and concurrency. Auto-resolves known gaps or prompts user via `ask_question` with recommended defaults. Records advisory spec observations over sibling specifications in `steps[2].output.specObservations`; they never block or alter the run.
-3. **DAG Generation:** Analyzes complexity (file count, touchpoints) and decomposes requirements into 1 or more atomic tasks.
+3. **DAG Generation:** Classifies the refined specification as `low`, `standard`, or `complex` from its declared acceptance criteria plus the Step 2 blueprint target files, then decomposes it into one task, the foundation-plus-integration pair, or three to five slices of at most four criteria and three target files. Four or fewer criteria are `low`, five to ten are `standard`, more than ten are `complex`, and three detected touchpoints with seven or more criteria escalate to `complex`. A decomposition needing more than five tasks is refused (exit `1`, `split-required tasks-needed=N cap=5`) with a two-specification split proposal instead of coarse merging. Every plan records `execMode: sequential`, wave `levels`, per-task `parallelizable` flags, and pairwise file disjointness; the flags are observable only.
 4. **Implementation Dispatch:** Sequentially dispatches one DAG task at a time to a single worker, with a complete brief (criteria, scope fence, prohibitions, evidence contract) instead of the orchestrator's transcript. Every accepted task is checkpointed immediately: one scoped commit of its `filesChanged` plus the tag `sdw-checkpoint-{runId}-{taskId}`.
 5. **Conformance Scoring:** An LLM judge fences the criteria plus the generated diff, emits a 0-10 score with per-criterion verdicts. If the score is below threshold (default 8/10), feedback triggers the re-implementation loop.
 6. **Delivery Commit:** Creates an atomic, structured git commit for verified code. It remains the delivery commit after the per-task checkpoints and aggregates whatever they did not already commit.
@@ -158,6 +158,16 @@ Headers are plain text for humans and grep. They change no exit code, no state f
 - **Envelope:** `runId`, `specSlug`, `taskId`, `title`, `status`, `sequence`, `promptFile`, `promptBytes`, `evidenceFile`, `specPath`, `workingDir`, `acIds`, `dependencies`, `subagentBrief`, `finishCommand`.
 - **Abandon:** `node skills/sdw-orch/scripts/sdw_orch.cjs task abandon --run-id <runId> --task <taskId> --reason "<why>"`
   - Returns the task to `pending`, appends to `steps["4"].dispatch.abandonments`, clears the active dispatch.
+- **Queue depth:** `status` prints `Queue: {remaining} remaining` while any DAG task is incomplete.
+
+### DAG Plan Contract & `dag preview`
+- **Plan fields (Step 3 output):** `complexity` (`level`, `acCount`, detected `touchpoints`), `taskCount`, `execMode: "sequential"`, `levels` (one task-id list per wave), `fileDisjointness` (one `{ pair, disjoint, sharedFiles }` entry per task pair), and `tasks` (`id`, `coveredAcs`, `dependencies`, `level`, `parallelizable`, `targetFiles`). Run state keeps this object in `steps[3].output`, so complexity, task count, dependencies, and the execution mode are recorded together.
+- **Wave levels and flags:** `level` is the longest dependency chain that precedes the task. A task is `parallelizable` only when it shares its wave with another task whose file slice is disjoint from its own; the flag never changes dispatch, which keeps exactly one task in flight (spec 00028 invariant).
+- **Cap and split proposal:** a decomposition needing more than the effective cap is refused with `split-required tasks-needed=N cap=<effective>`. The effective cap is the `maxTasksPerSpec` configuration value (`.sdw/config.json`, integer 2-8, default 5; out-of-range values clamp to 2 and 8, and an absent key means five), so the default refusal remains `split-required tasks-needed=N cap=5`. The refusal carries `splitProposal` with two entries `{ slug: "<orig>-a" | "<orig>-b", acIds, targetFiles }`, partitioning criteria in declaration order and files in blueprint order. Step 3 is recorded `failed` with the refusal and no tasks, and no Step 3 artifact is written.
+- **Preview:** `node skills/sdw-orch/scripts/sdw_orch.cjs dag preview [--json] [--spec <path>]`
+  - Resolves the specification plus configuration, builds the blueprint through refinement heuristics, and prints the plan the classifier would emit. A missing specification exits `1` naming the path.
+  - `--json` emits `{ complexity, execMode, taskCount, levels, tasks: [{ id, acIds, targetFiles, dependencies, level, parallelizable }] }`; a refused plan also emits `refused`, `tasksNeeded`, `cap`, and `splitProposal`, and exits `1`.
+  - Pure: no run state, step artifact, branch, sandbox, registry row, or report is written or refreshed.
 
 ### Task Finish Subcommand
 - **Command:** `node skills/sdw-orch/scripts/sdw_orch.cjs task finish --run-id <runId> --task <taskId> --evidence <evidencePath>`
@@ -165,7 +175,7 @@ Headers are plain text for humans and grep. They change no exit code, no state f
 - **Validation Rules:**
   - `taskId`: Must match target DAG task.
   - `status`: Required; `success`, `partial`, `failed`, or `blocked`. Only `success` is accepted.
-  - `acIds`: Non-empty subset of specification ACs.
+  - `acIds`: Non-empty, and a subset of the criteria assigned to this task (`coveredAcs`). A criterion owned by another task is out of scope: the submission is rejected with code 1 and the task stays dispatched.
   - `filesChanged`: Non-empty array of project-relative paths (no absolute paths, no `..` traversal, no `.git/`), files must exist on disk or be git-tracked deletions.
   - `tests`: Optional or empty array `[]` for non-testable tasks (e.g. docs, configs).
   - `summary`: Non-empty string.
