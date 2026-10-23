@@ -838,6 +838,49 @@ function loadProjectConfig(targetRoot, options = {}) {
   return config;
 }
 
+// Spec 00056 AC1-AC3: advisory per-role model hints. Hints stay opaque strings;
+// no helper invokes a model or contacts a provider. Resolution is role entry,
+// then models.default, then null (the current session model).
+const MODEL_HINT_KEYS = ['model', 'provider', 'effort', 'apiEndpoint'];
+
+function normalizeModelHint(entry) {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null;
+  const hint = {};
+  for (const key of MODEL_HINT_KEYS) {
+    hint[key] = typeof entry[key] === 'string' && entry[key].trim() ? entry[key].trim() : null;
+  }
+  return MODEL_HINT_KEYS.some(key => hint[key] !== null) ? hint : null;
+}
+
+function resolveModelHint(models, role) {
+  if (!models || typeof models !== 'object' || Array.isArray(models)) return null;
+  return normalizeModelHint(models[role]) || normalizeModelHint(models.default);
+}
+
+function resolveModelHints(config) {
+  const models = config && config.models;
+  return {
+    default: normalizeModelHint(models && models.default),
+    orchestrator: resolveModelHint(models, 'orchestrator'),
+    worker: resolveModelHint(models, 'worker')
+  };
+}
+
+function formatModelHint(hint) {
+  if (!hint) return 'session model';
+  const parts = [];
+  if (hint.model) parts.push(hint.model);
+  if (hint.provider) parts.push(`provider ${hint.provider}`);
+  if (hint.effort) parts.push(`effort ${hint.effort}`);
+  if (hint.apiEndpoint) parts.push(`endpoint ${hint.apiEndpoint}`);
+  return parts.join(', ');
+}
+
+function attachWorkerModelHint(promptFileAbs, workerHint) {
+  if (!workerHint) return;
+  fs.appendFileSync(promptFileAbs, `\n## Worker Model Hint\n\nModel: ${formatModelHint(workerHint)}\n`, 'utf8');
+}
+
 function resolveSpecPath(specInput, targetRoot, config) {
   if (!specInput) return null;
   const root = targetRoot ? path.resolve(targetRoot) : process.cwd();
@@ -1997,10 +2040,27 @@ function cmdRun(options) {
     state = stateManager.saveRunState(targetRoot, state);
   }
 
+  // Spec 00056 AC1-AC3: resolve the static hint snapshot once. Steps 1-3 carry
+  // orchestratorHint; every Step 4 envelope carries workerHint. Detection is a
+  // later slice, so the static path records the skipped status.
+  const modelHints = resolveModelHints(config);
+  state.models = {
+    detection: { status: 'skipped' },
+    orchestratorHint: modelHints.orchestrator,
+    workerHint: modelHints.worker
+  };
+  state = stateManager.saveRunState(targetRoot, state);
+
   console.log(`[sdw-orch] Run "${state.runId}" active at step ${startStep}/8.`);
   console.log(`[sdw-orch] State file: ${stateManager.getStateFilePath(targetRoot, state.runId)}`);
   if (resumedExistingRun && !options._resumedLogged) logRunResumed(state.runId, specSlug, startStep);
   else if (!resumedExistingRun) logRunStarted(state.runId, specSlug, startStep);
+
+  // Spec 00056 AC2: the orchestrator hint governs derivation, refinement, and
+  // DAG generation; each planning step records it in its output.
+  if (modelHints.orchestrator) {
+    console.log(`[Step 1-3: Planning] Orchestrator model hint: ${formatModelHint(modelHints.orchestrator)}.`);
+  }
 
   let effectiveSpecContent = rawSpecContent;
 
@@ -2012,10 +2072,10 @@ function cmdRun(options) {
     if (derivationResult.derivationNeeded) {
       console.log(`[Step 1: Derivation] Spec reformulated for agentic execution.`);
       effectiveSpecContent = derivationResult.specContent;
-      state = stateManager.updateStepState(targetRoot, state.runId, 1, 'completed', { derivationNeeded: true });
+      state = stateManager.updateStepState(targetRoot, state.runId, 1, 'completed', { derivationNeeded: true, orchestratorHint: modelHints.orchestrator });
     } else {
       console.log(`[Step 1: Derivation] Skipped: input spec is already agent-ready.`);
-      state = stateManager.updateStepState(targetRoot, state.runId, 1, 'skipped', { derivationNeeded: false });
+      state = stateManager.updateStepState(targetRoot, state.runId, 1, 'skipped', { derivationNeeded: false, orchestratorHint: modelHints.orchestrator });
     }
     logStepDone(1);
     const step1Status = state.steps[1].status;
@@ -2034,7 +2094,7 @@ function cmdRun(options) {
   if (refineMode && startStep <= 2 && state.steps[2].status !== 'completed' && state.steps[2].status !== 'skipped') {
     logStepEnter(2);
     console.log('[Step 2: Refinement] Second pass: skipping decision-gap grilling; the implementation already exists.');
-    state = stateManager.updateStepState(targetRoot, state.runId, 2, 'skipped', { mode: 'refine', reason: 'second pass reviews the delivered implementation' });
+    state = stateManager.updateStepState(targetRoot, state.runId, 2, 'skipped', { mode: 'refine', reason: 'second pass reviews the delivered implementation', orchestratorHint: modelHints.orchestrator });
     logStepDone(2);
     state = recordStepContributions(targetRoot, state, 2, [{
       kind: 'refinement',
@@ -2098,7 +2158,8 @@ function cmdRun(options) {
       gaps: grillingResult.gaps,
       gapsResolved: resolvedGaps,
       blueprint: grillingResult.blueprint,
-      specObservations
+      specObservations,
+      orchestratorHint: modelHints.orchestrator
     };
 
     console.log(`[Step 2: Refinement] Refinement complete. Blueprint generated for ${grillingResult.blueprint.targetFiles.length} target file(s).`);
@@ -2151,6 +2212,7 @@ function cmdRun(options) {
         parallelizable: false
       }]
     };
+    dagPlan.orchestratorHint = modelHints.orchestrator;
     state.dagTasks = dagPlan.tasks;
     state = stateManager.saveRunState(targetRoot, state);
     console.log('[Step 3: DAG Generation] Second pass: one refinement task.');
@@ -2172,6 +2234,7 @@ function cmdRun(options) {
       options._runResult = { runId: state.runId, status: 'failed', error: refusal };
       return 1;
     }
+    dagPlan.orchestratorHint = modelHints.orchestrator;
     console.log(`[Step 3: DAG Generation] Complexity: ${dagPlan.complexity.level}. Generated ${dagPlan.taskCount} task(s).`);
     logDagPlan(dagPlan);
     state.dagTasks = dagPlan.tasks;
@@ -2197,6 +2260,7 @@ function cmdRun(options) {
       options._runResult = { runId: state.runId, status: 'failed', error: refusal };
       return 1;
     }
+    dagPlan.orchestratorHint = modelHints.orchestrator;
   }
 
   if (state.steps[3] && state.steps[3].status === 'completed') {
@@ -2261,6 +2325,7 @@ function cmdRun(options) {
         specAcs,
         specSlug,
         specPath: state.specPath,
+        workerHint: modelHints.worker,
         options
       });
       state = dispatch.state;
@@ -3739,6 +3804,7 @@ function readSpecAcsForState(targetRoot, state) {
  */
 function dispatchNextTask(context) {
   const { targetRoot, state, dagPlan, specAcs, specSlug, specPath, options } = context;
+  const workerHint = context.workerHint ? normalizeModelHint(context.workerHint) : null;
   const step4 = state.steps[4];
   step4.tasks = step4.tasks || {};
   const tasks = step4.tasks;
@@ -3809,6 +3875,14 @@ function dispatchNextTask(context) {
   ].filter(Boolean));
   const digestText = formatLearningDigest(digest);
   if (digestText) attachLearningDigest(rendered.promptFileAbs, digestText);
+  // Spec 00056 AC3: the worker hint rides inside the prompt brief as well as
+  // the envelope so the spawned subagent sees the advisory routing.
+  attachWorkerModelHint(rendered.promptFileAbs, workerHint);
+  if (digestText || workerHint) {
+    try {
+      rendered.promptBytes = fs.statSync(rendered.promptFileAbs).size;
+    } catch (e) {}
+  }
   const digestEnvelope = digest.map(entry => ({
     slug: entry.body.slug,
     kind: entry.body.kind,
@@ -3853,7 +3927,8 @@ function dispatchNextTask(context) {
     acIds: ready.coveredAcs || [],
     dependencies: ready.dependencies || [],
     learnings: digestEnvelope,
-    subagentBrief: `Spawn one subagent for this task only. Give it: read ${sandboxed ? `"${displayPrompt}"` : displayPrompt} and execute it exactly as written, then report back per its report contract.${digestEnvelope.length > 0 ? ` The prompt carries ${digestEnvelope.length} run learning(s) recorded earlier in this run; require the worker to apply them and record each application with \`sdw-memory apply --run ${state.runId} --slug <slug> --step <n> --evidence <locator>\`.` : ''}${sandboxed ? ` Run every command with cwd "${displayWorkingDir}".` : ''}`,
+    workerHint: workerHint || null,
+    subagentBrief: `Spawn one subagent for this task only. Give it: read ${sandboxed ? `"${displayPrompt}"` : displayPrompt} and execute it exactly as written, then report back per its report contract.${workerHint ? ` Model hint: ${formatModelHint(workerHint)}.` : ''}${digestEnvelope.length > 0 ? ` The prompt carries ${digestEnvelope.length} run learning(s) recorded earlier in this run; require the worker to apply them and record each application with \`sdw-memory apply --run ${state.runId} --slug <slug> --step <n> --evidence <locator>\`.` : ''}${sandboxed ? ` Run every command with cwd "${displayWorkingDir}".` : ''}`,
     finishCommand: `node "${orchCommandPath()}" task finish --run-id ${state.runId} --task ${ready.id} --evidence ${evidenceArg}${rootFlag}`
   };
 
@@ -3968,6 +4043,7 @@ function cmdTaskNext(options) {
     specAcs,
     specSlug: state.specSlug,
     specPath: state.specPath,
+    workerHint: resolveModelHints(dispatchConfig).worker,
     options
   });
 
@@ -4415,6 +4491,7 @@ function cmdResume(options) {
           // AC31: re-emit the in-flight envelope so a lost dispatch is recoverable.
           const activeRecord = (state.steps[4].tasks || {})[dispatch.activeTaskId] || {};
           const activeTask = dagTasks.find(t => t.id === dispatch.activeTaskId) || {};
+          const resumeWorkerHint = resolveModelHints(resumeConfig).worker;
           const envelope = {
             runId: state.runId,
             specSlug: state.specSlug,
@@ -4429,7 +4506,8 @@ function cmdResume(options) {
             workingDir: activeRecord.workingDir || '.',
             acIds: activeRecord.coveredAcs || activeTask.coveredAcs || [],
             dependencies: activeRecord.dependencies || activeTask.dependencies || [],
-            subagentBrief: `Spawn one subagent for this task only. Give it: read ${activeRecord.promptPath} and execute it exactly as written, then report back per its report contract.`,
+            workerHint: resumeWorkerHint,
+            subagentBrief: `Spawn one subagent for this task only. Give it: read ${activeRecord.promptPath} and execute it exactly as written, then report back per its report contract.${resumeWorkerHint ? ` Model hint: ${formatModelHint(resumeWorkerHint)}.` : ''}`,
             finishCommand: `node "${orchCommandPath()}" task finish --run-id ${state.runId} --task ${dispatch.activeTaskId} --evidence ${sandbox.readMarker(targetRoot) ? `"${activeRecord.evidencePath}"` : activeRecord.evidencePath}${sandbox.readMarker(targetRoot) ? ` --root "${normalizePath(targetRoot)}"` : ''}`
           };
           printDispatchEnvelope(envelope, state, options);
@@ -4948,6 +5026,8 @@ module.exports = {
   printRunDryRunPlan,
   showHelp,
   loadProjectConfig,
+  resolveModelHints,
+  formatModelHint,
   resolveSpecPath,
   collectDeliveryFiles,
   stageAndCommitOnly,
