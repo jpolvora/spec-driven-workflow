@@ -70,6 +70,6 @@ Central repository index tracking specification lifecycle states, metadata, and 
 | 00057 | 00057-sdw-orch-delivery-report-step-contributions | SDW Delivery Report — Incremental Step Contributions, Learnings, and Retro Closure | completed | local | 2026-10-22 | PASS | - |
 | 00058 | 00058-sdw-batch-delivery-integrity | SDW Batch Delivery Integrity — Merge, Pre-Flight, Base Freshness, and Registry Truth | completed | local | 2026-10-22 | PASS | - |
 | 00059 | 00059-sdw-ship-pr-review-thread-fidelity | SDW Review Thread Fidelity — Full Thread Content in list-threads and the Fixer Input | completed | local | 2026-10-22 | PASS | - |
-| 00060 | 00060-sdw-delivery-report-artifact-location | SDW Delivery Report Artifact — Relocate to .sdw/reports and Exclude It From Every Specification Scanner | pending | local | 2026-10-22 | PASS | - |
+| 00060 | 00060-sdw-delivery-report-artifact-location | SDW Delivery Report Artifact — Relocate to .sdw/reports and Exclude It From Every Specification Scanner | completed | local | 2026-10-22 | PASS | - |
 | 00061 | 00061-us-48-brainstorm-multi-agent-parallel-f | Brainstorm: multi-agent parallel features via sandboxes plus a coordinator merge to develop | pending | github | 2026-10-23 | PASS | - |
 | 00062 | 00062-sdw-spec-issue-provider-sync | SDW Spec-Issue Two-Way Sync with Registered Provider | pending | local | 2026-10-23 | PASS | - |
