@@ -4,7 +4,7 @@ localSpecId: "00064"
 slug: 00064-dag-planning-must-prove-acceptance-crite
 title: "DAG planning must prove acceptance-criterion file coverage"
 source: local
-status: draft
+status: implemented
 specDate: 2026-10-23
 priority: high
 value: "Stops DAG slices that cannot satisfy their assigned criteria, six wasted dispatch rounds in one batch"
@@ -37,6 +37,7 @@ Establish deterministic architectural standards, test criteria, and automated ve
 
 ## Notes
 
+- Target files: `skills/sdw-orch/scripts/dag_planner.cjs` (plan generation, coverage validation, Step 3 output), `skills/sdw-orch/scripts/sdw_orch.cjs` (`dag preview --json` and the non-zero exit), `tests/dag_planner_coverage.test.cjs` (new coverage cases).
 - All helper scripts and tooling anchors must use Node.js CommonJS (.cjs) using standard library modules only.
 - Adhere strictly to the 3-Tier skill authoring standard and EARS acceptance criteria conventions.
 

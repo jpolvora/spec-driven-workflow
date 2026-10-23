@@ -57,6 +57,36 @@ function uniqueAcceptanceCriteria(acs) {
   return unique;
 }
 
+/**
+ * Spec 00064 AC1/AC3: an assigned criterion proves its slice through a project
+ * path named in its own text. A criterion that names no path records why it
+ * needs no file; the reason is either author-declared with `(no-file: ...)` or
+ * the planner's honest statement that coverage was not proven.
+ */
+const NO_FILE_REASON = 'criterion names no project path; file coverage not proven';
+const CRITERION_PATH_PATTERN = /(?<![\w./:-])(?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\.[A-Za-z0-9]+/g;
+const NO_FILE_MARKER_PATTERN = /\(no-file:\s*([^)]+)\)/i;
+
+function normalizeProjectPath(file) {
+  return String(file || '').replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
+/** An author-declared reason carried by a criterion as `(no-file: <reason>)`. */
+function extractNoFileReason(text) {
+  const match = String(text || '').match(NO_FILE_MARKER_PATTERN);
+  return match ? match[1].trim() : null;
+}
+
+/** Project paths named in a criterion, deduplicated in declaration order. */
+function extractCriterionPaths(text) {
+  const paths = [];
+  for (const match of String(text || '').match(CRITERION_PATH_PATTERN) || []) {
+    const candidate = normalizeProjectPath(match);
+    if (!paths.includes(candidate)) paths.push(candidate);
+  }
+  return paths;
+}
+
 function detectTouchpoints(specContent) {
   const content = String(specContent || '');
   const touchpoints = [];
@@ -207,6 +237,51 @@ function computeFileDisjointness(tasks) {
     }
   }
   return pairs;
+}
+
+/**
+ * Spec 00064 AC1-AC3: maps every assigned criterion to its task and the slice
+ * files that prove it. A path-naming criterion whose own paths are all absent
+ * from its slice is uncovered and fails the plan (AC2). A criterion that names
+ * no path keeps its author-declared `(no-file: ...)` reason; without one the
+ * entry states that coverage was not proven and is marked `assumed`. An empty
+ * slice is legitimate: a plan with fewer files than tasks repeats files and
+ * leaves some slices empty (spec 00030), so it must not fail a no-path criterion.
+ */
+function buildCoverageReport(tasks, acs) {
+  const acsById = new Map(acs.map(ac => [ac.id, ac]));
+  const criteria = [];
+  const uncovered = [];
+  for (const task of tasks) {
+    const taskFiles = (task.targetFiles || []).map(normalizeProjectPath);
+    for (const acId of task.coveredAcs || []) {
+      const ac = acsById.get(acId);
+      const requiredFiles = ac ? extractCriterionPaths(ac.text) : [];
+      const declared = ac ? extractNoFileReason(ac.text) : null;
+      if (requiredFiles.length === 0) {
+        criteria.push({
+          acId,
+          taskId: task.id,
+          files: [],
+          noFileReason: declared || NO_FILE_REASON,
+          assumed: !declared
+        });
+        continue;
+      }
+      const files = requiredFiles.filter(required =>
+        taskFiles.some(file => file === required || file.endsWith(`/${required}`)));
+      if (files.length > 0) {
+        criteria.push({ acId, taskId: task.id, files, noFileReason: null, assumed: false });
+      } else if (declared) {
+        // AC1's alternative: the author declares why the named path is not needed.
+        criteria.push({ acId, taskId: task.id, files: [], noFileReason: declared, assumed: false });
+      } else {
+        criteria.push({ acId, taskId: task.id, files: [], noFileReason: null, assumed: false });
+        uncovered.push({ acId, taskId: task.id, requiredFiles, taskFiles });
+      }
+    }
+  }
+  return { complete: uncovered.length === 0, criteria, uncovered };
 }
 
 /**
@@ -473,6 +548,29 @@ function generateDagPlan(specContent, options) {
   if (complexity.level === 'complex') plan = buildComplexPlan(context);
   else if (complexity.level === 'standard') plan = buildStandardPlan(context);
   else plan = buildSingleTaskPlan(context);
+
+  // Spec 00064 AC1-AC3: every assigned criterion must prove a supporting file in
+  // its slice or record an explicit no-file reason. An uncovered criterion
+  // refuses the plan instead of dispatching a slice that cannot satisfy it.
+  if (!plan.refused) {
+    const coverage = buildCoverageReport(plan.tasks, acs);
+    plan.coverage = { complete: coverage.complete, criteria: coverage.criteria };
+    if (!coverage.complete) {
+      plan = {
+        refused: true,
+        reason: 'criteria-uncovered',
+        complexity,
+        uncovered: coverage.uncovered,
+        coverage: plan.coverage,
+        taskCount: 0,
+        execMode: 'sequential',
+        levels: [],
+        fileDisjointness: [],
+        tasks: []
+      };
+    }
+  }
+
   if (opts.orchestratorHint) plan.orchestratorHint = opts.orchestratorHint;
   return plan;
 }

@@ -2534,7 +2534,9 @@ function cmdRun(options) {
     if (dagPlan.refused) {
       // Spec 00030 AC13/AC14: a decomposition beyond the cap is refused with a
       // split proposal, never merged into coarse tasks and never planned.
-      const refusal = `split-required tasks-needed=${dagPlan.tasksNeeded} cap=${dagPlan.cap}${dagPlan.detail === 'criteria-undersupplied' ? ` criteria=${dagPlan.acs}` : ''}`;
+      // Spec 00064 AC2: a plan whose assigned criteria cannot prove a supporting
+      // file in their slice is refused the same way.
+      const refusal = formatDagRefusal(dagPlan);
       console.error(`[Step 3: DAG] ${refusal}`);
       printSplitProposal(dagPlan.splitProposal);
       state = stateManager.updateStepState(targetRoot, state.runId, 3, 'failed', dagPlan, refusal);
@@ -2560,7 +2562,7 @@ function cmdRun(options) {
   } else {
     dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint, maxTasksPerSpec: config.maxTasksPerSpec, orchestratorHint: modelHints.orchestrator });
     if (dagPlan.refused) {
-      const refusal = `split-required tasks-needed=${dagPlan.tasksNeeded} cap=${dagPlan.cap}${dagPlan.detail === 'criteria-undersupplied' ? ` criteria=${dagPlan.acs}` : ''}`;
+      const refusal = formatDagRefusal(dagPlan);
       console.error(`[Step 3: DAG] ${refusal}`);
       printSplitProposal(dagPlan.splitProposal);
       state = stateManager.updateStepState(targetRoot, state.runId, 3, 'failed', dagPlan, refusal);
@@ -4059,6 +4061,18 @@ function cmdRun(options) {
 }
 
 /**
+ * Spec 00064 AC2: renders a refused plan's reason. A coverage refusal names
+ * every uncovered criterion and the task that was assigned it.
+ */
+function formatDagRefusal(plan) {
+  if (plan.reason === 'criteria-uncovered') {
+    const uncovered = (plan.uncovered || []).map(entry => `${entry.acId}/${entry.taskId}`).join(', ');
+    return `criteria-uncovered ${uncovered}`;
+  }
+  return `split-required tasks-needed=${plan.tasksNeeded} cap=${plan.cap}${plan.detail === 'criteria-undersupplied' ? ` criteria=${plan.acs}` : ''}`;
+}
+
+/**
  * Spec 00030 AC14: a plan refused by the task cap names two focused follow-up
  * specifications with their acceptance criteria and file partitions.
  */
@@ -4114,11 +4128,17 @@ function buildPreviewPlan(plan) {
       parallelizable: Boolean(task.parallelizable)
     }))
   };
+  if (plan.coverage) preview.coverage = plan.coverage;
   if (plan.refused) {
     preview.refused = true;
-    preview.tasksNeeded = plan.tasksNeeded;
-    preview.cap = plan.cap;
-    preview.splitProposal = plan.splitProposal || [];
+    if (plan.reason === 'criteria-uncovered') {
+      preview.reason = plan.reason;
+      preview.uncovered = plan.uncovered || [];
+    } else {
+      preview.tasksNeeded = plan.tasksNeeded;
+      preview.cap = plan.cap;
+      preview.splitProposal = plan.splitProposal || [];
+    }
   }
   return preview;
 }
@@ -4342,14 +4362,14 @@ function cmdDagPreview(options) {
   if (options.json) {
     console.log(JSON.stringify(buildPreviewPlan(plan), null, 2));
     if (plan.refused) {
-      console.error(`[Step 3: DAG] split-required tasks-needed=${plan.tasksNeeded} cap=${plan.cap}${plan.detail === 'criteria-undersupplied' ? ` criteria=${plan.acs}` : ''}`);
+      console.error(`[Step 3: DAG] ${formatDagRefusal(plan)}`);
     }
     return plan.refused ? 1 : 0;
   }
 
   console.log(`[sdw-orch dag preview] Specification: ${normalizePath(path.relative(targetRoot, resolvedSpec))} (${specSlug})`);
   if (plan.refused) {
-    console.error(`[Step 3: DAG] split-required tasks-needed=${plan.tasksNeeded} cap=${plan.cap}`);
+    console.error(`[Step 3: DAG] ${formatDagRefusal(plan)}`);
     printSplitProposal(plan.splitProposal);
     return 1;
   }
