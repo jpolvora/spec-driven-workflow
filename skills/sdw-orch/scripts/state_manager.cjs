@@ -85,6 +85,7 @@ function createRunState(options) {
     specPath,
     projectRoot: normalizePath(targetRoot),
     status: 'in_progress', // 'in_progress' | 'paused' | 'completed' | 'failed'
+    revision: 0,
     currentStep: 1,
     totalSteps: 8,
     createdAt: new Date().toISOString(),
@@ -126,7 +127,9 @@ function createRunState(options) {
       7: { name: 'code_review', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null },
       8: { name: 'pr_preparation', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null }
     },
-    errors: []
+    errors: [],
+    stepCheckpoints: {},
+    turnPause: null
   };
   fs.writeFileSync(stateFilePath, JSON.stringify(state, null, 2) + '\n', 'utf8');
   return state;
@@ -160,8 +163,29 @@ function findLatestRunState(targetRoot) {
   return JSON.parse(fs.readFileSync(latestFile, 'utf8'));
 }
 
+// Every persisted mutation advances the revision by one. A missing or invalid
+// revision (a state written before this field existed) starts again at 1.
+function nextRevision(state) {
+  return (Number.isInteger(state.revision) ? state.revision : 0) + 1;
+}
+
+// AC1: the durable record of a step transition. Its revision is the revision the
+// following save assigns, so the checkpoint and the state file never disagree.
+function writeStepCheckpoint(state, stepNum, status, recordedAt) {
+  state.stepCheckpoints = state.stepCheckpoints || {};
+  const checkpoint = {
+    step: Number(stepNum),
+    revision: nextRevision(state),
+    status,
+    recordedAt
+  };
+  state.stepCheckpoints[String(stepNum)] = checkpoint;
+  return checkpoint;
+}
+
 function saveRunState(targetRoot, state) {
   const stateFilePath = getStateFilePath(targetRoot, state.runId);
+  state.revision = nextRevision(state);
   state.updatedAt = new Date().toISOString();
   fs.writeFileSync(stateFilePath, JSON.stringify(state, null, 2) + '\n', 'utf8');
   return state;
@@ -185,6 +209,7 @@ function recordError(targetRoot, runId, stepNum, errorMessage) {
   if (state.steps[stepNum]) {
     state.steps[stepNum].status = 'failed';
     state.steps[stepNum].error = String(errorMessage);
+    writeStepCheckpoint(state, stepNum, 'failed', now);
   }
   return saveRunState(targetRoot, state);
 }
@@ -203,6 +228,43 @@ function recordStepArtifact(targetRoot, runId, stepNum, artifactRelPath) {
     state.steps[stepNum].artifact = normalizePath(artifactRelPath);
   }
   return saveRunState(targetRoot, state);
+}
+
+// AC2: store arbitrary, caller-supplied progress JSON for one step. The step's
+// current status is snapshotted so the checkpoint is readable on its own.
+function recordCheckpoint(targetRoot, runId, stepNum, progress) {
+  const step = Number(stepNum);
+  if (!Number.isInteger(step) || step < 1) {
+    throw new Error(`Invalid checkpoint step "${stepNum}". Expected a positive integer.`);
+  }
+  const state = loadRunState(targetRoot, runId);
+  const stepObj = state.steps && state.steps[step];
+  const checkpoint = writeStepCheckpoint(state, step, stepObj ? stepObj.status : 'unknown', new Date().toISOString());
+  checkpoint.progress = progress === undefined ? null : progress;
+  saveRunState(targetRoot, state);
+  return { state, checkpoint };
+}
+
+// AC3: record an explicit turn-boundary pause. A pause is a handoff marker, not
+// a step status change; it survives process restarts because it lives in state.
+function recordTurnPause(targetRoot, runId, stepNum, reason, nextAction) {
+  const step = Number(stepNum);
+  if (!Number.isInteger(step) || step < 1) {
+    throw new Error(`Invalid turn-pause step "${stepNum}". Expected a positive integer.`);
+  }
+  const cleanReason = String(reason === undefined || reason === null ? '' : reason).trim();
+  const cleanNextAction = String(nextAction === undefined || nextAction === null ? '' : nextAction).trim();
+  if (!cleanReason) throw new Error('A turn pause requires a non-empty reason.');
+  if (!cleanNextAction) throw new Error('A turn pause requires a non-empty next action.');
+  const state = loadRunState(targetRoot, runId);
+  state.turnPause = {
+    step,
+    reason: cleanReason,
+    nextAction: cleanNextAction,
+    recordedAt: new Date().toISOString()
+  };
+  saveRunState(targetRoot, state);
+  return { state, turnPause: state.turnPause };
 }
 
 function updateStepState(targetRoot, runId, stepNum, status, outputData, error, options) {
@@ -243,6 +305,7 @@ function updateStepState(targetRoot, runId, stepNum, status, outputData, error, 
   }
 
   state.currentStep = stepNum;
+  writeStepCheckpoint(state, stepNum, status, now);
   return saveRunState(targetRoot, state);
 }
 
@@ -281,6 +344,8 @@ module.exports = {
   recordError,
   recordWarning,
   recordStepArtifact,
+  recordCheckpoint,
+  recordTurnPause,
   updateStepState,
   updateTaskState,
   updateGateState

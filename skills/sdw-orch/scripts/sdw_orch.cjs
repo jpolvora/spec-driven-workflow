@@ -143,6 +143,9 @@ function parseArgs(args) {
     evidencePath: null,
     verdictPath: null,
     reason: null,
+    progress: null,
+    progressFile: null,
+    nextAction: null,
     skillsRoot: null,
     implementationMode: null,
     refineMode: false,
@@ -198,6 +201,12 @@ function parseArgs(args) {
     else if (arg.startsWith('--verdict=')) result.verdictPath = arg.slice(10);
     else if (arg === '--reason') result.reason = args[++i];
     else if (arg.startsWith('--reason=')) result.reason = arg.slice(9);
+    else if (arg === '--progress-file') result.progressFile = args[++i];
+    else if (arg.startsWith('--progress-file=')) result.progressFile = arg.slice(16);
+    else if (arg === '--progress') result.progress = args[++i];
+    else if (arg.startsWith('--progress=')) result.progress = arg.slice(11);
+    else if (arg === '--next-action') result.nextAction = args[++i];
+    else if (arg.startsWith('--next-action=')) result.nextAction = arg.slice(14);
     else if (arg === '--step') result.step = parseInt(args[++i], 10);
     else if (arg.startsWith('--step=')) result.step = parseInt(arg.slice(7), 10);
     else if (arg === '--min-score') result.minScore = parseInt(args[++i], 10);
@@ -4826,6 +4835,66 @@ function cmdTaskFinish(options) {
   return 0;
 }
 
+// AC2: persist caller-supplied progress JSON for one step of a run.
+function cmdCheckpoint(options) {
+  const targetRoot = options.root ? path.resolve(options.root) : process.cwd();
+  if (!options.runId) {
+    console.error('Error: --run-id is required for "checkpoint".');
+    return 1;
+  }
+  if (!Number.isInteger(options.step)) {
+    console.error('Error: --step <n> is required for "checkpoint".');
+    return 1;
+  }
+
+  let progress;
+  try {
+    if (options.progressFile) {
+      progress = JSON.parse(fs.readFileSync(path.resolve(targetRoot, options.progressFile), 'utf8'));
+    } else if (options.progress !== null && options.progress !== undefined) {
+      progress = JSON.parse(options.progress);
+    } else {
+      console.error('Error: provide the progress payload with --progress <json> or --progress-file <path>.');
+      return 1;
+    }
+  } catch (err) {
+    console.error(`Error: cannot read checkpoint progress: ${err.message}`);
+    return 1;
+  }
+
+  try {
+    const { checkpoint } = stateManager.recordCheckpoint(targetRoot, options.runId, options.step, progress);
+    console.log(`[Checkpoint] step ${checkpoint.step} revision ${checkpoint.revision} saved`);
+    return 0;
+  } catch (err) {
+    console.error(`Error: ${err.message}`);
+    return 1;
+  }
+}
+
+// AC3: record a turn-boundary pause with the action the next turn must take.
+function cmdPauseTurn(options) {
+  const targetRoot = options.root ? path.resolve(options.root) : process.cwd();
+  if (!options.runId) {
+    console.error('Error: --run-id is required for "pause-turn".');
+    return 1;
+  }
+  if (!Number.isInteger(options.step)) {
+    console.error('Error: --step <n> is required for "pause-turn".');
+    return 1;
+  }
+
+  try {
+    const { turnPause } = stateManager.recordTurnPause(targetRoot, options.runId, options.step, options.reason, options.nextAction);
+    console.log(`[pause-turn] step ${turnPause.step} paused: ${turnPause.reason}`);
+    console.log(`[pause-turn] Next action: ${turnPause.nextAction}`);
+    return 0;
+  } catch (err) {
+    console.error(`Error: ${err.message}`);
+    return 1;
+  }
+}
+
 function cmdResume(options) {
   const targetRoot = options.root ? path.resolve(options.root) : process.cwd();
   let state = null;
@@ -4863,7 +4932,21 @@ function cmdResume(options) {
     }
   }
 
+  // AC4: a turn pause is a handoff, not a stall. Announce the recorded next
+  // action and continue from the paused step; a pause never completes the step,
+  // so an unchanged revision is expected and must not block the resume.
+  const turnPause = state.turnPause || null;
   let resumptionStep = stateManager.getResumptionStep(state);
+  if (turnPause) {
+    console.log(`[sdw-orch resume] Turn pause at step ${turnPause.step}: ${turnPause.reason}`);
+    console.log(`[sdw-orch resume] Next action: ${turnPause.nextAction}`);
+    const pausedStep = Number(turnPause.step);
+    const pausedStepState = state.steps && state.steps[pausedStep];
+    const pauseOpen = Boolean(pausedStepState) && pausedStepState.status !== 'completed' && pausedStepState.status !== 'skipped';
+    if (Number.isInteger(pausedStep) && pausedStep >= 1 && pausedStep <= (state.totalSteps || 8) && pauseOpen) {
+      resumptionStep = Math.min(resumptionStep, pausedStep);
+    }
+  }
   logRunResumed(state.runId, state.specSlug, resumptionStep);
   options._resumedLogged = true;
 
@@ -5308,6 +5391,8 @@ function showHelp() {
 Subcommands:
   run <specPath>         Execute the orchestration workflow for one specification
   resume                 Resume paused or incomplete execution run from state file
+  checkpoint             Store progress JSON for one step of a run (--run-id, --step)
+  pause-turn             Record a turn-boundary pause and its next action (--run-id, --step)
   task next              Dispatch the next ready DAG task to one worker (subagent mode)
   task finish            Submit accepted evidence for the dispatched DAG task
   task abandon           Return the dispatched DAG task to the queue
@@ -5327,6 +5412,9 @@ Options:
   --evidence <path>      Path to evidence JSON file (alias: --evidence-path)
   --spec <path>          Specification path for dag preview (or pass it positionally)
   --reason <text>        Why the dispatched task is being abandoned
+  --progress <json>      Progress payload JSON for checkpoint
+  --progress-file <path> File containing the checkpoint progress JSON
+  --next-action <text>   Action the next turn must take after pause-turn
   --verdict <path>       Path to judge verdict JSON file for score submit
   --mode <mode>          Implementation mode (subagent | command)
   --dry-run              Print the execution plan and validate the spec; execute nothing
@@ -5383,6 +5471,12 @@ function main() {
     case 'resume':
       code = cmdResume(options);
       break;
+    case 'checkpoint':
+      code = cmdCheckpoint(options);
+      break;
+    case 'pause-turn':
+      code = cmdPauseTurn(options);
+      break;
     case 'task-finish':
       code = cmdTaskFinish(options);
       break;
@@ -5431,6 +5525,8 @@ if (require.main === module) {
 module.exports = {
   cmdRun,
   cmdResume,
+  cmdCheckpoint,
+  cmdPauseTurn,
   cmdStatus,
   cmdDagPreview,
   cmdTaskNext,
