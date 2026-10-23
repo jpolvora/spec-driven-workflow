@@ -4,7 +4,7 @@ localSpecId: "00063"
 slug: 00063-orchestrator-checkpoint-commits-must-ver
 title: "Orchestrator checkpoint commits must verify the run branch"
 source: local
-status: draft
+status: implemented
 specDate: 2026-10-23
 priority: high
 value: "Stops accepted task work landing on the integration branch when another session owns the checkout"
