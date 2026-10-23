@@ -76,6 +76,24 @@ async function captureStderr(operation) {
   }
 }
 
+async function captureStdout(operation) {
+  const messages = [];
+  const original = console.log;
+  console.log = (...args) => messages.push(args.join(' '));
+  try {
+    const result = await operation();
+    return { result, messages };
+  } finally {
+    console.log = original;
+  }
+}
+
+// Every byte in the specs directory, used to prove a dry-run writes nothing.
+function snapshotSpecs(root) {
+  const specsDir = path.join(root, '.sdw', 'specs');
+  return fs.readdirSync(specsDir).sort().map((name) => [name, fs.readFileSync(path.join(specsDir, name), 'utf8')]);
+}
+
 test('sdw-spec sync-remote - AC1: sync-up creates a provider item and persists the returned id', async () => {
   const root = setupWorkspace();
   try {
@@ -306,5 +324,202 @@ test('sdw-spec sync-remote - AC4: the CLI exits 1 through the process boundary w
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
     fs.rmSync(emptyPath, { recursive: true, force: true });
+  }
+});
+
+test('sdw-spec sync-remote - AC9: sync-down updates a scmSpecId match and never regresses a completed row', async () => {
+  const root = setupWorkspace();
+  try {
+    const pendingPath = writeSpecification(root, { prefix: '00011', slug: '00011-demo-lambda', title: 'Demo Lambda', scmSpecId: '60' });
+    registerFixture(root, { prefix: '00011', slug: '00011-demo-lambda', title: 'Demo Lambda' });
+    const completedPath = writeSpecification(root, { prefix: '00012', slug: '00012-demo-mu', title: 'Demo Mu', scmSpecId: '61' });
+    registerFixture(root, { prefix: '00012', slug: '00012-demo-mu', title: 'Demo Mu', status: 'completed' });
+
+    const executor = createGithubExecutor({
+      'gh issue list': JSON.stringify([
+        { number: 60, title: 'Demo Lambda', body: fs.readFileSync(pendingPath, 'utf8'), state: 'CLOSED', labels: [] },
+        { number: 61, title: 'Demo Mu', body: fs.readFileSync(completedPath, 'utf8'), state: 'OPEN', labels: [] }
+      ])
+    });
+
+    const report = await syncDown({ root, executor });
+
+    const updated = report.transitions.find((transition) => transition.slug === '00011-demo-lambda');
+    assert.strictEqual(updated.action, 'updated');
+    assert.strictEqual(updated.from, 'pending');
+    assert.strictEqual(updated.to, 'completed');
+
+    const guarded = report.transitions.find((transition) => transition.slug === '00012-demo-mu');
+    assert.strictEqual(guarded.action, 'skipped');
+    assert.strictEqual(guarded.from, 'completed');
+    assert.strictEqual(guarded.to, 'pending');
+
+    const rows = readIndex({ root }).entries;
+    assert.strictEqual(rows.find((row) => row.slug === '00011-demo-lambda').status, 'completed');
+    assert.strictEqual(rows.find((row) => row.slug === '00012-demo-mu').status, 'completed', 'a remote open state never regresses a completed row');
+    assert.deepStrictEqual(report.drift, [], 'a body equal to the local specification is not drift');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('sdw-spec sync-remote - AC9 & AC11: sync-down matches by slug marker and exact title without creating duplicates', async () => {
+  const root = setupWorkspace();
+  try {
+    writeSpecification(root, { prefix: '00013', slug: '00013-demo-nu', title: 'Demo Nu' });
+    registerFixture(root, { prefix: '00013', slug: '00013-demo-nu', title: 'Demo Nu' });
+    const omicronPath = writeSpecification(root, { prefix: '00014', slug: '00014-demo-omicron', title: 'Demo Omicron' });
+    registerFixture(root, { prefix: '00014', slug: '00014-demo-omicron', title: 'Demo Omicron' });
+    const before = fs.readdirSync(path.join(root, '.sdw', 'specs')).sort();
+
+    const executor = createGithubExecutor({
+      'gh issue list': JSON.stringify([
+        { number: 120, title: 'Renamed in the tracker', body: '<!-- sdw-spec: 00013-demo-nu -->\n\nremote body', state: 'CLOSED', labels: [] },
+        { number: 121, title: 'Demo Omicron', body: fs.readFileSync(omicronPath, 'utf8'), state: 'CLOSED', labels: [] }
+      ])
+    });
+
+    const report = await syncDown({ root, executor });
+
+    const byMarker = report.transitions.find((transition) => transition.id === '120');
+    assert.strictEqual(byMarker.slug, '00013-demo-nu', 'the marker names the local specification');
+    assert.strictEqual(byMarker.action, 'updated');
+    assert.deepStrictEqual(report.drift.map((entry) => entry.id), ['120'], 'the differing body is reported, not copied');
+
+    const byTitle = report.transitions.find((transition) => transition.id === '121');
+    assert.strictEqual(byTitle.slug, '00014-demo-omicron', 'an exact title claims an unlinked specification');
+    assert.strictEqual(byTitle.action, 'updated');
+
+    assert.deepStrictEqual(
+      fs.readdirSync(path.join(root, '.sdw', 'specs')).sort(),
+      before,
+      'a matched item must not create a second specification'
+    );
+    assert.ok(
+      !executor.calls.some((cmd) => /gh issue (create|edit|close|reopen)/.test(cmd)),
+      'sync-down never writes to the provider'
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('sdw-spec sync-remote - AC10: sync-down reports body drift and changes neither body', async () => {
+  const root = setupWorkspace();
+  try {
+    const filePath = writeSpecification(root, { prefix: '00015', slug: '00015-demo-pi', title: 'Demo Pi', scmSpecId: '70' });
+    registerFixture(root, { prefix: '00015', slug: '00015-demo-pi', title: 'Demo Pi' });
+    const specBefore = fs.readFileSync(filePath, 'utf8');
+    const indexBefore = fs.readFileSync(path.join(root, '.sdw', 'specs', 'index.specs.md'), 'utf8');
+
+    const executor = createGithubExecutor({
+      'gh issue list': JSON.stringify([
+        { number: 70, title: 'Demo Pi', body: 'edited in the tracker', state: 'OPEN', labels: [] }
+      ])
+    });
+
+    const report = await syncDown({ root, executor });
+
+    assert.strictEqual(report.transitions.length, 1);
+    assert.strictEqual(report.transitions[0].action, 'unchanged');
+    assert.strictEqual(report.drift.length, 1);
+    assert.strictEqual(report.drift[0].slug, '00015-demo-pi');
+    assert.strictEqual(report.drift[0].action, 'drift');
+    assert.match(report.drift[0].reason, /neither body changed/);
+
+    assert.strictEqual(fs.readFileSync(filePath, 'utf8'), specBefore, 'the local body must not be overwritten');
+    assert.strictEqual(fs.readFileSync(path.join(root, '.sdw', 'specs', 'index.specs.md'), 'utf8'), indexBefore);
+    assert.ok(
+      !executor.calls.some((cmd) => /gh issue (create|edit|close|reopen)/.test(cmd)),
+      'the remote body must not be overwritten'
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('sdw-spec sync-remote - AC11: sync-up embeds the slug marker as the first line of every created issue body', async () => {
+  const root = setupWorkspace();
+  try {
+    writeSpecification(root, { prefix: '00016', slug: '00016-demo-rho', title: 'Demo Rho' });
+    registerFixture(root, { prefix: '00016', slug: '00016-demo-rho', title: 'Demo Rho' });
+
+    const bodies = [];
+    const executor = createGithubExecutor({
+      'gh issue create': (cmd) => {
+        const bodyFile = cmd.match(/--body-file "([^"]+)"/);
+        bodies.push(bodyFile ? fs.readFileSync(bodyFile[1], 'utf8') : '');
+        return 'https://github.com/org/repo/issues/500\n';
+      }
+    });
+
+    const report = await syncUp({ root, executor });
+
+    assert.strictEqual(report.transitions[0].action, 'created');
+    assert.strictEqual(bodies.length, 1);
+    const lines = bodies[0].split('\n');
+    assert.strictEqual(lines[0], '<!-- sdw-spec: 00016-demo-rho -->', 'the marker is the first line of the issue body');
+    assert.match(bodies[0], /# Specification/, 'the local specification content follows the marker');
+    assert.match(bodies[0], /Local body content\./);
+
+    const frontmatter = parseFrontmatter(fs.readFileSync(path.join(root, '.sdw', 'specs', '00016-demo-rho.md'), 'utf8'));
+    assert.strictEqual(frontmatter.scmSpecId, '500', 'the created item id is still persisted');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('sdw-spec sync-remote - AC12: sync-up --dry-run prints the plan without provider contact', async () => {
+  const root = setupWorkspace();
+  const emptyPath = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-dry-run-path-'));
+  try {
+    writeSpecification(root, { prefix: '00017', slug: '00017-demo-sigma', title: 'Demo Sigma' });
+    registerFixture(root, { prefix: '00017', slug: '00017-demo-sigma', title: 'Demo Sigma' });
+    writeSpecification(root, { prefix: '00018', slug: '00018-demo-tau', title: 'Demo Tau', scmSpecId: '88' });
+    registerFixture(root, { prefix: '00018', slug: '00018-demo-tau', title: 'Demo Tau', status: 'completed' });
+    const before = snapshotSpecs(root);
+
+    const executor = createGithubExecutor();
+    const { result, messages } = await captureStdout(() => runSyncDirection('sync-up', { root, executor, dryRun: true }));
+
+    assert.strictEqual(result, 0);
+    assert.deepStrictEqual(executor.calls, [], 'the dry-run must not run a provider command');
+    const output = messages.join('\n');
+    assert.match(output, /create issue for 00017-demo-sigma \(remote state open\)/, 'a planned create names the slug and mapped state');
+    assert.match(output, /update issue #88 for 00018-demo-tau \(remote state closed\)/, 'a planned update names the item and mapped state');
+    assert.match(output, /no provider calls, no files modified/);
+    assert.deepStrictEqual(snapshotSpecs(root), before, 'the dry-run must not modify disk');
+
+    const cli = spawnSync(process.execPath, [CLI, 'sync-up', '--dry-run', '--root', root], {
+      encoding: 'utf8',
+      env: { ...process.env, PATH: emptyPath, Path: emptyPath }
+    });
+
+    assert.strictEqual(cli.status, 0, 'a dry-run succeeds without an installed provider CLI');
+    assert.match(cli.stdout, /create issue for 00017-demo-sigma/);
+    assert.match(cli.stdout, /no provider calls, no files modified/);
+    assert.deepStrictEqual(snapshotSpecs(root), before);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(emptyPath, { recursive: true, force: true });
+  }
+});
+
+test('sdw-spec sync-remote - AC12: sync-down --dry-run never queries the provider and writes nothing', async () => {
+  const root = setupWorkspace();
+  try {
+    writeSpecification(root, { prefix: '00019', slug: '00019-demo-upsilon', title: 'Demo Upsilon', scmSpecId: '90' });
+    registerFixture(root, { prefix: '00019', slug: '00019-demo-upsilon', title: 'Demo Upsilon' });
+    const before = snapshotSpecs(root);
+
+    const executor = createGithubExecutor();
+    const { result, messages } = await captureStdout(() => runSyncDirection('sync-down', { root, executor, dryRun: true }));
+
+    assert.strictEqual(result, 0);
+    assert.deepStrictEqual(executor.calls, [], 'the dry-run must not query the provider');
+    assert.match(messages.join('\n'), /reconcile 00019-demo-upsilon \(#90\): remote state is not queried under --dry-run/);
+    assert.deepStrictEqual(snapshotSpecs(root), before, 'the dry-run must not modify disk');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });

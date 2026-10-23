@@ -97,7 +97,7 @@ Spec statuses:
 Options:
   --root <path>            Target project workspace root directory
   --status <status>        Filter specifications by status (pending, completed, archived)
-  --provider <name>        SCM provider for import (github, azure-devops)
+  --provider <name>        SCM provider for import and sync (github, azure-devops)
   --id <id>                Work item or issue ID for remote import
   --title <title>          Explicit title for newly synthesized specification
   --slug <slug>            Specification slug ("new" and "update" subcommands)
@@ -107,7 +107,7 @@ Options:
   --apply                  Write the proposed drift insertion into the specification
   --mode <mode>            Validation mode (authoring | compat, default: authoring)
   --force                  Force overwrite or allow archiving incomplete specifications
-  --dry-run                Preview synchronization transitions without modifying disk
+  --dry-run                Print planned synchronization transitions without contacting the provider
   --json                   Output responses in structured JSON format
   -h, --help               Show help message
 `);

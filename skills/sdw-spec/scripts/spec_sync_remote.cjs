@@ -6,7 +6,9 @@
  * `sync-up` pushes local specifications to the registered SCM provider and
  * `sync-down` pulls remote tracker state back into the local registry. Both
  * refuse to run without a registered, installed, and authenticated provider, so
- * the refusal always precedes any provider call or local write.
+ * the refusal always precedes any provider call or local write. `--dry-run`
+ * plans from local files only: it probes no CLI, constructs no provider, and
+ * executes no provider command.
  */
 
 const fs = require('fs');
@@ -43,6 +45,42 @@ const REMOTE_TO_LOCAL_STATUS = {
 // Delivery evidence already closed these rows; a remote `open` never reopens them.
 const CLOSED_LOCAL_STATUSES = ['completed', 'archived'];
 
+// AC11: the first line of every issue body written by sync-up. It is an HTML
+// comment, so it disappears when rendered and gives sync-down an exact slug
+// lookup before any title fallback.
+const SLUG_MARKER = /^\s*<!--\s*sdw-spec:\s*([^\s>]+)\s*-->/;
+
+function slugMarker(slug) {
+  return `<!-- sdw-spec: ${slug} -->`;
+}
+
+function issueBody(spec) {
+  return `${slugMarker(spec.slug)}\n\n${String(spec.content || '').trimEnd()}\n`;
+}
+
+function parseSlugMarker(body) {
+  const match = String(body || '').replace(/\r\n?/g, '\n').match(SLUG_MARKER);
+  return match ? match[1].trim() : null;
+}
+
+// AC10: bodies are compared after the marker, line endings, and trailing
+// whitespace are normalized, so a sync-up round trip never reads as drift.
+function normalizeBody(body) {
+  return String(body || '')
+    .replace(/\r\n?/g, '\n')
+    .replace(SLUG_MARKER, '')
+    .replace(/[ \t]+$/gm, '')
+    .trim();
+}
+
+function bodiesAgree(localContent, remoteBody) {
+  return normalizeBody(localContent) === normalizeBody(remoteBody);
+}
+
+function normalizeTitle(title) {
+  return String(title || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
 function readProjectConfig(root) {
   const configPath = path.join(root, '.sdw', 'config.json');
   if (!fs.existsSync(configPath)) return {};
@@ -54,10 +92,11 @@ function readProjectConfig(root) {
 }
 
 /**
- * Resolves the registered provider and proves it can be used. Returns the
- * provider name and an instance; throws with the missing capability otherwise.
+ * AC12: the provider name alone, resolved from configuration or `--provider`.
+ * A dry-run needs it for its report and must never pay for the capability
+ * probes, so they stay in `resolveSyncProvider`.
  */
-function resolveSyncProvider(options = {}) {
+function resolveProviderName(options = {}) {
   const { root } = resolvePaths(options.root);
   const config = options.config || readProjectConfig(root);
   const resolution = resolveScmProvider({ config, explicit: options.provider });
@@ -66,17 +105,26 @@ function resolveSyncProvider(options = {}) {
     throw new Error('SCM provider is disabled (none); set scmProvider to "github" or "azure-devops" in .sdw/config.json or pass --provider <github|azure-devops>.');
   }
 
-  const capability = checkScmCapability(resolution.provider, options);
+  return resolution.provider;
+}
+
+/**
+ * Resolves the registered provider and proves it can be used. Returns the
+ * provider name and an instance; throws with the missing capability otherwise.
+ */
+function resolveSyncProvider(options = {}) {
+  const providerName = resolveProviderName(options);
+  const capability = checkScmCapability(providerName, options);
   if (!capability.installed) {
-    throw new Error(`SCM provider CLI "${capability.bin}" is not installed or not found on PATH; ${resolution.provider} sync needs it.`);
+    throw new Error(`SCM provider CLI "${capability.bin}" is not installed or not found on PATH; ${providerName} sync needs it.`);
   }
   if (!capability.authenticated) {
-    throw new Error(`SCM provider CLI "${capability.bin}" is not authenticated; run "${resolution.provider === 'ado' ? 'az login' : 'gh auth login'}".`);
+    throw new Error(`SCM provider CLI "${capability.bin}" is not authenticated; run "${providerName === 'ado' ? 'az login' : 'gh auth login'}".`);
   }
 
   return {
-    providerName: resolution.provider,
-    provider: options.scmProvider || createScmProvider(resolution.provider, options)
+    providerName,
+    provider: options.scmProvider || createScmProvider(providerName, options)
   };
 }
 
@@ -110,6 +158,17 @@ function readLocalSpecifications(options = {}) {
     });
   }
   return specs;
+}
+
+// Both directions and the dry-run planner order specifications the same way.
+function readSortedSpecifications(options = {}) {
+  return readLocalSpecifications(options).sort(
+    (left, right) => left.localSpecId.localeCompare(right.localSpecId) || left.slug.localeCompare(right.slug)
+  );
+}
+
+function isSyncableSource(spec, providerSource) {
+  return spec.source === 'local' || providerSourceName(spec.source) === providerSource;
 }
 
 // Writes the reported remote identity onto the created specification, so a
@@ -167,7 +226,7 @@ function createLocalSpecification(item, providerSource, options = {}) {
     validation: 'PASS'
   }, options);
 
-  return { prefix, slug, title, source, scmSpecId: remoteId, registryStatus: 'pending', filePath };
+  return { prefix, slug, title, source, scmSpecId: remoteId, registryStatus: 'pending', filePath, content };
 }
 
 /**
@@ -177,12 +236,11 @@ function createLocalSpecification(item, providerSource, options = {}) {
 async function syncUp(options = {}) {
   const { providerName, provider } = resolveSyncProvider(options);
   const providerSource = providerSourceName(providerName);
-  const specs = readLocalSpecifications(options)
-    .sort((left, right) => left.localSpecId.localeCompare(right.localSpecId) || left.slug.localeCompare(right.slug));
+  const specs = readSortedSpecifications(options);
   const transitions = [];
 
   for (const spec of specs) {
-    if (spec.source !== 'local' && providerSourceName(spec.source) !== providerSource) {
+    if (!isSyncableSource(spec, providerSource)) {
       transitions.push({
         direction: 'sync-up',
         action: 'skipped',
@@ -196,8 +254,10 @@ async function syncUp(options = {}) {
     }
 
     const state = LOCAL_TO_REMOTE_STATE[spec.registryStatus] || 'open';
+    // AC11: the issue body always starts with the slug marker.
+    const body = issueBody(spec);
     if (!spec.scmSpecId) {
-      const created = await provider.createWorkItem({ title: spec.title, body: spec.content, state });
+      const created = await provider.createWorkItem({ title: spec.title, body, state });
       writeScmLink(spec, providerSource, created.id);
       transitions.push({
         direction: 'sync-up',
@@ -209,7 +269,7 @@ async function syncUp(options = {}) {
         reason: `created ${providerName} item ${created.id}`
       });
     } else {
-      const updated = await provider.updateWorkItem({ id: spec.scmSpecId, title: spec.title, body: spec.content, state });
+      const updated = await provider.updateWorkItem({ id: spec.scmSpecId, title: spec.title, body, state });
       transitions.push({
         direction: 'sync-up',
         action: 'updated',
@@ -226,9 +286,28 @@ async function syncUp(options = {}) {
 }
 
 /**
- * AC2, AC8: mirrors remote tracker state into local specifications. A remote
- * item with no local match creates one carrying its scmSpecId and source; a
- * closed remote item never regresses a completed row.
+ * AC9: resolves the remote item to a local specification in the documented
+ * order, scmSpecId (legacy id already folded in) then slug marker then exact
+ * title. Marker and title only claim specifications that carry no remote
+ * identity yet, so a linked row is never rebound to a different item.
+ */
+function matchLocalSpecification(item, indexes) {
+  const byId = indexes.byScmSpecId.get(String(item.id));
+  if (byId) return byId;
+
+  const markerSlug = parseSlugMarker(item.description);
+  const byMarker = markerSlug ? indexes.bySlug.get(markerSlug) : null;
+  if (byMarker) return byMarker;
+
+  return indexes.byTitle.get(normalizeTitle(item.title)) || null;
+}
+
+/**
+ * AC2, AC8, AC9, AC10: mirrors remote tracker state into local specifications.
+ * A remote item with no local match creates one carrying its scmSpecId and
+ * source; a matched item updates its registry row from the remote state and a
+ * closed remote item never regresses a completed row. A body disagreement is
+ * reported as drift and neither body is written.
  */
 async function syncDown(options = {}) {
   const { providerName, provider } = resolveSyncProvider(options);
@@ -236,13 +315,22 @@ async function syncDown(options = {}) {
   const items = await provider.queryWorkItems({ state: options.state || 'all' });
 
   const byScmSpecId = new Map();
+  const bySlug = new Map();
+  const byTitle = new Map();
   for (const spec of readLocalSpecifications(options)) {
-    if (spec.scmSpecId) byScmSpecId.set(String(spec.scmSpecId), spec);
+    if (spec.scmSpecId) {
+      byScmSpecId.set(String(spec.scmSpecId), spec);
+      continue;
+    }
+    bySlug.set(spec.slug, spec);
+    const title = normalizeTitle(spec.title);
+    if (!byTitle.has(title)) byTitle.set(title, spec);
   }
 
   const transitions = [];
+  const drift = [];
   for (const item of items) {
-    const spec = byScmSpecId.get(String(item.id));
+    const spec = matchLocalSpecification(item, { byScmSpecId, bySlug, byTitle });
     if (!spec) {
       const created = createLocalSpecification(item, providerSource, options);
       // Keep the in-run index current so duplicate remote identities never
@@ -258,6 +346,20 @@ async function syncDown(options = {}) {
         reason: `created local specification for ${providerName} item ${item.id}`
       });
       continue;
+    }
+
+    // AC10: body content is only ever reported. sync-down writes no body on
+    // either side, so a disagreement leaves both bodies untouched.
+    if (!bodiesAgree(spec.content, item.description)) {
+      drift.push({
+        direction: 'sync-down',
+        action: 'drift',
+        slug: spec.slug,
+        id: item.id,
+        from: spec.registryStatus,
+        to: null,
+        reason: 'remote body differs from the local specification; neither body changed'
+      });
     }
 
     const nextStatus = REMOTE_TO_LOCAL_STATUS[String(item.state || '').toLowerCase()];
@@ -310,7 +412,85 @@ async function syncDown(options = {}) {
     });
   }
 
-  return { direction: 'sync-down', provider: providerName, transitions };
+  return { direction: 'sync-down', provider: providerName, transitions, drift };
+}
+
+/**
+ * AC12: the sync-up dry-run plan. Every fact comes from local files, so the
+ * planner never constructs a provider or executes a provider command.
+ */
+function planSyncUp(options = {}) {
+  const providerName = resolveProviderName(options);
+  const providerSource = providerSourceName(providerName);
+  const transitions = [];
+
+  for (const spec of readSortedSpecifications(options)) {
+    if (!isSyncableSource(spec, providerSource)) {
+      transitions.push({
+        direction: 'sync-up',
+        action: 'skipped',
+        slug: spec.slug,
+        id: spec.scmSpecId,
+        from: spec.source,
+        to: null,
+        reason: `source "${spec.source}" is not the registered provider "${providerName}"`
+      });
+      continue;
+    }
+
+    const state = LOCAL_TO_REMOTE_STATE[spec.registryStatus] || 'open';
+    transitions.push({
+      direction: 'sync-up',
+      action: spec.scmSpecId ? 'update' : 'create',
+      slug: spec.slug,
+      id: spec.scmSpecId || null,
+      from: spec.registryStatus,
+      to: state,
+      planned: true,
+      reason: spec.scmSpecId
+        ? `remote state ${state} for item ${spec.scmSpecId}`
+        : `remote state ${state} for a new item`
+    });
+  }
+
+  return { direction: 'sync-up', provider: providerName, dryRun: true, transitions };
+}
+
+/**
+ * AC12: sync-down changes are driven by remote state, and a dry-run must not
+ * contact the provider, so the plan names the linked rows a live run would
+ * reconcile and states that no remote state was read.
+ */
+function planSyncDown(options = {}) {
+  const providerName = resolveProviderName(options);
+  const transitions = readSortedSpecifications(options)
+    .filter((spec) => spec.scmSpecId)
+    .map((spec) => ({
+      direction: 'sync-down',
+      action: 'reconcile',
+      slug: spec.slug,
+      id: spec.scmSpecId,
+      from: spec.registryStatus,
+      to: null,
+      planned: true,
+      reason: 'remote state is not queried under --dry-run'
+    }));
+
+  return { direction: 'sync-down', provider: providerName, dryRun: true, transitions };
+}
+
+function formatPlanTransition(transition) {
+  const slug = transition.slug || `item ${transition.id}`;
+  if (transition.action === 'create') {
+    return `create issue for ${slug} (remote state ${transition.to})`;
+  }
+  if (transition.action === 'update') {
+    return `update issue #${transition.id} for ${slug} (remote state ${transition.to})`;
+  }
+  if (transition.action === 'reconcile') {
+    return `reconcile ${slug} (#${transition.id}): ${transition.reason}`;
+  }
+  return `skip ${slug}: ${transition.reason}`;
 }
 
 const DIRECTIONS = {
@@ -335,20 +515,30 @@ async function runSyncDirection(direction, options = {}) {
     console.error(`[sdw-spec] Unknown sync direction "${direction}".`);
     return 1;
   }
-  if (options.dryRun) {
-    // The dry-run planner is owned by the next slice; refusing keeps this
-    // command from writing while that planner is absent.
-    console.error(`[sdw-spec ${direction}] Error: --dry-run is not wired for this direction yet.`);
-    return 1;
-  }
 
   try {
+    if (options.dryRun) {
+      const plan = direction === 'sync-up' ? planSyncUp(options) : planSyncDown(options);
+      if (options.json) {
+        console.log(JSON.stringify(plan, null, 2));
+      } else {
+        console.log(`[${direction} dry-run] provider ${plan.provider}: ${plan.transitions.length} planned transition(s)`);
+        plan.transitions.forEach((transition) => console.log(`[${direction} dry-run] ${formatPlanTransition(transition)}`));
+        console.log(`[${direction} dry-run] no provider calls, no files modified`);
+      }
+      return 0;
+    }
+
     const report = await runner(options);
     if (options.json) {
       console.log(JSON.stringify(report, null, 2));
     } else {
       console.log(`[sdw-spec ${direction}] ${report.provider}: ${report.transitions.length} transition(s)`);
       report.transitions.forEach((transition) => console.log(formatTransition(transition)));
+      if (report.drift && report.drift.length > 0) {
+        console.log(`[sdw-spec ${direction}] body drift ${report.drift.length}:`);
+        report.drift.forEach((entry) => console.log(formatTransition(entry)));
+      }
     }
     return 0;
   } catch (err) {
