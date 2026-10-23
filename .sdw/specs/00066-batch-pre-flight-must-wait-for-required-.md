@@ -4,7 +4,7 @@ localSpecId: "00066"
 slug: 00066-batch-pre-flight-must-wait-for-required-
 title: "Batch pre-flight must wait for required checks before merging"
 source: local
-status: draft
+status: implemented
 specDate: 2026-10-23
 priority: medium
 value: "Lets batch pre-flight merge governed pull requests without halting the queue for a manual merge"
