@@ -2165,7 +2165,7 @@ function cmdRun(options) {
     if (dagPlan.refused) {
       // Spec 00030 AC13/AC14: a decomposition beyond the cap is refused with a
       // split proposal, never merged into coarse tasks and never planned.
-      const refusal = `split-required tasks-needed=${dagPlan.tasksNeeded} cap=${dagPlan.cap}`;
+      const refusal = `split-required tasks-needed=${dagPlan.tasksNeeded} cap=${dagPlan.cap}${dagPlan.detail === 'criteria-undersupplied' ? ` criteria=${dagPlan.acs}` : ''}`;
       console.error(`[Step 3: DAG] ${refusal}`);
       printSplitProposal(dagPlan.splitProposal);
       state = stateManager.updateStepState(targetRoot, state.runId, 3, 'failed', dagPlan, refusal);
@@ -2190,7 +2190,7 @@ function cmdRun(options) {
   } else {
     dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint, maxTasksPerSpec: config.maxTasksPerSpec });
     if (dagPlan.refused) {
-      const refusal = `split-required tasks-needed=${dagPlan.tasksNeeded} cap=${dagPlan.cap}`;
+      const refusal = `split-required tasks-needed=${dagPlan.tasksNeeded} cap=${dagPlan.cap}${dagPlan.detail === 'criteria-undersupplied' ? ` criteria=${dagPlan.acs}` : ''}`;
       console.error(`[Step 3: DAG] ${refusal}`);
       printSplitProposal(dagPlan.splitProposal);
       state = stateManager.updateStepState(targetRoot, state.runId, 3, 'failed', dagPlan, refusal);
@@ -3915,7 +3915,7 @@ function cmdDagPreview(options) {
   if (options.json) {
     console.log(JSON.stringify(buildPreviewPlan(plan), null, 2));
     if (plan.refused) {
-      console.error(`[Step 3: DAG] split-required tasks-needed=${plan.tasksNeeded} cap=${plan.cap}`);
+      console.error(`[Step 3: DAG] split-required tasks-needed=${plan.tasksNeeded} cap=${plan.cap}${plan.detail === 'criteria-undersupplied' ? ` criteria=${plan.acs}` : ''}`);
     }
     return plan.refused ? 1 : 0;
   }

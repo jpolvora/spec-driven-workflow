@@ -529,3 +529,19 @@ test('classifier: unanchored touchpoint fragments do not escalate a spec to comp
   const plan = dagPlanner.generateDagPlan(content, { slug: '015-touchpoint-precision', targetFiles: TARGET_FILES });
   assert.equal(plan.taskCount, 2, 'a standard spec keeps the two-task split');
 });
+test('complex plan: a task list wider than the criteria is refused, never emitted empty', () => {
+  const content = buildSpec('016-criteria-undersupplied', 7, {
+    description: 'Runs one cli command, records a git commit review, and answers a pr comment.'
+  });
+  const files = Array.from({ length: 22 }, (_, index) => `src/f${index}.cjs`);
+  const analysis = dagPlanner.analyzeComplexity(content, { targetFiles: files });
+  assert.equal(analysis.level, 'complex');
+  assert.ok(analysis.touchpoints.length >= 3, 'three anchored touchpoints escalate a seven-AC spec');
+  const plan = dagPlanner.generateDagPlan(content, { slug: '016-criteria-undersupplied', targetFiles: files, maxTasksPerSpec: 8 });
+  assert.equal(plan.refused, true, 'a task without criteria cannot be planned');
+  assert.equal(plan.detail, 'criteria-undersupplied');
+  assert.equal(plan.tasksNeeded, 8);
+  assert.equal(plan.acs, 7);
+  assert.equal(plan.taskCount, 0);
+  assert.deepEqual(plan.tasks, []);
+});

@@ -385,6 +385,29 @@ function buildComplexPlan(context) {
     };
   }
 
+  // A plan can never carry a task without criteria to implement, and a wider
+  // task list than the criteria (or too many files per task) means the
+  // decomposition cannot honour AC10/AC11: refuse and propose a split instead
+  // of emitting an empty or oversized task.
+  if (tasksNeeded > acs.length || fileSlicesNeeded > Math.min(tasksNeeded, acs.length)) {
+    return {
+      refused: true,
+      reason: 'split-required',
+      detail: 'criteria-undersupplied',
+      complexity,
+      tasksNeeded,
+      cap: maxTasksPerSpec,
+      acs: acs.length,
+      targetFileCount: targetFiles.length,
+      taskCount: 0,
+      execMode: 'sequential',
+      levels: [],
+      fileDisjointness: [],
+      splitProposal: buildSplitProposal(slug, acs, targetFiles),
+      tasks: []
+    };
+  }
+
   const acGroups = splitContiguous(acs, tasksNeeded);
   const fileSlices = targetFiles.length > 0 ? splitContiguous(targetFiles, tasksNeeded) : acGroups.map(() => []);
 
