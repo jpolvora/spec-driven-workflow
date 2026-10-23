@@ -142,6 +142,26 @@ function acquire(stateFilePath, options = {}) {
 
   const existing = readLockFile(lockFile);
   if (!isLockRecord(existing)) {
+    // A crash between creating the lock file and writing its record leaves an
+    // unreadable lock with no owner to prove absent. Its age is the only
+    // evidence: an old one is reclaimed, a young one is refused.
+    let ageMs = Number.POSITIVE_INFINITY;
+    try {
+      ageMs = Math.max(0, Date.now() - fs.statSync(lockFile).mtimeMs);
+    } catch (err) {
+      if (err.code !== 'ENOENT') throw new RunLockError(unreadableMessage(lockFile));
+    }
+    if (ageMs < staleMs) {
+      throw new RunLockError(unreadableMessage(lockFile));
+    }
+    try {
+      fs.unlinkSync(lockFile);
+    } catch (err) {
+      if (err.code !== 'ENOENT') throw new RunLockError(unreadableMessage(lockFile));
+    }
+    if (writeLockFile(lockFile, lock)) {
+      return { lockFile, lock, reclaimed: true };
+    }
     throw new RunLockError(unreadableMessage(lockFile));
   }
 

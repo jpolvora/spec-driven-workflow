@@ -931,3 +931,62 @@ test('AC17: resuming an open run leaves its completed steps untouched', () => {
     cleanup(root);
   }
 });
+
+// Spec 00019 revision protocol (AC7 & AC17): a stale in-memory writer fails
+// closed instead of erasing a newer checkpoint or pause written by another
+// process after the stale object was loaded.
+test('AC7 & AC17: a stale in-memory state is refused and the newer pause survives', () => {
+  const root = makeRoot();
+  try {
+    const stale = stateManager.loadRunState(root, RUN_ID);
+    stateManager.recordTurnPause(root, RUN_ID, 4, 'host turn ended', 'resume task-2 implementation');
+    const paused = stateManager.loadRunState(root, RUN_ID);
+    assert.equal(paused.revision, 1, 'the concurrent writer advanced the revision');
+    assert.equal(paused.turnPause.step, 4, 'the concurrent writer stored the pause');
+
+    assert.throws(
+      () => stateManager.saveRunState(root, stale),
+      /Stale run state write refused .*revision 1 .*in-memory state is at 0/,
+      'the stale writer cannot overwrite the newer revision'
+    );
+
+    const afterRefusal = stateManager.loadRunState(root, RUN_ID);
+    assert.equal(afterRefusal.revision, 1, 'the refused write did not advance the revision');
+    assert.equal(afterRefusal.turnPause.nextAction, 'resume task-2 implementation', 'the newer pause survives the refused write');
+
+    const reloaded = stateManager.loadRunState(root, RUN_ID);
+    stateManager.saveRunState(root, reloaded);
+    assert.equal(stateManager.loadRunState(root, RUN_ID).revision, 2, 'a reloaded writer still lands');
+  } finally {
+    cleanup(root);
+  }
+});
+
+// Spec 00019 AC10 & AC17: a lock file left empty by a crash between creation and
+// its record write is reclaimed once it is older than lockStaleMs, and refused
+// while it is young (there is no owner pid to prove absent).
+test('AC10 & AC17: an unreadable lock is reclaimed only once it is older than lockStaleMs', () => {
+  const root = makeRoot();
+  try {
+    const stateFile = stateManager.getStateFilePath(root, RUN_ID);
+    const lockFile = `${stateFile}.lock`;
+
+    fs.writeFileSync(lockFile, '', 'utf8');
+    const old = new Date(Date.now() - 10 * 60 * 1000);
+    fs.utimesSync(lockFile, old, old);
+    const reclaimed = runLock.acquire(stateFile, { staleMs: 60000 });
+    assert.equal(reclaimed.reclaimed, true, 'an old unreadable lock is reclaimed');
+    runLock.release(reclaimed);
+    assert.equal(fs.existsSync(lockFile), false, 'the reclaimed lock is released');
+
+    fs.writeFileSync(lockFile, '', 'utf8');
+    assert.throws(
+      () => runLock.acquire(stateFile, { staleMs: 60000 }),
+      (err) => err.code === 'RUN_LOCKED' && /does not contain a readable pid/.test(err.message),
+      'a young unreadable lock is refused with the manual-removal message'
+    );
+    fs.unlinkSync(lockFile);
+  } finally {
+    cleanup(root);
+  }
+});

@@ -279,10 +279,31 @@ function writeStepCheckpoint(state, stepNum, status, recordedAt) {
   return checkpoint;
 }
 
+// Spec 00019 revision protocol: a caller that supplies an expected revision and
+// finds a different value fails closed. The in-memory revision is the caller's
+// expectation, so a state object loaded before another writer committed is
+// refused instead of silently overwriting the newer pause or checkpoint.
+function readRevisionOnDisk(stateFilePath) {
+  try {
+    const raw = JSON.parse(fs.readFileSync(stateFilePath, 'utf8'));
+    return Number.isInteger(raw.revision) ? raw.revision : null;
+  } catch (err) {
+    return null;
+  }
+}
+
 function saveRunState(targetRoot, state) {
   const stateFilePath = getStateFilePath(targetRoot, state.runId);
   // AC9: the write is the mutation boundary; a live foreign lock fails here.
   return withStateLock(targetRoot, stateFilePath, () => {
+    const onDisk = readRevisionOnDisk(stateFilePath);
+    if (onDisk !== null && onDisk !== state.revision) {
+      const memoryRevision = Number.isInteger(state.revision) ? state.revision : 'unknown';
+      throw new Error(
+        `Stale run state write refused for "${state.runId}": the state file is at revision ${onDisk} `
+        + `but the in-memory state is at ${memoryRevision}. Reload the run before mutating it again.`
+      );
+    }
     state.revision = nextRevision(state);
     state.updatedAt = new Date().toISOString();
     writeStateFileAtomic(stateFilePath, state);
