@@ -274,3 +274,319 @@ test('AC1 & AC3: a diagnostic run records state and step transitions; a plain ru
     fs.rmSync(plainRoot, { recursive: true, force: true });
   }
 });
+
+test('AC5: a script that exits non-zero keeps its command and a bounded output excerpt', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-diag-'));
+  try {
+    fs.writeFileSync(path.join(root, 'failing-script.cjs'), [
+      "'use strict';",
+      "process.stdout.write('partial progress\\n');",
+      "process.stderr.write('script exploded\\n' + 'X'.repeat(900));",
+      'process.exit(3);'
+    ].join('\n'), 'utf8');
+    const eventsPath = path.join('.sdw', 'state', 'diag-demo', 'run-1', 'diagnostics.jsonl');
+    const recorder = diagnostics.createRecorder({ enabled: true, eventsPath, targetRoot: root });
+
+    const result = sdwOrch.runScriptWithDiagnostics(recorder, {
+      step: 7,
+      script: path.join(root, 'failing-script.cjs'),
+      cwd: root
+    });
+
+    assert.equal(result.status, 3, 'the spawn result is unchanged for the caller');
+    const failure = recorder.getEvents().find(event => event.kind === 'script_failure');
+    assert.ok(failure, 'the failing script is recorded');
+    assert.equal(failure.step, 7);
+    assert.equal(failure.exitCode, 3);
+    assert.match(failure.command, /failing-script\.cjs/, 'the failing command is preserved');
+    assert.match(failure.snippet, /partial progress/, 'the stdout excerpt is kept');
+    assert.match(failure.snippet, /script exploded/, 'the stderr excerpt is kept');
+    assert.ok(failure.snippet.length <= diagnostics.MAX_SNIPPET_CHARS, 'the output excerpt is bounded');
+
+    const persisted = fs.readFileSync(path.join(root, eventsPath), 'utf8').trim().split('\n').map(JSON.parse);
+    assert.equal(persisted.find(event => event.kind === 'script_failure').exitCode, 3, 'the failure persists in the JSONL');
+
+    fs.writeFileSync(path.join(root, 'ok-script.cjs'), "process.stdout.write('fine\\n');", 'utf8');
+    const quietRecorder = diagnostics.createRecorder({
+      enabled: true,
+      eventsPath: path.join('.sdw', 'state', 'diag-demo', 'run-2', 'diagnostics.jsonl'),
+      targetRoot: root
+    });
+    const ok = sdwOrch.runScriptWithDiagnostics(quietRecorder, {
+      step: 7,
+      script: path.join(root, 'ok-script.cjs'),
+      cwd: root
+    });
+    assert.equal(ok.status, 0);
+    assert.deepEqual(quietRecorder.getEvents(), [], 'a successful script records nothing');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC6: reopening a run appends JSONL events without rewriting earlier lines', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-diag-'));
+  try {
+    const eventsPath = path.join('.sdw', 'state', 'diag-demo', 'run-1', 'diagnostics.jsonl');
+    const absolutePath = path.join(root, eventsPath);
+    const first = diagnostics.createRecorder({
+      enabled: true,
+      eventsPath,
+      targetRoot: root,
+      now: () => new Date('2026-10-21T15:04:05.000Z')
+    });
+    first.recordStepTransition({ step: 2, transition: 'enter' });
+    first.recordToolFailure({ step: 4, command: 'npm test', exitCode: 1, stderr: 'first failure' });
+    const firstLines = fs.readFileSync(absolutePath, 'utf8').trim().split('\n');
+    assert.equal(firstLines.length, 2);
+
+    // Reopening the same run (a resume) creates a new recorder on the same file.
+    const second = diagnostics.createRecorder({
+      enabled: true,
+      eventsPath,
+      targetRoot: root,
+      now: () => new Date('2026-10-21T15:05:05.000Z')
+    });
+    second.recordStepTransition({ step: 2, transition: 'done' });
+    second.recordStepTransition({ step: 3, transition: 'enter' });
+
+    const secondLines = fs.readFileSync(absolutePath, 'utf8').trim().split('\n');
+    assert.equal(secondLines.length, 4, 'a reopened run appends instead of truncating');
+    assert.deepEqual(secondLines.slice(0, 2), firstLines, 'earlier lines are byte-identical after reopening');
+    for (const line of secondLines) {
+      assert.doesNotThrow(() => JSON.parse(line), 'every line stays valid JSON');
+    }
+
+    const disabled = diagnostics.createRecorder({ enabled: false, eventsPath, targetRoot: root });
+    disabled.recordStepTransition({ step: 3, transition: 'done' });
+    assert.deepEqual(fs.readFileSync(absolutePath, 'utf8').trim().split('\n'), secondLines, 'a disabled recorder writes nothing');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC6: a resumed diagnostic run appends to the same JSONL file', () => {
+  const root = makeProject();
+  try {
+    assert.equal(sdwOrch.cmdRun({
+      root,
+      specPath: '.sdw/specs/diag-demo.md',
+      skipReview: true,
+      skipPr: true,
+      diagnostic: true
+    }), 4);
+    const state = stateManager.findLatestRunState(root);
+    const eventsAbsolutePath = path.join(root, state.diagnostic.eventsPath);
+    const beforeResume = fs.readFileSync(eventsAbsolutePath, 'utf8').trim().split('\n');
+    assert.ok(beforeResume.length > 0);
+
+    assert.equal(sdwOrch.cmdResume({ root, runId: state.runId, diagnostic: true }), 4);
+
+    const afterResume = fs.readFileSync(eventsAbsolutePath, 'utf8').trim().split('\n');
+    assert.ok(afterResume.length > beforeResume.length, 'the resume appends new events');
+    assert.deepEqual(afterResume.slice(0, beforeResume.length), beforeResume, 'the earlier run is never rewritten');
+    for (const line of afterResume) {
+      assert.doesNotThrow(() => JSON.parse(line));
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC7: a failing gate retry loop counts attempts and records the fallback', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-diag-'));
+  try {
+    fs.writeFileSync(
+      path.join(root, 'gate-tool.cjs'),
+      "process.stderr.write('gate exploded\\n'); process.exit(9);\n",
+      'utf8'
+    );
+    const eventsPath = path.join('.sdw', 'state', 'diag-demo', 'run-1', 'diagnostics.jsonl');
+    const recorder = diagnostics.createRecorder({ enabled: true, eventsPath, targetRoot: root });
+    const fixerCalls = [];
+
+    const result = sdwOrch.runVerificationGates(
+      root,
+      { verification: { buildCommand: `"${process.execPath}" gate-tool.cjs`, timeoutMs: 60000 } },
+      {
+        requiredBuild: true,
+        runAllTests: false,
+        diagnosticRecorder: recorder,
+        buildFixer: (targetRoot, attempt) => fixerCalls.push(attempt)
+      }
+    );
+
+    assert.equal(result.passed, false, 'the exhausted loop still fails the gate');
+    assert.deepEqual(fixerCalls, [1, 2, 3], 'the existing repair loop ran its full retry budget');
+
+    const retries = recorder.getEvents().filter(event => event.kind === 'retry');
+    assert.deepEqual(retries.map(event => event.attempt), [1, 2, 3], 'every repair attempt is counted');
+    for (const retry of retries) {
+      assert.equal(retry.step, 4);
+      assert.match(retry.command, /gate-tool\.cjs/);
+      assert.match(retry.note, /build repair attempt/);
+    }
+
+    const fallbacks = recorder.getEvents().filter(event => event.kind === 'fallback');
+    assert.equal(fallbacks.length, 1);
+    assert.equal(fallbacks[0].step, 4);
+    assert.equal(fallbacks[0].attempt, 4, 'the fallback carries the attempt that exhausted the budget');
+    assert.match(fallbacks[0].note, /no retry budget remains/);
+
+    // Without a repair hook the first failure is already the fallback path.
+    const noFixerRecorder = diagnostics.createRecorder({
+      enabled: true,
+      eventsPath: path.join('.sdw', 'state', 'diag-demo', 'run-2', 'diagnostics.jsonl'),
+      targetRoot: root
+    });
+    const noFixer = sdwOrch.runVerificationGates(
+      root,
+      { verification: { buildCommand: `"${process.execPath}" gate-tool.cjs`, timeoutMs: 60000 } },
+      { requiredBuild: true, runAllTests: false, diagnosticRecorder: noFixerRecorder }
+    );
+    assert.equal(noFixer.passed, false);
+    assert.deepEqual(noFixerRecorder.getEvents().filter(event => event.kind === 'retry'), []);
+    const noFixerFallback = noFixerRecorder.getEvents().find(event => event.kind === 'fallback');
+    assert.equal(noFixerFallback.attempt, 1, 'a gate with no retry budget records its fallback on the first attempt');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC8: the report renders deterministically from JSONL with a run summary and issue table', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-diag-'));
+  try {
+    const eventsPath = path.join('.sdw', 'state', 'diag-demo', 'run-1', 'diagnostics.jsonl');
+    const events = [
+      { ts: '2026-10-21T15:04:05.000Z', kind: 'step_transition', step: 1, note: 'enter' },
+      { ts: '2026-10-21T15:04:06.000Z', kind: 'script_failure', step: 7, command: 'node "review.cjs" run', exitCode: 3, snippet: 'review exploded' },
+      { ts: '2026-10-21T15:04:07.000Z', kind: 'retry', step: 7, command: 'node "review.cjs" run --fix', attempt: 1, note: 'review convergence iteration 1/3' },
+      { ts: '2026-10-21T15:04:08.000Z', kind: 'fallback', step: 7, command: 'node "review.cjs" run --fix', attempt: 3, note: 'review convergence stopped: no fixable findings were reported' }
+    ];
+    fs.mkdirSync(path.dirname(path.join(root, eventsPath)), { recursive: true });
+    fs.writeFileSync(path.join(root, eventsPath), events.map(event => JSON.stringify(event)).join('\n') + '\n', 'utf8');
+
+    const first = diagnostics.renderReport({
+      slug: 'diag-demo',
+      runId: 'run-1',
+      status: 'failed',
+      events,
+      eventsPath
+    });
+    const second = diagnostics.renderReport({
+      slug: 'diag-demo',
+      runId: 'run-1',
+      status: 'failed',
+      events,
+      eventsPath
+    });
+    assert.equal(first, second, 'the same JSONL renders byte-identical Markdown');
+
+    assert.match(first, /^# Diagnostics report: diag-demo/);
+    assert.match(first, /## Run summary/);
+    assert.match(first, /\| Status \| failed \|/);
+    assert.match(first, /\| Events \| 4 \|/);
+    assert.match(first, /## Issues/);
+    assert.match(first, /^\| Severity \| Step \| Evidence \|$/m);
+    assert.match(first, /^\| error \| 7 \| script_failure;/m, 'a failing script appears as an error issue');
+    assert.match(first, /exit 3/, 'the evidence keeps the exit code');
+    assert.match(first, /^\| warning \| 7 \| retry;/m, 'a retry appears as a warning issue');
+    assert.match(first, /attempt 1/);
+    assert.match(first, /^\| warning \| 7 \| fallback;/m, 'a fallback appears as a warning issue');
+    assert.match(first, /review convergence stopped/);
+    assert.equal(/^\| \w+ \| 1 \| step_transition/m.test(first), false, 'step transitions are summarized, not listed as issues');
+
+    const written = diagnostics.writeReport({
+      targetRoot: root,
+      artifactsDir: path.join('.sdw', 'state', 'diag-demo', 'run-1'),
+      slug: 'diag-demo',
+      runId: 'run-1',
+      status: 'failed',
+      eventsPath
+    });
+    assert.equal(written.ok, true);
+    assert.equal(written.path, '.sdw/state/diag-demo/run-1/diag-demo-diagnostics.md');
+    assert.equal(written.eventCount, 4);
+    assert.equal(fs.readFileSync(path.join(root, written.path), 'utf8'), first, 'the written report is the rendered report');
+
+    // AC8 fail-open: an unwritable report path returns a failure, never a throw.
+    fs.writeFileSync(path.join(root, 'blocked'), 'this is a file, not a directory', 'utf8');
+    const failedWrite = diagnostics.writeReport({
+      targetRoot: root,
+      artifactsDir: path.join('blocked', 'nested'),
+      slug: 'diag-demo',
+      runId: 'run-1',
+      status: 'failed',
+      eventsPath
+    });
+    assert.equal(failedWrite.ok, false);
+    assert.equal(typeof failedWrite.error, 'string');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC8: a terminal run emits the diagnostics report and an intermediate pause does not', () => {
+  const root = makeProject();
+  try {
+    assert.equal(sdwOrch.cmdRun({
+      root,
+      specPath: '.sdw/specs/diag-demo.md',
+      skipReview: true,
+      skipPr: true,
+      diagnostic: true
+    }), 4);
+    const state = stateManager.findLatestRunState(root);
+    const reportRelPath = `${state.artifactsDir}/diag-demo-diagnostics.md`;
+    assert.equal(fs.existsSync(path.join(root, reportRelPath)), false, 'a paused dispatch writes no report');
+
+    // A terminal failure that only reached the command result (for example when
+    // the state write itself failed) still emits the report.
+    const resultOnly = sdwOrch.finalizeDiagnosticRun({
+      root,
+      _runResult: { status: 'failed' },
+      _diagnosticRun: {
+        runId: 'run-missing',
+        specSlug: state.specSlug,
+        artifactsDir: state.artifactsDir,
+        eventsPath: state.diagnostic.eventsPath
+      }
+    });
+    assert.ok(resultOnly && resultOnly.ok, 'a terminal failure carried by the result emits the report');
+
+    state.status = 'completed';
+    stateManager.saveRunState(root, state);
+    const result = sdwOrch.finalizeDiagnosticRun({
+      root,
+      _diagnosticRun: {
+        runId: state.runId,
+        specSlug: state.specSlug,
+        artifactsDir: state.artifactsDir,
+        eventsPath: state.diagnostic.eventsPath
+      }
+    });
+
+    assert.ok(result && result.ok, 'a terminal run writes the report');
+    assert.equal(result.path, reportRelPath);
+    const markdown = fs.readFileSync(path.join(root, reportRelPath), 'utf8');
+    assert.match(markdown, /^# Diagnostics report: diag-demo/);
+    assert.match(markdown, /## Run summary/);
+    assert.match(markdown, /## Issues/);
+    assert.match(markdown, /^\| Severity \| Step \| Evidence \|$/m);
+
+    // A write failure is reported, never thrown, so delivery is unaffected.
+    fs.writeFileSync(path.join(root, 'blocked-report'), 'file', 'utf8');
+    const degraded = sdwOrch.finalizeDiagnosticRun({
+      root,
+      _diagnosticRun: {
+        runId: state.runId,
+        specSlug: state.specSlug,
+        artifactsDir: path.join('blocked-report', 'nested'),
+        eventsPath: state.diagnostic.eventsPath
+      }
+    });
+    assert.equal(degraded.ok, false, 'an unwritable report is reported as degraded');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
