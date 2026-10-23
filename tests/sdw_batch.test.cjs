@@ -1581,6 +1581,18 @@ test('00066 AC3: a pull request still not mergeable after its checks pass halts 
   assert.equal(merge.retryOutcome, 'failed');
 });
 
+// Spec 00066 AC1: the production probe gates on the required checks only, so an
+// advisory check can neither block nor halt the queue.
+test('00066 AC1: the github check probe reads only required checks', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'skills', 'sdw-batch', 'scripts', 'batch_queue.cjs'),
+    'utf8'
+  );
+  const probe = source.split('\n').find(line => line.includes('spawnSync(`gh pr checks'));
+  assert.ok(probe, 'the pre-flight probe shells out to gh pr checks');
+  assert.match(probe, /--required/, 'the probe asks only for required checks');
+});
+
 
 // Spec 00058 AC1-AC4: the skip path skips the implementation only. The merge
 // stage still runs on adopted delivery evidence, and an item without any

@@ -992,10 +992,12 @@ const FAILING_CHECK_STATES = new Set([
 
 // `gh pr checks` exits non-zero while checks are pending (8) or failing (1), so
 // the JSON body is read whatever the exit status: only an unreadable report,
-// zero checks, or an absent CLI means the provider cannot report.
+// zero checks, or an absent CLI means the provider cannot report. `--required`
+// limits the gate to the checks the protected branch actually requires, so an
+// advisory check can never block or halt the queue.
 function providerChecksStatus({ config, prNumber, provider } = {}) {
   if (providerKind({ scmProvider: provider }) !== 'github' || !/^\d+$/.test(String(prNumber))) return null;
-  const result = spawnSync(`gh pr checks ${prNumber} --json name,state`, {
+  const result = spawnSync(`gh pr checks ${prNumber} --required --json name,state`, {
     cwd: config.root,
     shell: true,
     encoding: 'utf8',
