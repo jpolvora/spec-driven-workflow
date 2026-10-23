@@ -61,11 +61,13 @@ function detectTouchpoints(specContent) {
   const content = String(specContent || '');
   const touchpoints = [];
 
-  if (/cli|command|subcommand|flags/i.test(content)) touchpoints.push('cli');
-  if (/state|persistence|json|database|store/i.test(content)) touchpoints.push('state');
-  if (/git|commit|review|diff/i.test(content)) touchpoints.push('vcs');
-  if (/pr|pull request|comments/i.test(content)) touchpoints.push('pr');
-  if (/ui|view|frontend|component/i.test(content)) touchpoints.push('ui');
+  // Word boundaries only: unanchored fragments match unrelated prose ("project"
+  // as "pr", "build" as "ui", "client" as "cli") and escalate specs to complex.
+  if (/\bcli\b|\bcommands?\b|\bsubcommands?\b|\bflags?\b/i.test(content)) touchpoints.push('cli');
+  if (/\bstate\b|\bpersistence\b|\bjson\b|\bdatabase\b|\bstore\b/i.test(content)) touchpoints.push('state');
+  if (/\bgit\b|\bcommits?\b|\breview\b|\bdiff\b/i.test(content)) touchpoints.push('vcs');
+  if (/\bprs?\b|\bpull requests?\b|\bcomments?\b/i.test(content)) touchpoints.push('pr');
+  if (/\bui\b|\bviews?\b|\bfrontend\b|\bcomponents?\b/i.test(content)) touchpoints.push('ui');
 
   return touchpoints;
 }

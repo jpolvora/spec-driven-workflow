@@ -515,3 +515,17 @@ test('AC13 & AC19: run and dag preview honor the configured maxTasksPerSpec', ()
     fs.rmSync(narrowRoot, { recursive: true, force: true });
   }
 });
+
+test('classifier: unanchored touchpoint fragments do not escalate a spec to complex', () => {
+  const content = buildSpec('015-touchpoint-precision', 7, {
+    description: 'This project process guides the client to build and restore state during review of a prompt.'
+  });
+  const analysis = dagPlanner.analyzeComplexity(content, { targetFiles: TARGET_FILES });
+  assert.equal(analysis.acCount, 7);
+  assert.ok(!analysis.touchpoints.includes('pr'), 'project must not count as a PR touchpoint');
+  assert.ok(!analysis.touchpoints.includes('ui'), 'build and guide must not count as UI touchpoints');
+  assert.ok(!analysis.touchpoints.includes('cli'), 'client must not count as a CLI touchpoint');
+  assert.equal(analysis.level, 'standard', 'two real touchpoints stay below the escalation threshold');
+  const plan = dagPlanner.generateDagPlan(content, { slug: '015-touchpoint-precision', targetFiles: TARGET_FILES });
+  assert.equal(plan.taskCount, 2, 'a standard spec keeps the two-task split');
+});
