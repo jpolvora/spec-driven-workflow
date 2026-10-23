@@ -1005,6 +1005,73 @@ function formatModelHint(hint) {
   return parts.join(', ');
 }
 
+// Spec 00056 AC13: the plan previews model routing without executing a step. It
+// reads the capability cache, never probes or writes it, and reports the same
+// detection status the real run would record (skipped, hit, probe).
+function buildDryRunModelPlan(options = {}) {
+  const { targetRoot, config } = options;
+  const runtime = options.options || {};
+  const detection = modelCapabilities.resolveDetection(config && config.models);
+  const enabled = detection.enabled === true && runtime.noModelDetect !== true;
+  const key = modelCapabilities.resolveSessionKey(runtime);
+  const scoring = runtime.scoring || (config && config.scoring);
+  let status = 'skipped';
+  let source = 'skipped';
+  let transport = 'none';
+  let resolved = resolveModelHints(config, scoring);
+  let adaptations = [];
+  if (enabled) {
+    const cacheFile = typeof runtime.capabilitiesCacheFile === 'string' && runtime.capabilitiesCacheFile.trim()
+      ? path.resolve(runtime.capabilitiesCacheFile)
+      : path.join(targetRoot, modelCapabilities.CACHE_FILE_REL);
+    const cache = modelCapabilities.readCapabilitiesCache(cacheFile);
+    const entry = cache && cache[key];
+    const validation = entry && entry.capabilities
+      ? modelCapabilities.validateCapabilities(entry.capabilities)
+      : { valid: false };
+    if (validation.valid) {
+      status = 'hit';
+      source = 'hit';
+      transport = 'cache';
+      const adapted = modelCapabilities.adaptModelHints({
+        staticHints: resolved,
+        chains: buildModelChains(config, scoring),
+        capabilities: validation.capabilities,
+        supportedModels: Array.isArray(entry.supportedModels) ? entry.supportedModels : validation.supportedModels
+      });
+      resolved = adapted.resolved;
+      adaptations = adapted.adaptations;
+    } else {
+      status = 'probe';
+      source = 'probe';
+      transport = detection.command ? 'command' : 'host';
+    }
+  }
+  return {
+    detection: { enabled, status, source, transport, key, command: detection.command },
+    resolved,
+    adaptations
+  };
+}
+
+// Spec 00056 AC13/AC14: the hint line shows the resolved role hint, which already
+// fell back to models.default, plus the requested id when a cached hit adapted it.
+function formatDryRunModelHint(hint) {
+  const formatted = formatModelHint(hint);
+  return hint && hint.configuredModel ? `${formatted} (requested ${hint.configuredModel})` : formatted;
+}
+
+function printDryRunModelPlan(plan) {
+  const { detection } = plan;
+  console.log(`[sdw-orch dry-run] Models detection: enabled=${detection.enabled ? 'yes' : 'no'} status=${detection.status} source=${detection.source} transport=${detection.transport} key=${detection.key} command=${detection.command || 'none'}`);
+  if (detection.status === 'probe') {
+    console.log('[sdw-orch dry-run] Models detection: probe not executed (--dry-run); hints below stay static.');
+  }
+  for (const role of modelCapabilities.MODEL_ROLES) {
+    console.log(`[sdw-orch dry-run] Model hint ${role}: ${formatDryRunModelHint(plan.resolved[role])}`);
+  }
+}
+
 function attachWorkerModelHint(promptFileAbs, workerHint) {
   if (!workerHint) return;
   fs.appendFileSync(promptFileAbs, `\n## Worker Model Hint\n\nModel: ${formatModelHint(workerHint)}\n`, 'utf8');
@@ -1673,6 +1740,10 @@ function printRunDryRunPlan(context) {
     specObservations = [];
   }
 
+  // Spec 00056 AC13: the plan names the detection source, status, and key plus
+  // every resolved role hint, read from the cache without probing or writing.
+  const modelPlan = buildDryRunModelPlan({ targetRoot, config, options });
+
   if (options.json) {
     console.log(JSON.stringify({
       mode: 'dry-run',
@@ -1684,6 +1755,7 @@ function printRunDryRunPlan(context) {
       settings,
       branchPlan,
       steps,
+      models: modelPlan,
       specObservations,
       reportContributions: {
         total: 0,
@@ -1707,6 +1779,7 @@ function printRunDryRunPlan(context) {
   console.log(`[sdw-orch dry-run] Specification: ${normalizePath(path.relative(targetRoot, resolvedSpec))} (${specSlug})`);
   console.log(`[sdw-orch dry-run] Target root: ${normalizePath(targetRoot)}`);
   console.log(`[sdw-orch dry-run] Settings: scoreMin=${settings.scoreMin}, pushDelivery=${settings.pushDelivery}, scmProvider=${settings.scmProvider}, useFeatureBranches=${settings.useFeatureBranches}, useWorktrees=${settings.useWorktrees}, branching=${settings.branching}`);
+  printDryRunModelPlan(modelPlan);
   console.log(`[sdw-orch dry-run] Strategy: ${branchPlan.strategy}`);
   console.log(`[sdw-orch dry-run] Start lane: ${branchPlan.startLane} (update: ${branchPlan.update ? 'yes' : 'no'})`);
   console.log(`[sdw-orch dry-run] Feature branch: ${branchPlan.featureBranch}`);

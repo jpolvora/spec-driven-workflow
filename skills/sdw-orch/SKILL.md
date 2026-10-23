@@ -24,7 +24,7 @@ Orchestrates spec execution from input requirement to delivery commit, automated
 ## Subcommands
 
 - `run <specPath>`: Executes the full 8-step workflow pipeline for one specification.
-- `run <specPath> --dry-run`: Validates the specification, prints the execution plan and the spec observations it found; executes nothing and writes no state, report, or artifact.
+- `run <specPath> --dry-run`: Validates the specification, prints the execution plan, the model-detection status with the resolved per-role hints, and the spec observations it found; executes nothing and writes no state, report, or artifact.
 - `run <specPath> --second-pass` (alias `--refine`): Refines an already implemented specification: audits how it was delivered, fills acceptance criteria that are missing or drifted from the spec, then applies clear simplification or quality gains. Writes a `{slug}-refine.md` report, commits only when the pass changed code, and runs Step 8 only when that commit exists. Producing no change is valid only when every criterion already holds and no drift remains.
 - `run <specPath> --sandbox`: Executes the whole pipeline against an isolated local clone of `HEAD`; never pushes or opens a pull request.
 - `sandbox list | report --run-id <runId> | clean --run-id <runId>`: Lists isolated sandboxes with status, branch, and age; regenerates and prints a sandbox report; or deletes the clone keeping its metadata and report.

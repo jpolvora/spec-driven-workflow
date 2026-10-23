@@ -2764,3 +2764,200 @@ test('00056 AC12: malformed model hints refuse the run before any probe', () => 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+// Spec 00056 AC13 & AC14: the plan prints the detection block plus one resolved
+// hint per role, an absent role falls back to models.default, and nothing runs.
+test('00056 AC13 & AC14: --dry-run prints the detection block and the resolved hint per role', () => {
+  const slug = 'model-dry-plan';
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-56-dry-plan-'));
+  try {
+    fs.mkdirSync(path.join(tmpDir, '.sdw', 'specs'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.sdw', 'config.json'), JSON.stringify({
+      scoreMin: 8,
+      scmProvider: 'none',
+      useFeatureBranches: false,
+      useWorktrees: false,
+      pushDelivery: false,
+      models: {
+        default: { model: 'default-model', effort: 'medium' },
+        worker: { model: 'fast-model', effort: 'low' }
+      }
+    }, null, 2), 'utf8');
+    fs.writeFileSync(
+      path.join(tmpDir, '.sdw', 'specs', `${slug}.md`),
+      validDryRunSpec(slug, 'Names `skills/sdw-orch/scripts/sdw_orch.cjs` as a target.')
+    );
+
+    let output = '';
+    const originalLog = console.log;
+    console.log = (message) => { output += `${String(message)}\n`; };
+    let code;
+    try {
+      code = sdwOrch.cmdRun({
+        root: tmpDir,
+        specPath: `.sdw/specs/${slug}.md`,
+        dryRun: true,
+        modelsSessionKey: 'test-host::dry-plan'
+      });
+    } finally {
+      console.log = originalLog;
+    }
+
+    assert.equal(code, 0, 'AC13: a valid specification plans cleanly');
+    assert.match(
+      output,
+      /Models detection: enabled=no status=skipped source=skipped transport=none key=test-host::dry-plan command=none/,
+      'AC13: disabled detection prints its source, status, and key'
+    );
+    assert.match(output, /Model hint orchestrator: default-model, effort medium/, 'AC14: an absent orchestrator entry falls back to models.default');
+    assert.match(output, /Model hint worker: fast-model, effort low/, 'AC13: the configured worker hint prints');
+    assert.match(output, /Model hint reviewer: default-model, effort medium/, 'AC14: an absent reviewer entry falls back to models.default');
+    assert.match(output, /Model hint fixer: default-model, effort medium/, 'AC14: an absent fixer entry falls back to models.default');
+    assert.match(output, /Model hint judge: default-model, effort medium/, 'AC14: the judge falls through scoring and models.default');
+    assert.match(output, /Model hint ship: default-model, effort medium/, 'AC14: an absent ship entry falls through the fixer chain to models.default');
+    assert.match(output, /Model hint retro: default-model, effort medium/, 'AC14: an absent retro entry falls back to models.default');
+    assert.match(output, /No steps executed \(--dry-run\)/, 'AC13: the plan executes no step');
+    assert.equal(fs.existsSync(path.join(tmpDir, '.sdw', 'host-capabilities.json')), false, 'AC13: the plan writes no capability cache');
+    assert.equal(fs.existsSync(path.join(tmpDir, '.sdw', 'state')), false, 'AC13: the plan writes no run state');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// Spec 00056 AC13: an enabled toggle previews the cached hit and its adaptation
+// from the cache only; --dry-run never probes and never rewrites the cache.
+test('00056 AC13: --dry-run previews a cached hit and its adaptation without probing', () => {
+  const slug = 'model-dry-hit';
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-56-dry-hit-'));
+  try {
+    const detection = writeModelDetectionFixture(tmpDir, detectedCapabilities);
+    fs.mkdirSync(path.join(tmpDir, '.sdw', 'specs'), { recursive: true });
+    const config = {
+      scoreMin: 8,
+      scmProvider: 'none',
+      useFeatureBranches: false,
+      useWorktrees: false,
+      pushDelivery: false,
+      models: {
+        default: { model: 'fast-model', effort: 'low' },
+        worker: { model: 'slow-model', effort: 'high' },
+        detection: { enabled: true, command: detection.command, timeoutMs: 10000 }
+      }
+    };
+    fs.writeFileSync(path.join(tmpDir, '.sdw', 'config.json'), JSON.stringify(config, null, 2), 'utf8');
+    const specPath = path.join(tmpDir, '.sdw', 'specs', `${slug}.md`);
+    fs.writeFileSync(specPath, validDryRunSpec(slug, 'Names `skills/sdw-orch/scripts/sdw_orch.cjs` as a target.'));
+
+    const cacheFile = path.join(tmpDir, '.sdw', 'host-capabilities.json');
+    const cacheBefore = `${JSON.stringify({
+      'test-host::dry-hit': {
+        capabilities: detectedCapabilities,
+        supportedModels: ['fast-model', 'review-model'],
+        probedAt: '2026-10-22T00:00:00.000Z',
+        source: 'command'
+      }
+    }, null, 2)}\n`;
+    fs.writeFileSync(cacheFile, cacheBefore, 'utf8');
+
+    let output = '';
+    const originalLog = console.log;
+    console.log = (message) => { output += `${String(message)}\n`; };
+    let code;
+    try {
+      code = sdwOrch.cmdRun({
+        root: tmpDir,
+        specPath: `.sdw/specs/${slug}.md`,
+        dryRun: true,
+        modelsSessionKey: 'test-host::dry-hit'
+      });
+    } finally {
+      console.log = originalLog;
+    }
+
+    assert.equal(code, 0, 'AC13: the plan exits 0');
+    assert.match(
+      output,
+      /Models detection: enabled=yes status=hit source=hit transport=cache key=test-host::dry-hit command=node/,
+      'AC13: the cached hit prints its source, status, and key'
+    );
+    assert.match(
+      output,
+      /Model hint worker: fast-model, effort low \(requested slow-model\)/,
+      'AC13: the unavailable worker hint previews its adaptation and requested id'
+    );
+    assert.match(output, /Model hint reviewer: fast-model, effort low/, 'AC13: an available default hint is not adapted');
+    assert.equal(detection.probeCount(), 0, 'AC13: --dry-run never executes the detection command');
+    assert.equal(fs.readFileSync(cacheFile, 'utf8'), cacheBefore, 'AC13: --dry-run never rewrites the capability cache');
+    assert.equal(fs.existsSync(path.join(tmpDir, '.sdw', 'state')), false, 'AC13: the plan writes no run state');
+
+    let jsonOut = '';
+    console.log = (message) => { jsonOut += `${String(message)}\n`; };
+    let jsonCode;
+    try {
+      jsonCode = sdwOrch.printRunDryRunPlan({
+        targetRoot: tmpDir,
+        resolvedSpec: specPath,
+        specSlug: slug,
+        config,
+        options: { json: true, modelsSessionKey: 'test-host::dry-hit' }
+      });
+    } finally {
+      console.log = originalLog;
+    }
+    assert.equal(jsonCode, 0, 'AC13: the JSON plan exits 0');
+    const payload = JSON.parse(jsonOut);
+    assert.equal(payload.executed, false, 'AC13: the JSON plan states that nothing executed');
+    assert.equal(payload.models.detection.status, 'hit', 'AC13: the JSON plan carries the detection status');
+    assert.equal(payload.models.detection.source, 'hit');
+    assert.equal(payload.models.detection.key, 'test-host::dry-hit', 'AC13: the JSON plan carries the detection key');
+    assert.equal(payload.models.resolved.worker.model, 'fast-model', 'AC13: the JSON plan carries the resolved worker hint');
+    assert.equal(payload.models.resolved.worker.configuredModel, 'slow-model', 'AC13: the JSON plan keeps the requested id');
+    assert.equal(payload.models.resolved.retro.model, 'fast-model', 'AC14: an absent retro entry resolves through models.default');
+    assert.equal(payload.models.adaptations.length, 1, 'AC13: the JSON plan records the previewed adaptation');
+    assert.equal(detection.probeCount(), 0, 'AC13: the JSON plan never executes the detection command');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// Spec 00056 AC14: role resolution is role entry, then models.default, then null,
+// which keeps the current agent model instance as the zero-config behavior.
+test('00056 AC14: an absent role hint resolves to models.default before the session model', () => {
+  const roleNames = ['orchestrator', 'worker', 'reviewer', 'fixer', 'judge', 'ship', 'retro'];
+  const onlyDefault = sdwOrch.resolveModelHints({
+    models: { default: { model: 'fallback-model', effort: 'medium' } }
+  });
+  for (const role of roleNames) {
+    assert.deepEqual(
+      onlyDefault[role],
+      { model: 'fallback-model', provider: null, effort: 'medium', apiEndpoint: null },
+      `AC14: absent ${role} falls back to models.default`
+    );
+  }
+
+  const explicit = sdwOrch.resolveModelHints({
+    models: { default: { model: 'fallback-model' }, worker: { model: 'worker-model' } }
+  });
+  assert.equal(explicit.worker.model, 'worker-model', 'AC14: a present role entry wins over models.default');
+  assert.equal(explicit.orchestrator.model, 'fallback-model', 'AC14: the other roles keep the default fallback');
+
+  const none = sdwOrch.resolveModelHints({});
+  for (const role of roleNames) {
+    assert.equal(none[role], null, `AC14: unconfigured ${role} resolves to the session model`);
+  }
+});
+
+// Spec 00056 AC15: the touched skill definitions stay inside the Tier-1 budget.
+test('00056 AC15: the modified skill definitions stay within the Tier-1 line budget', () => {
+  const repoRoot = path.resolve(__dirname, '..');
+  const doctorPath = path.join(repoRoot, 'skills', 'sdw-rules', 'scripts', 'sdw_rules.cjs');
+  const doctor = JSON.parse(execSync(`node "${doctorPath}" doctor --json`, { encoding: 'utf8' }));
+  assert.equal(doctor.passed, true, 'AC15: doctor passes');
+  assert.equal(doctor.violationsCount, 0, 'AC15: doctor reports zero violations');
+  assert.ok(doctor.checkedSkillsCount > 0, 'AC15: doctor checked every skill definition');
+  for (const skill of doctor.checkedSkills) {
+    assert.ok(skill.lineCount <= 120, `AC15: ${skill.name}/SKILL.md stays within 120 lines (${skill.lineCount})`);
+  }
+  const orchSkill = fs.readFileSync(path.join(repoRoot, 'skills', 'sdw-orch', 'SKILL.md'), 'utf8');
+  assert.ok(orchSkill.split(/\r?\n/).length <= 120, 'AC15: sdw-orch/SKILL.md stays within 120 lines');
+});
