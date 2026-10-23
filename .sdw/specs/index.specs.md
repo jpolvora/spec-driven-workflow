@@ -54,7 +54,7 @@ Central repository index tracking specification lifecycle states, metadata, and 
 | 00040 | 00040-sdw-branching-strategy | SDW Branching Strategy — Configurable Presets, Branch Lanes, and Post-Merge Sync | completed | local | 2026-10-21 | PASS | - |
 | 00041 | 00041-us-20-versioned-spec-files-for-creation | Versioned spec files for creation, editing, and drift repair | pending | github | 2026-10-21 | PASS | - |
 | 00042 | 00042-us-18-reduce-repeated-full-test-suite-r | Reduce repeated full test suite runs during task implementation | completed | github | 2026-10-21 | PASS | - |
-| 00043 | 00043-us-17-emphasize-step-number-progress-in | Emphasize step number progress in sdw-orch agent output | pending | github | 2026-10-21 | PASS | - |
+| 00043 | 00043-us-17-emphasize-step-number-progress-in | Emphasize step number progress in sdw-orch agent output | completed | github | 2026-10-21 | PASS | - |
 | 00044 | 00044-us-16-add-gitattributes-and-per-task-sa | Add .gitattributes and per-task save in sdw-orch DAG | completed | github | 2026-10-21 | PASS | - |
 | 00045 | 00045-sdw-retro-auto-run | Automatic Retrospective After Delivery and Delivery-Integrity Signals | completed | local | 2026-10-21 | PASS | - |
 | 00046 | 00046-sdw-batch-retro-followup | Unattended Batch Retro Follow-Up — Queued Specs From Retrospective Candidates | completed | local | 2026-10-21 | PASS | - |
