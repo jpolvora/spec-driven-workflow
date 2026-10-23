@@ -19,6 +19,8 @@ const sandbox = require('./sandbox.cjs');
 const deliveryReport = require('./delivery_report.cjs');
 const modelCapabilities = require('./model_capabilities.cjs');
 const diagnostics = require('./diagnostics.cjs');
+const telemetry = require('./telemetry.cjs');
+const monitor = require('./monitor.cjs');
 const memory = require('../../sdw-memory/scripts/sdw_memory.cjs');
 
 // Spec 00043: short, consistent step-number progress headers. Additive only:
@@ -112,12 +114,83 @@ function recordDiagnosticFallback(recorder, step, command, attempt, note) {
   }
 }
 
+// Spec 00021 AC1-AC3: while a run is executing, every existing step entry and
+// completion point appends one telemetry event. The session is inert elsewhere,
+// so no other subcommand writes telemetry.
+let activeTelemetry = null;
+
+// Spec 00021 AC2: bind one writer to the run artifact directory. Starting the
+// session never throws: an observability setup failure leaves the run unchanged.
+function startTelemetrySession(targetRoot, state) {
+  activeTelemetry = null;
+  try {
+    if (!state || !state.runId) return null;
+    const artifactsDir = state.artifactsDir
+      || stateManager.getArtifactsRelDir(targetRoot, state.specSlug, state.runId);
+    const telemetryPath = telemetry.telemetryPathFor(artifactsDir);
+    activeTelemetry = {
+      telemetryPath,
+      stateFilePath: stateManager.getStateFilePath(targetRoot, state.runId),
+      targetRoot,
+      writer: telemetry.createWriter({
+        targetRoot,
+        telemetryPath,
+        runId: state.runId,
+        specSlug: state.specSlug
+      })
+    };
+  } catch (e) {
+    activeTelemetry = null;
+  }
+  return activeTelemetry;
+}
+
+// Spec 00021 AC3: the step record on disk is the duration source, because the
+// existing transition sites update state just before the completion log. A read
+// failure degrades to a named step with no duration instead of failing the step.
+function readTelemetryStep(step) {
+  if (!activeTelemetry || !activeTelemetry.stateFilePath) return null;
+  try {
+    const state = JSON.parse(fs.readFileSync(activeTelemetry.stateFilePath, 'utf8'));
+    const stepState = state && state.steps ? state.steps[step] : null;
+    return stepState && typeof stepState === 'object' ? stepState : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function recordTelemetryStepTransition(step, transition) {
+  if (!activeTelemetry) return null;
+  try {
+    const stepState = readTelemetryStep(step);
+    const entering = transition === 'enter';
+    return activeTelemetry.writer.recordStep({
+      step,
+      stepName: (stepState && stepState.name) || STEP_PROGRESS_NAMES[step] || null,
+      status: entering ? 'in_progress' : ((stepState && stepState.status) || 'completed'),
+      durationMs: entering
+        ? null
+        : telemetry.stepDuration({
+          stepState,
+          step,
+          telemetryPath: activeTelemetry.telemetryPath,
+          targetRoot: activeTelemetry.targetRoot
+        })
+    });
+  } catch (e) {
+    // AC12 owns the warning; a telemetry failure never fails a step.
+    return null;
+  }
+}
+
 function logStepEnter(step) {
+  recordTelemetryStepTransition(step, 'enter');
   recordDiagnosticStepTransition(step, 'enter');
   console.log(`[Step ${step}/8] Entering Step ${step}: ${STEP_PROGRESS_NAMES[step]}.`);
 }
 
 function logStepDone(step) {
+  recordTelemetryStepTransition(step, 'done');
   recordDiagnosticStepTransition(step, 'done');
   console.log(`[Step ${step}/8] Completed Step ${step}: ${STEP_PROGRESS_NAMES[step]}.`);
 }
@@ -366,6 +439,12 @@ function parseArgs(args) {
     if (result.subcommand === 'task-finish' && !result.evidencePath && rest[1]) result.evidencePath = rest[1];
     if (result.subcommand === 'task-abandon' && !result.reason && rest[1]) result.reason = rest[1];
     if (result.subcommand === 'dag-preview' && rest[0] && !result.specPath) result.specPath = rest[0];
+  } else if (positional[0] === 'monitor') {
+    // Spec 00021 AC4: `monitor` takes no spec path. A bare `--run-id` scopes the
+    // listing to one run; every other flag keeps its parsed meaning.
+    result.subcommand = 'monitor';
+    result.specPaths = [];
+    result.specPath = null;
   } else {
     result.subcommand = positional[0] || null;
     result.specPaths = positional.slice(1);
@@ -2744,6 +2823,10 @@ function executeRun(options) {
     }
   }
 
+  // Spec 00021 AC1/AC2: telemetry binds to this run before the first step
+  // transition. It is always on, and its writer never fails the run.
+  startTelemetrySession(targetRoot, state);
+
   // Spec 00017 AC1/AC15/AC17: the ledger exists before the first Step 1 mutation.
   // A run that already owns one loads it, so resume preserves every record. A
   // failure here fails the run before Step 1 completes instead of continuing
@@ -5109,6 +5192,10 @@ function cmdTaskFinish(options) {
   state.steps[4] = state.steps[4] || { name: 'implementation', status: 'awaiting_implementation', tasks: {}, gates: {} };
   state.steps[4].tasks = state.steps[4].tasks || {};
 
+  // Spec 00021 AC1: accepting the final task completes Step 4 through the same
+  // completion point, so this session records that transition too.
+  startTelemetrySession(targetRoot, state);
+
   // Spec 028 AC9: only the dispatched task may be completed, which also rules out
   // out-of-order acceptance and a second worker finishing someone else's task.
   const dispatch = getDispatchRecord(state);
@@ -5548,6 +5635,9 @@ function cmdResume(options) {
     console.log(`[sdw-orch diagnostics] enabled, writing to ${state.diagnostic.eventsPath}`);
   }
 
+  // Spec 00021 AC1/AC2: a resume appends to the run's existing telemetry file.
+  startTelemetrySession(targetRoot, state);
+
   // AC11: every step that is already completed or skipped is skipped by the
   // guards in cmdRun; a fully resolved run only refreshes its reports. Announce
   // that, so resume never implies re-executing a completed step.
@@ -5691,6 +5781,25 @@ function cmdResume(options) {
     // A second pass keeps its mode and scoring base across resumes.
     ...(state.refineMode ? { refineMode: true, baseCommit: options.baseCommit || state.baseCommit } : {})
   });
+}
+
+// Spec 00021 AC4: print the active-run snapshot. Read-only: nothing here
+// initializes the state layout or writes state, the ledger, or telemetry.
+function cmdMonitor(options) {
+  const targetRoot = options.root ? path.resolve(options.root) : process.cwd();
+  let snapshot;
+  try {
+    snapshot = monitor.listActiveRuns({
+      targetRoot,
+      runId: options.runId || null,
+      now: options.now
+    });
+  } catch (err) {
+    console.error(`[sdw-orch monitor] Error: ${err.message}`);
+    return 1;
+  }
+  console.log(monitor.renderMonitor(snapshot));
+  return 0;
 }
 
 function cmdStatus(options) {
@@ -6208,6 +6317,7 @@ Subcommands:
   ledger audit           List acceptance criteria without evidence (--run-id, --format md|json; exit 1 when any remain)
   dag preview            Print the plan the classifier would generate, without side effects
   status                 Check status of current or specified run state
+  monitor                List active runs with status, current step, and age (--run-id to scope)
   sandbox list           List isolated sandboxes created by --sandbox
   sandbox report         Regenerate and print the report for a sandbox (--run-id)
   sandbox clean          Delete a sandbox clone, keeping its report (--run-id)
@@ -6324,6 +6434,9 @@ function main() {
       case 'status':
         code = cmdStatus(options);
         break;
+      case 'monitor':
+        code = cmdMonitor(options);
+        break;
       case 'dag-preview':
         code = cmdDagPreview(options);
         break;
@@ -6347,7 +6460,8 @@ function main() {
 
   try {
     // Spec 00030 AC19: `dag preview` is pure; it never refreshes a sandbox report.
-    if (options.subcommand !== 'dag-preview') {
+    // Spec 00021 AC4: `monitor` is read-only, so it never refreshes one either.
+    if (options.subcommand !== 'dag-preview' && options.subcommand !== 'monitor') {
       const refreshRoot = options._effectiveRoot || (options.root ? path.resolve(options.root) : process.cwd());
       sandbox.refreshReportForRoot(refreshRoot);
     }
@@ -6367,6 +6481,7 @@ module.exports = {
   cmdCheckpoint,
   cmdPauseTurn,
   cmdStatus,
+  cmdMonitor,
   cmdDagPreview,
   cmdTaskNext,
   cmdTaskAbandon,
