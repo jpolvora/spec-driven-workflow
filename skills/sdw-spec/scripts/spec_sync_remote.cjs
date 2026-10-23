@@ -375,6 +375,18 @@ async function syncDown(options = {}) {
       });
       continue;
     }
+    if (spec.registryStatus === 'archived') {
+      transitions.push({
+        direction: 'sync-down',
+        action: 'skipped',
+        slug: spec.slug,
+        id: item.id,
+        from: spec.registryStatus,
+        to: nextStatus,
+        reason: 'archived rows are terminal; a remote state never unarchives or regresses one'
+      });
+      continue;
+    }
     if (nextStatus === 'pending' && CLOSED_LOCAL_STATUSES.includes(spec.registryStatus)) {
       transitions.push({
         direction: 'sync-down',

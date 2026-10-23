@@ -363,6 +363,38 @@ test('sdw-spec sync-remote - AC9: sync-down updates a scmSpecId match and never 
   }
 });
 
+test('sdw-spec sync-remote - AC9: sync-down never regresses an archived row', async () => {
+  const root = setupWorkspace();
+  try {
+    const archivedPath = writeSpecification(root, {
+      prefix: '00015', slug: '00015-demo-pi', title: 'Demo Pi', scmSpecId: '62', status: 'abandoned'
+    });
+    registerFixture(root, { prefix: '00015', slug: '00015-demo-pi', title: 'Demo Pi', status: 'archived' });
+
+    const executor = createGithubExecutor({
+      'gh issue list': JSON.stringify([
+        { number: 62, title: 'Demo Pi', body: fs.readFileSync(archivedPath, 'utf8'), state: 'CLOSED', labels: [] }
+      ])
+    });
+
+    const report = await syncDown({ root, executor });
+
+    const guarded = report.transitions.find((transition) => transition.slug === '00015-demo-pi');
+    assert.strictEqual(guarded.action, 'skipped');
+    assert.strictEqual(guarded.from, 'archived');
+    assert.strictEqual(guarded.to, 'completed');
+    assert.match(String(guarded.reason), /archived rows are terminal/);
+
+    const rows = readIndex({ root }).entries;
+    assert.strictEqual(rows.find((row) => row.slug === '00015-demo-pi').status, 'archived',
+      'an archived row is terminal in the registry');
+    assert.match(fs.readFileSync(archivedPath, 'utf8'), /status: abandoned/,
+      'the authored header is not rewritten by a remote closed state');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('sdw-spec sync-remote - AC9 & AC11: sync-down matches by slug marker and exact title without creating duplicates', async () => {
   const root = setupWorkspace();
   try {
