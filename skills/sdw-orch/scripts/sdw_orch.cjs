@@ -6,6 +6,7 @@ const path = require('path');
 const { execSync, spawnSync } = require('child_process');
 
 const stateManager = require('./state_manager.cjs');
+const runLock = require('./run_lock.cjs');
 const specDerivation = require('./spec_derivation.cjs');
 const specGrilling = require('./spec_grilling.cjs');
 const dagPlanner = require('./dag_planner.cjs');
@@ -143,6 +144,9 @@ function parseArgs(args) {
     evidencePath: null,
     verdictPath: null,
     reason: null,
+    progress: null,
+    progressFile: null,
+    nextAction: null,
     skillsRoot: null,
     implementationMode: null,
     refineMode: false,
@@ -198,6 +202,12 @@ function parseArgs(args) {
     else if (arg.startsWith('--verdict=')) result.verdictPath = arg.slice(10);
     else if (arg === '--reason') result.reason = args[++i];
     else if (arg.startsWith('--reason=')) result.reason = arg.slice(9);
+    else if (arg === '--progress-file') result.progressFile = args[++i];
+    else if (arg.startsWith('--progress-file=')) result.progressFile = arg.slice(16);
+    else if (arg === '--progress') result.progress = args[++i];
+    else if (arg.startsWith('--progress=')) result.progress = arg.slice(11);
+    else if (arg === '--next-action') result.nextAction = args[++i];
+    else if (arg.startsWith('--next-action=')) result.nextAction = arg.slice(14);
     else if (arg === '--step') result.step = parseInt(args[++i], 10);
     else if (arg.startsWith('--step=')) result.step = parseInt(arg.slice(7), 10);
     else if (arg === '--min-score') result.minScore = parseInt(args[++i], 10);
@@ -4826,24 +4836,96 @@ function cmdTaskFinish(options) {
   return 0;
 }
 
+// AC2: persist caller-supplied progress JSON for one step of a run.
+function cmdCheckpoint(options) {
+  const targetRoot = options.root ? path.resolve(options.root) : process.cwd();
+  if (!options.runId) {
+    console.error('Error: --run-id is required for "checkpoint".');
+    return 1;
+  }
+  if (!Number.isInteger(options.step)) {
+    console.error('Error: --step <n> is required for "checkpoint".');
+    return 1;
+  }
+
+  let progress;
+  try {
+    if (options.progressFile) {
+      progress = JSON.parse(fs.readFileSync(path.resolve(targetRoot, options.progressFile), 'utf8'));
+    } else if (options.progress !== null && options.progress !== undefined) {
+      progress = JSON.parse(options.progress);
+    } else {
+      console.error('Error: provide the progress payload with --progress <json> or --progress-file <path>.');
+      return 1;
+    }
+  } catch (err) {
+    console.error(`Error: cannot read checkpoint progress: ${err.message}`);
+    return 1;
+  }
+
+  try {
+    const { checkpoint } = stateManager.recordCheckpoint(targetRoot, options.runId, options.step, progress);
+    console.log(`[Checkpoint] step ${checkpoint.step} revision ${checkpoint.revision} saved`);
+    return 0;
+  } catch (err) {
+    console.error(`Error: ${err.message}`);
+    return 1;
+  }
+}
+
+// AC3: record a turn-boundary pause with the action the next turn must take.
+function cmdPauseTurn(options) {
+  const targetRoot = options.root ? path.resolve(options.root) : process.cwd();
+  if (!options.runId) {
+    console.error('Error: --run-id is required for "pause-turn".');
+    return 1;
+  }
+  if (!Number.isInteger(options.step)) {
+    console.error('Error: --step <n> is required for "pause-turn".');
+    return 1;
+  }
+
+  try {
+    const { turnPause } = stateManager.recordTurnPause(targetRoot, options.runId, options.step, options.reason, options.nextAction);
+    console.log(`[pause-turn] step ${turnPause.step} paused: ${turnPause.reason}`);
+    console.log(`[pause-turn] Next action: ${turnPause.nextAction}`);
+    return 0;
+  } catch (err) {
+    console.error(`Error: ${err.message}`);
+    return 1;
+  }
+}
+
 function cmdResume(options) {
   const targetRoot = options.root ? path.resolve(options.root) : process.cwd();
   let state = null;
-  if (options.runId) {
-    state = stateManager.loadRunState(targetRoot, options.runId);
-  } else if (options.latest) {
-    state = stateManager.findLatestRunState(targetRoot);
-    if (!state) {
-      console.error('Error: No existing run state files found to resume.');
-      return 1;
+  let stateFilePath = null;
+  try {
+    if (options.runId) {
+      stateFilePath = stateManager.getStateFilePath(targetRoot, options.runId);
+      state = stateManager.loadRunState(targetRoot, options.runId);
+    } else if (options.latest) {
+      state = stateManager.findLatestRunState(targetRoot);
+      if (!state) {
+        console.error('Error: No existing run state files found to resume.');
+        return 1;
+      }
+    } else {
+      state = stateManager.findLatestRunState(targetRoot);
+      if (!state) {
+        console.error('Error: specify --run-id <id> or --latest to resume.');
+        return 1;
+      }
     }
-  } else {
-    state = stateManager.findLatestRunState(targetRoot);
-    if (!state) {
-      console.error('Error: specify --run-id <id> or --latest to resume.');
-      return 1;
-    }
+  } catch (err) {
+    // AC8: an unparseable state file is a partial or foreign write; refuse and
+    // name the file together with the remediation instead of crashing.
+    console.error(`Error: Refusing to resume: ${err.message}`);
+    console.error(`Remediation: restore a complete state file, or discard it and start a new run with:`);
+    console.error(`  node "${orchCommandPath()}" run --spec <specPath> --new-run${followUpRootFlag(targetRoot)}`);
+    return 1;
   }
+  if (!stateFilePath) stateFilePath = stateManager.getStateFilePath(targetRoot, state.runId);
 
   // Reject obsolete run state files created before sdw-orch migration
   if (!state.orchestrator || state.orchestrator !== 'sdw-orch') {
@@ -4863,7 +4945,38 @@ function cmdResume(options) {
     }
   }
 
+  // AC8: a state file whose revision is missing or not a non-negative integer
+  // cannot be resumed; name the file and the remediation, never a stack trace.
+  const resumable = stateManager.validateResumableState(state);
+  if (!resumable.ok) {
+    console.error(`Error: Refusing to resume run "${state.runId || options.runId || 'unknown'}": state file "${normalizePath(stateFilePath)}" is not resumable (${resumable.error}).`);
+    console.error(`Remediation: restore a complete state file, or discard it and start a new run with:`);
+    console.error(`  node "${orchCommandPath()}" run --spec <specPath> --new-run${followUpRootFlag(targetRoot)}`);
+    return 1;
+  }
+
+  // AC11: every step that is already completed or skipped is skipped by the
+  // guards in cmdRun; a fully resolved run only refreshes its reports. Announce
+  // that, so resume never implies re-executing a completed step.
+  if (stateManager.isRunComplete(state)) {
+    console.log(`[sdw-orch resume] Run "${state.runId}" is already complete (all ${state.totalSteps} steps resolved); refreshing reports without re-executing completed steps.`);
+  }
+
+  // AC4: a turn pause is a handoff, not a stall. Announce the recorded next
+  // action and continue from the paused step; a pause never completes the step,
+  // so an unchanged revision is expected and must not block the resume.
+  const turnPause = state.turnPause || null;
   let resumptionStep = stateManager.getResumptionStep(state);
+  if (turnPause) {
+    console.log(`[sdw-orch resume] Turn pause at step ${turnPause.step}: ${turnPause.reason}`);
+    console.log(`[sdw-orch resume] Next action: ${turnPause.nextAction}`);
+    const pausedStep = Number(turnPause.step);
+    const pausedStepState = state.steps && state.steps[pausedStep];
+    const pauseOpen = Boolean(pausedStepState) && pausedStepState.status !== 'completed' && pausedStepState.status !== 'skipped';
+    if (Number.isInteger(pausedStep) && pausedStep >= 1 && pausedStep <= (state.totalSteps || 8) && pauseOpen) {
+      resumptionStep = Math.min(resumptionStep, pausedStep);
+    }
+  }
   logRunResumed(state.runId, state.specSlug, resumptionStep);
   options._resumedLogged = true;
 
@@ -5308,6 +5421,8 @@ function showHelp() {
 Subcommands:
   run <specPath>         Execute the orchestration workflow for one specification
   resume                 Resume paused or incomplete execution run from state file
+  checkpoint             Store progress JSON for one step of a run (--run-id, --step)
+  pause-turn             Record a turn-boundary pause and its next action (--run-id, --step)
   task next              Dispatch the next ready DAG task to one worker (subagent mode)
   task finish            Submit accepted evidence for the dispatched DAG task
   task abandon           Return the dispatched DAG task to the queue
@@ -5327,6 +5442,9 @@ Options:
   --evidence <path>      Path to evidence JSON file (alias: --evidence-path)
   --spec <path>          Specification path for dag preview (or pass it positionally)
   --reason <text>        Why the dispatched task is being abandoned
+  --progress <json>      Progress payload JSON for checkpoint
+  --progress-file <path> File containing the checkpoint progress JSON
+  --next-action <text>   Action the next turn must take after pause-turn
   --verdict <path>       Path to judge verdict JSON file for score submit
   --mode <mode>          Implementation mode (subagent | command)
   --dry-run              Print the execution plan and validate the spec; execute nothing
@@ -5371,46 +5489,62 @@ function main() {
   }
 
   let code = 0;
-  switch (options.subcommand) {
-    case 'run':
-      if (options.specPaths && options.specPaths.length > 1) {
-        console.error('[sdw-orch] Error: "run" executes exactly one specification. Use "sdw-batch run <spec...>" for a queue of specifications.');
+  try {
+    switch (options.subcommand) {
+      case 'run':
+        if (options.specPaths && options.specPaths.length > 1) {
+          console.error('[sdw-orch] Error: "run" executes exactly one specification. Use "sdw-batch run <spec...>" for a queue of specifications.');
+          code = 1;
+        } else {
+          code = cmdRun(options);
+        }
+        break;
+      case 'resume':
+        code = cmdResume(options);
+        break;
+      case 'checkpoint':
+        code = cmdCheckpoint(options);
+        break;
+      case 'pause-turn':
+        code = cmdPauseTurn(options);
+        break;
+      case 'task-finish':
+        code = cmdTaskFinish(options);
+        break;
+      case 'task-next':
+        code = cmdTaskNext(options);
+        break;
+      case 'task-abandon':
+        code = cmdTaskAbandon(options);
+        break;
+      case 'score-submit':
+        code = cmdScoreSubmit(options);
+        break;
+      case 'report-re-render':
+        code = cmdReportReRender(options);
+        break;
+      case 'status':
+        code = cmdStatus(options);
+        break;
+      case 'dag-preview':
+        code = cmdDagPreview(options);
+        break;
+      case 'sandbox':
+        code = cmdSandbox(options);
+        break;
+      default:
+        console.error(`Unknown subcommand: "${options.subcommand}". Run with --help for usage.`);
         code = 1;
-      } else {
-        code = cmdRun(options);
-      }
-      break;
-    case 'resume':
-      code = cmdResume(options);
-      break;
-    case 'task-finish':
-      code = cmdTaskFinish(options);
-      break;
-    case 'task-next':
-      code = cmdTaskNext(options);
-      break;
-    case 'task-abandon':
-      code = cmdTaskAbandon(options);
-      break;
-    case 'score-submit':
-      code = cmdScoreSubmit(options);
-      break;
-    case 'report-re-render':
-      code = cmdReportReRender(options);
-      break;
-    case 'status':
-      code = cmdStatus(options);
-      break;
-    case 'dag-preview':
-      code = cmdDagPreview(options);
-      break;
-    case 'sandbox':
-      code = cmdSandbox(options);
-      break;
-    default:
-      console.error(`Unknown subcommand: "${options.subcommand}". Run with --help for usage.`);
+        break;
+    }
+  } catch (err) {
+    // AC10: a held run lock must fail as an actionable message, never a stack trace.
+    if (runLock.isRunLockError(err)) {
+      console.error(`Error: ${err.message}`);
       code = 1;
-      break;
+    } else {
+      throw err;
+    }
   }
 
   try {
@@ -5431,6 +5565,8 @@ if (require.main === module) {
 module.exports = {
   cmdRun,
   cmdResume,
+  cmdCheckpoint,
+  cmdPauseTurn,
   cmdStatus,
   cmdDagPreview,
   cmdTaskNext,

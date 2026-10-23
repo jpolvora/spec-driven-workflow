@@ -38,6 +38,9 @@ Each execution session is completely isolated within a dedicated JSON state file
   "score": 9,
   "scoreIteration": 1,
   "reviewIteration": 1,
+  "revision": 17,
+  "stepCheckpoints": {},
+  "turnPause": null,
   "dagTasks": [],
   "steps": {
     "1": { "name": "derivation", "status": "completed", "output": {} },
@@ -61,6 +64,22 @@ Each execution session is completely isolated within a dedicated JSON state file
   "errors": []
 }
 ```
+
+### Revision, Checkpoints & Turn Pause (Spec 00019)
+
+- `revision`: monotonic integer. A new run starts at `0`, and every persisted mutation advances it by exactly one. A checkpoint records the revision its transition produced.
+- `stepCheckpoints`: object keyed by step number. Each entry is `{ step, revision, status, progress?, recordedAt }`. `checkpoint --step N` snapshots the step's current status and the caller's progress JSON; finishing a step (`completed` or `skipped`) deletes its entry.
+- `turnPause`: `{ step, reason, nextAction, recordedAt }` or `null`. A turn pause is a handoff marker, not a failure: it never completes or fails the step. `resume` prints the recorded next action and continues from the paused step, and finishing that step clears the pause.
+- Resume validation: a state file that does not parse, or whose `revision` is missing or not a non-negative integer, is refused with exit code `1`, the file path, and a `Remediation:` line. Resume never re-executes a resolved step and never mutates an unchanged open run.
+- Telemetry: every checkpoint and turn pause appends to `state.reportContributions` with kind `checkpoint` or `turn_paused`, carrying the step, revision, timestamp, and payload. No external log file is written.
+
+### Run Lock, Atomic Writes & Interrupted-Write Recovery (Spec 00019)
+
+- **Lock:** every read-modify-write of `{stateFile}` takes the sibling `{stateFile}.lock`, created exclusively and holding `{ pid, host, acquiredAt }`. The lock is reentrant inside one process and is always released, so a thrown mutation never leaves it held.
+- **Contention:** a live lock fails the mutation with exit code `1` and an actionable message naming the owner pid, host, acquisition time, and lock file.
+- **Stale reclaim:** `lockStaleMs` (`.sdw/config.json`, default `300000`) bounds the lock age. A stale lock is reclaimed only when it was acquired on this host and the owner process is proven absent; a foreign-host lock, or one whose owner is alive, is never reclaimed and the message says to delete it manually once no process is using the run.
+- **Atomic write:** state is staged in `{stateFile}.tmp-{pid}`, flushed best-effort, renamed over `{stateFile}`, and the directory is fsynced where supported. A crash can leave a temp file, never a partially written state file.
+- **Recovery:** a load ignores every sibling `{stateFile}.tmp-*` and reads the last valid state; a stale temp file is a warning, not a failure. The next successful write deletes stale temp files, so operators never remove one by hand.
 
 ### Advisory Model Hints (Spec 00056)
 
@@ -393,7 +412,7 @@ Target files are the backticked project-relative paths that contain a `/` and a 
 
 The report is incremental: each step appends one entry to `state.reportContributions` as the step happens, and both report paths are re-rendered from the whole list at that boundary (`refreshInProgressReport`). An entry is `{ step, stepName, at, kind, title, body, evidence: [] }`; it is appended, never rewritten, and ordered by `step` ascending, then `at`, then insertion order. Step `9` is `retrospective`, the post-delivery contribution.
 
-Kinds and owning steps: `derivation` (1), `refinement` (2), `plan` (3), `task` (4, one per accepted task), `verdict` and `judgment` (5), `learning` (any step that records memory), `delivery` (6), `review` (7, one per iteration), `gates` and `ship` (8), `convergence` (8, one per delivery attempt), `retro` (9), and `warning` (any step).
+Kinds and owning steps: `derivation` (1), `refinement` (2), `plan` (3), `task` (4, one per accepted task), `verdict` and `judgment` (5), `learning` (any step that records memory), `delivery` (6), `review` (7, one per iteration), `gates` and `ship` (8), `convergence` (8, one per delivery attempt), `checkpoint` and `turn_paused` (any step, spec 00019 telemetry), `retro` (9), and `warning` (any step).
 
 - A malformed entry is skipped by the renderer, recorded once as a warning in `state.errors`, and the remaining contributions still render.
 - A section whose contributions are absent renders `Not available`; reporting never blocks delivery.

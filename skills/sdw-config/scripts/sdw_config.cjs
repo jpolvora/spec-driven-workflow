@@ -327,6 +327,7 @@ const DEFAULT_CONFIG = {
   changelogEnabled: true,
   changelogFile: '{projectRoot}/CHANGELOG.md',
   stateDir: '{projectRoot}/.sdw/state',
+  lockStaleMs: 300000,
   sandboxDir: '{projectRoot}/.sdw/sandbox',
   autoResolveGaps: true,
   securityChecksEnabled: false,
@@ -530,6 +531,12 @@ const DEFAULT_SCHEMA = {
       "type": "string",
       "description": "Path to the directory storing run session state files. Supports tokens {projectRoot} and {skillsRoot}.",
       "default": "{projectRoot}/.sdw/state"
+    },
+    "lockStaleMs": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Age in milliseconds after which an abandoned run lock ({stateFile}.lock) may be reclaimed, and only when the recorded owner process is proven absent. A younger lock always blocks mutation.",
+      "default": 300000
     },
     "sandboxDir": {
       "type": "string",
@@ -781,7 +788,7 @@ Baseline directory layout for consumer projects adopting Spec-Driven Workflow:
     ├── config.schema.json       # JSON Schema definition for config.json validation
     ├── directory-structure.md   # Structural guidelines and layout rules
     ├── specs/                   # Target directory for canonical specifications
-    ├── state/                   # Ephemeral execution run state files (*.state.json)
+    ├── state/                   # Ephemeral execution run state files (*.state.json) and run locks (*.state.json.lock)
     │   └── {slug}/{runId}/      # Step artifacts ({slug}-step-{N}.md), dispatch prompts
     │                            # (task-{taskId}.prompt.md), task evidence (task-{taskId}.evidence.json),
     │                            # and Step 5 judge files (step-5-judge.prompt.md, .verdict.json)
@@ -920,6 +927,13 @@ function validateConfigSchema(config) {
   if ('stateDir' in config) {
     if (typeof config.stateDir !== 'string' || config.stateDir.trim().length === 0) {
       errors.push('Property "stateDir" must be a string.');
+    }
+  }
+
+  // lockStaleMs (spec 00019 AC9)
+  if ('lockStaleMs' in config) {
+    if (typeof config.lockStaleMs !== 'number' || !Number.isInteger(config.lockStaleMs) || config.lockStaleMs < 1) {
+      errors.push('Property "lockStaleMs" must be a positive integer.');
     }
   }
 

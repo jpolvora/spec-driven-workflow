@@ -3,7 +3,7 @@ id: null
 slug: 00019-sdw-orch-checkpoint-resume
 title: "SDW Orchestrator Checkpoint, Turn Pause, and Crash-Safe Resume"
 source: local
-status: awaiting-approval
+status: implemented
 specDate: 2026-10-19
 priority: high
 value: "Run lock, revision guard, and crash-safe resume for long batch runs"
