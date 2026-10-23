@@ -7,7 +7,7 @@
 | Specification file | `.sdw/specs/00063-orchestrator-checkpoint-commits-must-ver.md` |
 | Specification slug | 00063-orchestrator-checkpoint-commits-must-ver |
 | Run ID | run-1792765278247-00063-orchestrator-checkpoint- |
-| Run status | paused |
+| Run status | completed |
 | Branch | `feature/00063-orchestrator-checkpoint-commits-must-ver` |
 | Base branch | `master` |
 | Base commit | `ad9f1c8740760f2dabf9e43d63cff85ba8b7d71a` |
@@ -17,7 +17,7 @@
 | Implementation start | 2026-10-23T14:21:20.243Z |
 | Implementation end | 2026-10-23T14:31:51.440Z |
 | Total wall-clock duration | 10m 31s |
-| Generated at | 2026-10-23T14:35:50.103Z |
+| Generated at | 2026-10-23T14:41:15.146Z |
 | Step 1: derivation (skipped) | 2ms |
 | Step 2: refinement (completed) | 26ms |
 | Step 3: dag_generation (completed) | 3ms |
@@ -25,7 +25,7 @@
 | Step 5: scoring (completed) | 30s |
 | Step 6: delivery_commit (completed) | 347ms |
 | Step 7: code_review (completed) | 1s |
-| Step 8: pr_preparation (pending) | n/a |
+| Step 8: pr_preparation (completed) | 5m 20s |
 
 
 ## Tasks
@@ -38,6 +38,8 @@
 
 | SHA | Subject | Range |
 |---|---|---|
+| `a4a619d` | chore(00063-orchestrator-checkpoint-commits-must-ver): mark the specification completed in the registry | base..HEAD |
+| `13e4e0b` | docs(00063-orchestrator-checkpoint-commits-must-ver): record delivery report | base..HEAD |
 | `8e2f140` | task(00063-orchestrator-checkpoint-commits-must-ver): task-1 | base..HEAD |
 
 ## Files Changed
@@ -49,9 +51,18 @@
 | `skills/sdw-orch/scripts/sdw_orch.cjs` | modified |
 | `tests/sdw_orch_branch_guard.test.cjs` | added |
 
+### Unattributed changes
+
+| File | Change |
+|---|---|
+| `.sdw/reports/00063-orchestrator-checkpoint-commits-must-ver-report.md` | added |
+| `.sdw/specs/00063-orchestrator-checkpoint-commits-must-ver.md` | modified |
+| `.sdw/specs/index.specs.md` | modified |
+
 ## Verification
 
 - test gate: status `passed`, exit code `0`, duration 3m 20s
+- Step 8 delivery: `completed`
 
 ## Code Review
 
@@ -91,7 +102,13 @@ Not available
 
 ## Retrospective
 
-Not available
+- Status: `passed`
+- Report: `.sdw/state/00063-orchestrator-checkpoint-commits-must-ver/run-1792765278247-00063-orchestrator-checkpoint-/run-1792765278247-00063-orchestrator-checkpoint-.retro.md`
+- Data: `.sdw/state/00063-orchestrator-checkpoint-commits-must-ver/run-1792765278247-00063-orchestrator-checkpoint-/run-1792765278247-00063-orchestrator-checkpoint-.retro.json`
+- Signals: retries 4 (score 2, review 0, rounds 2, abandonments 0); leftover runs 0; missing artifacts 0; review findings 0 (0 open)
+- Candidates: 0
+- Applied fixes:
+  - none
 
 ## Breaking Changes
 
@@ -113,18 +130,18 @@ None.
 ## Notes
 
 - Step 1 (derivation) skipped: not recorded
-- Environment: workspace: 2 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
+- Environment: workspace: 5 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
 
 ## Outcome
 
-- Result: `paused`
+- Result: `completed`
 - Delivery commit: `8e2f14061c4da5eca4c9cf0faf84190a2874319d`
 - Ship status: `pending`
 - Duration: 10m 31s
 
 ## Step Contributions
 
-- Recorded: 8 contribution(s)
+- Recorded: 13 contribution(s)
 
 ### Step 1: derivation
 
@@ -172,8 +189,18 @@ None.
 
 ### Step 8: pr_preparation
 
-Not available
+- **convergence** 2026-10-23T14:41:09.735Z - Convergence iteration 1
+  - Body: `{"iteration":1,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":false}`
+- **convergence** 2026-10-23T14:41:10.676Z - Convergence iteration 2
+  - Body: `{"iteration":2,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":true}`
+- **gates** 2026-10-23T14:41:11.080Z - Pre-PR gates: 6 result(s)
+  - Body: `{"gates":[{"name":"prePrCommand","status":"skipped","detail":"prePrCommand is not configured"},{"name":"build","status":"skipped","detail":"requiredBuild is false"},{"name":"tests","status":"pass","detail":"npm test exited 0"},{"name":"security","status":"pass","detail":"sdw-security-checks found no blocking leak"},{"name":"runState","status":"pass","detail":"step 4, step 6 and step 7 completed; score 10 >= scoreMin 8"},{"name":"discovery","status":"pass","detail":"no prepare obligations discovered"}]}`
+- **ship** 2026-10-23T14:41:11.080Z - Pull request #55
+  - Body: `{"pushed":true,"branch":"feature/00063-orchestrator-checkpoint-commits-must-ver","pullRequest":{"number":"55","url":"https://github.com/jpolvora/spec-driven-workflow/pull/55","title":null},"shipStatus":"delivered"}`
+  - Evidence: `https://github.com/jpolvora/spec-driven-workflow/pull/55`
 
 ### Step 9: retrospective
 
-Not available
+- **retro** 2026-10-23T14:41:14.908Z - Retrospective passed: 0 candidate(s)
+  - Body: `{"status":"passed","runStatus":"completed","signals":{"retries":{"scoreIterations":2,"reviewIterations":0,"reviewRounds":2,"dispatchAbandonments":0,"total":4},"leftoverRuns":0,"missingArtifacts":0,"reviewFindings":{"total":0,"open":0}},"candidates":[],"fixes":{"recorded":[],"consolidated":null,"queuedSpecifications":[],"failures":[]},"routedCandidates":[],"reportMd":".sdw/state/00063-orchestrator-checkpoint-commits-must-ver/run-1792765278247-00063-orchestrator-checkpoint-/run-1792765278247-00063-orchestrator-checkpoint-.retro.md","reportJson":".sdw/state/00063-orchestrator-checkpoint-commits-must-ver/run-1792765278247-00063-orchestrator-checkpoint-/run-1792765278247-00063-orchestrator-checkpoint-.retro.json"}`
+  - Evidence: `.sdw/state/00063-orchestrator-checkpoint-commits-must-ver/run-1792765278247-00063-orchestrator-checkpoint-/run-1792765278247-00063-orchestrator-checkpoint-.retro.md`, `.sdw/state/00063-orchestrator-checkpoint-commits-must-ver/run-1792765278247-00063-orchestrator-checkpoint-/run-1792765278247-00063-orchestrator-checkpoint-.retro.json`
