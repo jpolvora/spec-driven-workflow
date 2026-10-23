@@ -858,6 +858,15 @@ function resolveModelHint(models, role) {
   return normalizeModelHint(models[role]) || normalizeModelHint(models.default);
 }
 
+// Spec 00056 AC7: Step 8 convergence applies the ship hint, falling back to the
+// fixer hint, then models.default, then the session model.
+function resolveShipModelHint(models) {
+  if (!models || typeof models !== 'object' || Array.isArray(models)) return null;
+  return normalizeModelHint(models.ship)
+    || normalizeModelHint(models.fixer)
+    || normalizeModelHint(models.default);
+}
+
 // Spec 00056 AC6: the judge hint resolves per field from models.judge, then the
 // legacy scoring.judge* keys, then models.default, then the session model.
 function resolveJudgeModelHint(models, scoring) {
@@ -886,7 +895,10 @@ function resolveModelHints(config, scoring) {
     worker: resolveModelHint(models, 'worker'),
     reviewer: resolveModelHint(models, 'reviewer'),
     fixer: resolveModelHint(models, 'fixer'),
-    judge: resolveJudgeModelHint(models, scoring || (config && config.scoring))
+    judge: resolveJudgeModelHint(models, scoring || (config && config.scoring)),
+    // AC7: ship falls back to the fixer hint; AC8: retro falls back to default.
+    ship: resolveShipModelHint(models),
+    retro: resolveModelHint(models, 'retro')
   };
 }
 
@@ -2109,10 +2121,11 @@ function cmdRun(options) {
     state = stateManager.saveRunState(targetRoot, state);
   }
 
-  // Spec 00056 AC1-AC6: resolve the static hint snapshot once. Steps 1-3 carry
+  // Spec 00056 AC1-AC8: resolve the static hint snapshot once. Steps 1-3 carry
   // orchestratorHint; every Step 4 envelope carries workerHint; Step 7 briefs
-  // carry reviewerHint/fixerHint; Step 5 carries judgeHint. Detection is a later
-  // slice, so the static path records the skipped status.
+  // carry reviewerHint/fixerHint; Step 5 carries judgeHint; Step 8 convergence
+  // carries shipHint (AC7) and retro analysis carries retroHint (AC8). Detection
+  // is disabled by default (AC9), so the static path records the skipped status.
   const modelHints = resolveModelHints(config, options.scoring || config.scoring);
   state.models = {
     detection: { status: 'skipped' },
@@ -2120,7 +2133,9 @@ function cmdRun(options) {
     workerHint: modelHints.worker,
     reviewerHint: modelHints.reviewer,
     fixerHint: modelHints.fixer,
-    judgeHint: modelHints.judge
+    judgeHint: modelHints.judge,
+    shipHint: modelHints.ship,
+    retroHint: modelHints.retro
   };
   state = stateManager.saveRunState(targetRoot, state);
 
@@ -3338,6 +3353,13 @@ function cmdRun(options) {
     const step8GateAttempts = [];
     let step8ShipResult = null;
 
+    // Spec 00056 AC7: Step 8 convergence applies the ship hint, falling back to
+    // the fixer hint (then models.default), so the host routes the delivery and
+    // review-convergence dialogue without changing the ship-pr contract.
+    if (modelHints.ship) {
+      console.log(`[Step 8: PR Preparation] Ship model hint: ${formatModelHint(modelHints.ship)}.`);
+    }
+
     // If sdw-ship-pr is available and no unit-test fixer hooks are passed, delegate pre-PR gates to sdw-ship-pr as single owner
     if (!hasShipPr || options.testFixer || options.buildFixer || options.prePrHook) {
       // 1. Project-Specific Pre-PR Instructions / Lifecycle Hook (AC11, AC12)
@@ -3502,6 +3524,7 @@ function cmdRun(options) {
       baseCommit: state.baseCommit,
       deliveryCommit: state.deliveryCommit,
       score: state.score,
+      shipHint: modelHints.ship || null,
       completedAt: new Date().toISOString()
     };
     console.log(`[Step 8: PR Preparation] Assembled PR payload: "${prPayload.title}".`);
@@ -3741,6 +3764,11 @@ function cmdRun(options) {
   // record its outcome on state.retro, and keep the completed delivery even
   // when it fails. Otherwise keep the advisory print unchanged.
   if (config && config.retro && config.retro.enabled === true) {
+    // Spec 00056 AC8: retro analysis applies the retro hint, falling back to
+    // models.default, and records the resolution on the run's model snapshot.
+    if (modelHints.retro) {
+      console.log(`[sdw-retro] Retro model hint: ${formatModelHint(modelHints.retro)}.`);
+    }
     state.retro = runRetroForCompletedRun(targetRoot, state);
     state = stateManager.saveRunState(targetRoot, state);
     if (state.retro.status === 'passed') {

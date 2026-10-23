@@ -62,6 +62,24 @@ Each execution session is completely isolated within a dedicated JSON state file
 }
 ```
 
+### Advisory Model Hints (Spec 00056)
+
+Step 1 resolves every advisory hint once, before any step acts, and records the snapshot in `state.models`. Hints are opaque strings interpreted by the host harness: no helper invokes a model, calls a provider API, stores credentials, or validates reachability.
+
+| Field | Resolution order (first non-empty wins) |
+|---|---|
+| `orchestratorHint` | `models.orchestrator`, then `models.default` |
+| `workerHint` | `models.worker`, then `models.default` |
+| `reviewerHint` | `models.reviewer`, then `models.default` |
+| `fixerHint` | `models.fixer`, then `models.default` |
+| `judgeHint` | `models.judge`, then `scoring.judgeModel`/`judgeProvider`/`judgeEffort`/`judgeApiEndpoint`, then `models.default` |
+| `shipHint` | `models.ship`, then `models.fixer`, then `models.default` |
+| `retroHint` | `models.retro`, then `models.default` |
+
+Each field is a `{ model, provider, effort, apiEndpoint }` record of nullable strings, or `null` for the current agent model instance. An absent `models` section resolves every field to `null`.
+
+`models.detection` is the start-of-run capability toggle: `{ enabled, command, timeoutMs }` with defaults `false`, `null`, `30000`. A disabled toggle (the default) skips detection entirely, performs no probe, writes no capabilities cache, and records `state.models.detection.status: "skipped"`; hints then come from static resolution only, and the run stays free of per-step model concern.
+
 ## 2. 8-Step State Machine
 
 1. **Derivation:** Identifies whether the spec is already agent-ready (EARS ACs, DoR, YAML frontmatter). Skips derivation if ready; otherwise reformulates human stories.
@@ -262,6 +280,10 @@ Step 8 delegates all final PR verification gates, remote publishing, SCM submiss
   - Records delivery outcome (`pullRequest`, `shipStatus`, `pushedBranch`, `reviewConvergence`, `branchingSync`) into `.sdw/state/{runId}.state.json`.
   - Transitions specification status to `completed` in `.sdw/specs/index.specs.md` after the delivery stage reports the delivery (or `--skip-pr`), and sets the specification header status to `implemented` in the same transition.
 
+### Ship Model Hint (Spec 00056 AC7)
+
+Step 8 applies the ship hint to the delivery and review-convergence dialogue: `models.ship`, falling back to `models.fixer`, then `models.default`, then the current session model. The resolved hint is printed as `[Step 8: PR Preparation] Ship model hint: ...` and recorded in `state.models.shipHint` and `steps[8].output.shipHint`, so the host routes the convergence session without changing the `sdw-ship-pr` CLI contract. A `null` hint means the session model and prints nothing; the hint stays advisory and never gates delivery.
+
 ## 8. Delegated Code Review via sdw-code-review (Step 7)
 
 Step 7 delegates all working-tree review execution to the standalone `sdw-code-review` skill. The orchestrator holds no duplicated review instructions.
@@ -402,6 +424,10 @@ The record appends one `learning` contribution (`{ step, stepName, at, kind: 'le
 ### Retrospective Contribution
 
 When `sdw-retro` completes, the run appends the `retro` contribution with the signals, the candidates, the applied fixes, and the queued specifications, and re-renders both report paths. The retrospective applies every fix its routes allow: it records the memory entries its candidates call for, consolidates duplicate entries, and queues a follow-up specification for each candidate that needs a code change. A candidate that needs a change under `skills/` or `tests/` is routed to a specification and named; the file is never edited. The applied fixes and each routed candidate are recorded on the retro report under `fixes` and `routedCandidates`.
+
+### Retro Model Hint (Spec 00056 AC8)
+
+When `retro.enabled` runs the analysis after delivery, the retrospective applies the retro hint: `models.retro`, falling back to `models.default`, then the current session model. The resolved hint is printed as `[sdw-retro] Retro model hint: ...` and recorded in `state.models.retroHint`; a `null` hint means the session model and prints nothing. The hint routes the analysis session only: it never changes the retro outcome, the recorded candidates, or the completed delivery, and a retro failure still leaves the run `completed`.
 
 ### Reference
 

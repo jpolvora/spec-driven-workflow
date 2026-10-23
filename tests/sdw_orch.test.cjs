@@ -2354,3 +2354,87 @@ title: Model Hint Fixture
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+// Spec 00056 AC7 & AC8: the ship and retro roles resolve before their
+// documented fallbacks; no hint invokes a model or contacts a provider.
+test('00056 AC7 & AC8: ship falls back to the fixer hint and retro falls back to models.default', () => {
+  const fallback = sdwOrch.resolveModelHints({
+    models: {
+      default: { model: 'default-model' },
+      fixer: { model: 'fixer-model', effort: 'low' }
+    }
+  });
+  assert.deepEqual(fallback.ship, { model: 'fixer-model', provider: null, effort: 'low', apiEndpoint: null }, 'AC7: an absent ship entry falls back to the fixer hint');
+  assert.deepEqual(fallback.retro, { model: 'default-model', provider: null, effort: null, apiEndpoint: null }, 'AC8: an absent retro entry falls back to models.default');
+
+  const explicit = sdwOrch.resolveModelHints({
+    models: {
+      default: { model: 'default-model' },
+      fixer: { model: 'fixer-model' },
+      ship: { model: 'ship-model' },
+      retro: { model: 'retro-model', effort: 'high' }
+    }
+  });
+  assert.equal(explicit.ship.model, 'ship-model', 'AC7: models.ship wins over the fixer hint');
+  assert.equal(explicit.retro.model, 'retro-model', 'AC8: models.retro wins over models.default');
+  assert.equal(explicit.retro.effort, 'high');
+
+  const none = sdwOrch.resolveModelHints({ models: {} });
+  assert.equal(none.ship, null, 'AC7: no ship, fixer, or default hint resolves to the session model');
+  assert.equal(none.retro, null, 'AC8: no retro or default hint resolves to the session model');
+});
+
+// Spec 00056 AC7-AC9 end to end: Step 8 applies the ship hint with the fixer
+// fallback, retro analysis applies its own hint, and detection stays disabled,
+// so resolution remains static. The executor and the judge are stubs.
+test('00056 AC7-AC9: Step 8 applies the ship hint, retro applies its hint, and detection stays static', () => {
+  const slug = 'model-ship-retro';
+  const tmpDir = setupDeliveryReportRepo(slug);
+  try {
+    const configPath = path.join(tmpDir, '.sdw', 'config.json');
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    fs.writeFileSync(configPath, JSON.stringify({
+      ...config,
+      models: {
+        fixer: { model: 'fixer-model', effort: 'low' },
+        retro: { model: 'retro-model', effort: 'high' }
+      },
+      retro: { enabled: true, followUp: 'none' }
+    }, null, 2), 'utf8');
+    execSync('git add -A && git commit -qm "configure model hints"', { cwd: tmpDir, stdio: 'ignore' });
+
+    const runId = `run-${Date.now()}-${slug}`;
+    let output = '';
+    const originalLog = console.log;
+    console.log = (message) => { output += `${String(message)}\n`; };
+    let code;
+    try {
+      code = sdwOrch.cmdRun({
+        root: tmpDir,
+        specPath: `.sdw/specs/${slug}.md`,
+        runId,
+        minScore: 8,
+        skipReview: true,
+        implementation: deliveryImplementation(),
+        scoring: judgeScoring()
+      });
+    } finally {
+      console.log = originalLog;
+    }
+
+    assert.equal(code, 0, 'the run completes through Step 8 and the retrospective');
+    assert.match(output, /\[Step 8: PR Preparation\] Ship model hint: fixer-model, effort low/, 'AC7: Step 8 applies the ship hint, falling back to the fixer hint');
+    assert.match(output, /\[sdw-retro\] Retro model hint: retro-model, effort high/, 'AC8: retro analysis applies the retro hint');
+
+    const state = stateManager.loadRunState(tmpDir, runId);
+    assert.deepEqual(state.models.shipHint, { model: 'fixer-model', provider: null, effort: 'low', apiEndpoint: null }, 'AC7: run state records the ship hint');
+    assert.deepEqual(state.models.retroHint, { model: 'retro-model', provider: null, effort: 'high', apiEndpoint: null }, 'AC8: run state records the retro hint');
+    assert.equal(state.steps[8].output.shipHint.model, 'fixer-model', 'AC7: Step 8 output records the ship hint');
+    assert.equal(state.models.detection.status, 'skipped', 'AC9: disabled detection records the skipped static path');
+
+    const sdwConfig = require('../skills/sdw-config/scripts/sdw_config.cjs');
+    assert.equal(sdwConfig.DEFAULT_CONFIG.models.detection.enabled, false, 'AC9: the detection toggle defaults to disabled');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
