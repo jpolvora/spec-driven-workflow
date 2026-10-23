@@ -10,6 +10,7 @@ const runLock = require('./run_lock.cjs');
 const specDerivation = require('./spec_derivation.cjs');
 const specGrilling = require('./spec_grilling.cjs');
 const dagPlanner = require('./dag_planner.cjs');
+const acLedger = require('./ac_ledger.cjs');
 const scoreEvaluator = require('./score_evaluator.cjs');
 const artifactWriter = require('./artifact_writer.cjs');
 const implementationRunner = require('./implementation_runner.cjs');
@@ -152,7 +153,16 @@ function parseArgs(args) {
     refineMode: false,
     newRun: false,
     noModelDetect: false,
-    refreshModels: false
+    refreshModels: false,
+    ledgerAction: null,
+    reportFormat: null,
+    acIds: [],
+    evidenceType: null,
+    evidenceFilePath: null,
+    evidenceName: null,
+    evidenceTestStatus: null,
+    evidenceSha: null,
+    evidenceRefId: null
   };
 
   const positional = [];
@@ -179,6 +189,25 @@ function parseArgs(args) {
     else if (arg === '--new-run') result.newRun = true;
     else if (arg === '--no-model-detect') result.noModelDetect = true;
     else if (arg === '--refresh-models') result.refreshModels = true;
+    else if (arg === '--type') result.evidenceType = args[++i];
+    else if (arg.startsWith('--type=')) result.evidenceType = arg.slice(7);
+    else if (arg === '--path') result.evidenceFilePath = args[++i];
+    else if (arg.startsWith('--path=')) result.evidenceFilePath = arg.slice(7);
+    else if (arg === '--name') result.evidenceName = args[++i];
+    else if (arg.startsWith('--name=')) result.evidenceName = arg.slice(7);
+    else if (arg === '--status') result.evidenceTestStatus = args[++i];
+    else if (arg.startsWith('--status=')) result.evidenceTestStatus = arg.slice(9);
+    else if (arg === '--sha') result.evidenceSha = args[++i];
+    else if (arg.startsWith('--sha=')) result.evidenceSha = arg.slice(6);
+    else if (arg === '--id') result.evidenceRefId = args[++i];
+    else if (arg.startsWith('--id=')) result.evidenceRefId = arg.slice(5);
+    // Spec 00017 AC11: `ledger report` renders Markdown or JSON.
+    else if (arg === '--format') result.reportFormat = args[++i];
+    else if (arg.startsWith('--format=')) result.reportFormat = arg.slice(9);
+    // Spec 00017 AC3: `--ac` takes one or more criterion ids until the next flag.
+    else if (arg === '--ac') {
+      while (i + 1 < args.length && !args[i + 1].startsWith('-')) result.acIds.push(args[++i]);
+    } else if (arg.startsWith('--ac=')) result.acIds.push(arg.slice(5));
     else if (arg === '--latest') result.latest = true;
     else if (arg === '--dry-run') result.dryRun = true;
     else if (arg === '--sandbox') result.sandbox = true;
@@ -221,7 +250,10 @@ function parseArgs(args) {
     'task abandon': 'task-abandon',
     'score submit': 'score-submit',
     'report re-render': 'report-re-render',
-    'dag preview': 'dag-preview'
+    'dag preview': 'dag-preview',
+    'ledger link': 'ledger',
+    'ledger report': 'ledger',
+    'ledger audit': 'ledger'
   };
   const combinedMatch = COMBINED[positional.slice(0, 2).join(' ')];
   if (combinedMatch) {
@@ -230,7 +262,13 @@ function parseArgs(args) {
     result.specPaths = [];
     // `dag preview` keeps its --spec path; the other combined commands have none.
     if (combinedMatch !== 'dag-preview') result.specPath = null;
-    if (!result.taskId && rest[0]) result.taskId = rest[0];
+    if (combinedMatch === 'ledger') {
+      // Keep the parsed action verbatim: cmdLedger refuses anything it does not
+      // know, so a mistyped action can never mutate the ledger.
+      result.ledgerAction = positional[1] || null;
+    } else if (!result.taskId && rest[0]) {
+      result.taskId = rest[0];
+    }
     if (combinedMatch === 'task-finish' && !result.evidencePath && rest[1]) result.evidencePath = rest[1];
     if (combinedMatch === 'task-abandon' && !result.reason && rest[1]) result.reason = rest[1];
     if (combinedMatch === 'dag-preview' && rest[0] && !result.specPath) result.specPath = rest[0];
@@ -1817,6 +1855,202 @@ function printRunDryRunPlan(context) {
   return 0;
 }
 
+// Spec 00017 AC1: every run owns an acceptance criteria ledger in its artifact
+// directory. Initialization happens before Step 1 work.
+// AC15: a run that already owns a ledger reads it (resume never re-seeds the
+// criteria), so accepted evidence survives every later invocation of the run.
+// AC17: any initialization failure is reported to the caller, which fails the run
+// before Step 1 completes; it is never downgraded to a warning.
+function initializeRunLedger({ targetRoot, state, specContent }) {
+  let ledgerPath = null;
+  try {
+    if (!state.artifactsDir) {
+      state.artifactsDir = stateManager.getArtifactsRelDir(targetRoot, state.specSlug, state.runId);
+    }
+    state.artifactsDir = normalizePath(state.artifactsDir);
+    ledgerPath = path.resolve(targetRoot, state.artifactsDir, acLedger.LEDGER_FILENAME);
+    const result = acLedger.initLedger({
+      root: targetRoot,
+      artifactsDir: state.artifactsDir,
+      runId: state.runId,
+      specSlug: state.specSlug,
+      specContent
+    });
+    const ledgerRel = normalizePath(path.relative(targetRoot, result.ledgerPath));
+    console.log(`[Ledger] ${result.created ? 'Initialized' : 'Loaded'} ${ledgerRel} with ${result.ledger.criteria.length} acceptance criteria.`);
+    return { ok: true, ...result };
+  } catch (err) {
+    return { ok: false, ledgerPath: ledgerPath || path.resolve(targetRoot, acLedger.LEDGER_FILENAME), error: err.message };
+  }
+}
+
+// Spec 00017 AC6-AC8: the run ledger path and the two links Step 4 and Step 5
+// own. The ledger lives in the run artifact directory, so resume and sandbox
+// runs resolve their own copy.
+function resolveRunLedgerPath(targetRoot, state) {
+  if (!state || !state.artifactsDir) return null;
+  return path.resolve(targetRoot, normalizePath(state.artifactsDir), acLedger.LEDGER_FILENAME);
+}
+
+// Spec 00017 AC9: the run state anchors the ledger by its canonical SHA-256.
+// Recorded after every accepted update so a later edit is detectable (AC10).
+function recordLedgerAnchor(targetRoot, state, ledgerPath) {
+  if (!state || !ledgerPath || !fs.existsSync(ledgerPath)) return null;
+  try {
+    state.acLedgerPath = normalizePath(path.relative(targetRoot, ledgerPath));
+    state.acLedgerSha256 = acLedger.hashLedgerFile(ledgerPath);
+    return state.acLedgerSha256;
+  } catch (err) {
+    console.warn(`[Ledger] The ledger hash could not be recorded: ${err.message}`);
+    return null;
+  }
+}
+
+// Spec 00017 AC10: verification compares the anchored hash with the ledger on
+// disk. A run without a ledger keeps its existing behaviour.
+function verifyRunLedger(targetRoot, state) {
+  const ledgerPath = resolveRunLedgerPath(targetRoot, state);
+  if (!ledgerPath) return { ok: true, verified: false, error: null };
+  return acLedger.verifyLedgerHash({ root: targetRoot, ledgerPath, expectedSha256: state.acLedgerSha256 });
+}
+
+// Spec 00017 AC6: an accepted task links its changed files and its checkpoint
+// commit to every acceptance criterion the evidence claims. Files keep their
+// project-relative forward-slash form and every entry names the task.
+function linkAcceptedTaskEvidence({ targetRoot, state, taskId, acIds, files, commitSha }) {
+  const ledgerPath = resolveRunLedgerPath(targetRoot, state);
+  if (!ledgerPath || !fs.existsSync(ledgerPath)) {
+    return 0;
+  }
+  const payloads = [];
+  for (const file of Array.isArray(files) ? files : []) {
+    payloads.push({ type: 'file', path: file, taskId });
+  }
+  if (commitSha) payloads.push({ type: 'commit', sha: commitSha, taskId });
+
+  let linked = 0;
+  for (const evidence of payloads) {
+    const result = acLedger.linkEvidence({ root: targetRoot, ledgerPath, acIds, evidence });
+    if (!result.ok) {
+      console.warn(`[Ledger] ${evidence.type} evidence for "${taskId}" was not linked: ${result.errors.join(' ')}`);
+      continue;
+    }
+    linked += result.linked.length;
+  }
+  // Spec 00017 AC9/AC15: only a link that added an entry is an accepted update,
+  // so re-running the same acceptance re-anchors nothing and writes no duplicate.
+  if (linked > 0) {
+    recordLedgerAnchor(targetRoot, state, ledgerPath);
+    console.log(`[Ledger] ${taskId} linked ${linked} evidence record(s) to ${acIds.join(', ')}.`);
+  }
+  return linked;
+}
+
+// Spec 00017 AC13: a capped score names the cap and the criteria that triggered
+// it, wherever Step 5 reports its result.
+function describeScoreCap(scoreCap) {
+  const headline = scoreCap.applied
+    ? `Score capped at ${scoreCap.limit}/10 (uncapped ${scoreCap.uncappedScore}/10)`
+    : `Score cap in force at ${scoreCap.limit}/10 (uncapped ${scoreCap.uncappedScore}/10)`;
+  return `${headline}: ${scoreCap.reasons.join(' ')}`;
+}
+
+// Spec 00017 AC7/AC8: Step 5 derives its score from the run ledger. The judge
+// verdicts are written to the ledger first, so the judge stays authoritative and
+// a criterion it failed can never remain verified. A run without a ledger keeps
+// the verdict-based report instead of failing.
+function applyLedgerScore({ targetRoot, state, report, verdict, judgeResolution }) {
+  const ledgerPath = resolveRunLedgerPath(targetRoot, state);
+  if (!ledgerPath || !fs.existsSync(ledgerPath)) return report;
+
+  const recorded = acLedger.recordReviewVerdicts({
+    root: targetRoot,
+    ledgerPath,
+    reviewId: `step5-${judgeResolution || 'judge'}`,
+    verdicts: verdict.verdicts
+  });
+  if (!recorded.ok) {
+    // Spec 00017 AC7/AC8: the ledger is the only score source when it exists, so
+    // a ledger that cannot record the verdicts fails closed instead of letting
+    // the judge-authored score through.
+    return {
+      ...report,
+      score: 0,
+      passed: false,
+      ledgerError: `Step 5 judge verdicts could not be recorded: ${recorded.errors.join(' ')}`
+    };
+  }
+
+  // Spec 00017 AC9: recording the verdicts is an accepted ledger update, so the
+  // anchor follows it. The save mutates the caller's shared state object.
+  recordLedgerAnchor(targetRoot, state, ledgerPath);
+  stateManager.saveRunState(targetRoot, state);
+
+  const derived = acLedger.deriveScore(recorded.ledger);
+  // Spec 00017 AC13: the negative-scenario cap travels with the score so a
+  // caller can report it and a later reader can see why the score stopped at 8.
+  const scoreCap = derived.capLimit === null
+    ? null
+    : {
+        limit: derived.capLimit,
+        applied: derived.capped,
+        uncappedScore: derived.uncappedScore,
+        reasons: derived.capReasons
+      };
+  const verdictById = new Map(verdict.verdicts.map(entry => [entry.id, entry]));
+  const verifiedAcs = recorded.ledger.criteria
+    .filter(record => record.status === acLedger.STATUS_VERIFIED)
+    .map(record => {
+      const entry = verdictById.get(record.id);
+      return { id: record.id, text: record.text, evidence: entry ? entry.evidence : 'acceptance criteria ledger' };
+    });
+  const failingAcs = recorded.ledger.criteria
+    .filter(record => record.status !== acLedger.STATUS_VERIFIED)
+    .map(record => {
+      const entry = verdictById.get(record.id);
+      return {
+        id: record.id,
+        text: record.text,
+        reason: entry && entry.verdict === 'failed'
+          ? entry.evidence
+          : 'No verified evidence entry in the acceptance criteria ledger.'
+      };
+    });
+
+  const passed = derived.totalAcs > 0 && derived.score >= report.minScore;
+  const capNote = scoreCap === null ? '' : `\n${describeScoreCap(scoreCap)}`;
+  let feedback;
+  if (derived.totalAcs === 0) {
+    feedback = 'Specification has no acceptance criteria. Fails closed with score 0/10.';
+  } else if (!passed) {
+    feedback = `Conformance score is ${derived.score}/10 (minimum required: ${report.minScore}/10).\n` +
+      `The following acceptance criteria were judged unmet:\n` +
+      failingAcs.map(item => `- ${item.id}: ${item.text}\n  Reason: ${item.reason}`).join('\n') +
+      `\nAddress the reasons above and re-run the workflow.` + capNote;
+  } else {
+    feedback = `Conformance score is ${derived.score}/10 (meets or exceeds required threshold ${report.minScore}/10). ` +
+      `${derived.verifiedCount}/${derived.totalAcs} acceptance criteria verified in the acceptance criteria ledger.` + capNote;
+  }
+
+  return {
+    ...report,
+    score: derived.score,
+    passed,
+    totalAcs: derived.totalAcs,
+    verifiedCount: derived.verifiedCount,
+    failingCount: derived.failingCount,
+    scoreCap,
+    verifiedAcs,
+    failingAcs,
+    judge: {
+      ...report.judge,
+      reportedScore: verdict.score,
+      scoreMismatch: verdict.score !== derived.score
+    },
+    feedback
+  };
+}
+
 function cmdRun(options) {
   let targetRoot = options.root ? path.resolve(options.root) : process.cwd();
   const sourceRoot = targetRoot;
@@ -2274,6 +2508,29 @@ function cmdRun(options) {
       scm: scmState,
       refineMode: Boolean(options.refineMode)
     });
+  }
+
+  // Spec 00017 AC1/AC15/AC17: the ledger exists before the first Step 1 mutation.
+  // A run that already owns one loads it, so resume preserves every record. A
+  // failure here fails the run before Step 1 completes instead of continuing
+  // without a trustworthy evidence ledger.
+  const ledgerInit = initializeRunLedger({ targetRoot, state, specContent: rawSpecContent });
+  if (!ledgerInit.ok) {
+    const artifactsRel = normalizePath(state.artifactsDir);
+    const ledgerRel = normalizePath(path.relative(targetRoot, ledgerInit.ledgerPath));
+    const failure = `Acceptance criteria ledger initialization failed in "${artifactsRel}" (${ledgerRel}): ${ledgerInit.error}`;
+    console.error(`[Ledger] Initialization failed in "${artifactsRel}" (${ledgerRel}): ${ledgerInit.error}`);
+    console.error(`[Ledger] Remediation: create the run artifact directory "${artifactsRel}" and make it writable, or restore its ${acLedger.LEDGER_FILENAME} if it was corrupted, then re-run; resume the same run with --run-id ${state.runId}. Step 1 has not completed.`);
+    state.status = 'failed';
+    state.errors = Array.isArray(state.errors) ? state.errors : [];
+    state.errors.push({ step: 1, timestamp: new Date().toISOString(), error: failure });
+    try {
+      stateManager.saveRunState(targetRoot, state);
+    } catch (stateErr) {
+      console.error(`[Ledger] The run state could not record the initialization failure: ${stateErr.message}`);
+    }
+    options._runResult = { runId: state.runId, status: 'failed', error: failure };
+    return 1;
   }
 
   // Spec 00057 AC1: every run carries the append-only contribution list from the
@@ -2958,6 +3215,14 @@ function cmdRun(options) {
       return 2;
     };
 
+    // Spec 00017 AC10: a ledger that no longer hashes to the anchor in run state
+    // was changed after its last accepted update. Step 5 refuses to score it, and
+    // the refusal never rewrites the anchor or the ledger.
+    const ledgerVerification = verifyRunLedger(targetRoot, state);
+    if (!ledgerVerification.ok) {
+      return failClosedScoring(`Ledger verification failed: ${ledgerVerification.error}`, { mode: 'none' });
+    }
+
     // AC8: a specification without acceptance criteria scores 0 and never invokes the judge.
     if (specAcs.length === 0) {
       return failClosedScoring('Specification has no acceptance criteria. Fails closed with score 0/10; the judge is not invoked.', { mode: 'none' });
@@ -3077,12 +3342,27 @@ function cmdRun(options) {
       touchedFiles: scoringTouchedFiles,
       judge: { ...judgeMeta, mode: judgeResolution }
     });
+    // Spec 00017 AC7/AC8: record the verdicts, then take the score from the ledger.
+    scoreReport = applyLedgerScore({
+      targetRoot,
+      state,
+      report: scoreReport,
+      verdict: verdictValidation.data,
+      judgeResolution
+    });
+    if (scoreReport.ledgerError) {
+      return failClosedScoring(scoreReport.ledgerError, judgeMeta);
+    }
 
     console.log(`[Step 5: Conformance Scoring] Score: ${scoreReport.score}/10 (Required: ${effectiveMinScore}/10). Passed: ${scoreReport.passed}`);
     console.log(`  Verified ACs: ${scoreReport.verifiedCount}/${scoreReport.totalAcs}`);
     console.log(`  Failing ACs:  ${scoreReport.failingCount}/${scoreReport.totalAcs}`);
     if (scoreReport.passed && scoreReport.failingCount > 0) {
       console.warn(`[Step 5: Conformance Scoring] Warning: ${scoreReport.failingCount} AC(s) failed verification despite meeting minScore threshold (${effectiveMinScore}/10).`);
+    }
+    // Spec 00017 AC13: a capped score always names its cap and its reason.
+    if (scoreReport.scoreCap) {
+      console.warn(`[Step 5: Conformance Scoring] ${describeScoreCap(scoreReport.scoreCap)}`);
     }
 
     const step5Artifact = artifactWriter.writeStep5Artifact({
@@ -4767,6 +5047,17 @@ function cmdTaskFinish(options) {
     commitSha = getBaseCommit(targetRoot);
   }
 
+  // Spec 00017 AC6: accepted evidence links its files and checkpoint commit to
+  // every criterion the task claims, so Step 5 can derive and trace the score.
+  linkAcceptedTaskEvidence({
+    targetRoot,
+    state,
+    taskId,
+    acIds: evidenceData.acIds,
+    files: evidenceData.filesChanged,
+    commitSha
+  });
+
   // Record task completion in state (Spec 015 AC16, Spec 028 AC10)
   dispatch.activeTaskId = null;
   dispatch.dispatchedAt = null;
@@ -5209,6 +5500,14 @@ function cmdScoreSubmit(options) {
     return 1;
   }
 
+  // Spec 00017 AC10: the submitted-verdict path is also Step 5 scoring, so it
+  // refuses a ledger whose hash no longer matches the anchor in run state.
+  const ledgerVerification = verifyRunLedger(targetRoot, state);
+  if (!ledgerVerification.ok) {
+    console.error(`[sdw-orch score submit] Ledger verification failed: ${ledgerVerification.error}`);
+    return 1;
+  }
+
   let specContent = '';
   if (state.specPath) {
     try {
@@ -5253,12 +5552,24 @@ function cmdScoreSubmit(options) {
     resolveJudgeConfigWithModels(config, options.scoring || config.scoring),
     boundJudgeHint
   );
-  const report = scoreEvaluator.applyVerdict(validation.data, {
-    acs: judgeCriteria,
-    minScore,
-    touchedFiles: scoreEvaluator.getTouchedFiles(state.baseCommit, targetRoot),
-    judge: { ...judgeConfig, ...(priorOutput.judge || {}), mode: 'submitted' }
+  const report = applyLedgerScore({
+    targetRoot,
+    state,
+    report: scoreEvaluator.applyVerdict(validation.data, {
+      acs: judgeCriteria,
+      minScore,
+      touchedFiles: scoreEvaluator.getTouchedFiles(state.baseCommit, targetRoot),
+      judge: { ...judgeConfig, ...(priorOutput.judge || {}), mode: 'submitted' }
+    }),
+    verdict: validation.data,
+    judgeResolution: 'submitted'
   });
+  if (report.ledgerError) {
+    // Spec 00017 AC7/AC8: no ledger-derived score means no accepted score.
+    console.error(`[sdw-orch score submit] ${report.ledgerError}`);
+    console.error(`[sdw-orch score submit] Step 5 fails closed: the ledger is the only score source when it exists.`);
+    return 2;
+  }
 
   state.steps[5] = state.steps[5] || { name: 'scoring', status: 'pending', output: null, artifact: null };
   state.steps[5].status = report.passed ? 'judged' : 'reimplementation_needed';
@@ -5282,6 +5593,10 @@ function cmdScoreSubmit(options) {
   console.log(`[sdw-orch score submit] Score: ${report.score}/10 (Required: ${minScore}/10). Passed: ${report.passed}`);
   console.log(`  Verified ACs: ${report.verifiedCount}/${report.totalAcs}`);
   console.log(`  Failing ACs:  ${report.failingCount}/${report.totalAcs}`);
+  // Spec 00017 AC13: the submitted-verdict path reports the cap and its reason.
+  if (report.scoreCap) {
+    console.warn(`[sdw-orch score submit] ${describeScoreCap(report.scoreCap)}`);
+  }
   if (report.judge.scoreMismatch) {
     console.warn(`[sdw-orch score submit] Warning: the judge reported ${report.judge.reportedScore}/10 while its per-criterion verdicts yield ${report.score}/10; the verdicts are authoritative.`);
   }
@@ -5415,6 +5730,157 @@ function cmdSandbox(options) {
   return 1;
 }
 
+// Spec 00017 AC3/AC4: `ledger link` appends one typed evidence payload to one
+// or more declared criteria. Every validation runs before the write, so a
+// refused link leaves the ledger untouched.
+function cmdLedgerLink(options) {
+  const targetRoot = options.root ? path.resolve(options.root) : process.cwd();
+  if (!options.runId) {
+    console.error('Error: --run-id is required for "ledger link".');
+    return 1;
+  }
+
+  let state;
+  try {
+    state = stateManager.loadRunState(targetRoot, options.runId);
+  } catch (err) {
+    console.error(`[Ledger] ${err.message}`);
+    return 1;
+  }
+
+  const artifactsDir = state.artifactsDir
+    || stateManager.getArtifactsRelDir(targetRoot, state.specSlug, state.runId);
+  const result = acLedger.linkEvidence({
+    root: targetRoot,
+    artifactsDir,
+    acIds: options.acIds,
+    evidence: {
+      type: options.evidenceType,
+      path: options.evidenceFilePath,
+      name: options.evidenceName,
+      status: options.evidenceTestStatus,
+      sha: options.evidenceSha,
+      id: options.evidenceRefId
+    }
+  });
+
+  if (!result.ok) {
+    for (const message of result.errors) console.error(`[Ledger] ${message}`);
+    return 1;
+  }
+
+  // Spec 00017 AC9/AC15: every accepted link re-anchors the ledger in run state.
+  // A duplicate link adds no entry, so it is not an accepted update and leaves
+  // both the ledger and its anchor untouched.
+  if (result.linked.length > 0) {
+    recordLedgerAnchor(targetRoot, state, result.ledgerPath);
+    try {
+      stateManager.saveRunState(targetRoot, state);
+    } catch (err) {
+      console.error(`[Ledger] The ledger was updated but its hash could not be recorded in run state: ${err.message}`);
+      return 1;
+    }
+  }
+
+  for (const id of result.linked) {
+    const record = result.ledger.criteria.find(criterion => criterion.id === id);
+    const types = [...new Set(record.evidence.map(entry => entry.type))].join(', ');
+    console.log(`[Ledger] ${id} ${record.status} (${types})`);
+  }
+  if (result.duplicates.length > 0) {
+    console.log(`[Ledger] Already linked for ${result.duplicates.join(', ')}.`);
+  }
+  return 0;
+}
+
+// Spec 00017 AC11: `ledger report --format md|json` renders the AC status and
+// evidence summary. It reads the ledger and never re-anchors or rewrites it, so
+// a mismatch is reported by verification instead of being silently repaired.
+function cmdLedgerReport(options) {
+  const targetRoot = options.root ? path.resolve(options.root) : process.cwd();
+  let state;
+  try {
+    state = options.runId
+      ? stateManager.loadRunState(targetRoot, options.runId)
+      : stateManager.findLatestRunState(targetRoot);
+  } catch (err) {
+    console.error(`[Ledger] ${err.message}`);
+    return 1;
+  }
+  if (!state) {
+    console.error('Error: No run state found to report on. Pass --run-id <id>.');
+    return 1;
+  }
+
+  const ledgerPath = resolveRunLedgerPath(targetRoot, state);
+  if (!ledgerPath || !fs.existsSync(ledgerPath)) {
+    const ledgerRel = ledgerPath ? ` at ${normalizePath(path.relative(targetRoot, ledgerPath))}` : '';
+    console.error(`[Ledger] No acceptance criteria ledger found${ledgerRel}. Start the run before reporting.`);
+    return 1;
+  }
+
+  let rendered;
+  try {
+    rendered = acLedger.renderLedgerReport(acLedger.readLedger(ledgerPath), options.reportFormat || 'md');
+  } catch (err) {
+    console.error(`[Ledger] ${err.message}`);
+    return 1;
+  }
+  console.log(rendered.replace(/\n$/, ''));
+  return 0;
+}
+
+// Spec 00017 AC12: `ledger audit --run-id <id> [--format md|json]` lists every
+// criterion that carries no evidence. Exit code 0 means the ledger proves every
+// criterion; exit code 1 means at least one criterion is still unproven (or the
+// run, ledger, or format is invalid). It reads the ledger and never rewrites it.
+function cmdLedgerAudit(options) {
+  const targetRoot = options.root ? path.resolve(options.root) : process.cwd();
+  if (!options.runId) {
+    console.error('Error: --run-id is required for "ledger audit".');
+    return 1;
+  }
+  let state;
+  try {
+    state = stateManager.loadRunState(targetRoot, options.runId);
+  } catch (err) {
+    console.error(`[Ledger] ${err.message}`);
+    return 1;
+  }
+
+  const ledgerPath = resolveRunLedgerPath(targetRoot, state);
+  if (!ledgerPath || !fs.existsSync(ledgerPath)) {
+    const ledgerRel = ledgerPath ? ` at ${normalizePath(path.relative(targetRoot, ledgerPath))}` : '';
+    console.error(`[Ledger] No acceptance criteria ledger found${ledgerRel}. Start the run before auditing.`);
+    return 1;
+  }
+
+  let ledger;
+  let rendered;
+  try {
+    ledger = acLedger.readLedger(ledgerPath);
+    rendered = acLedger.renderLedgerAudit(ledger, options.reportFormat || 'md');
+  } catch (err) {
+    console.error(`[Ledger] ${err.message}`);
+    return 1;
+  }
+  const missing = acLedger.summarizeAudit(ledger).missingCount;
+  console.log(rendered.replace(/\n$/, ''));
+  if (missing > 0) {
+    console.error(`[Ledger] ${missing} acceptance criterion${missing === 1 ? '' : 'a'} without evidence remain.`);
+  }
+  return missing > 0 ? 1 : 0;
+}
+
+function cmdLedger(options) {
+  const action = String(options.ledgerAction || options.specPath || '').trim();
+  if (action === 'link') return cmdLedgerLink(options);
+  if (action === 'report') return cmdLedgerReport(options);
+  if (action === 'audit') return cmdLedgerAudit(options);
+  console.error(`Unknown ledger action "${action}". Use: ledger link --run-id <id> --ac <id> [<id> ...] --type <file|test|commit|review|sabotage> | ledger report --run-id <id> [--format md|json] | ledger audit --run-id <id> [--format md|json]`);
+  return 1;
+}
+
 function showHelp() {
   console.log(`Usage: node sdw_orch.cjs <subcommand> [specPath] [options]
 
@@ -5428,6 +5894,9 @@ Subcommands:
   task abandon           Return the dispatched DAG task to the queue
   score submit           Submit a judge verdict for Step 5 conformance scoring
   report re-render       Refresh the delivery report and the in-progress report from run state (never commits)
+  ledger link            Link typed evidence to one or more acceptance criteria (--run-id, --ac, --type)
+  ledger report          Print the AC status and evidence summary (--run-id, --format md|json)
+  ledger audit           List acceptance criteria without evidence (--run-id, --format md|json; exit 1 when any remain)
   dag preview            Print the plan the classifier would generate, without side effects
   status                 Check status of current or specified run state
   sandbox list           List isolated sandboxes created by --sandbox
@@ -5446,6 +5915,14 @@ Options:
   --progress-file <path> File containing the checkpoint progress JSON
   --next-action <text>   Action the next turn must take after pause-turn
   --verdict <path>       Path to judge verdict JSON file for score submit
+  --ac <id...>           Acceptance criterion ids for ledger link (one or more, until the next flag)
+  --type <type>          Evidence type for ledger link: file | test | commit | review | sabotage
+  --path <path>          Evidence path for --type file (stored project-relative with forward slashes; outside-root paths are refused)
+  --name <name>          Test name for --type test
+  --status <status>      Test status for --type test (for example passed)
+  --sha <sha>            Commit SHA for --type commit
+  --id <id>              Review or sabotage id for --type review | sabotage
+  --format <format>      Report format for ledger report and ledger audit: md | json (default: md)
   --mode <mode>          Implementation mode (subagent | command)
   --dry-run              Print the execution plan and validate the spec; execute nothing
   --sandbox              Execute the whole pipeline in an isolated local clone; never pushes
@@ -5523,6 +6000,9 @@ function main() {
       case 'report-re-render':
         code = cmdReportReRender(options);
         break;
+      case 'ledger':
+        code = cmdLedger(options);
+        break;
       case 'status':
         code = cmdStatus(options);
         break;
@@ -5575,6 +6055,9 @@ module.exports = {
   cmdScoreSubmit,
   cmdReportReRender,
   cmdSandbox,
+  cmdLedger,
+  cmdLedgerLink,
+  cmdLedgerReport,
   printRunDryRunPlan,
   showHelp,
   loadProjectConfig,
