@@ -1,16 +1,17 @@
 'use strict';
 
 /**
- * Spec 00017 AC1-AC8: the per-run acceptance criteria ledger.
+ * Spec 00017 AC1-AC11: the per-run acceptance criteria ledger.
  *
  * The ledger is the run's record of which acceptance criteria are verified and
  * which typed evidence proves them. This file owns initialization, the record
  * schema, evidence linking, evidence-type validation, recording the Step 5
- * judge verdicts, and deriving the score from the ledger. Hashing, reporting,
- * and auditing are later slices; they read the same stable JSON, so nothing
- * here needs to change.
+ * judge verdicts, deriving the score from the ledger, the canonical SHA-256
+ * anchor, and the Markdown/JSON report. Auditing is a later slice; it reads the
+ * same stable JSON, so nothing here needs to change.
  */
 
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const dagPlanner = require('./dag_planner.cjs');
@@ -293,6 +294,127 @@ function deriveScore(ledger) {
   };
 }
 
+// AC9: canonical JSON sorts object keys at every depth and keeps array order, so
+// the same ledger always hashes to the same digest on any machine.
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(item => canonicalJson(item)).join(',')}]`;
+  if (value && typeof value === 'object') {
+    const entries = Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonicalJson(value[key])}`);
+    return `{${entries.join(',')}}`;
+  }
+  return JSON.stringify(value === undefined ? null : value);
+}
+
+function hashLedger(ledger) {
+  return crypto.createHash('sha256').update(canonicalJson(ledger), 'utf8').digest('hex');
+}
+
+// AC9: the digest of the ledger exactly as it exists on disk.
+function hashLedgerFile(ledgerPath) {
+  return hashLedger(readLedger(ledgerPath));
+}
+
+// AC10: compare the digest anchored in run state with the ledger file. A run
+// without a ledger, or a state written before the anchor existed, is not a
+// mismatch: only a recorded hash that disagrees with the file fails.
+function verifyLedgerHash(options = {}) {
+  const ledgerPath = options.ledgerPath || null;
+  const expectedSha256 = trimmed(options.expectedSha256).toLowerCase();
+  if (!ledgerPath || !fs.existsSync(ledgerPath)) {
+    return { ok: true, verified: false, expectedSha256, actualSha256: null, error: null };
+  }
+  if (!expectedSha256) {
+    return { ok: true, verified: false, expectedSha256, actualSha256: null, error: null };
+  }
+  let actualSha256;
+  try {
+    actualSha256 = hashLedgerFile(ledgerPath);
+  } catch (err) {
+    return { ok: false, verified: true, expectedSha256, actualSha256: null, error: `Acceptance criteria ledger verification failed: ${err.message}` };
+  }
+  if (actualSha256 !== expectedSha256) {
+    const relative = normalizePath(path.relative(path.resolve(options.root || process.cwd()), ledgerPath));
+    return {
+      ok: false,
+      verified: true,
+      expectedSha256,
+      actualSha256,
+      error: `Acceptance criteria ledger hash mismatch: run state records SHA-256 ${expectedSha256} `
+        + `but ${relative || normalizePath(ledgerPath)} hashes to ${actualSha256}. `
+        + 'The ledger changed after its last accepted update; verification fails closed.'
+    };
+  }
+  return { ok: true, verified: true, expectedSha256, actualSha256, error: null };
+}
+
+// AC11: the same verified count Step 5 derives, plus one entry per AC with its
+// status and its typed evidence. The summary is deterministic, so a report of an
+// unchanged ledger is byte-identical.
+function summarizeLedger(ledger) {
+  const derived = deriveScore(ledger);
+  const criteria = ledger && Array.isArray(ledger.criteria) ? ledger.criteria : [];
+  return {
+    runId: ledger && ledger.runId ? ledger.runId : null,
+    specSlug: ledger && ledger.specSlug ? ledger.specSlug : null,
+    totals: {
+      total: derived.totalAcs,
+      verified: derived.verifiedCount,
+      unverified: derived.failingCount
+    },
+    criteria: criteria.map(record => ({
+      id: record.id,
+      status: record.status,
+      text: record.text,
+      evidence: Array.isArray(record.evidence) ? record.evidence : []
+    }))
+  };
+}
+
+function describeEvidence(entry) {
+  let identity;
+  if (entry.type === 'file') identity = entry.path;
+  else if (entry.type === 'test') identity = entry.name;
+  else if (entry.type === 'commit') identity = entry.sha;
+  else identity = entry.id;
+  const status = entry.status ? ` (${entry.status})` : '';
+  return `${entry.type}: ${identity}${status}`;
+}
+
+function escapeTableCell(value) {
+  return String(value == null ? '' : value).replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
+}
+
+function renderLedgerMarkdown(summary) {
+  const lines = [
+    '# Acceptance Criteria Ledger Report',
+    '',
+    `- Run: ${summary.runId || 'unknown'}`,
+    `- Specification: ${summary.specSlug || 'unknown'}`,
+    `- Total: ${summary.totals.total}`,
+    `- Verified: ${summary.totals.verified}`,
+    `- Unverified: ${summary.totals.unverified}`,
+    '',
+    '| AC | Status | Criterion | Evidence |',
+    '| --- | --- | --- | --- |'
+  ];
+  for (const record of summary.criteria) {
+    const evidence = record.evidence.length > 0
+      ? record.evidence.map(describeEvidence).join('; ')
+      : 'none';
+    lines.push(`| ${record.id} | ${record.status} | ${escapeTableCell(record.text)} | ${escapeTableCell(evidence)} |`);
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+// AC11: `ledger report --format md|json`. An unknown format is refused instead
+// of silently falling back to another representation.
+function renderLedgerReport(ledger, format) {
+  const normalized = String(format || 'md').trim().toLowerCase();
+  if (normalized === 'json') return `${JSON.stringify(summarizeLedger(ledger), null, 2)}\n`;
+  if (normalized === 'md') return renderLedgerMarkdown(summarizeLedger(ledger));
+  throw new Error(`Unknown ledger report format "${format}". Use: md | json.`);
+}
+
 module.exports = {
   LEDGER_FILENAME,
   EVIDENCE_TYPES,
@@ -311,5 +433,11 @@ module.exports = {
   initLedger,
   linkEvidence,
   recordReviewVerdicts,
-  deriveScore
+  deriveScore,
+  canonicalJson,
+  hashLedger,
+  hashLedgerFile,
+  verifyLedgerHash,
+  summarizeLedger,
+  renderLedgerReport
 };

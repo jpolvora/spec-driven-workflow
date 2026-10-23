@@ -306,6 +306,12 @@ test('AC6: task finish links the accepted files and checkpoint commit to the cla
     }
     assert.equal(ledger.criteria.find(criterion => criterion.id === 'AC3').status, 'unverified',
       'an AC the evidence never claimed stays unverified');
+
+    const acceptedLedgerPath = path.join(root, accepted.artifactsDir, acLedger.LEDGER_FILENAME);
+    assert.equal(accepted.acLedgerPath, path.relative(root, acceptedLedgerPath).replace(/\\/g, '/'),
+      'AC9: the accepted task records the project-relative ledger path');
+    assert.equal(accepted.acLedgerSha256, acLedger.hashLedgerFile(acceptedLedgerPath),
+      'AC9: Step 4 acceptance records the ledger hash in run state');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -452,6 +458,170 @@ test('AC7 & AC8: a run without a ledger keeps the verdict-based score', () => {
     assert.equal(submitted.score, 10, 'without a ledger the per-criterion verdicts still score');
     assert.equal(submitted.steps[5].status, 'judged');
     assert.equal(fs.existsSync(ledgerPath), false, 'scoring never invents a ledger');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC9: ledger link records the canonical ledger hash and path in run state', () => {
+  const root = setupProject();
+  try {
+    const { state, ledgerPath } = seedRun(root);
+    const first = link(root, state.runId, ['--ac', 'AC1', '--type', 'file', '--path', 'skills/demo.cjs']);
+    assert.equal(first.status, 0, first.stderr);
+
+    let anchored = stateManager.loadRunState(root, state.runId);
+    assert.equal(anchored.acLedgerPath, path.relative(root, ledgerPath).replace(/\\/g, '/'),
+      'AC9: the state records the project-relative ledger path');
+    assert.match(anchored.acLedgerSha256, /^[0-9a-f]{64}$/, 'AC9: the state records a SHA-256 digest');
+    assert.equal(anchored.acLedgerSha256, acLedger.hashLedgerFile(ledgerPath),
+      'AC9: the digest covers the ledger as written');
+    const firstHash = anchored.acLedgerSha256;
+
+    const second = link(root, state.runId, ['--ac', 'AC2', '--type', 'test', '--name', 'ledger contract', '--status', 'passed']);
+    assert.equal(second.status, 0, second.stderr);
+    anchored = stateManager.loadRunState(root, state.runId);
+    assert.notEqual(anchored.acLedgerSha256, firstHash, 'AC9: an accepted update re-anchors the new digest');
+    assert.equal(anchored.acLedgerSha256, acLedger.hashLedgerFile(ledgerPath));
+
+    // AC9: canonical JSON sorts object keys at every depth and keeps array order.
+    assert.equal(
+      acLedger.hashLedger({ b: 2, a: [{ y: 1, x: 2 }] }),
+      acLedger.hashLedger({ a: [{ x: 2, y: 1 }], b: 2 }),
+      'AC9: object key order never changes the digest'
+    );
+    assert.notEqual(
+      acLedger.hashLedger({ a: [1, 2] }),
+      acLedger.hashLedger({ a: [2, 1] }),
+      'AC9: array order is part of the digest'
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC10: a tampered ledger fails Step 5 verification and is never repaired', () => {
+  const root = setupGitProject();
+  try {
+    fs.writeFileSync(path.join(root, SCORE_SPEC_REL), FOUR_AC_SPEC, 'utf8');
+    const state = seedScoringRun(root);
+    const init = acLedger.initLedger({
+      root,
+      artifactsDir: state.artifactsDir,
+      runId: state.runId,
+      specSlug: state.specSlug,
+      specContent: FOUR_AC_SPEC,
+      generatedAt: '2026-10-19T12:00:00.000Z'
+    });
+    const linked = link(root, state.runId, ['--ac', 'AC1', '--type', 'test', '--name', 'ledger contract', '--status', 'passed']);
+    assert.equal(linked.status, 0, linked.stderr);
+
+    const anchored = stateManager.loadRunState(root, state.runId);
+    const anchoredHash = anchored.acLedgerSha256;
+    assert.match(anchoredHash, /^[0-9a-f]{64}$/, 'AC9: the link anchored the ledger');
+
+    const tampered = readLedgerFile(init.ledgerPath);
+    tampered.criteria[1].status = 'verified';
+    tampered.criteria[1].evidence.push({ type: 'file', path: 'skills/demo.cjs' });
+    fs.writeFileSync(init.ledgerPath, `${JSON.stringify(tampered, null, 2)}\n`, 'utf8');
+    const tamperedBytes = fs.readFileSync(init.ledgerPath, 'utf8');
+
+    // AC10: a ledger command that reads the tampered file never re-anchors it.
+    const report = spawnSync(
+      process.execPath,
+      [ORCH, 'ledger', 'report', '--root', root, '--run-id', state.runId, '--format', 'json'],
+      { encoding: 'utf8' }
+    );
+    assert.equal(report.status, 0, report.stderr);
+    assert.equal(JSON.parse(report.stdout).totals.verified, 2, 'the report reads the ledger as it is');
+    assert.equal(stateManager.loadRunState(root, state.runId).acLedgerSha256, anchoredHash,
+      'AC10: reading the ledger never repairs the hash');
+
+    let errors = '';
+    const originalLog = console.log;
+    const originalError = console.error;
+    console.log = () => {};
+    console.error = (...args) => { errors += `${args.map(String).join(' ')}\n`; };
+    let code;
+    try {
+      code = sdwOrch.cmdRun({
+        root,
+        specPath: SCORE_SPEC_REL,
+        runId: state.runId,
+        step: 5,
+        skipReview: true,
+        skipPr: true
+      });
+    } finally {
+      console.log = originalLog;
+      console.error = originalError;
+    }
+
+    assert.equal(code, 2, 'AC10: Step 5 refuses to score');
+    assert.match(errors, /ledger hash mismatch/i, 'AC10: the failure names the mismatch');
+    assert.match(errors, new RegExp(anchoredHash), 'AC10: the failure names the recorded hash');
+    assert.match(errors, /[0-9a-f]{64}/, 'AC10: the failure names the observed hash');
+
+    const after = stateManager.loadRunState(root, state.runId);
+    assert.equal(after.steps[5].status, 'reimplementation_needed', 'the fail-closed outcome is recorded');
+    assert.equal(after.score, 0);
+    assert.equal(after.acLedgerSha256, anchoredHash, 'AC10: verification never rewrites the anchor');
+    assert.equal(fs.readFileSync(init.ledgerPath, 'utf8'), tamperedBytes, 'AC10: verification never rewrites the ledger');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC11: ledger report renders AC status and evidence as Markdown and JSON', () => {
+  const root = setupProject();
+  try {
+    const { state } = seedRun(root);
+    const fileLink = link(root, state.runId, ['--ac', 'AC1', '--type', 'file', '--path', 'skills/demo.cjs']);
+    assert.equal(fileLink.status, 0, fileLink.stderr);
+    const testLink = link(root, state.runId, ['--ac', 'AC2', '--type', 'test', '--name', 'ledger contract', '--status', 'passed']);
+    assert.equal(testLink.status, 0, testLink.stderr);
+
+    const markdown = spawnSync(
+      process.execPath,
+      [ORCH, 'ledger', 'report', '--root', root, '--run-id', state.runId, '--format', 'md'],
+      { encoding: 'utf8' }
+    );
+    assert.equal(markdown.status, 0, markdown.stderr);
+    assert.match(markdown.stdout, /^# Acceptance Criteria Ledger Report/);
+    assert.match(markdown.stdout, /- Total: 3/);
+    assert.match(markdown.stdout, /- Verified: 2/);
+    assert.match(markdown.stdout, /- Unverified: 1/);
+    assert.match(
+      markdown.stdout,
+      /\| AC1 \| verified \| The system shall initialize the ledger in the run artifact directory\. \| file: skills\/demo\.cjs \|/,
+      'the Markdown row carries the AC id, status, criterion, and evidence type'
+    );
+    assert.match(markdown.stdout, /\| AC2 \| verified \| .* \| test: ledger contract \(passed\) \|/);
+    assert.match(markdown.stdout, /\| AC3 \| unverified \| .* \| none \|/);
+
+    const json = spawnSync(
+      process.execPath,
+      [ORCH, 'ledger', 'report', '--root', root, '--run-id', state.runId, '--format=json'],
+      { encoding: 'utf8' }
+    );
+    assert.equal(json.status, 0, json.stderr);
+    const summary = JSON.parse(json.stdout);
+    assert.equal(summary.runId, state.runId);
+    assert.equal(summary.specSlug, 'ac-ledger-demo');
+    assert.deepEqual(summary.totals, { total: 3, verified: 2, unverified: 1 });
+    assert.deepEqual(summary.criteria.map(record => record.id), ['AC1', 'AC2', 'AC3']);
+    assert.equal(summary.criteria[0].status, 'verified');
+    assert.match(summary.criteria[0].text, /shall initialize the ledger/);
+    assert.deepEqual(summary.criteria[0].evidence, [{ type: 'file', path: 'skills/demo.cjs' }]);
+    assert.deepEqual(summary.criteria[2].evidence, [], 'an unverified AC reports no evidence');
+
+    const unknown = spawnSync(
+      process.execPath,
+      [ORCH, 'ledger', 'report', '--root', root, '--run-id', state.runId, '--format', 'yaml'],
+      { encoding: 'utf8' }
+    );
+    assert.notEqual(unknown.status, 0, 'an unknown report format is refused');
+    assert.match(unknown.stderr, /Unknown ledger report format "yaml"/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
