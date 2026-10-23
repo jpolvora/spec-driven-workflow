@@ -1186,6 +1186,20 @@ function replaceStep5Contributions(state) {
 }
 
 /**
+ * Spec 00057 AC7: a resumed Step 8 restarts the ship contract's convergence
+ * history at iteration 1, so the rows from an earlier invocation are replaced
+ * instead of duplicated. Each invocation owns the rounds that produced the
+ * current delivery state.
+ */
+function replaceStep8ConvergenceContributions(state) {
+  if (!state || !Array.isArray(state.reportContributions)) return state;
+  state.reportContributions = state.reportContributions.filter(
+    (entry) => !(entry && Number(entry.step) === 8 && entry.kind === 'convergence')
+  );
+  return state;
+}
+
+/**
  * Spec 00057 AC7: the pre-PR gate results and the push/pull-request outcome.
  * Gate rows come from sdw-ship-pr when it ran, otherwise from the attempts the
  * orchestrator executed itself, so a failed-then-passed gate appears twice.
@@ -3305,7 +3319,9 @@ function cmdRun(options) {
           step8ShipResult = shipResult;
           // Spec 00057 AC7, AC9: record every convergence iteration before any
           // pause decision and re-render after each one, so a delivery stopped on
-          // failing checks still renders the rounds that already ran.
+          // failing checks still renders the rounds that already ran. A resumed
+          // Step 8 restarts the history, so the earlier invocation's rows go.
+          state = replaceStep8ConvergenceContributions(state);
           const convergenceContributions = buildConvergenceContributions(shipResult);
           for (const contribution of convergenceContributions) {
             state = recordStepContributions(targetRoot, state, 8, [contribution], { allowDuplicates: true });
