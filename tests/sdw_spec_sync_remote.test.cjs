@@ -749,3 +749,94 @@ test('sdw-spec sync-remote - AC15: skill docs document both directions with the 
     assert.ok(contract.includes(row), `the status mapping table documents ${row}`);
   }
 });
+
+test('sdw-spec sync-remote - AC16: status mapping sends pending as open and completed or archived as closed', async () => {
+  const root = setupWorkspace();
+  try {
+    writeSpecification(root, { prefix: '00030', slug: '00030-demo-status-pending', title: 'Status Pending' });
+    registerFixture(root, { prefix: '00030', slug: '00030-demo-status-pending', title: 'Status Pending' });
+    writeSpecification(root, { prefix: '00031', slug: '00031-demo-status-done', title: 'Status Done', scmSpecId: '801' });
+    registerFixture(root, { prefix: '00031', slug: '00031-demo-status-done', title: 'Status Done', status: 'completed' });
+    writeSpecification(root, { prefix: '00032', slug: '00032-demo-status-archived', title: 'Status Archived', scmSpecId: '802' });
+    registerFixture(root, { prefix: '00032', slug: '00032-demo-status-archived', title: 'Status Archived', status: 'archived' });
+
+    const closed = [];
+    const executor = createGithubExecutor({
+      'gh issue create': 'https://github.com/org/repo/issues/800\n',
+      'gh issue view': (cmd) => JSON.stringify({
+        number: Number(cmd.match(/gh issue view (\d+)/)[1]),
+        title: 'Remote title',
+        body: 'remote body',
+        state: 'OPEN',
+        url: ''
+      }),
+      'gh issue edit': '',
+      'gh issue close': (cmd) => {
+        closed.push(cmd);
+        return '';
+      }
+    });
+
+    const report = await syncUp({ root, executor });
+    const bySlug = new Map(report.transitions.map((transition) => [transition.slug, transition]));
+
+    assert.strictEqual(bySlug.get('00030-demo-status-pending').action, 'created');
+    assert.strictEqual(bySlug.get('00030-demo-status-pending').to, 'open', 'pending maps to open');
+    assert.strictEqual(bySlug.get('00031-demo-status-done').to, 'closed', 'completed maps to closed');
+    assert.strictEqual(bySlug.get('00032-demo-status-archived').to, 'closed', 'archived maps to closed');
+    assert.deepStrictEqual(
+      closed.map((cmd) => cmd.match(/gh issue close (\d+)/)[1]).sort(),
+      ['801', '802'],
+      'only the completed and archived specifications close their issue'
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('sdw-spec sync-remote - AC16: Azure DevOps sync-down maps Done to completed and every other state to open', async () => {
+  const root = setupWorkspace('ado');
+  try {
+    writeSpecification(root, { prefix: '00033', slug: '00033-demo-ado-done', title: 'ADO Done', scmSpecId: '900' });
+    registerFixture(root, { prefix: '00033', slug: '00033-demo-ado-done', title: 'ADO Done' });
+    writeSpecification(root, { prefix: '00034', slug: '00034-demo-ado-active', title: 'ADO Active', scmSpecId: '901' });
+    registerFixture(root, { prefix: '00034', slug: '00034-demo-ado-active', title: 'ADO Active' });
+
+    const queries = [];
+    const executor = (cmd) => {
+      if (cmd.includes('where az') || cmd.includes('command -v az')) return 'C:\\bin\\az.exe';
+      if (cmd.includes('az account show')) return '{}';
+      if (cmd.includes('az boards query')) {
+        queries.push(cmd);
+        return JSON.stringify([{ id: 900 }, { id: 901 }]);
+      }
+      if (cmd.includes('az boards work-item show --id 900')) {
+        return JSON.stringify({
+          id: 900,
+          fields: { 'System.Title': 'ADO Done', 'System.Description': 'remote done', 'System.State': 'Done', 'System.Tags': '' }
+        });
+      }
+      if (cmd.includes('az boards work-item show --id 901')) {
+        return JSON.stringify({
+          id: 901,
+          fields: { 'System.Title': 'ADO Active', 'System.Description': 'remote active', 'System.State': 'Active', 'System.Tags': '' }
+        });
+      }
+      throw new Error(`Unexpected command: ${cmd}`);
+    };
+
+    const report = await syncDown({ root, executor });
+    const done = report.transitions.find((transition) => transition.slug === '00033-demo-ado-done');
+    const active = report.transitions.find((transition) => transition.slug === '00034-demo-ado-active');
+
+    assert.strictEqual(done.action, 'updated');
+    assert.strictEqual(done.to, 'completed', 'Done reads as closed, so the registry becomes completed');
+    assert.strictEqual(active.action, 'unchanged');
+    assert.strictEqual(active.to, 'pending', 'Active reads as open, so a pending row is unchanged');
+    assert.strictEqual(queries.length, 1, 'sync-down queries the provider once');
+    assert.ok(!queries.some((cmd) => /\[System\.State\]\s*=\s*'all'/.test(cmd)), 'all is a scope, never a work-item state');
+    assert.match(queries[0], /FROM WorkItems\s+ORDER BY/, 'an all-state query carries no state predicate');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

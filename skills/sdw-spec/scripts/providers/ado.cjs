@@ -21,6 +21,21 @@ function isAdoClosedState(state) {
   return norm === 'closed' || norm === 'done';
 }
 
+function adoMirrorState(state) {
+  return isAdoClosedState(state) ? 'closed' : 'open';
+}
+
+// Spec 00062 AC16: `all` is a mirroring scope, never a work-item state, so it
+// must not become a WIQL equality. Open and closed also span the process
+// template's terminal-state vocabulary.
+function adoStateClause(state) {
+  const norm = String(state === undefined || state === null ? 'all' : state).toLowerCase().trim();
+  if (!norm || norm === 'all') return '';
+  if (norm === 'closed') return "WHERE ([System.State] = 'Closed' OR [System.State] = 'Done')";
+  if (norm === 'open') return "WHERE ([System.State] <> 'Closed' AND [System.State] <> 'Done')";
+  return `WHERE [System.State] = '${String(state).replace(/[^a-zA-Z0-9_\s]/g, '')}'`;
+}
+
 // Azure DevOps stores System.Description as HTML. Encode line breaks as <br>
 // so a multi-line Markdown body survives a single CLI argument and round-trips
 // through fetchWorkItem's htmlToMarkdown.
@@ -52,7 +67,7 @@ class AzureDevOpsProvider extends ScmProvider {
       const title = fields['System.Title'] || '';
       const rawDesc = fields['System.Description'] || '';
       const rawAc = fields['Microsoft.VSTS.Common.AcceptanceCriteria'] || '';
-      const state = (fields['System.State'] || 'New').toLowerCase();
+      const state = adoMirrorState(fields['System.State'] || 'New');
       const rawTags = fields['System.Tags'] || '';
 
       const description = htmlToMarkdown(rawDesc);
@@ -87,7 +102,7 @@ class AzureDevOpsProvider extends ScmProvider {
     try {
       let wiql = query.wiql;
       if (!wiql) {
-        const stateClause = query.state ? `WHERE [System.State] = '${String(query.state).replace(/[^a-zA-Z0-9_\s]/g, '')}'` : '';
+        const stateClause = adoStateClause(query.state);
         wiql = `SELECT [System.Id], [System.Title], [System.State] FROM WorkItems ${stateClause} ORDER BY [System.Id] DESC`;
       }
       const cmd = `az boards query --wiql "${wiql.replace(/"/g, '\\"')}" --output json`;

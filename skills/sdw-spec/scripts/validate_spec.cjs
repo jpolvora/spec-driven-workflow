@@ -8,6 +8,14 @@ const PLACEHOLDER = /^(?:tbd|todo|placeholder|\?+|[-–—.]{1,3}|\.{3}|n\/?a)$/
 
 const SPEC_STATUSES = ['draft', 'awaiting-approval', 'ready-to-implement', 'implemented', 'abandoned'];
 
+// Spec 00062 AC17/AC18: the five-digit filename prefix is the immutable
+// localSpecId, and the legacy `id` key is the pre-migration spelling of
+// scmSpecId. Both belong to one read path so every caller agrees.
+const LOCAL_SPEC_ID_KEY = 'localSpecId';
+const SCM_SPEC_ID_KEY = 'scmSpecId';
+const LEGACY_SCM_SPEC_ID_KEY = 'id';
+const LOCAL_SPEC_ID_PATTERN = /^(\d{5})-/;
+
 // Spec 00055: declared ranking fields. `priority` defaults to `medium` when
 // absent; `effort` stays unset. Both enums are shared by the validator and the
 // list-by-priority ranking so there is one vocabulary.
@@ -58,6 +66,30 @@ function frontmatter(text) {
     if (item) values[item[1]] = item[2].trim().replace(/^['"]|['"]$/g, '');
   }
   return values;
+}
+
+function identityValue(value) {
+  if (value === undefined || value === null) return null;
+  const raw = String(value).trim();
+  return !raw || raw === 'null' || raw === '~' ? null : raw;
+}
+
+function localSpecIdFromFileName(fileName) {
+  const match = path.basename(String(fileName || '')).match(LOCAL_SPEC_ID_PATTERN);
+  return match ? match[1] : null;
+}
+
+// AC17: the filename prefix is the local identity, so a specification without a
+// frontmatter localSpecId still reads its prefix. AC18: scmSpecId is read from
+// the new key, or from the legacy `id` key while tracked files migrate.
+function readSpecIdentity(frontmatterValues, fileName) {
+  const values = frontmatterValues || {};
+  return {
+    localSpecId: identityValue(values[LOCAL_SPEC_ID_KEY]) || localSpecIdFromFileName(fileName),
+    scmSpecId: identityValue(
+      values[SCM_SPEC_ID_KEY] !== undefined ? values[SCM_SPEC_ID_KEY] : values[LEGACY_SCM_SPEC_ID_KEY]
+    )
+  };
 }
 
 function compositeReason(text) {
@@ -297,9 +329,36 @@ function validate(text, options) {
   if (!fm) {
     errors.push({ code: 'frontmatter-missing', message: 'Required YAML frontmatter is missing.' });
   } else {
-    for (const key of ['id', 'slug', 'title', 'source', 'status', 'specDate']) {
+    for (const key of [SCM_SPEC_ID_KEY, 'slug', 'title', 'source', 'status', 'specDate']) {
+      if (key === SCM_SPEC_ID_KEY) {
+        // AC18: a legacy `id` key still names the remote identity during migration.
+        if (!(SCM_SPEC_ID_KEY in fm) && !(LEGACY_SCM_SPEC_ID_KEY in fm)) {
+          errors.push({
+            code: 'frontmatter-key',
+            message: 'Frontmatter key is required: scmSpecId (the legacy id key is accepted during migration)'
+          });
+        }
+        continue;
+      }
       if (!(key in fm) || fm[key] === '') {
         errors.push({ code: 'frontmatter-key', message: `Frontmatter key is required: ${key}` });
+      }
+    }
+    // AC17: localSpecId is assigned from the filename prefix at creation and can
+    // never disagree with the file that carries it.
+    if (LOCAL_SPEC_ID_KEY in fm) {
+      const declaredLocalSpecId = identityValue(fm[LOCAL_SPEC_ID_KEY]);
+      const fileNamePrefix = localSpecIdFromFileName(options && options.fileName);
+      if (!declaredLocalSpecId || !/^\d{5}$/.test(declaredLocalSpecId)) {
+        errors.push({
+          code: 'local-spec-id',
+          message: `localSpecId must be the five-digit filename prefix (found "${fm[LOCAL_SPEC_ID_KEY]}").`
+        });
+      } else if (fileNamePrefix && declaredLocalSpecId !== fileNamePrefix) {
+        errors.push({
+          code: 'local-spec-id',
+          message: `localSpecId "${declaredLocalSpecId}" does not match the filename prefix "${fileNamePrefix}"; localSpecId is immutable.`
+        });
       }
     }
     if (fm.status && !SPEC_STATUSES.includes(fm.status)) {
@@ -377,6 +436,7 @@ function validate(text, options) {
     mode,
     errors,
     warnings,
+    identity: fm ? readSpecIdentity(fm, options && options.fileName) : null,
     acceptanceCriteria: rows.map((row) => row[1])
   };
 }
@@ -387,7 +447,7 @@ function validateFile(specPath, options) {
     throw new Error(`File not found: ${fullPath}`);
   }
   const content = fs.readFileSync(fullPath, 'utf8');
-  return validate(content, options);
+  return validate(content, { ...options, fileName: path.basename(fullPath) });
 }
 
 function main() {
@@ -432,6 +492,8 @@ module.exports = {
   PRIORITY_VALUES,
   EFFORT_VALUES,
   earsViolation,
+  readSpecIdentity,
+  localSpecIdFromFileName,
   validate,
   validateFile,
   parseArgs,

@@ -2,9 +2,9 @@
 
 const fs = require('fs');
 const path = require('path');
-const { resolvePaths, registerSpec, isSpecificationFile } = require('./spec_index.cjs');
+const { resolvePaths, registerSpec, isSpecificationFile, parseFrontmatter } = require('./spec_index.cjs');
 const { createScmProvider, resolveScmProvider, checkScmCapability } = require('./scm_provider_contract.cjs');
-const { validateFile } = require('./validate_spec.cjs');
+const { validateFile, readSpecIdentity } = require('./validate_spec.cjs');
 
 function getNextPrefix(specsDir) {
   if (!fs.existsSync(specsDir)) {
@@ -84,6 +84,7 @@ function toEarsCriterion(text) {
 function synthesizeCanonicalSpec(options) {
   const {
     id = null,
+    localSpecId,
     slug,
     title,
     source = 'local',
@@ -92,6 +93,11 @@ function synthesizeCanonicalSpec(options) {
     acceptanceCriteria = [],
     isTracker = false
   } = options;
+
+  // AC17: the five-digit prefix in the slug is the immutable localSpecId.
+  const localId = localSpecId !== undefined
+    ? localSpecId
+    : (String(slug || '').match(/^(\d{5})-/)?.[1] || null);
 
   const acLines = (acceptanceCriteria.length > 0 ? acceptanceCriteria : [
     `The system shall implement ${title} in accordance with architectural standards.`
@@ -108,6 +114,7 @@ function synthesizeCanonicalSpec(options) {
 
   return `---
 id: ${id !== null ? JSON.stringify(id) : 'null'}
+localSpecId: ${localId !== null ? JSON.stringify(String(localId)) : 'null'}
 slug: ${slug}
 title: ${JSON.stringify(title)}
 source: ${source}
@@ -194,6 +201,7 @@ function createNewSpec(inputText, options = {}) {
 
   const specContent = synthesizeCanonicalSpec({
     id: null,
+    localSpecId: prefix,
     slug,
     title,
     source: 'local',
@@ -285,17 +293,14 @@ async function importRemoteSpec(options = {}) {
   }
 
   // Check if a spec already exists for this remote work item (AC17)
+  // AC18: the legacy `id` key reads as scmSpecId, so both spellings hit the guard.
   const existingFiles = fs.readdirSync(specsDir).filter(f => f.endsWith('.md') && f !== 'index.specs.md');
   for (const f of existingFiles) {
     const fullPath = path.join(specsDir, f);
-    const content = fs.readFileSync(fullPath, 'utf8');
-    const fmMatch = content.match(/id:\s*(["']?[^"'\r\n]+["']?)/);
-    if (fmMatch) {
-      const existingId = fmMatch[1].replace(/['"]/g, '').trim();
-      if (existingId === String(item.id)) {
-        if (!options.force) {
-          throw new Error(`Specification for remote work item #${item.id} already exists on disk (${f}). Overwrite rejected without --force.`);
-        }
+    const identity = readSpecIdentity(parseFrontmatter(fs.readFileSync(fullPath, 'utf8')), f);
+    if (identity.scmSpecId && identity.scmSpecId === String(item.id)) {
+      if (!options.force) {
+        throw new Error(`Specification for remote work item #${item.id} already exists on disk (${f}). Overwrite rejected without --force.`);
       }
     }
   }
@@ -311,6 +316,7 @@ async function importRemoteSpec(options = {}) {
 
   const specContent = synthesizeCanonicalSpec({
     id: String(item.id),
+    localSpecId: prefix,
     slug,
     title,
     source: item.source,
