@@ -53,6 +53,92 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
       "maximum": 10,
       "default": 8
     },
+    "models": {
+      "type": "object",
+      "description": "Advisory per-role model hints interpreted by the host harness. Hints carry opaque identifiers only; helpers never invoke a model, call a provider API, or store credentials.",
+      "properties": {
+        "default": {
+          "description": "Fallback hint applied when the role-specific entry is null or absent.",
+          "anyOf": [
+            { "$ref": "#/definitions/modelHint" },
+            { "type": "null" }
+          ]
+        },
+        "orchestrator": {
+          "description": "Hint for Steps 1-3 derivation, refinement grilling, DAG generation, and run supervision.",
+          "anyOf": [
+            { "$ref": "#/definitions/modelHint" },
+            { "type": "null" }
+          ]
+        },
+        "worker": {
+          "description": "Hint for Step 4 task implementation subagents.",
+          "anyOf": [
+            { "$ref": "#/definitions/modelHint" },
+            { "type": "null" }
+          ]
+        },
+        "reviewer": {
+          "description": "Hint for the Step 7 fresh reviewer subagent.",
+          "anyOf": [
+            { "$ref": "#/definitions/modelHint" },
+            { "type": "null" }
+          ]
+        },
+        "fixer": {
+          "description": "Hint for fixer remediation in Step 7 fix iteration and Step 8 convergence fixes.",
+          "anyOf": [
+            { "$ref": "#/definitions/modelHint" },
+            { "type": "null" }
+          ]
+        },
+        "judge": {
+          "description": "Hint for Step 5 conformance scoring; resolved before the legacy scoring.judge* keys.",
+          "anyOf": [
+            { "$ref": "#/definitions/modelHint" },
+            { "type": "null" }
+          ]
+        },
+        "ship": {
+          "description": "Hint for Step 8 PR metadata and review convergence dialogue; falls back to the fixer hint.",
+          "anyOf": [
+            { "$ref": "#/definitions/modelHint" },
+            { "type": "null" }
+          ]
+        },
+        "retro": {
+          "description": "Hint for retro analysis; falls back to the default hint.",
+          "anyOf": [
+            { "$ref": "#/definitions/modelHint" },
+            { "type": "null" }
+          ]
+        },
+        "detection": {
+          "type": "object",
+          "description": "Opt-in start-of-run host capability detection. Disabled by default so runs resolve hints statically.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false,
+              "description": "Bind capabilities once at run start before task dispatch."
+            },
+            "command": {
+              "type": ["string", "null"],
+              "default": null,
+              "description": "Optional command that writes the capabilities JSON file. Supports {capabilitiesFile}, {targetRoot}, {slug}, {runId}. When null, the host consults its harness."
+            },
+            "timeoutMs": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 30000,
+              "description": "Maximum detection command runtime in milliseconds."
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
     "retro": {
       "type": "object",
       "description": "Automatic retrospective after a run reaches completed (spec 00045).",
@@ -264,6 +350,35 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
       "additionalProperties": true
     }
   },
+  "definitions": {
+    "modelHint": {
+      "type": "object",
+      "description": "Advisory model hint passed through verbatim to the host harness.",
+      "properties": {
+        "model": {
+          "type": ["string", "null"],
+          "default": null,
+          "description": "Opaque model identifier."
+        },
+        "provider": {
+          "type": ["string", "null"],
+          "default": null,
+          "description": "Opaque provider identifier."
+        },
+        "effort": {
+          "type": ["string", "null"],
+          "default": null,
+          "description": "Reasoning-effort token passed through verbatim (for example high, medium, low)."
+        },
+        "apiEndpoint": {
+          "type": ["string", "null"],
+          "default": null,
+          "description": "Optional API endpoint identifier."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
   "additionalProperties": true
 }
 ```
@@ -275,6 +390,17 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
 | `$schema` | `string` | `"./config.schema.json"` | Schema definition reference for editor autocomplete and validation |
 | `specsDir` | `string` | `"{projectRoot}/.sdw/specs"` | Path to specifications directory (supports `{projectRoot}` and `{skillsRoot}`) |
 | `scoreMin` | `integer` | `8` | Minimum acceptable conformance score (range: 0–10) |
+| `models.default` | `object \| null` | `null` | Fallback hint applied when a role entry is null or absent. Each hint carries nullable `model`, `provider`, `effort`, and `apiEndpoint` strings; helpers pass them through verbatim and never invoke a model |
+| `models.orchestrator` | `object \| null` | `null` | Hint for Steps 1-3 derivation, refinement grilling, DAG generation, and run supervision |
+| `models.worker` | `object \| null` | `null` | Hint for Step 4 task implementation subagents |
+| `models.reviewer` | `object \| null` | `null` | Hint for the Step 7 fresh reviewer subagent under the spec 00052 isolation contract |
+| `models.fixer` | `object \| null` | `null` | Hint for fixer remediation in the Step 7 fix iteration and Step 8 convergence fixes |
+| `models.judge` | `object \| null` | `null` | Hint for Step 5 conformance scoring; resolved before the legacy `scoring.judge*` keys, which stay honored when absent |
+| `models.ship` | `object \| null` | `null` | Hint for Step 8 PR metadata and review convergence dialogue; falls back to `models.fixer` |
+| `models.retro` | `object \| null` | `null` | Hint for retro analysis; falls back to `models.default` |
+| `models.detection.enabled` | `boolean` | `false` | Bind host capabilities once at run start before task dispatch; `false` keeps static resolution and performs no probe |
+| `models.detection.command` | `string \| null` | `null` | Optional command that writes the capabilities JSON file; supports `{capabilitiesFile}`, `{targetRoot}`, `{slug}`, `{runId}`. When null, the host consults its harness |
+| `models.detection.timeoutMs` | `integer` | `30000` | Maximum detection command runtime in milliseconds |
 | `scoring.judgeCommand` | `string \| null` | `null` | Optional judge command that writes the Step 5 verdict JSON. Supports `{promptFile}`, `{verdictFile}`, `{diffFile}`, `{criteriaFile}`, `{slug}`, `{targetRoot}`. When unset, the current agent model instance judges via `score submit`. Env fallback: `SDW_JUDGE_COMMAND` |
 | `scoring.judgeModel` | `string \| null` | `null` | Judge model identifier passed to the judge command or host agent |
 | `scoring.judgeProvider` | `string \| null` | `null` | Judge provider identifier passed to the judge command or host agent |
@@ -331,6 +457,21 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
   "$schema": "./config.schema.json",
   "specsDir": "{projectRoot}/.sdw/specs",
   "scoreMin": 8,
+  "models": {
+    "default": null,
+    "orchestrator": null,
+    "worker": null,
+    "reviewer": null,
+    "fixer": null,
+    "judge": null,
+    "ship": null,
+    "retro": null,
+    "detection": {
+      "enabled": false,
+      "command": null,
+      "timeoutMs": 30000
+    }
+  },
   "scmCodeReviewEnabled": false,
   "pushDelivery": false,
   "changelogEnabled": true,

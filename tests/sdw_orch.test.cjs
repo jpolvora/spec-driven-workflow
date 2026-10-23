@@ -2212,3 +2212,145 @@ test('00057 AC25 & AC28: the retrospective contribution renders and a re-render 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+// Spec 00056 AC4-AC6: reviewer, fixer, and judge hints. Resolution stays
+// declarative; no helper invokes a model or contacts a provider.
+test('00056 AC4-AC6: reviewer, fixer, and judge hints resolve before their fallbacks', () => {
+  const models = {
+    default: { model: 'default-model', provider: 'default-provider' },
+    reviewer: { model: 'reviewer-model', effort: 'high' },
+    fixer: null,
+    judge: { model: 'judge-model' }
+  };
+  const hints = sdwOrch.resolveModelHints({ models, scoring: { judgeModel: 'legacy-judge', judgeEffort: 'low' } });
+  assert.deepEqual(hints.reviewer, { model: 'reviewer-model', provider: null, effort: 'high', apiEndpoint: null }, 'AC4: the reviewer entry wins');
+  assert.deepEqual(hints.fixer, { model: 'default-model', provider: 'default-provider', effort: null, apiEndpoint: null }, 'AC5: an absent fixer entry falls back to models.default');
+  assert.deepEqual(hints.judge, { model: 'judge-model', provider: 'default-provider', effort: 'low', apiEndpoint: null }, 'AC6: models.judge wins over scoring, which fills the fields it leaves null');
+
+  const legacy = sdwOrch.resolveModelHints({ models: { default: { model: 'default-model' } }, scoring: { judgeModel: 'legacy-judge' } });
+  assert.equal(legacy.judge.model, 'legacy-judge', 'AC6: the scoring fallback still applies when models.judge is absent');
+
+  const none = sdwOrch.resolveModelHints({ models: {}, scoring: {} });
+  assert.equal(none.reviewer, null, 'AC4: no reviewer hint resolves to the session model');
+  assert.equal(none.fixer, null, 'AC5: no fixer hint resolves to the session model');
+  assert.equal(none.judge, null, 'AC6: no judge hint resolves to the session model');
+
+  const judgeConfig = sdwOrch.resolveJudgeConfigWithModels(
+    { models: { judge: { model: 'judge-model', provider: 'judge-provider' } } },
+    { judgeCommand: 'node judge.cjs', judgeCriticity: 'permissive', judgeModel: 'legacy-judge', judgeEffort: 'low' }
+  );
+  assert.equal(judgeConfig.mode, 'command', 'AC6: the legacy judge command is untouched');
+  assert.equal(judgeConfig.criticity, 'permissive', 'AC6: the legacy criticity is untouched');
+  assert.equal(judgeConfig.model, 'judge-model', 'AC6: models.judge.model precedes scoring.judgeModel');
+  assert.equal(judgeConfig.provider, 'judge-provider', 'AC6: models.judge fields carry through');
+  assert.equal(judgeConfig.effort, 'low', 'AC6: scoring fills a field models.judge leaves null');
+
+  const legacyConfig = sdwOrch.resolveJudgeConfigWithModels(
+    { models: { default: { model: 'default-model' } } },
+    { judgeModel: 'legacy-judge', judgeEffort: 'low' }
+  );
+  assert.equal(legacyConfig.model, 'legacy-judge', 'AC6: scoring precedes models.default for the judge');
+  assert.equal(legacyConfig.effort, 'low');
+});
+
+// Spec 00056 AC4/AC5: the briefs the orchestrator emits for the fresh reviewer
+// and fixer sessions carry the resolved advisory hints.
+test('00056 AC4 & AC5: the reviewer and fixer briefs carry their role hints', () => {
+  const reviewerBrief = sdwOrch.buildReviewerBrief({
+    reviewerHint: { model: 'reviewer-model', provider: 'reviewer-provider', effort: 'high', apiEndpoint: null },
+    targetRoot: 'C:/repo',
+    base: 'abc1234',
+    reportPath: '.sdw/state/review.md'
+  });
+  assert.match(reviewerBrief, /context-fresh reviewer subagent session/, 'AC4: the brief names the fresh reviewer session');
+  assert.match(reviewerBrief, /Target root: C:\/repo/);
+  assert.match(reviewerBrief, /Base reference: abc1234/);
+  assert.match(reviewerBrief, /Report path: \.sdw\/state\/review\.md/);
+  assert.match(reviewerBrief, /Scope fence: review only the delivered diff/, 'AC4: the spec 00052 allowlist fence stays in the brief');
+  assert.match(reviewerBrief, /Model hint: reviewer-model, provider reviewer-provider, effort high/, 'AC4: the reviewer hint rides in the brief');
+
+  const fixerBrief = sdwOrch.buildFixerBrief({
+    fixerHint: { model: 'fixer-model', provider: null, effort: 'low', apiEndpoint: null },
+    findingsPath: '.sdw/state/review.md',
+    targetRoot: 'C:/repo',
+    reportPath: '.sdw/state/fix.md'
+  });
+  assert.match(fixerBrief, /fresh sdw-fixer subagent session, distinct from the reviewer session/, 'AC5: the brief keeps fixer separation');
+  assert.match(fixerBrief, /Findings: \.sdw\/state\/review\.md/);
+  assert.match(fixerBrief, /Model hint: fixer-model, effort low/, 'AC5: the fixer hint rides in the brief');
+
+  assert.doesNotMatch(sdwOrch.buildReviewerBrief({ reviewerHint: null, targetRoot: 'r', base: 'b', reportPath: 'p' }), /Model hint/, 'AC4: a null hint adds no model line');
+  assert.doesNotMatch(sdwOrch.buildFixerBrief({ fixerHint: null, findingsPath: 'f', targetRoot: 'r', reportPath: 'f' }), /Model hint/, 'AC5: a null hint adds no model line');
+});
+
+// Spec 00056 AC4-AC6 end to end: Step 7 dispatches the reviewer brief, triggers
+// fixer remediation for a fixable critical finding, and Step 5 resolves the
+// judge hint from models.judge. The sdw-code-review CLI runs locally only.
+test('00056 AC4-AC6: Step 7 briefs carry reviewer and fixer hints and Step 5 uses the judge hint', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-model-hints-'));
+  try {
+    execSync('git init', { cwd: tmpDir, stdio: 'ignore' });
+    execSync('git config user.name "SDW Tester"', { cwd: tmpDir, stdio: 'ignore' });
+    execSync('git config user.email "tester@sdw.org"', { cwd: tmpDir, stdio: 'ignore' });
+    fs.mkdirSync(path.join(tmpDir, '.sdw', 'specs'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'README.md'), '# model hint fixture\n', 'utf8');
+    fs.writeFileSync(path.join(tmpDir, '.sdw', 'config.json'), JSON.stringify({
+      scoreMin: 8,
+      scmProvider: 'none',
+      useFeatureBranches: false,
+      useWorktrees: false,
+      pushDelivery: false,
+      models: {
+        reviewer: { model: 'review-model', effort: 'high' },
+        fixer: { model: 'fixer-model' },
+        judge: { model: 'judge-model' }
+      }
+    }, null, 2), 'utf8');
+    const slug = 'model-hints';
+    fs.writeFileSync(path.join(tmpDir, '.sdw', 'specs', `${slug}.md`), `---
+slug: ${slug}
+title: Model Hint Fixture
+---
+# Model Hint Fixture
+## Acceptance Criteria
+- AC1: The orchestrator shall route each orchestration role with its advisory model hint.
+`, 'utf8');
+    execSync('git add -A && git commit -m "baseline"', { cwd: tmpDir, stdio: 'ignore' });
+
+    const runId = `run-${Date.now()}-${slug}`;
+    let output = '';
+    const origLog = console.log;
+    console.log = (msg) => { output += String(msg) + '\n'; };
+    let code;
+    try {
+      code = sdwOrch.cmdRun({
+        root: tmpDir,
+        specPath: `.sdw/specs/${slug}.md`,
+        runId,
+        minScore: 8,
+        implementation: {
+          mode: 'command',
+          command: 'node -e "const fs=require(\'fs\');fs.writeFileSync(\'buggy.js\',\'function test() {\\n  debugger;\\n  return true;\\n}\\n\');fs.appendFileSync(\'README.md\',\'\\n# review hint update\');fs.writeFileSync(process.env.SDW_EVIDENCE_FILE,JSON.stringify({taskId:process.env.SDW_TASK_ID,acIds:[\'AC1\'],filesChanged:[\'README.md\',\'buggy.js\'],tests:[{name:\'fixture\',status:\'passed\'}],summary:\'review hint fixture\'}));"'
+        },
+        scoring: judgeScoring()
+      });
+    } finally {
+      console.log = origLog;
+    }
+
+    assert.equal(code, 0, 'the run completes through Step 8');
+    assert.match(output, /\[Step 7: Delegated Review\] Fresh reviewer brief: .*Model hint: review-model, effort high/, 'AC4: Step 7 emits the reviewer brief with the reviewer hint');
+    assert.match(output, /\[Step 7: Delegated Review\] Fixer brief: .*Model hint: fixer-model/, 'AC5: Step 7 emits the fixer brief with the fixer hint');
+    assert.match(output, /\[Step 5: Conformance Scoring\] Judge model hint: judge-model/, 'AC6: Step 5 resolves the judge hint from models.judge');
+
+    const state = stateManager.loadRunState(tmpDir, runId);
+    assert.deepEqual(state.models.reviewerHint, { model: 'review-model', provider: null, effort: 'high', apiEndpoint: null }, 'AC4: the run state records the reviewer hint');
+    assert.deepEqual(state.models.fixerHint, { model: 'fixer-model', provider: null, effort: null, apiEndpoint: null }, 'AC5: the run state records the fixer hint');
+    assert.deepEqual(state.models.judgeHint, { model: 'judge-model', provider: null, effort: null, apiEndpoint: null }, 'AC6: the run state records the judge hint');
+    assert.match(state.steps[7].output.briefs.reviewer, /Model hint: review-model, effort high/, 'AC4: the completed Step 7 output keeps the reviewer brief');
+    assert.match(state.steps[7].output.briefs.fixer, /Model hint: fixer-model/, 'AC5: the completed Step 7 output keeps the fixer brief');
+    assert.equal(state.steps[5].output.judge.model, 'judge-model', 'AC6: the scoring artifact records the resolved judge model');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

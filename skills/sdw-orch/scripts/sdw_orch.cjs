@@ -838,9 +838,10 @@ function loadProjectConfig(targetRoot, options = {}) {
   return config;
 }
 
-// Spec 00056 AC1-AC3: advisory per-role model hints. Hints stay opaque strings;
+// Spec 00056 AC1-AC6: advisory per-role model hints. Hints stay opaque strings;
 // no helper invokes a model or contacts a provider. Resolution is role entry,
-// then models.default, then null (the current session model).
+// then models.default, then null (the current session model). The judge adds the
+// legacy scoring.judge* keys between the role entry and the default (AC6).
 const MODEL_HINT_KEYS = ['model', 'provider', 'effort', 'apiEndpoint'];
 
 function normalizeModelHint(entry) {
@@ -857,12 +858,50 @@ function resolveModelHint(models, role) {
   return normalizeModelHint(models[role]) || normalizeModelHint(models.default);
 }
 
-function resolveModelHints(config) {
+// Spec 00056 AC6: the judge hint resolves per field from models.judge, then the
+// legacy scoring.judge* keys, then models.default, then the session model.
+function resolveJudgeModelHint(models, scoring) {
+  const judge = normalizeModelHint(models && models.judge);
+  const legacy = normalizeModelHint({
+    model: scoring && scoring.judgeModel,
+    provider: scoring && scoring.judgeProvider,
+    effort: scoring && scoring.judgeEffort,
+    apiEndpoint: scoring && scoring.judgeApiEndpoint
+  });
+  const fallback = normalizeModelHint(models && models.default);
+  const hint = {};
+  let resolvedAny = false;
+  for (const key of MODEL_HINT_KEYS) {
+    hint[key] = (judge && judge[key]) || (legacy && legacy[key]) || (fallback && fallback[key]) || null;
+    if (hint[key]) resolvedAny = true;
+  }
+  return resolvedAny ? hint : null;
+}
+
+function resolveModelHints(config, scoring) {
   const models = config && config.models;
   return {
     default: normalizeModelHint(models && models.default),
     orchestrator: resolveModelHint(models, 'orchestrator'),
-    worker: resolveModelHint(models, 'worker')
+    worker: resolveModelHint(models, 'worker'),
+    reviewer: resolveModelHint(models, 'reviewer'),
+    fixer: resolveModelHint(models, 'fixer'),
+    judge: resolveJudgeModelHint(models, scoring || (config && config.scoring))
+  };
+}
+
+// Spec 00056 AC6: Step 5 keeps the legacy judge command, criticity, and env
+// fallbacks; only the model hint fields prefer models.judge over scoring.judge*.
+function resolveJudgeConfigWithModels(config, scoring) {
+  const resolved = scoreEvaluator.resolveJudgeConfig({ scoring });
+  const hint = resolveJudgeModelHint(config && config.models, scoring);
+  if (!hint) return resolved;
+  return {
+    ...resolved,
+    model: hint.model,
+    provider: hint.provider,
+    effort: hint.effort,
+    apiEndpoint: hint.apiEndpoint
   };
 }
 
@@ -879,6 +918,36 @@ function formatModelHint(hint) {
 function attachWorkerModelHint(promptFileAbs, workerHint) {
   if (!workerHint) return;
   fs.appendFileSync(promptFileAbs, `\n## Worker Model Hint\n\nModel: ${formatModelHint(workerHint)}\n`, 'utf8');
+}
+
+// Spec 00056 AC4: the fresh reviewer brief (spec 00052 allowlist) carries the
+// advisory reviewer hint so the host can route the context-fresh session.
+function buildReviewerBrief(options) {
+  const { reviewerHint, targetRoot, base, reportPath, scopeFence } = options;
+  const parts = [
+    'Spawn one context-fresh reviewer subagent session for sdw-code-review only.',
+    `Target root: ${targetRoot}.`,
+    `Base reference: ${base || 'auto'}.`,
+    `Report path: ${reportPath}.`,
+    `Scope fence: ${scopeFence || 'review only the delivered diff; never the implementation transcript, prior worker reasoning, DAG prompts, or judge verdicts'}.`
+  ];
+  if (reviewerHint) parts.push(`Model hint: ${formatModelHint(reviewerHint)}.`);
+  return parts.join(' ');
+}
+
+// Spec 00056 AC5: the fixer brief carries the advisory fixer hint when a review
+// iteration must hand its findings batch to a fresh fixer session.
+function buildFixerBrief(options) {
+  const { fixerHint, findingsPath, targetRoot, reportPath } = options;
+  const parts = [
+    'Spawn one fresh sdw-fixer subagent session, distinct from the reviewer session.',
+    `Findings: ${findingsPath}.`,
+    `Target root: ${targetRoot}.`,
+    `Report: ${reportPath}.`,
+    'Scope fence: fix only the listed findings; never approve your own output.'
+  ];
+  if (fixerHint) parts.push(`Model hint: ${formatModelHint(fixerHint)}.`);
+  return parts.join(' ');
 }
 
 function resolveSpecPath(specInput, targetRoot, config) {
@@ -2040,14 +2109,18 @@ function cmdRun(options) {
     state = stateManager.saveRunState(targetRoot, state);
   }
 
-  // Spec 00056 AC1-AC3: resolve the static hint snapshot once. Steps 1-3 carry
-  // orchestratorHint; every Step 4 envelope carries workerHint. Detection is a
-  // later slice, so the static path records the skipped status.
-  const modelHints = resolveModelHints(config);
+  // Spec 00056 AC1-AC6: resolve the static hint snapshot once. Steps 1-3 carry
+  // orchestratorHint; every Step 4 envelope carries workerHint; Step 7 briefs
+  // carry reviewerHint/fixerHint; Step 5 carries judgeHint. Detection is a later
+  // slice, so the static path records the skipped status.
+  const modelHints = resolveModelHints(config, options.scoring || config.scoring);
   state.models = {
     detection: { status: 'skipped' },
     orchestratorHint: modelHints.orchestrator,
-    workerHint: modelHints.worker
+    workerHint: modelHints.worker,
+    reviewerHint: modelHints.reviewer,
+    fixerHint: modelHints.fixer,
+    judgeHint: modelHints.judge
   };
   state = stateManager.saveRunState(targetRoot, state);
 
@@ -2577,7 +2650,12 @@ function cmdRun(options) {
     logStepEnter(5);
 
     const specAcs = dagPlanner.parseAcceptanceCriteria(effectiveSpecContent);
-    const judgeConfig = scoreEvaluator.resolveJudgeConfig({ scoring: options.scoring || config.scoring });
+    // Spec 00056 AC6: the judge hint prefers models.judge over scoring.judge*,
+    // then models.default, then the current session model.
+    const judgeConfig = resolveJudgeConfigWithModels(config, options.scoring || config.scoring);
+    if (judgeConfig.model || judgeConfig.provider || judgeConfig.effort || judgeConfig.apiEndpoint) {
+      console.log(`[Step 5: Conformance Scoring] Judge model hint: ${formatModelHint(judgeConfig)}.`);
+    }
     const judgePaths = scoreEvaluator.resolveJudgePaths({
       targetRoot,
       stateDir: stateManager.resolveStateDir(targetRoot),
@@ -3019,6 +3097,17 @@ function cmdRun(options) {
       ? path.join(artifactsDirAbs, `${specSlug}-step-7.md`)
       : path.join(targetRoot, '.sdw', 'state', 'code-review.report.md');
 
+    // Spec 00056 AC4: the fresh reviewer brief carries the advisory reviewer
+    // hint for the context-fresh session; AC5 builds the fixer brief below.
+    const step7Briefs = { reviewer: null, fixer: null };
+    step7Briefs.reviewer = buildReviewerBrief({
+      reviewerHint: modelHints.reviewer,
+      targetRoot,
+      base: state.baseCommit,
+      reportPath: reportAbsPath
+    });
+    console.log(`[Step 7: Delegated Review] Fresh reviewer brief: ${step7Briefs.reviewer}`);
+
     function parseReviewJson(stdout) {
       try {
         const t = String(stdout || '').trim();
@@ -3087,6 +3176,15 @@ function cmdRun(options) {
       const fixable = (reviewReport.findings || []).filter(f => f.fixable && f.status === 'open');
       if (fixable.length === 0) break;
       reviewLoop++;
+      // Spec 00056 AC5: fixer remediation carries the advisory fixer hint in the
+      // fresh fixer session brief, distinct from the reviewer session.
+      step7Briefs.fixer = buildFixerBrief({
+        fixerHint: modelHints.fixer,
+        findingsPath: reportAbsPath,
+        targetRoot,
+        reportPath: reportAbsPath
+      });
+      console.log(`[Step 7: Delegated Review] Fixer brief: ${step7Briefs.fixer}`);
       console.log(`[Step 7: Delegated Review] Applying auto-fixes for iteration ${reviewLoop}...`);
       const fixRes = invokeReview(true);
       if (!fixRes || !fixRes.report) break;
@@ -3124,7 +3222,7 @@ function cmdRun(options) {
     } catch (e) { artifactRel = null; }
     if (!reviewReport.passed) {
       console.error(`[Step 7: Delegated Review] Review loop halted with unresolved errors.`);
-      state = stateManager.updateStepState(targetRoot, state.runId, 7, 'review_failed', reviewReport, null, artifactRel ? { artifact: artifactRel } : undefined);
+      state = stateManager.updateStepState(targetRoot, state.runId, 7, 'review_failed', { ...reviewReport, briefs: step7Briefs }, null, artifactRel ? { artifact: artifactRel } : undefined);
       state.status = 'failed';
       stateManager.saveRunState(targetRoot, state);
       state = recordStepContributions(targetRoot, state, 7, buildStep7Contributions(reviewIterations, artifactRel), { allowDuplicates: true });
@@ -3133,7 +3231,7 @@ function cmdRun(options) {
     }
 
     state.reviewCommit = getBaseCommit(targetRoot);
-    state = stateManager.updateStepState(targetRoot, state.runId, 7, 'completed', reviewReport, null, artifactRel ? { artifact: artifactRel } : undefined);
+    state = stateManager.updateStepState(targetRoot, state.runId, 7, 'completed', { ...reviewReport, briefs: step7Briefs }, null, artifactRel ? { artifact: artifactRel } : undefined);
     logStepDone(7);
     state = recordStepContributions(targetRoot, state, 7, buildStep7Contributions(reviewIterations, artifactRel), { allowDuplicates: true });
   } else if (options.skipReview && startStep <= 7 && state.steps[7].status !== 'completed') {
@@ -4725,7 +4823,7 @@ function cmdScoreSubmit(options) {
   const minScore = options.minScore !== undefined
     ? options.minScore
     : (config.scoreMin !== undefined ? config.scoreMin : 8);
-  const judgeConfig = scoreEvaluator.resolveJudgeConfig({ scoring: options.scoring || config.scoring });
+  const judgeConfig = resolveJudgeConfigWithModels(config, options.scoring || config.scoring);
   const report = scoreEvaluator.applyVerdict(validation.data, {
     acs: judgeCriteria,
     minScore,
@@ -5027,7 +5125,11 @@ module.exports = {
   showHelp,
   loadProjectConfig,
   resolveModelHints,
+  resolveJudgeModelHint,
+  resolveJudgeConfigWithModels,
   formatModelHint,
+  buildReviewerBrief,
+  buildFixerBrief,
   resolveSpecPath,
   collectDeliveryFiles,
   stageAndCommitOnly,
