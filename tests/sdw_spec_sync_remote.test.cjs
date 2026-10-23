@@ -122,6 +122,50 @@ test('sdw-spec sync-remote - AC1: sync-up creates a provider item and persists t
   }
 });
 
+test('sdw-spec sync-remote - AC10: a sync-up create round trip never reports body drift', async () => {
+  const root = setupWorkspace();
+  try {
+    const filePath = writeSpecification(root, { prefix: '00017', slug: '00017-demo-rho', title: 'Demo Rho' });
+    registerFixture(root, { prefix: '00017', slug: '00017-demo-rho', title: 'Demo Rho' });
+
+    // The tracker receives the body as it was before sync-up writes the link keys.
+    const publishedBody = `<!-- sdw-spec: 00017-demo-rho -->\n\n${fs.readFileSync(filePath, 'utf8').trimEnd()}\n`;
+
+    const createExecutor = createGithubExecutor({ 'gh issue create': 'https://github.com/org/repo/issues/424\n' });
+    await syncUp({ root, executor: createExecutor });
+
+    const queryExecutor = createGithubExecutor({
+      'gh issue list': JSON.stringify([
+        { number: 424, title: 'Demo Rho', body: publishedBody, state: 'OPEN', labels: [] }
+      ])
+    });
+    const report = await syncDown({ root, executor: queryExecutor });
+
+    assert.deepStrictEqual(report.drift, [], 'identity keys added after publication are not drift');
+    const transition = report.transitions.find((entry) => entry.slug === '00017-demo-rho');
+    assert.strictEqual(transition.action, 'unchanged');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('sdw-spec sync-remote - AC9: sync-down asks the provider for every item, not the default page', async () => {
+  const root = setupWorkspace();
+  try {
+    writeSpecification(root, { prefix: '00018', slug: '00018-demo-sigma', title: 'Demo Sigma', scmSpecId: '425' });
+    registerFixture(root, { prefix: '00018', slug: '00018-demo-sigma', title: 'Demo Sigma' });
+
+    const executor = createGithubExecutor({ 'gh issue list': JSON.stringify([]) });
+    await syncDown({ root, executor });
+
+    const query = executor.calls.find((cmd) => cmd.startsWith('gh issue list'));
+    assert.ok(query, 'sync-down queries the provider');
+    assert.match(query, /--limit\s+1000\b/, 'the reconciliation query is not capped at the adapter default');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('sdw-spec sync-remote - AC1: sync-up updates a linked specification instead of creating another issue', async () => {
   const root = setupWorkspace();
   try {

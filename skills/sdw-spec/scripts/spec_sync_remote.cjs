@@ -65,10 +65,26 @@ function parseSlugMarker(body) {
 
 // AC10: bodies are compared after the marker, line endings, and trailing
 // whitespace are normalized, so a sync-up round trip never reads as drift.
+// Identity keys live only in the local frontmatter: sync-up adds them after the
+// remote body was captured, so comparing them would report false drift.
+function stripIdentityKeys(text) {
+  const match = text.match(/^---\n([\s\S]*?)\n---/);
+  if (!match) return text;
+  const kept = match[1]
+    .split('\n')
+    .filter(line => !/^(?:id|scmSpecId|localSpecId|source):/.test(line))
+    .join('\n');
+  return `---\n${kept}\n---${text.slice(match[0].length)}`;
+}
+
 function normalizeBody(body) {
-  return String(body || '')
+  // trimStart first: removing the marker leaves leading blank lines, and the
+  // frontmatter match below is anchored at the start of the text.
+  const text = String(body || '')
     .replace(/\r\n?/g, '\n')
     .replace(SLUG_MARKER, '')
+    .trimStart();
+  return stripIdentityKeys(text)
     .replace(/[ \t]+$/gm, '')
     .trim();
 }
@@ -312,7 +328,9 @@ function matchLocalSpecification(item, indexes) {
 async function syncDown(options = {}) {
   const { providerName, provider } = resolveSyncProvider(options);
   const providerSource = providerSourceName(providerName);
-  const items = await provider.queryWorkItems({ state: options.state || 'all' });
+  // The provider adapters default to a small page (GitHub: 20). A reconciliation
+  // pass must see every item, so ask for a wide page unless the caller caps it.
+  const items = await provider.queryWorkItems({ state: options.state || 'all', limit: options.limit || 1000 });
 
   const byScmSpecId = new Map();
   const bySlug = new Map();
