@@ -4,7 +4,7 @@ localSpecId: "00064"
 slug: 00064-dag-planning-must-prove-acceptance-crite
 title: "DAG planning must prove acceptance-criterion file coverage"
 source: local
-status: draft
+status: implemented
 specDate: 2026-10-23
 priority: high
 value: "Stops DAG slices that cannot satisfy their assigned criteria, six wasted dispatch rounds in one batch"
