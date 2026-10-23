@@ -12,12 +12,12 @@
 | Base branch | `master` |
 | Base commit | `395912d44005311393d71961d9407694098615fd` |
 | Delivery commit | `865da01114377098787a36cbd284f6f43b07adb2` |
-| Ship status | pending |
+| Ship status | review_pending |
 | Score | 10/10 (scoreMin 8) |
 | Implementation start | 2026-10-23T05:59:26.530Z |
 | Implementation end | 2026-10-23T06:56:20.990Z |
 | Total wall-clock duration | 56m 54s |
-| Generated at | 2026-10-23T07:29:49.116Z |
+| Generated at | 2026-10-23T08:13:29.851Z |
 | Step 1: derivation (skipped) | 1ms |
 | Step 2: refinement (completed) | 39ms |
 | Step 3: dag_generation (completed) | 4ms |
@@ -25,7 +25,7 @@
 | Step 5: scoring (completed) | 29m 48s |
 | Step 6: delivery_commit (completed) | 516ms |
 | Step 7: code_review (completed) | 1s |
-| Step 8: pr_preparation (pending) | n/a |
+| Step 8: pr_preparation (blocked_convergence) | n/a |
 
 
 ## Tasks
@@ -39,6 +39,10 @@
 
 | SHA | Subject | Range |
 |---|---|---|
+| `8fe5669` | fix(review): refuse a plan that would emit a task without criteria | base..HEAD |
+| `f21f28f` | fix(review): anchor touchpoint regexes so prose no longer escalates specs | base..HEAD |
+| `5060715` | fix(review): make the DAG task cap configurable via maxTasksPerSpec | base..HEAD |
+| `4b87178` | docs(00030-sdw-micro-task-dag-planning): record delivery report | base..HEAD |
 | `865da01` | task(00030-sdw-micro-task-dag-planning): task-2 | base..HEAD |
 | `7ef1757` | task(00030-sdw-micro-task-dag-planning): task-1 | base..HEAD |
 
@@ -63,9 +67,20 @@
 | `tests/sdw_dag_micro.test.cjs` | added |
 | `tests/sdw_orch_dispatch.test.cjs` | modified |
 
+### Unattributed changes
+
+| File | Change |
+|---|---|
+| `.sdw/config.json` | modified |
+| `.sdw/config.schema.json` | modified |
+| `.sdw/reports/00030-sdw-micro-task-dag-planning-report.md` | added |
+| `skills/sdw-config/references/config_spec.md` | modified |
+| `skills/sdw-config/scripts/sdw_config.cjs` | modified |
+
 ## Verification
 
 - test gate: status `passed`, exit code `0`, duration 3m 14s
+- Step 8 delivery: `blocked_convergence` (ship status `review_pending`)
 
 ## Code Review
 
@@ -142,6 +157,12 @@ Not available
 
 ## Breaking Changes
 
+- **Configuration key** `maxTasksPerSpec` added with value 5 in `.sdw/config.json`
+- **Configuration schema** `properties.maxTasksPerSpec.default` added with value 5 in `.sdw/config.schema.json`
+- **Configuration schema** `properties.maxTasksPerSpec.description` added with value "Task cap per specification that the DAG planner enforces; out-of-range values clamp to 2-8." in `.sdw/config.schema.json`
+- **Configuration schema** `properties.maxTasksPerSpec.maximum` added with value 8 in `.sdw/config.schema.json`
+- **Configuration schema** `properties.maxTasksPerSpec.minimum` added with value 2 in `.sdw/config.schema.json`
+- **Configuration schema** `properties.maxTasksPerSpec.type` added with value "integer" in `.sdw/config.schema.json`
 - **CLI command** `dag-preview` added in `skills/sdw-orch/scripts/sdw_orch.cjs`
 
 ## Quality
@@ -319,18 +340,18 @@ Not available
 
 - Step 1 (derivation) skipped: not recorded
 - Task task-2 accepted after re-dispatch (sequence 2)
-- Environment: workspace: 7 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
+- Environment: workspace: 12 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
 
 ## Outcome
 
 - Result: `paused`
 - Delivery commit: `865da01114377098787a36cbd284f6f43b07adb2`
-- Ship status: `pending`
+- Ship status: `review_pending`
 - Duration: 56m 54s
 
 ## Step Contributions
 
-- Recorded: 8 contribution(s)
+- Recorded: 10 contribution(s)
 
 ### Step 1: derivation
 
@@ -378,7 +399,10 @@ Not available
 
 ### Step 8: pr_preparation
 
-Not available
+- **convergence** 2026-10-23T07:38:53.152Z - Convergence iteration 1
+  - Body: `{"iteration":1,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":false}`
+- **convergence** 2026-10-23T07:38:53.965Z - Convergence iteration 2
+  - Body: `{"iteration":2,"rounds":2,"failingChecks":[{"name":"review","status":""}],"openThreads":1,"resolvedThreads":0,"fixCommit":null,"converged":false}`
 
 ### Step 9: retrospective
 
