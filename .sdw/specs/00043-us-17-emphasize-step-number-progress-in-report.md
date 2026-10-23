@@ -12,12 +12,12 @@
 | Base branch | `master` |
 | Base commit | `dd67c16a4c96cfc61ddb1ea5545ea584e33f3918` |
 | Delivery commit | `5b4ab524f76925e50820ef8c8ba62e28e58e2cf5` |
-| Ship status | pending |
+| Ship status | review_pending |
 | Score | 10/10 (scoreMin 8) |
 | Implementation start | 2026-10-23T03:21:35.083Z |
 | Implementation end | 2026-10-23T03:32:35.790Z |
 | Total wall-clock duration | 11m |
-| Generated at | 2026-10-23T03:40:36.541Z |
+| Generated at | 2026-10-23T03:54:38.184Z |
 | Step 1: derivation (skipped) | 1ms |
 | Step 2: refinement (completed) | 32ms |
 | Step 3: dag_generation (completed) | 3ms |
@@ -25,7 +25,7 @@
 | Step 5: scoring (completed) | 15s |
 | Step 6: delivery_commit (completed) | 353ms |
 | Step 7: code_review (completed) | 842ms |
-| Step 8: pr_preparation (in_progress) | n/a |
+| Step 8: pr_preparation (blocked_convergence) | n/a |
 
 
 ## Tasks
@@ -39,6 +39,8 @@
 
 | SHA | Subject | Range |
 |---|---|---|
+| `d78a576` | fix(00043-us-17-emphasize-step-number-progress-in): guard skip-review/skip-pr headers against completed steps | base..HEAD |
+| `61c99e8` | docs(00043-us-17-emphasize-step-number-progress-in): record delivery report | base..HEAD |
 | `ecac5ad` | docs(00043-us-17-emphasize-step-number-progress-in): record delivery report | base..HEAD |
 | `5b4ab52` | task(00043-us-17-emphasize-step-number-progress-in): task-2 | base..HEAD |
 | `b2cea59` | task(00043-us-17-emphasize-step-number-progress-in): task-1 | base..HEAD |
@@ -66,7 +68,7 @@
 ## Verification
 
 - test gate: status `passed`, exit code `0`, duration 2m 20s
-- Step 8 delivery: `in_progress`
+- Step 8 delivery: `blocked_convergence` (ship status `review_pending`)
 
 ## Code Review
 
@@ -168,12 +170,12 @@ None detected.
 
 - Result: `paused`
 - Delivery commit: `5b4ab524f76925e50820ef8c8ba62e28e58e2cf5`
-- Ship status: `pending`
+- Ship status: `review_pending`
 - Duration: 11m
 
 ## Step Contributions
 
-- Recorded: 8 contribution(s)
+- Recorded: 10 contribution(s)
 
 ### Step 1: derivation
 
@@ -221,7 +223,10 @@ None detected.
 
 ### Step 8: pr_preparation
 
-Not available
+- **convergence** 2026-10-23T03:48:38.581Z - Convergence iteration 1
+  - Body: `{"iteration":1,"rounds":2,"failingChecks":[],"openThreads":1,"resolvedThreads":0,"fixCommit":null,"converged":false}`
+- **convergence** 2026-10-23T03:48:39.024Z - Convergence iteration 2
+  - Body: `{"iteration":2,"rounds":2,"failingChecks":[{"name":"review","status":""}],"openThreads":1,"resolvedThreads":0,"fixCommit":null,"converged":false}`
 
 ### Step 9: retrospective
 
