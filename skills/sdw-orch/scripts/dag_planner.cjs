@@ -60,13 +60,21 @@ function uniqueAcceptanceCriteria(acs) {
 /**
  * Spec 00064 AC1/AC3: an assigned criterion proves its slice through a project
  * path named in its own text. A criterion that names no path records why it
- * needs no file instead.
+ * needs no file; the reason is either author-declared with `(no-file: ...)` or
+ * the planner's honest statement that coverage was not proven.
  */
-const NO_FILE_REASON = 'criterion names no path; covered by the task slice';
+const NO_FILE_REASON = 'criterion names no project path; file coverage not proven';
 const CRITERION_PATH_PATTERN = /(?<![\w./:-])(?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\.[A-Za-z0-9]+/g;
+const NO_FILE_MARKER_PATTERN = /\(no-file:\s*([^)]+)\)/i;
 
 function normalizeProjectPath(file) {
   return String(file || '').replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
+/** An author-declared reason carried by a criterion as `(no-file: <reason>)`. */
+function extractNoFileReason(text) {
+  const match = String(text || '').match(NO_FILE_MARKER_PATTERN);
+  return match ? match[1].trim() : null;
 }
 
 /** Project paths named in a criterion, deduplicated in declaration order. */
@@ -234,7 +242,11 @@ function computeFileDisjointness(tasks) {
 /**
  * Spec 00064 AC1-AC3: maps every assigned criterion to its task and the slice
  * files that prove it. A path-naming criterion whose own paths are all absent
- * from its slice is uncovered and fails the plan (AC2).
+ * from its slice is uncovered and fails the plan (AC2). A criterion that names
+ * no path keeps its author-declared `(no-file: ...)` reason; without one the
+ * entry states that coverage was not proven and is marked `assumed`. An empty
+ * slice is legitimate: a plan with fewer files than tasks repeats files and
+ * leaves some slices empty (spec 00030), so it must not fail a no-path criterion.
  */
 function buildCoverageReport(tasks, acs) {
   const acsById = new Map(acs.map(ac => [ac.id, ac]));
@@ -246,15 +258,22 @@ function buildCoverageReport(tasks, acs) {
       const ac = acsById.get(acId);
       const requiredFiles = ac ? extractCriterionPaths(ac.text) : [];
       if (requiredFiles.length === 0) {
-        criteria.push({ acId, taskId: task.id, files: [], noFileReason: NO_FILE_REASON });
+        const declared = ac ? extractNoFileReason(ac.text) : null;
+        criteria.push({
+          acId,
+          taskId: task.id,
+          files: [],
+          noFileReason: declared || NO_FILE_REASON,
+          assumed: !declared
+        });
         continue;
       }
       const files = requiredFiles.filter(required =>
         taskFiles.some(file => file === required || file.endsWith(`/${required}`)));
       if (files.length > 0) {
-        criteria.push({ acId, taskId: task.id, files, noFileReason: null });
+        criteria.push({ acId, taskId: task.id, files, noFileReason: null, assumed: false });
       } else {
-        criteria.push({ acId, taskId: task.id, files: [], noFileReason: null });
+        criteria.push({ acId, taskId: task.id, files: [], noFileReason: null, assumed: false });
         uncovered.push({ acId, taskId: task.id, requiredFiles, taskFiles });
       }
     }

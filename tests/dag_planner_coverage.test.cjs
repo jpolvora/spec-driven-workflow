@@ -123,15 +123,48 @@ test('AC1 & AC3: full coverage maps each criterion to its task and supporting sl
 test('AC1: a criterion that names no path records an explicit no-file reason instead of failing', () => {
   const plan = dagPlanner.generateDagPlan(buildSpec('coverage-reason', NO_PATH_CRITERIA), {
     slug: 'coverage-reason',
-    targetFiles: []
+    targetFiles: TARGET_FILES
   });
 
-  assert.ok(!plan.refused, 'criteria that name no path never fail the plan');
+  assert.ok(!plan.refused, 'criteria that name no path never fail the plan while the slice holds files');
   assert.equal(plan.coverage.complete, true);
   for (const entry of plan.coverage.criteria) {
     assert.deepEqual(entry.files, [], 'a no-path criterion claims no supporting file');
-    assert.match(entry.noFileReason, /names no path/, 'the entry records why it needs no file');
+    assert.match(entry.noFileReason, /not proven/, 'the entry states that coverage was not proven');
+    assert.doesNotMatch(entry.noFileReason, /covered by the task slice/, 'the planner never claims unverified coverage');
+    assert.equal(entry.assumed, true, 'the entry is marked as assumed');
   }
+});
+
+test('AC1: an author-declared (no-file: ...) reason is preserved instead of the planner default', () => {
+  const criteria = buildCriteria({
+    AC2: 'The system shall report run status to the operator (no-file: the operator surface is delivered by AC9).'
+  });
+  const plan = dagPlanner.generateDagPlan(buildSpec('coverage-declared', criteria), {
+    slug: 'coverage-declared',
+    targetFiles: TARGET_FILES
+  });
+
+  assert.ok(!plan.refused);
+  const entry = plan.coverage.criteria.find(item => item.acId === 'AC2');
+  assert.equal(entry.noFileReason, 'the operator surface is delivered by AC9', 'the declared reason wins');
+  assert.equal(entry.assumed, false, 'a declared reason is not an assumption');
+});
+
+test('AC1: a plan with fewer files than tasks keeps its empty slices and still plans', () => {
+  const criteria = buildCriteria();
+  for (let index = 11; index < 25; index++) {
+    criteria.push(`- AC${index + 1}: The system shall satisfy criterion ${index + 1}.`);
+  }
+  const plan = dagPlanner.generateDagPlan(buildSpec('coverage-wide', criteria), {
+    slug: 'coverage-wide',
+    targetFiles: ['skills/demo/a.cjs', 'skills/demo/b.cjs'],
+    maxTasksPerSpec: 8
+  });
+
+  assert.ok(!plan.refused, 'an empty slice never fails a criterion that names no path');
+  assert.equal(plan.coverage.complete, true);
+  assert.equal(plan.coverage.criteria.length, 25);
 });
 
 test('AC3: the coverage report reaches the Step 3 output and dag preview --json', () => {
@@ -144,7 +177,7 @@ test('AC3: the coverage report reaches the Step 3 output and dag preview --json'
     const previewAc1 = previewPlan.coverage.criteria.find(entry => entry.acId === 'AC1');
     assert.equal(previewAc1.taskId, 'task-1');
     assert.deepEqual(previewAc1.files, ['skills/demo/a.cjs']);
-    assert.match(previewPlan.coverage.criteria.find(entry => entry.acId === 'AC2').noFileReason, /names no path/);
+    assert.match(previewPlan.coverage.criteria.find(entry => entry.acId === 'AC2').noFileReason, /names no project path/);
 
     const runCode = sdwOrch.cmdRun({
       root,
