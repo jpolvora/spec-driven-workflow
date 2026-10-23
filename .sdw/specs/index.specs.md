@@ -73,3 +73,7 @@ Central repository index tracking specification lifecycle states, metadata, and 
 | 00060 | 00060-sdw-delivery-report-artifact-location | SDW Delivery Report Artifact — Relocate to .sdw/reports and Exclude It From Every Specification Scanner | completed | local | 2026-10-22 | PASS | - |
 | 00061 | 00061-us-48-brainstorm-multi-agent-parallel-f | Brainstorm: multi-agent parallel features via sandboxes plus a coordinator merge to develop | pending | github | 2026-10-23 | PASS | - |
 | 00062 | 00062-sdw-spec-issue-provider-sync | SDW Spec-Issue Two-Way Sync with Registered Provider | completed | local | 2026-10-23 | PASS | - |
+| 00063 | 00063-orchestrator-checkpoint-commits-must-ver | Orchestrator checkpoint commits must verify the run branch | pending | local | 2026-10-23 | PASS | - |
+| 00064 | 00064-dag-planning-must-prove-acceptance-crite | DAG planning must prove acceptance-criterion file coverage | pending | local | 2026-10-23 | PASS | - |
+| 00065 | 00065-judge-verdict-contract-must-define-parti | Judge verdict contract must define partial verdict handling | pending | local | 2026-10-23 | PASS | - |
+| 00066 | 00066-batch-pre-flight-must-wait-for-required- | Batch pre-flight must wait for required checks before merging | pending | local | 2026-10-23 | PASS | - |

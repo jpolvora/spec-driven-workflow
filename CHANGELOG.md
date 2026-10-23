@@ -1,5 +1,10 @@
 # Changelog
 
+### [2026-10-23 08:12] Agent: agent
+- **Prompt**: sdw-batch specs 00059, 00060, 00030, 00062, 00056
+- **Done**: Delivered five specifications through sdw-orch under one batch: 00059 review-thread fidelity (10/10), 00060 report relocation (9/10), 00030 complexity-gated DAG (10/10), 00062 spec-issue sync (10/10), 00056 per-role agent models (9/10); PRs #50-#54 merged into develop
+- **Result**: 5/5 merged, 588-test suite green, 3 delivery commits and 8 review rounds; residual follow-ups recorded for AC14 (00060) and AC2 (00056)
+
 ### [2026-10-23 00:09] Agent: agent
 - **Prompt**: fix duplicated exports
 - **Done**: Removed the shadowed duplicate module.exports block in skills/sdw-spec/scripts/scm_provider_contract.cjs; the effective 11-key surface (including cliFailure and assertSafeRef) is unchanged
