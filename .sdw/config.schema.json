@@ -222,6 +222,12 @@
       "description": "Path to the directory storing run session state files. Supports tokens {projectRoot} and {skillsRoot}.",
       "default": "{projectRoot}/.sdw/state"
     },
+    "lockStaleMs": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Age in milliseconds after which an abandoned run lock ({stateFile}.lock) may be reclaimed, and only when the recorded owner process is proven absent. A younger lock always blocks mutation.",
+      "default": 300000
+    },
     "sandboxDir": {
       "type": "string",
       "description": "Path to the directory that holds sandbox clones created by sdw-orch --sandbox. Defaults to {projectRoot}/.sdw/sandbox; any other value must resolve outside the project root. Supports tokens {projectRoot}, {skillsRoot}, and {temp}.",

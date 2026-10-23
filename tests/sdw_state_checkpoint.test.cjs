@@ -8,9 +8,19 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const stateManager = require('../skills/sdw-orch/scripts/state_manager.cjs');
+const runLock = require('../skills/sdw-orch/scripts/run_lock.cjs');
 
 const CLI_PATH = path.resolve(__dirname, '../skills/sdw-orch/scripts/sdw_orch.cjs');
 const RUN_ID = 'run-checkpoint-demo';
+
+// A pid the operating system cannot have assigned, so the owner is provably absent.
+const DEAD_PID = 2147483647;
+
+function writeLockRecord(stateFile, record) {
+  const lockFile = `${stateFile}.lock`;
+  fs.writeFileSync(lockFile, JSON.stringify(record, null, 2) + '\n', 'utf8');
+  return lockFile;
+}
 
 function makeRoot() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-state-checkpoint-'));
@@ -323,6 +333,234 @@ test('AC8: resume refuses a state file whose revision is missing or not a non-ne
       { ok: true },
       'a non-negative integer revision, including a fresh run, stays resumable'
     );
+  } finally {
+    cleanup(root);
+  }
+});
+
+// Spec 00019 AC9.
+test('AC9: a mutation takes the exclusive run lock and releases it afterwards', () => {
+  const root = makeRoot();
+  try {
+    const stateFile = stateManager.getStateFilePath(root, RUN_ID);
+    const lockFile = `${stateFile}.lock`;
+    assert.equal(fs.existsSync(lockFile), false, 'a fresh run holds no lock');
+
+    const saved = stateManager.recordWarning(root, RUN_ID, 4, 'lock probe');
+    assert.equal(saved.revision, 1, 'the mutation landed');
+    assert.equal(fs.existsSync(lockFile), false, 'the lock is released after a successful mutation');
+
+    const handle = runLock.acquire(stateFile, { staleMs: 60000 });
+    const record = JSON.parse(fs.readFileSync(lockFile, 'utf8'));
+    assert.equal(record.pid, process.pid, 'the lock names the owner pid');
+    assert.equal(record.host, os.hostname(), 'the lock names the owner host');
+    assert.ok(!Number.isNaN(Date.parse(record.acquiredAt)), 'the lock carries a parseable acquisition timestamp');
+    assert.throws(
+      () => runLock.acquire(stateFile, { staleMs: 60000 }),
+      err => err.code === 'RUN_LOCKED' && err.message.includes(`pid ${process.pid}`),
+      'a second acquisition is refused while the lock is live'
+    );
+    assert.equal(runLock.release(handle), true, 'release removes the owned lock');
+    assert.equal(fs.existsSync(lockFile), false, 'releasing leaves no lock file behind');
+  } finally {
+    cleanup(root);
+  }
+});
+
+// Spec 00019 AC9: the lock must survive a nesting mutation and never outlive a throw.
+test('AC9: the lock is reentrant for one process and released when the mutation throws', () => {
+  const root = makeRoot();
+  try {
+    const stateFile = stateManager.getStateFilePath(root, RUN_ID);
+    const lockFile = `${stateFile}.lock`;
+
+    // updateStepState calls saveRunState while holding the lock: a non-reentrant
+    // lock would block or throw here.
+    const completed = stateManager.updateStepState(root, RUN_ID, 4, 'completed', { done: true });
+    assert.equal(completed.revision, 1, 'a nested mutation acquires the lock once and advances one revision');
+    assert.equal(fs.existsSync(lockFile), false, 'the outermost mutation releases the lock');
+
+    const realRenameSync = fs.renameSync;
+    fs.renameSync = () => {
+      throw new Error('simulated write failure');
+    };
+    try {
+      assert.throws(() => stateManager.recordWarning(root, RUN_ID, 4, 'fails'), /simulated write failure/);
+    } finally {
+      fs.renameSync = realRenameSync;
+    }
+    assert.equal(fs.existsSync(lockFile), false, 'the lock is released even when the write throws');
+    assert.equal(stateManager.loadRunState(root, RUN_ID).revision, 1, 'the failed mutation did not advance the revision');
+  } finally {
+    cleanup(root);
+  }
+});
+
+// Spec 00019 AC9 & AC10.
+test('AC9: a stale lock is reclaimed only after lockStaleMs and only when the owner is gone', () => {
+  const root = makeRoot();
+  try {
+    fs.writeFileSync(
+      path.join(root, '.sdw', 'config.json'),
+      JSON.stringify({ specsDir: '{projectRoot}/.sdw/specs', lockStaleMs: 60000 }, null, 2) + '\n',
+      'utf8'
+    );
+    const stateFile = stateManager.getStateFilePath(root, RUN_ID);
+    const lockFile = `${stateFile}.lock`;
+
+    writeLockRecord(stateFile, {
+      pid: DEAD_PID,
+      host: os.hostname(),
+      acquiredAt: new Date(Date.now() - 120000).toISOString()
+    });
+    const reclaimed = runOrch(['checkpoint', '--run-id', RUN_ID, '--step', '4', '--progress', '{}'], root);
+    assert.equal(reclaimed.status, 0, `the configured 60000 ms threshold reclaims the stale lock: ${reclaimed.stderr}`);
+    assert.equal(stateManager.loadRunState(root, RUN_ID).revision, 1, 'the reclaimed mutation landed');
+    assert.equal(fs.existsSync(lockFile), false, 'the reclaimed lock is released after the write');
+
+    // The same shape at 30 s stays: it is younger than the configured threshold.
+    writeLockRecord(stateFile, {
+      pid: DEAD_PID,
+      host: os.hostname(),
+      acquiredAt: new Date(Date.now() - 30000).toISOString()
+    });
+    const young = runOrch(['checkpoint', '--run-id', RUN_ID, '--step', '4', '--progress', '{}'], root);
+    assert.equal(young.status, 1, 'a lock younger than the threshold is never reclaimed');
+    assert.match(young.stderr, /younger than lockStaleMs=60000/);
+    assert.ok(fs.existsSync(lockFile), 'the young lock stays in place');
+    assert.equal(stateManager.loadRunState(root, RUN_ID).revision, 1, 'the refused mutation did not advance the revision');
+  } finally {
+    cleanup(root);
+  }
+});
+
+// Spec 00019 AC9 & AC10: absence of the owner cannot be proven across hosts.
+test('AC9: a stale lock from another host is never reclaimed automatically', () => {
+  const root = makeRoot();
+  try {
+    const stateFile = stateManager.getStateFilePath(root, RUN_ID);
+    const lockFile = writeLockRecord(stateFile, {
+      pid: DEAD_PID,
+      host: 'sdw-foreign-host',
+      acquiredAt: new Date(Date.now() - 600000).toISOString()
+    });
+
+    const result = runOrch(['checkpoint', '--run-id', RUN_ID, '--step', '4', '--progress', '{}'], root);
+    assert.equal(result.status, 1, 'a foreign-host lock is not reclaimed');
+    assert.match(result.stderr, /another host/, 'the refusal explains that the owner cannot be verified here');
+    assert.match(result.stderr, /delete the lock file manually/i, 'the refusal states the manual remediation');
+    assert.ok(fs.existsSync(lockFile), 'the foreign lock stays in place');
+    assert.equal(stateManager.loadRunState(root, RUN_ID).revision, 0, 'the refused mutation did not advance the revision');
+  } finally {
+    cleanup(root);
+  }
+});
+
+// Spec 00019 AC10.
+test('AC10: a live run lock blocks mutation with an actionable owner message', () => {
+  const root = makeRoot();
+  try {
+    const stateFile = stateManager.getStateFilePath(root, RUN_ID);
+    const owner = { pid: process.pid, host: os.hostname(), acquiredAt: new Date().toISOString() };
+    const lockFile = writeLockRecord(stateFile, owner);
+
+    const result = runOrch(['checkpoint', '--run-id', RUN_ID, '--step', '4', '--progress', '{}'], root);
+    assert.equal(result.status, 1, `a held lock fails the mutation: ${result.stderr}`);
+    assert.ok(result.stderr.includes(`pid ${owner.pid}`), 'the message names the owner pid');
+    assert.ok(result.stderr.includes(owner.host), 'the message names the owner host');
+    assert.ok(result.stderr.includes(stateManager.normalizePath(lockFile)), 'the message names the lock file');
+    assert.match(result.stderr, /delete the lock file manually/, 'the message states the manual remediation');
+    assert.doesNotMatch(result.stderr, /at Object\./, 'the refusal is not an unhandled stack trace');
+
+    assert.equal(stateManager.loadRunState(root, RUN_ID).revision, 0, 'the blocked mutation leaves the state untouched');
+    assert.throws(
+      () => stateManager.recordWarning(root, RUN_ID, 4, 'blocked'),
+      err => err.code === 'RUN_LOCKED',
+      'the helper refuses a direct mutation while the lock is held'
+    );
+  } finally {
+    cleanup(root);
+  }
+});
+
+// Spec 00019 AC10: a younger lock is not reclaimed even after the owner disappears.
+test('AC10: a lock younger than lockStaleMs is not reclaimed even when its owner is gone', () => {
+  const root = makeRoot();
+  try {
+    const stateFile = stateManager.getStateFilePath(root, RUN_ID);
+    const lockFile = writeLockRecord(stateFile, {
+      pid: DEAD_PID,
+      host: os.hostname(),
+      acquiredAt: new Date().toISOString()
+    });
+
+    const result = runOrch(['pause-turn', '--run-id', RUN_ID, '--step', '4', '--reason', 'host turn ended', '--next-action', 'resume'], root);
+    assert.equal(result.status, 1, 'a young lock blocks mutation until it is stale');
+    assert.match(result.stderr, /younger than lockStaleMs=300000/, 'the refusal names the default threshold');
+    assert.match(result.stderr, /delete the lock file manually/, 'the refusal states the manual remediation');
+    assert.ok(fs.existsSync(lockFile), 'the young lock stays in place');
+    assert.equal(stateManager.loadRunState(root, RUN_ID).revision, 0, 'the refused mutation did not advance the revision');
+  } finally {
+    cleanup(root);
+  }
+});
+
+// Spec 00019 AC11: a finished run refreshes reports but re-executes no step.
+test('AC11: resume of a run whose steps are all resolved re-executes no step', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-state-complete-'));
+  try {
+    fs.mkdirSync(path.join(root, '.sdw', 'specs'), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, '.sdw', 'specs', 'complete-demo.md'),
+      '# Complete Demo\n\n## Acceptance Criteria\n\n- AC1: The system shall stay complete.\n',
+      'utf8'
+    );
+    stateManager.createRunState({ root, specPath: '.sdw/specs/complete-demo.md', slug: 'complete-demo', runId: RUN_ID });
+    for (let step = 1; step <= 8; step++) {
+      stateManager.updateStepState(root, RUN_ID, step, step === 2 ? 'skipped' : 'completed', { step });
+    }
+    const before = stateManager.loadRunState(root, RUN_ID);
+    const stateFile = stateManager.getStateFilePath(root, RUN_ID);
+
+    const result = runOrch(['resume', '--run-id', RUN_ID], root);
+    assert.equal(result.status, 0, `resuming a resolved run exits 0: ${result.stderr}`);
+    assert.match(result.stdout, /already complete \(all 8 steps resolved\); refreshing reports without re-executing completed steps/);
+
+    const after = stateManager.loadRunState(root, RUN_ID);
+    assert.deepEqual(after.steps, before.steps, 'no resolved step is re-executed or rewritten');
+    assert.equal(after.status, 'completed', 'the run stays completed');
+    assert.equal(fs.existsSync(`${stateFile}.lock`), false, 'the resume leaves no lock behind');
+  } finally {
+    cleanup(root);
+  }
+});
+
+// Spec 00019 AC11: repeated resume of an open run touches no completed step.
+test('AC11: repeated resume leaves completed steps untouched and reports the pending task', () => {
+  const root = makeRoot();
+  try {
+    stateManager.updateStepState(root, RUN_ID, 1, 'completed', { derivationNeeded: false });
+    stateManager.updateStepState(root, RUN_ID, 2, 'completed', { mode: 'refine' });
+    stateManager.updateStepState(root, RUN_ID, 3, 'completed', {
+      tasks: [
+        { id: 'task-1', title: 'Task 1', dependencies: [] },
+        { id: 'task-2', title: 'Task 2', dependencies: ['task-1'] }
+      ]
+    });
+    stateManager.updateStepState(root, RUN_ID, 4, 'in_progress');
+    const before = stateManager.loadRunState(root, RUN_ID);
+
+    const first = runOrch(['resume', '--run-id', RUN_ID], root);
+    assert.equal(first.status, 4, `resume waits for the pending task: ${first.stderr}`);
+    assert.match(first.stdout, /\[PENDING\] task-1: Task 1/);
+    const second = runOrch(['resume', '--run-id', RUN_ID], root);
+    assert.equal(second.status, 4, `a second resume reaches the same point: ${second.stderr}`);
+
+    const after = stateManager.loadRunState(root, RUN_ID);
+    assert.equal(after.revision, before.revision, 'resume of an unresolved run does not mutate state');
+    assert.deepEqual(after.steps[1], before.steps[1], 'step 1 is not re-executed');
+    assert.deepEqual(after.steps[2], before.steps[2], 'step 2 is not re-executed');
+    assert.deepEqual(after.steps[3], before.steps[3], 'step 3 is not re-executed');
   } finally {
     cleanup(root);
   }

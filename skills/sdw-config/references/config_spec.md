@@ -11,7 +11,7 @@ Consumer projects following the Spec-Driven Workflow (SDW) standard store projec
     ├── config.schema.json       # JSON Schema definition for config.json validation
     ├── directory-structure.md   # Structural guidelines and layout rules
     ├── specs/                   # Target directory for canonical specifications
-    └── state/                   # Ephemeral execution run state files (*.state.json)
+    └── state/                   # Ephemeral execution run state files (*.state.json) and run locks (*.state.json.lock)
 ```
 
 ### 1.1 Components
@@ -193,6 +193,12 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
       "type": "string",
       "description": "Path to the directory storing run session state files. Supports tokens {projectRoot} and {skillsRoot}.",
       "default": "{projectRoot}/.sdw/state"
+    },
+    "lockStaleMs": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Age in milliseconds after which an abandoned run lock ({stateFile}.lock) may be reclaimed, and only when the recorded owner process is proven absent. A younger lock always blocks mutation.",
+      "default": 300000
     },
     "sandboxDir": {
       "type": "string",
@@ -418,6 +424,7 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
 | `changelogEnabled` | `boolean` | `true` | Enable appending delivery records to the project changelog; `false` skips the append with exit `0` and writes nothing |
 | `changelogFile` | `string` | `"{projectRoot}/CHANGELOG.md"` | Changelog path; supports `{projectRoot}` and must resolve inside the project root |
 | `stateDir` | `string` | `"{projectRoot}/.sdw/state"` | Path to isolated execution run state directory (supports `{projectRoot}` and `{skillsRoot}`) |
+| `lockStaleMs` | `integer` | `300000` | Age in milliseconds after which an abandoned run lock (`{stateFile}.lock`) may be reclaimed; reclamation also requires the recorded owner process to be proven absent, and a younger lock always blocks mutation |
 | `sandboxDir` | `string` | `"{projectRoot}/.sdw/sandbox"` | Root directory for `sdw-orch --sandbox` clones; each run creates `{sandboxDir}/{runId}/repo`. Supports `{projectRoot}`, `{skillsRoot}`, and `{temp}` (OS temp directory). A custom value must resolve **outside** the project root; only the default may live inside it |
 | `skillsRoot` | `string` | — | Path to the active skills directory (supports `{projectRoot}` and `{skillsRoot}`) |
 | `autoResolveGaps` | `boolean` | `true` | Whether to auto-apply recommended grilling defaults when non-interactive |
@@ -477,6 +484,7 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
   "changelogEnabled": true,
   "changelogFile": "{projectRoot}/CHANGELOG.md",
   "stateDir": "{projectRoot}/.sdw/state",
+  "lockStaleMs": 300000,
   "sandboxDir": "{projectRoot}/.sdw/sandbox",
   "autoResolveGaps": true,
   "securityChecksEnabled": false,

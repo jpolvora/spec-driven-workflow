@@ -6,6 +6,7 @@ const path = require('path');
 const { execSync, spawnSync } = require('child_process');
 
 const stateManager = require('./state_manager.cjs');
+const runLock = require('./run_lock.cjs');
 const specDerivation = require('./spec_derivation.cjs');
 const specGrilling = require('./spec_grilling.cjs');
 const dagPlanner = require('./dag_planner.cjs');
@@ -4954,6 +4955,13 @@ function cmdResume(options) {
     return 1;
   }
 
+  // AC11: every step that is already completed or skipped is skipped by the
+  // guards in cmdRun; a fully resolved run only refreshes its reports. Announce
+  // that, so resume never implies re-executing a completed step.
+  if (stateManager.isRunComplete(state)) {
+    console.log(`[sdw-orch resume] Run "${state.runId}" is already complete (all ${state.totalSteps} steps resolved); refreshing reports without re-executing completed steps.`);
+  }
+
   // AC4: a turn pause is a handoff, not a stall. Announce the recorded next
   // action and continue from the paused step; a pause never completes the step,
   // so an unchanged revision is expected and must not block the resume.
@@ -5481,52 +5489,62 @@ function main() {
   }
 
   let code = 0;
-  switch (options.subcommand) {
-    case 'run':
-      if (options.specPaths && options.specPaths.length > 1) {
-        console.error('[sdw-orch] Error: "run" executes exactly one specification. Use "sdw-batch run <spec...>" for a queue of specifications.');
+  try {
+    switch (options.subcommand) {
+      case 'run':
+        if (options.specPaths && options.specPaths.length > 1) {
+          console.error('[sdw-orch] Error: "run" executes exactly one specification. Use "sdw-batch run <spec...>" for a queue of specifications.');
+          code = 1;
+        } else {
+          code = cmdRun(options);
+        }
+        break;
+      case 'resume':
+        code = cmdResume(options);
+        break;
+      case 'checkpoint':
+        code = cmdCheckpoint(options);
+        break;
+      case 'pause-turn':
+        code = cmdPauseTurn(options);
+        break;
+      case 'task-finish':
+        code = cmdTaskFinish(options);
+        break;
+      case 'task-next':
+        code = cmdTaskNext(options);
+        break;
+      case 'task-abandon':
+        code = cmdTaskAbandon(options);
+        break;
+      case 'score-submit':
+        code = cmdScoreSubmit(options);
+        break;
+      case 'report-re-render':
+        code = cmdReportReRender(options);
+        break;
+      case 'status':
+        code = cmdStatus(options);
+        break;
+      case 'dag-preview':
+        code = cmdDagPreview(options);
+        break;
+      case 'sandbox':
+        code = cmdSandbox(options);
+        break;
+      default:
+        console.error(`Unknown subcommand: "${options.subcommand}". Run with --help for usage.`);
         code = 1;
-      } else {
-        code = cmdRun(options);
-      }
-      break;
-    case 'resume':
-      code = cmdResume(options);
-      break;
-    case 'checkpoint':
-      code = cmdCheckpoint(options);
-      break;
-    case 'pause-turn':
-      code = cmdPauseTurn(options);
-      break;
-    case 'task-finish':
-      code = cmdTaskFinish(options);
-      break;
-    case 'task-next':
-      code = cmdTaskNext(options);
-      break;
-    case 'task-abandon':
-      code = cmdTaskAbandon(options);
-      break;
-    case 'score-submit':
-      code = cmdScoreSubmit(options);
-      break;
-    case 'report-re-render':
-      code = cmdReportReRender(options);
-      break;
-    case 'status':
-      code = cmdStatus(options);
-      break;
-    case 'dag-preview':
-      code = cmdDagPreview(options);
-      break;
-    case 'sandbox':
-      code = cmdSandbox(options);
-      break;
-    default:
-      console.error(`Unknown subcommand: "${options.subcommand}". Run with --help for usage.`);
+        break;
+    }
+  } catch (err) {
+    // AC10: a held run lock must fail as an actionable message, never a stack trace.
+    if (runLock.isRunLockError(err)) {
+      console.error(`Error: ${err.message}`);
       code = 1;
-      break;
+    } else {
+      throw err;
+    }
   }
 
   try {

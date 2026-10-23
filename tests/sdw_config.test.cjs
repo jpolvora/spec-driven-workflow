@@ -38,6 +38,36 @@ test('sdw-config: loadConfig parses {projectRoot} tokens and provides defaults',
   }
 });
 
+test('00019 AC9: lockStaleMs is a positive integer key with a 300000 ms default', () => {
+  assert.equal(sdwConfig.DEFAULT_CONFIG.lockStaleMs, 300000, 'the default stale threshold is five minutes');
+  assert.equal(sdwConfig.DEFAULT_SCHEMA.properties.lockStaleMs.default, 300000, 'the schema publishes the same default');
+  assert.equal(sdwConfig.DEFAULT_SCHEMA.properties.lockStaleMs.minimum, 1, 'the schema rejects a zero threshold');
+
+  const valid = sdwConfig.validateConfigSchema({ specsDir: '.sdw/specs', lockStaleMs: 1000 });
+  assert.equal(valid.valid, true, 'a positive integer threshold is valid');
+  assert.equal(valid.errors.length, 0);
+
+  for (const value of [0, -1, 1.5, '300000', null]) {
+    const invalid = sdwConfig.validateConfigSchema({ specsDir: '.sdw/specs', lockStaleMs: value });
+    assert.equal(invalid.valid, false, `lockStaleMs ${JSON.stringify(value)} is rejected`);
+    assert.ok(invalid.errors.some(err => err.includes('lockStaleMs')), 'the error names the key');
+  }
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-cfg-lock-'));
+  try {
+    assert.equal(sdwConfig.loadConfig(tmpDir).lockStaleMs, 300000, 'loadConfig applies the default when the file omits the key');
+    fs.mkdirSync(path.join(tmpDir, '.sdw'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, '.sdw', 'config.json'),
+      JSON.stringify({ specsDir: '{projectRoot}/.sdw/specs', lockStaleMs: 2500 }, null, 2),
+      'utf8'
+    );
+    assert.equal(sdwConfig.loadConfig(tmpDir).lockStaleMs, 2500, 'loadConfig reads the configured threshold');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test('sdw-config: validateConfigSchema verifies valid and rejects invalid types/bounds', () => {
   // Valid config
   const valid = sdwConfig.validateConfigSchema({

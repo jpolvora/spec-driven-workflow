@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const runLock = require('./run_lock.cjs');
 
 function normalizePath(p) {
   return p.replace(/\\/g, '/');
@@ -42,6 +43,30 @@ function generateRunId(specSlug) {
 function getStateFilePath(targetRoot, runId) {
   const stateDir = resolveStateDir(targetRoot);
   return path.join(stateDir, `${runId}.state.json`);
+}
+
+// AC9: lockStaleMs is a project configuration key. An absent or invalid value
+// keeps the documented 300000 ms default.
+function resolveLockStaleMs(targetRoot) {
+  const root = targetRoot ? path.resolve(targetRoot) : process.cwd();
+  try {
+    const configFile = path.join(root, '.sdw', 'config.json');
+    if (fs.existsSync(configFile)) {
+      const raw = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+      if (Number.isInteger(raw.lockStaleMs) && raw.lockStaleMs > 0) {
+        return raw.lockStaleMs;
+      }
+    }
+  } catch (e) {
+    // An unreadable configuration never disables the run lock.
+  }
+  return runLock.DEFAULT_STALE_MS;
+}
+
+// AC9-AC10: every read-modify-write of a run state file runs under the run lock.
+// The lock is reentrant, so a helper that calls saveRunState locks only once.
+function withStateLock(targetRoot, stateFilePath, fn) {
+  return runLock.withLock(stateFilePath, fn, { staleMs: resolveLockStaleMs(targetRoot) });
 }
 
 // AC6: a state write becomes visible only after the temporary file is complete.
@@ -92,76 +117,79 @@ function createRunState(options) {
   const runId = options.runId || generateRunId(specSlug);
   const stateFilePath = getStateFilePath(targetRoot, runId);
 
-  // If state already exists for this runId and overwrite is not forced, return existing state
-  if (!options.overwrite && fs.existsSync(stateFilePath)) {
-    try {
-      const existing = JSON.parse(fs.readFileSync(stateFilePath, 'utf8'));
-      if (!existing.artifactsDir) {
-        existing.artifactsDir = getArtifactsRelDir(targetRoot, existing.specSlug || specSlug, existing.runId || runId);
+  // AC9: creating or overwriting a run state is a mutation guarded by the run lock.
+  return withStateLock(targetRoot, stateFilePath, () => {
+    // If state already exists for this runId and overwrite is not forced, return existing state
+    if (!options.overwrite && fs.existsSync(stateFilePath)) {
+      try {
+        const existing = JSON.parse(fs.readFileSync(stateFilePath, 'utf8'));
+        if (!existing.artifactsDir) {
+          existing.artifactsDir = getArtifactsRelDir(targetRoot, existing.specSlug || specSlug, existing.runId || runId);
+        }
+        return existing;
+      } catch (e) {
+        // If corrupted, recreate
       }
-      return existing;
-    } catch (e) {
-      // If corrupted, recreate
     }
-  }
 
-  const artifactsRelDir = getArtifactsRelDir(targetRoot, specSlug, runId);
+    const artifactsRelDir = getArtifactsRelDir(targetRoot, specSlug, runId);
 
-  const state = {
-    orchestrator: 'sdw-orch',
-    runId,
-    specSlug,
-    specPath,
-    projectRoot: normalizePath(targetRoot),
-    status: 'in_progress', // 'in_progress' | 'paused' | 'completed' | 'failed'
-    revision: 0,
-    currentStep: 1,
-    totalSteps: 8,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    baseCommit: options.baseCommit || null,
-    refineMode: Boolean(options.refineMode),
-    deliveryCommitCreated: null,
-    branch: options.branch || null,
-    baseBranch: options.baseBranch || null,
-    branchReused: Boolean(options.branchReused),
-    branching: options.branching || null,
-    branchingSync: options.branchingSync || null,
-    worktrees: [],
-    worktreeSkipReason: null,
-    runtimeOverrides: options.runtimeOverrides || null,
-    scm: options.scm || {
-      provider: 'none',
-      resolvedFrom: 'default',
-      cliInstalled: null,
-      cliAuthenticated: null,
-      skipped: false,
-      skipReason: null,
-      errors: []
-    },
-    deliveryCommit: null,
-    reviewCommit: null,
-    score: null,
-    scoreIteration: 0,
-    reviewIteration: 0,
-    dagTasks: [],
-    artifactsDir: options.artifactsDir || artifactsRelDir,
-    steps: {
-      1: { name: 'derivation', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null },
-      2: { name: 'refinement', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null },
-      3: { name: 'dag_generation', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null },
-      4: { name: 'implementation', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null, tasks: {}, gates: {}, dispatch: { activeTaskId: null, sequence: 0, dispatchedAt: null, abandonments: [] } },
-      5: { name: 'scoring', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null },
-      6: { name: 'delivery_commit', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null },
-      7: { name: 'code_review', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null },
-      8: { name: 'pr_preparation', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null }
-    },
-    errors: [],
-    stepCheckpoints: {},
-    turnPause: null
-  };
-  writeStateFileAtomic(stateFilePath, state);
-  return state;
+    const state = {
+      orchestrator: 'sdw-orch',
+      runId,
+      specSlug,
+      specPath,
+      projectRoot: normalizePath(targetRoot),
+      status: 'in_progress', // 'in_progress' | 'paused' | 'completed' | 'failed'
+      revision: 0,
+      currentStep: 1,
+      totalSteps: 8,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      baseCommit: options.baseCommit || null,
+      refineMode: Boolean(options.refineMode),
+      deliveryCommitCreated: null,
+      branch: options.branch || null,
+      baseBranch: options.baseBranch || null,
+      branchReused: Boolean(options.branchReused),
+      branching: options.branching || null,
+      branchingSync: options.branchingSync || null,
+      worktrees: [],
+      worktreeSkipReason: null,
+      runtimeOverrides: options.runtimeOverrides || null,
+      scm: options.scm || {
+        provider: 'none',
+        resolvedFrom: 'default',
+        cliInstalled: null,
+        cliAuthenticated: null,
+        skipped: false,
+        skipReason: null,
+        errors: []
+      },
+      deliveryCommit: null,
+      reviewCommit: null,
+      score: null,
+      scoreIteration: 0,
+      reviewIteration: 0,
+      dagTasks: [],
+      artifactsDir: options.artifactsDir || artifactsRelDir,
+      steps: {
+        1: { name: 'derivation', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null },
+        2: { name: 'refinement', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null },
+        3: { name: 'dag_generation', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null },
+        4: { name: 'implementation', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null, tasks: {}, gates: {}, dispatch: { activeTaskId: null, sequence: 0, dispatchedAt: null, abandonments: [] } },
+        5: { name: 'scoring', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null },
+        6: { name: 'delivery_commit', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null },
+        7: { name: 'code_review', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null },
+        8: { name: 'pr_preparation', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null }
+      },
+      errors: [],
+      stepCheckpoints: {},
+      turnPause: null
+    };
+    writeStateFileAtomic(stateFilePath, state);
+    return state;
+  });
 }
 
 function loadRunState(targetRoot, runId) {
@@ -218,10 +246,13 @@ function writeStepCheckpoint(state, stepNum, status, recordedAt) {
 
 function saveRunState(targetRoot, state) {
   const stateFilePath = getStateFilePath(targetRoot, state.runId);
-  state.revision = nextRevision(state);
-  state.updatedAt = new Date().toISOString();
-  writeStateFileAtomic(stateFilePath, state);
-  return state;
+  // AC9: the write is the mutation boundary; a live foreign lock fails here.
+  return withStateLock(targetRoot, stateFilePath, () => {
+    state.revision = nextRevision(state);
+    state.updatedAt = new Date().toISOString();
+    writeStateFileAtomic(stateFilePath, state);
+    return state;
+  });
 }
 
 function getResumptionStep(state) {
@@ -232,6 +263,20 @@ function getResumptionStep(state) {
     }
   }
   return state.totalSteps;
+}
+
+// AC11: a run whose every step is resolved has nothing to resume. Callers use
+// this to return without re-executing a step or advancing the revision.
+function isRunComplete(state) {
+  if (!state || typeof state !== 'object' || !state.steps) return false;
+  const totalSteps = Number.isInteger(state.totalSteps) ? state.totalSteps : 8;
+  for (let s = 1; s <= totalSteps; s++) {
+    const stepObj = state.steps[s];
+    if (!stepObj || (stepObj.status !== 'completed' && stepObj.status !== 'skipped')) {
+      return false;
+    }
+  }
+  return totalSteps > 0;
 }
 
 // AC8: resume continues only from a complete state file whose revision is a
@@ -251,32 +296,38 @@ function validateResumableState(state) {
 }
 
 function recordError(targetRoot, runId, stepNum, errorMessage) {
-  const state = loadRunState(targetRoot, runId);
-  const now = new Date().toISOString();
-  state.errors.push({ step: stepNum, timestamp: now, error: String(errorMessage) });
-  state.status = 'failed';
-  if (state.steps[stepNum]) {
-    state.steps[stepNum].status = 'failed';
-    state.steps[stepNum].error = String(errorMessage);
-    writeStepCheckpoint(state, stepNum, 'failed', now);
-  }
-  return saveRunState(targetRoot, state);
+  return withStateLock(targetRoot, getStateFilePath(targetRoot, runId), () => {
+    const state = loadRunState(targetRoot, runId);
+    const now = new Date().toISOString();
+    state.errors.push({ step: stepNum, timestamp: now, error: String(errorMessage) });
+    state.status = 'failed';
+    if (state.steps[stepNum]) {
+      state.steps[stepNum].status = 'failed';
+      state.steps[stepNum].error = String(errorMessage);
+      writeStepCheckpoint(state, stepNum, 'failed', now);
+    }
+    return saveRunState(targetRoot, state);
+  });
 }
 
 function recordWarning(targetRoot, runId, stepNum, warningMessage) {
-  const state = loadRunState(targetRoot, runId);
-  const now = new Date().toISOString();
-  state.errors = state.errors || [];
-  state.errors.push({ step: stepNum, timestamp: now, error: String(warningMessage), warning: true });
-  return saveRunState(targetRoot, state);
+  return withStateLock(targetRoot, getStateFilePath(targetRoot, runId), () => {
+    const state = loadRunState(targetRoot, runId);
+    const now = new Date().toISOString();
+    state.errors = state.errors || [];
+    state.errors.push({ step: stepNum, timestamp: now, error: String(warningMessage), warning: true });
+    return saveRunState(targetRoot, state);
+  });
 }
 
 function recordStepArtifact(targetRoot, runId, stepNum, artifactRelPath) {
-  const state = loadRunState(targetRoot, runId);
-  if (state.steps && state.steps[stepNum]) {
-    state.steps[stepNum].artifact = normalizePath(artifactRelPath);
-  }
-  return saveRunState(targetRoot, state);
+  return withStateLock(targetRoot, getStateFilePath(targetRoot, runId), () => {
+    const state = loadRunState(targetRoot, runId);
+    if (state.steps && state.steps[stepNum]) {
+      state.steps[stepNum].artifact = normalizePath(artifactRelPath);
+    }
+    return saveRunState(targetRoot, state);
+  });
 }
 
 // AC2: store arbitrary, caller-supplied progress JSON for one step. The step's
@@ -286,12 +337,14 @@ function recordCheckpoint(targetRoot, runId, stepNum, progress) {
   if (!Number.isInteger(step) || step < 1) {
     throw new Error(`Invalid checkpoint step "${stepNum}". Expected a positive integer.`);
   }
-  const state = loadRunState(targetRoot, runId);
-  const stepObj = state.steps && state.steps[step];
-  const checkpoint = writeStepCheckpoint(state, step, stepObj ? stepObj.status : 'unknown', new Date().toISOString());
-  checkpoint.progress = progress === undefined ? null : progress;
-  saveRunState(targetRoot, state);
-  return { state, checkpoint };
+  return withStateLock(targetRoot, getStateFilePath(targetRoot, runId), () => {
+    const state = loadRunState(targetRoot, runId);
+    const stepObj = state.steps && state.steps[step];
+    const checkpoint = writeStepCheckpoint(state, step, stepObj ? stepObj.status : 'unknown', new Date().toISOString());
+    checkpoint.progress = progress === undefined ? null : progress;
+    saveRunState(targetRoot, state);
+    return { state, checkpoint };
+  });
 }
 
 // AC3: record an explicit turn-boundary pause. A pause is a handoff marker, not
@@ -305,85 +358,93 @@ function recordTurnPause(targetRoot, runId, stepNum, reason, nextAction) {
   const cleanNextAction = String(nextAction === undefined || nextAction === null ? '' : nextAction).trim();
   if (!cleanReason) throw new Error('A turn pause requires a non-empty reason.');
   if (!cleanNextAction) throw new Error('A turn pause requires a non-empty next action.');
-  const state = loadRunState(targetRoot, runId);
-  state.turnPause = {
-    step,
-    reason: cleanReason,
-    nextAction: cleanNextAction,
-    recordedAt: new Date().toISOString()
-  };
-  saveRunState(targetRoot, state);
-  return { state, turnPause: state.turnPause };
+  return withStateLock(targetRoot, getStateFilePath(targetRoot, runId), () => {
+    const state = loadRunState(targetRoot, runId);
+    state.turnPause = {
+      step,
+      reason: cleanReason,
+      nextAction: cleanNextAction,
+      recordedAt: new Date().toISOString()
+    };
+    saveRunState(targetRoot, state);
+    return { state, turnPause: state.turnPause };
+  });
 }
 
 function updateStepState(targetRoot, runId, stepNum, status, outputData, error, options) {
-  const state = loadRunState(targetRoot, runId);
-  const now = new Date().toISOString();
-  if (!state.steps[stepNum]) {
-    state.steps[stepNum] = { name: `step_${stepNum}`, status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null };
-  }
-
-  const stepObj = state.steps[stepNum];
-  stepObj.status = status;
-  if (status === 'in_progress' && !stepObj.startedAt) {
-    stepObj.startedAt = now;
-  }
-  if (status === 'completed' || status === 'skipped') {
-    stepObj.completedAt = now;
-  }
-  if (outputData !== undefined) {
-    stepObj.output = outputData;
-  }
-
-  let opt = options;
-  if (error && typeof error === 'object' && !error.message && !Array.isArray(error) && (error.artifact || error.artifactsDir)) {
-    opt = error;
-    error = null;
-  }
-  if (opt && opt.artifact) {
-    stepObj.artifact = normalizePath(opt.artifact);
-  }
-  if (opt && opt.artifactsDir) {
-    state.artifactsDir = normalizePath(opt.artifactsDir);
-  }
-
-  if (error) {
-    stepObj.error = error;
-    state.errors.push({ step: stepNum, timestamp: now, error: String(error) });
-    state.status = 'failed';
-  }
-
-  state.currentStep = stepNum;
-  writeStepCheckpoint(state, stepNum, status, now);
-  // AC5: a finished step consumes its checkpoint and any turn pause that targets
-  // it. Only this step's records are cleared; another step's pause still stands.
-  if (status === 'completed' || status === 'skipped') {
-    delete state.stepCheckpoints[String(stepNum)];
-    if (state.turnPause && Number(state.turnPause.step) === Number(stepNum)) {
-      state.turnPause = null;
+  return withStateLock(targetRoot, getStateFilePath(targetRoot, runId), () => {
+    const state = loadRunState(targetRoot, runId);
+    const now = new Date().toISOString();
+    if (!state.steps[stepNum]) {
+      state.steps[stepNum] = { name: `step_${stepNum}`, status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null };
     }
-  }
-  return saveRunState(targetRoot, state);
+
+    const stepObj = state.steps[stepNum];
+    stepObj.status = status;
+    if (status === 'in_progress' && !stepObj.startedAt) {
+      stepObj.startedAt = now;
+    }
+    if (status === 'completed' || status === 'skipped') {
+      stepObj.completedAt = now;
+    }
+    if (outputData !== undefined) {
+      stepObj.output = outputData;
+    }
+
+    let opt = options;
+    if (error && typeof error === 'object' && !error.message && !Array.isArray(error) && (error.artifact || error.artifactsDir)) {
+      opt = error;
+      error = null;
+    }
+    if (opt && opt.artifact) {
+      stepObj.artifact = normalizePath(opt.artifact);
+    }
+    if (opt && opt.artifactsDir) {
+      state.artifactsDir = normalizePath(opt.artifactsDir);
+    }
+
+    if (error) {
+      stepObj.error = error;
+      state.errors.push({ step: stepNum, timestamp: now, error: String(error) });
+      state.status = 'failed';
+    }
+
+    state.currentStep = stepNum;
+    writeStepCheckpoint(state, stepNum, status, now);
+    // AC5: a finished step consumes its checkpoint and any turn pause that targets
+    // it. Only this step's records are cleared; another step's pause still stands.
+    if (status === 'completed' || status === 'skipped') {
+      delete state.stepCheckpoints[String(stepNum)];
+      if (state.turnPause && Number(state.turnPause.step) === Number(stepNum)) {
+        state.turnPause = null;
+      }
+    }
+    return saveRunState(targetRoot, state);
+  });
 }
 
 function updateTaskState(targetRoot, runId, taskId, taskState) {
-  const state = loadRunState(targetRoot, runId);
-  if (!state.steps[4]) {
-    state.steps[4] = { name: 'implementation', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null, tasks: {}, gates: {} };
-  }
-  state.steps[4].tasks = state.steps[4].tasks || {};
-  state.steps[4].tasks[taskId] = { ...(state.steps[4].tasks[taskId] || {}), ...taskState };
-  return saveRunState(targetRoot, state);
+  return withStateLock(targetRoot, getStateFilePath(targetRoot, runId), () => {
+    const state = loadRunState(targetRoot, runId);
+    if (!state.steps[4]) {
+      state.steps[4] = { name: 'implementation', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null, tasks: {}, gates: {} };
+    }
+    state.steps[4].tasks = state.steps[4].tasks || {};
+    state.steps[4].tasks[taskId] = { ...(state.steps[4].tasks[taskId] || {}), ...taskState };
+    return saveRunState(targetRoot, state);
+  });
 }
 
 function updateGateState(targetRoot, runId, gateName, gateState) {
-  const state = loadRunState(targetRoot, runId);
-  if (!state.steps[4]) {
-    state.steps[4] = { name: 'implementation', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null, tasks: {}, gates: {} };
-  }
-  state.steps[4].gates = state.steps[4].gates || {};
-  state.steps[4].gates[gateName] = { ...(state.steps[4].gates[gateName] || {}), ...gateState };
-  return saveRunState(targetRoot, state);
+  return withStateLock(targetRoot, getStateFilePath(targetRoot, runId), () => {
+    const state = loadRunState(targetRoot, runId);
+    if (!state.steps[4]) {
+      state.steps[4] = { name: 'implementation', status: 'pending', startedAt: null, completedAt: null, output: null, artifact: null, tasks: {}, gates: {} };
+    }
+    state.steps[4].gates = state.steps[4].gates || {};
+    state.steps[4].gates[gateName] = { ...(state.steps[4].gates[gateName] || {}), ...gateState };
+    return saveRunState(targetRoot, state);
+  });
 }
 
 module.exports = {
@@ -393,11 +454,13 @@ module.exports = {
   getArtifactsRelDir,
   generateRunId,
   getStateFilePath,
+  resolveLockStaleMs,
   createRunState,
   loadRunState,
   findLatestRunState,
   saveRunState,
   getResumptionStep,
+  isRunComplete,
   validateResumableState,
   recordError,
   recordWarning,

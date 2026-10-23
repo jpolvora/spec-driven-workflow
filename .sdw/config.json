@@ -30,6 +30,7 @@
   "changelogEnabled": true,
   "changelogFile": "{projectRoot}/CHANGELOG.md",
   "stateDir": "{projectRoot}/.sdw/state",
+  "lockStaleMs": 300000,
   "sandboxDir": "{projectRoot}/.sdw/sandbox",
   "skillsRoot": "{projectRoot}/skills",
   "autoResolveGaps": true,
