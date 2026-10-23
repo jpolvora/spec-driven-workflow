@@ -10,6 +10,8 @@ invocation_names:
   - sdw-spec new
   - sdw-spec import
   - sdw-spec sync
+  - sdw-spec sync-up
+  - sdw-spec sync-down
   - sdw-spec validate
   - sdw-spec update
   - sdw-spec archive
@@ -30,10 +32,14 @@ Specification lifecycle, authoring, synchronization, and formatting manager inte
 - `new <text>`: Synthesizes a canonical specification with autoincremented numerical prefix; header status `draft`.
 - `import`: Imports remote tracker items from GitHub issues or Azure DevOps work items using unified SCM contract.
 - `sync`: Reconciles `index.specs.md` against on-disk specification files and orchestrator run state files.
+- `sync-up [--root <path>] [--provider <github|azure-devops>] [--dry-run] [--json]`: Mirrors local specifications to the registered provider: creates an issue for a specification without `scmSpecId`, updates a linked one, and sends `pending` as `open` and `completed`/`archived` as `closed`.
+- `sync-down [--root <path>] [--provider <github|azure-devops>] [--dry-run] [--json]`: Mirrors remote tracker state into the registry, matching on `scmSpecId`, then the slug marker, then exact title; a completed row never reopens, and a body disagreement is reported as drift without writing either body.
 - `validate <specPath>`: Enforces validation against YAML frontmatter, section hierarchy, and EARS syntax rules.
 - `status <slug> <status>`: Changes the spec header status through the defined transitions.
 - `update`: Proposes a drift entry for changed files that the target specification already names; `--from <commit>` sets the comparison base (default `HEAD`), and `--apply` writes the reviewed insertion under `## Notes` without touching the header, status, or registry row.
 - `archive <slug>`: Transitions completed specifications to `archived` in `index.specs.md`.
+
+`sync-up` and `sync-down` are the only subcommands that call the provider. `--dry-run` contacts none: it resolves the provider name from configuration only, probes no CLI, and writes nothing. `sync-up` prints its planned creates, updates, and mapped states from local files; `sync-down` lists the linked rows a live run would reconcile and states that remote state is not queried.
 
 ## Declared Ranking Fields
 

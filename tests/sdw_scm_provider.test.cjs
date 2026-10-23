@@ -562,7 +562,7 @@ test('sdw-scm-provider - AzureDevOpsProvider.fetchWorkItem converts HTML and ext
   assert.strictEqual(item.source, 'azure-devops');
   assert.strictEqual(item.title, 'Implement User Session Management');
   assert.ok(item.description.includes('This is HTML formatted description with & entity.'));
-  assert.strictEqual(item.state, 'active');
+  assert.strictEqual(item.state, 'open', 'Active is a non-terminal state, so the contract reports it as open');
   assert.deepStrictEqual(item.tags, ['core', 'security']);
   assert.strictEqual(item.acceptanceCriteria.length, 2);
   assert.strictEqual(item.acceptanceCriteria[0], 'The system shall validate active session cookies.');
@@ -596,7 +596,7 @@ test('sdw-scm-provider - AzureDevOpsProvider.queryWorkItems executes WIQL and ma
   assert.strictEqual(items[0].id, '888');
   assert.strictEqual(items[0].source, 'azure-devops');
   assert.strictEqual(items[0].title, 'Query Work Item Title');
-  assert.strictEqual(items[0].state, 'new');
+  assert.strictEqual(items[0].state, 'open', 'a non-terminal work-item state is normalized to open');
   assert.deepStrictEqual(items[0].tags, ['backend']);
   assert.strictEqual(items[0].acceptanceCriteria.length, 1);
 });

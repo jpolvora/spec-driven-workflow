@@ -6,8 +6,9 @@
  * Provider implementations live in ./providers/ so each CLI adapter stays
  * reviewable on its own; this module keeps the public surface stable:
  * ScmProvider, GitHubProvider, AzureDevOpsProvider, createScmProvider,
- * resolveScmProvider, checkScmCapability, extractAcceptanceCriteria,
- * htmlToMarkdown, assertResolutionComment, plus the shared plumbing helpers.
+ * resolveScmProvider, checkScmCapability, providerSourceName,
+ * extractAcceptanceCriteria, htmlToMarkdown, assertResolutionComment, plus the
+ * shared plumbing helpers.
  */
 
 const { execSync } = require('child_process');
@@ -61,6 +62,19 @@ function resolveScmProvider({ config, explicit } = {}) {
   }
 
   return { provider: 'none', name: 'none', resolvedFrom: 'default', disabled: true };
+}
+
+/**
+ * Spec 00062: the frontmatter `source` vocabulary is `github` or
+ * `azure-devops`; the configuration and CLI accept the shorter `ado` alias.
+ * Both sync directions compare and persist through this single mapping so an
+ * `ado` run never writes a source that validation rejects.
+ */
+function providerSourceName(providerName) {
+  const norm = String(providerName || '').toLowerCase().trim();
+  if (norm === 'github' || norm === 'gh') return 'github';
+  if (norm === 'ado' || norm === 'az' || norm === 'azure-devops' || norm === 'azure_devops') return 'azure-devops';
+  return norm;
 }
 
 /**
@@ -125,6 +139,7 @@ module.exports = {
   createScmProvider,
   resolveScmProvider,
   checkScmCapability,
+  providerSourceName,
   extractAcceptanceCriteria,
   htmlToMarkdown,
   assertResolutionComment,

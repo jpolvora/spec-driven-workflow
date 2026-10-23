@@ -72,6 +72,121 @@ class GitHubProvider extends ScmProvider {
     }
   }
 
+  /**
+   * Spec 00062: creates a tracker issue for a specification. The issue URL is
+   * the source of the item id, so an unparsable answer is a failure, never an
+   * unlinked issue.
+   */
+  async createWorkItem(options = {}) {
+    const { title, body = '', state = 'open', dryRun = false } = options;
+    if (!title) {
+      throw new Error('title is required for GitHub createWorkItem.');
+    }
+    const cleanTitle = String(title).replace(/["`$\\]/g, '\\$&');
+
+    if (dryRun) {
+      return {
+        id: null,
+        url: null,
+        state,
+        dryRun: true,
+        command: `gh issue create --title "${cleanTitle}"`
+      };
+    }
+
+    let tempBodyFile = null;
+    try {
+      let bodyArg = '';
+      if (body) {
+        tempBodyFile = path.join(os.tmpdir(), `sdw-issue-body-${Date.now()}-${Math.random().toString(36).slice(2)}.md`);
+        fs.writeFileSync(tempBodyFile, body, 'utf8');
+        bodyArg = `--body-file "${tempBodyFile.replace(/\\/g, '/')}"`;
+      }
+
+      const output = String(this.executor(`gh issue create --title "${cleanTitle}" ${bodyArg}`.trim())).trim();
+      const idMatch = output.match(/\/issues\/(\d+)/);
+      if (!idMatch) {
+        throw new Error(`gh issue create returned no issue URL: ${output || '(empty output)'}`);
+      }
+      const id = idMatch[1];
+
+      let finalState = 'open';
+      if (String(state).toLowerCase() === 'closed') {
+        this.executor(`gh issue close ${id}`);
+        finalState = 'closed';
+      }
+      return { id, url: output, state: finalState, dryRun: false };
+    } catch (err) {
+      throw cliFailure('GitHub createWorkItem', err);
+    } finally {
+      if (tempBodyFile && fs.existsSync(tempBodyFile)) {
+        try { fs.unlinkSync(tempBodyFile); } catch (e) {}
+      }
+    }
+  }
+
+  /**
+   * Spec 00062: writes the local title, body, and state onto an existing issue.
+   * The current state is read first so the state transition is explicit and a
+   * close/reopen is only issued when it actually changes the issue.
+   */
+  async updateWorkItem(options = {}) {
+    const { id, title, body, state, dryRun = false } = options;
+    if (!id || !/^\d+$/.test(String(id).trim())) {
+      throw new Error(`Item identifier must be a valid numeric ID for GitHub updateWorkItem: ${id}`);
+    }
+    const safeId = String(id).trim();
+    const desiredClosed = state === undefined || state === null ? null : String(state).toLowerCase() === 'closed';
+
+    if (dryRun) {
+      return {
+        id: safeId,
+        url: null,
+        from: null,
+        state: state === undefined ? null : state,
+        dryRun: true,
+        command: `gh issue edit ${safeId}`
+      };
+    }
+
+    let tempBodyFile = null;
+    try {
+      const current = JSON.parse(this.executor(`gh issue view ${safeId} --json number,title,body,state,url`) || '{}');
+      const currentState = String(current.state || '').toLowerCase();
+
+      const titleArg = title && title !== current.title
+        ? `--title "${String(title).replace(/["`$\\]/g, '\\$&')}"`
+        : '';
+      let bodyArg = '';
+      if (body !== undefined && body !== null && String(body) !== String(current.body || '')) {
+        tempBodyFile = path.join(os.tmpdir(), `sdw-issue-update-${Date.now()}-${Math.random().toString(36).slice(2)}.md`);
+        fs.writeFileSync(tempBodyFile, body, 'utf8');
+        bodyArg = `--body-file "${tempBodyFile.replace(/\\/g, '/')}"`;
+      }
+
+      if (titleArg || bodyArg) {
+        this.executor(`gh issue edit ${safeId} ${titleArg} ${bodyArg}`.trim());
+      }
+
+      let nextState = currentState || 'open';
+      if (desiredClosed === true && nextState !== 'closed') {
+        this.executor(`gh issue close ${safeId}`);
+        nextState = 'closed';
+      } else if (desiredClosed === false && nextState === 'closed') {
+        this.executor(`gh issue reopen ${safeId}`);
+        nextState = 'open';
+      }
+
+      return { id: safeId, url: current.url || null, from: currentState || null, state: nextState, dryRun: false };
+    } catch (err) {
+      throw cliFailure('GitHub updateWorkItem', err);
+    } finally {
+      if (tempBodyFile && fs.existsSync(tempBodyFile)) {
+        try { fs.unlinkSync(tempBodyFile); } catch (e) {}
+      }
+    }
+  }
+
   async findActivePullRequest(options = {}) {
     const { head, base } = options;
     if (!head) throw new Error('head branch is required for GitHub findActivePullRequest.');

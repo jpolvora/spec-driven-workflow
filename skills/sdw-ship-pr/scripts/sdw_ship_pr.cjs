@@ -125,7 +125,9 @@ function resolveIssueLink(projectRoot, specSlug) {
     const files = fs.readdirSync(dir).filter((f) => !isReportCompanion(f) && (f === `${specSlug}.md` || f.replace(/^\d+-/, '').replace(/\.md$/, '') === normSlug));
     for (const f of files) {
       const content = fs.readFileSync(path.join(dir, f), 'utf8').split(/\r?\n/).slice(0, 25).join('\n');
-      const id = parseFrontmatterValue(content, 'id');
+      // Canonical identity is scmSpecId (spec 00062 AC18); legacy id stays a
+      // fallback so pre-migration specifications keep their closing keyword.
+      const id = parseFrontmatterValue(content, 'scmSpecId') || parseFrontmatterValue(content, 'id');
       const provider = parseFrontmatterValue(content, 'source');
       const formatKeyword = id ? ISSUE_CLOSING_KEYWORDS.get(provider || '') : null;
       const keyword = formatKeyword ? formatKeyword(id) : null;

@@ -7,7 +7,7 @@ const path = require('path');
 const os = require('os');
 const { spawnSync } = require('child_process');
 
-const { initIndex, readIndex, writeIndex, listIndex, archiveSpec, updateSpecStatus, scanSpecsDir, readDeclaredFields } = require('../skills/sdw-spec/scripts/spec_index.cjs');
+const { initIndex, readIndex, writeIndex, listIndex, archiveSpec, updateSpecStatus, scanSpecsDir, readDeclaredFields, parseFrontmatter } = require('../skills/sdw-spec/scripts/spec_index.cjs');
 const { getNextPrefix, createNewSpec, importRemoteSpec, toEarsCriterion } = require('../skills/sdw-spec/scripts/spec_creator.cjs');
 const { validate, validateFile } = require('../skills/sdw-spec/scripts/validate_spec.cjs');
 const { syncIndex } = require('../skills/sdw-spec/scripts/spec_sync.cjs');
@@ -1248,4 +1248,63 @@ test('00055 AC19: sdw-spec docs declare the subcommand and ranking fields within
   assert.match(standard, /'high' \| 'medium' \| 'low' \(default 'medium'\)/);
   assert.match(standard, /'S' \| 'M' \| 'L' \(default: unset\)/);
   assert.match(standard, /prefixes or slugs that land first \(default: empty\)/);
+});
+
+test('00062 AC17: the filename prefix is written and enforced as the immutable localSpecId', () => {
+  const { tmpDir } = setupTestWorkspace();
+  try {
+    const created = createNewSpec('Local identity demo', { root: tmpDir });
+    const original = fs.readFileSync(created.filePath, 'utf8');
+    const frontmatter = parseFrontmatter(original);
+
+    assert.strictEqual(frontmatter.localSpecId, created.prefix, 'creation records the prefix as localSpecId');
+    assert.strictEqual(path.basename(created.filePath), `${created.slug}.md`, 'the filename carries the same prefix');
+    assert.strictEqual(validateFile(created.filePath, { mode: 'authoring' }).ok, true);
+
+    const mismatched = original.replace(`localSpecId: "${created.prefix}"`, 'localSpecId: "00099"');
+    assert.notStrictEqual(mismatched, original, 'the fixture carries a localSpecId line to mismatch');
+    fs.writeFileSync(created.filePath, mismatched, 'utf8');
+
+    const rejected = validateFile(created.filePath, { mode: 'authoring' });
+    assert.strictEqual(rejected.ok, false);
+    assert.ok(
+      rejected.errors.some((error) => error.code === 'local-spec-id' && /filename prefix/.test(error.message)),
+      JSON.stringify(rejected.errors)
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('00062 AC18: a legacy id key reads as scmSpecId during migration', async () => {
+  const { tmpDir } = setupTestWorkspace();
+  try {
+    const created = createNewSpec('Legacy identity demo', { root: tmpDir });
+    const generated = fs.readFileSync(created.filePath, 'utf8');
+    const legacy = generated
+      .replace(/^localSpecId:.*\n/m, '')
+      .replace(/^id: null$/m, 'id: "4242"');
+    fs.writeFileSync(created.filePath, legacy, 'utf8');
+
+    const validated = validateFile(created.filePath, { mode: 'authoring' });
+    assert.strictEqual(validated.ok, true, JSON.stringify(validated.errors));
+    assert.strictEqual(validated.identity.scmSpecId, '4242', 'the legacy id reads as scmSpecId');
+    assert.strictEqual(validated.identity.localSpecId, created.prefix, 'the filename prefix stands in when localSpecId is absent');
+
+    const item = { id: '4242', title: 'Legacy identity demo', description: 'Remote body.', source: 'github', acceptanceCriteria: [] };
+    await assert.rejects(
+      importRemoteSpec({ root: tmpDir, provider: 'github', id: '4242', scmProvider: { fetchWorkItem: async () => item } }),
+      /already exists on disk/,
+      'the import guard reads the legacy id as the remote link'
+    );
+
+    fs.writeFileSync(created.filePath, legacy.replace(/^id: "4242"$/m, 'scmSpecId: "4242"'), 'utf8');
+    await assert.rejects(
+      importRemoteSpec({ root: tmpDir, provider: 'github', id: '4242', scmProvider: { fetchWorkItem: async () => item } }),
+      /already exists on disk/,
+      'a migrated scmSpecId key is read the same way'
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });
