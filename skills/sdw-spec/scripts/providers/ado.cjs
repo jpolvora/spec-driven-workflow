@@ -13,6 +13,29 @@ const {
   cliFailure
 } = require('./base.cjs');
 
+// Spec 00062: Azure DevOps states are process-specific. `Closed` and `Done`
+// both mean finished; every other work-item state is open. The mirroring
+// contract speaks `open`/`closed`, so the adapter translates at the CLI edge.
+function isAdoClosedState(state) {
+  const norm = String(state || '').toLowerCase();
+  return norm === 'closed' || norm === 'done';
+}
+
+// Azure DevOps stores System.Description as HTML. Encode line breaks as <br>
+// so a multi-line Markdown body survives a single CLI argument and round-trips
+// through fetchWorkItem's htmlToMarkdown.
+function adoDescription(markdown) {
+  return String(markdown)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\r?\n/g, '<br>');
+}
+
+function quoteCliArgument(value) {
+  return `"${String(value).replace(/(["\\$`])/g, '\\$1')}"`;
+}
+
 class AzureDevOpsProvider extends ScmProvider {
   async fetchWorkItem(itemId) {
     if (!itemId || !/^\d+$/.test(String(itemId).trim())) {
@@ -81,6 +104,110 @@ class AzureDevOpsProvider extends ScmProvider {
     } catch (err) {
       const errMsg = err.stderr ? err.stderr.toString().trim() : err.message;
       throw new Error(`Azure DevOps SCM Provider failed to query work items: ${errMsg}`);
+    }
+  }
+
+  /**
+   * Spec 00062: creates a tracker work item for a specification. Azure DevOps
+   * starts every item in the process's initial state, so a finished
+   * specification is moved to Closed after creation instead of being created
+   * directly in a terminal state.
+   */
+  async createWorkItem(options = {}) {
+    const { title, body = '', state = 'open', dryRun = false } = options;
+    if (!title) {
+      throw new Error('title is required for Azure DevOps createWorkItem.');
+    }
+    const cleanTitle = String(title).replace(/["`$\\]/g, '\\$&');
+    const descriptionArg = body ? `--description ${quoteCliArgument(adoDescription(body))}` : '';
+
+    if (dryRun) {
+      return {
+        id: null,
+        url: null,
+        state,
+        dryRun: true,
+        command: `az boards work-item create --title "${cleanTitle}" --type Issue ${descriptionArg}`.trim()
+      };
+    }
+
+    try {
+      const createCmd = `az boards work-item create --title "${cleanTitle}" --type Issue ${descriptionArg} --output json`.trim();
+      const data = JSON.parse(this.executor(createCmd) || '{}');
+      const id = String(data.id || '');
+      if (!id) {
+        throw new Error('az boards work-item create returned no work item id.');
+      }
+
+      let finalState = 'New';
+      if (isAdoClosedState(state)) {
+        this.executor(`az boards work-item update --id ${id} --state "Closed" --output json`);
+        finalState = 'Closed';
+      }
+
+      return {
+        id,
+        url: data.url || (data._links && data._links.html && data._links.html.href) || '',
+        state: finalState,
+        dryRun: false
+      };
+    } catch (err) {
+      throw cliFailure('Azure DevOps createWorkItem', err);
+    }
+  }
+
+  /**
+   * Spec 00062: writes the local title, body, and state onto an existing work
+   * item. The current state is read first so a close or reopen is only issued
+   * when the finished/open nature actually changes.
+   */
+  async updateWorkItem(options = {}) {
+    const { id, title, body, state, dryRun = false } = options;
+    if (!id || !/^\d+$/.test(String(id).trim())) {
+      throw new Error(`Item identifier must be a valid numeric ID for Azure DevOps updateWorkItem: ${id}`);
+    }
+    const safeId = String(id).trim();
+    const desiredClosed = state === undefined || state === null ? null : isAdoClosedState(state);
+
+    if (dryRun) {
+      return {
+        id: safeId,
+        url: null,
+        from: null,
+        state: state === undefined ? null : state,
+        dryRun: true,
+        command: `az boards work-item update --id ${safeId}`
+      };
+    }
+
+    try {
+      const current = await this.fetchWorkItem(safeId);
+      const currentState = String(current.state || '').toLowerCase();
+      const currentClosed = isAdoClosedState(currentState);
+
+      const args = [`--id ${safeId}`];
+      if (title) args.push(`--title ${quoteCliArgument(title)}`);
+      if (body !== undefined && body !== null) args.push(`--description ${quoteCliArgument(adoDescription(body))}`);
+
+      let nextState = current.state || null;
+      if (desiredClosed !== null && desiredClosed !== currentClosed) {
+        nextState = desiredClosed ? 'Closed' : 'New';
+        args.push(`--state "${nextState}"`);
+      }
+
+      if (args.length > 1) {
+        this.executor(`az boards work-item update ${args.join(' ')} --output json`);
+      }
+
+      return {
+        id: safeId,
+        url: current.url || null,
+        from: current.state || null,
+        state: nextState,
+        dryRun: false
+      };
+    } catch (err) {
+      throw cliFailure('Azure DevOps updateWorkItem', err);
     }
   }
 

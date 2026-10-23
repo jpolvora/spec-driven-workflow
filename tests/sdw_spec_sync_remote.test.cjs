@@ -154,7 +154,7 @@ test('sdw-spec sync-remote - AC1: sync-up treats a legacy id key as the remote l
   }
 });
 
-test('sdw-spec sync-remote - AC2: sync-down follows remote state into the registry and reports unmatched items', async () => {
+test('sdw-spec sync-remote - AC2 & AC8: sync-down follows remote state and creates a local specification for an unmatched item', async () => {
   const root = setupWorkspace();
   try {
     writeSpecification(root, { prefix: '00004', slug: '00004-demo-delta', title: 'Demo Delta', scmSpecId: '45' });
@@ -175,8 +175,14 @@ test('sdw-spec sync-remote - AC2: sync-down follows remote state into the regist
     assert.strictEqual(updated.from, 'pending');
     assert.strictEqual(updated.to, 'completed');
 
-    const unmatched = report.transitions.find((transition) => transition.action === 'unmatched');
-    assert.strictEqual(unmatched.id, '99');
+    const created = report.transitions.find((transition) => transition.id === '99');
+    assert.strictEqual(created.action, 'created', 'a remote item without a local match creates one');
+    assert.ok(created.slug, 'the created transition names the local specification');
+    const createdFrontmatter = parseFrontmatter(
+      fs.readFileSync(path.join(root, '.sdw', 'specs', `${created.slug}.md`), 'utf8')
+    );
+    assert.strictEqual(createdFrontmatter.scmSpecId || createdFrontmatter.id, '99', 'the created specification carries the remote item id');
+    assert.strictEqual(createdFrontmatter.source, 'github', 'the created specification carries the remote source');
 
     const row = readIndex({ root }).entries.find((entry) => entry.slug === '00004-demo-delta');
     assert.strictEqual(row.status, 'completed');

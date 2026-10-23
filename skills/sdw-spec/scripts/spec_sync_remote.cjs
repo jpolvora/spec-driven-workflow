@@ -17,13 +17,16 @@ const {
   readIndex,
   parseFrontmatter,
   isSpecificationFile,
-  updateSpecStatus
+  updateSpecStatus,
+  registerSpec
 } = require('./spec_index.cjs');
 const {
   createScmProvider,
   resolveScmProvider,
-  checkScmCapability
+  checkScmCapability,
+  providerSourceName
 } = require('./scm_provider_contract.cjs');
+const { getNextPrefix, slugify, synthesizeCanonicalSpec } = require('./spec_creator.cjs');
 
 // One status table, read by both directions.
 const LOCAL_TO_REMOTE_STATE = {
@@ -129,17 +132,57 @@ function writeScmLink(spec, providerName, scmSpecId) {
 }
 
 /**
+ * AC8: creates the local specification a remote item proves exists. The remote
+ * id lands in the legacy `id` key that the current authoring validator still
+ * requires; every reader already treats it as scmSpecId (AC18).
+ */
+function createLocalSpecification(item, providerSource, options = {}) {
+  const { specsDir } = resolvePaths(options.root);
+  if (!fs.existsSync(specsDir)) fs.mkdirSync(specsDir, { recursive: true });
+
+  const prefix = getNextPrefix(specsDir);
+  const remoteId = String(item.id);
+  const title = item.title || `Work Item ${remoteId}`;
+  const source = providerSourceName(item.source || providerSource);
+  const slug = `${prefix}-us-${remoteId}-${slugify(title)}`.slice(0, 45).replace(/-+$/, '');
+  const content = synthesizeCanonicalSpec({
+    id: remoteId,
+    slug,
+    title,
+    source,
+    description: item.description || `Imported remote item #${remoteId} from ${source}.`,
+    acceptanceCriteria: item.acceptanceCriteria || [],
+    isTracker: true
+  });
+  const filePath = path.join(specsDir, `${slug}.md`);
+  fs.writeFileSync(filePath, content, 'utf8');
+
+  registerSpec({
+    prefix,
+    slug,
+    title,
+    status: 'pending',
+    source,
+    specDate: new Date().toISOString().slice(0, 10),
+    validation: 'PASS'
+  }, options);
+
+  return { prefix, slug, title, source, scmSpecId: remoteId, registryStatus: 'pending', filePath };
+}
+
+/**
  * AC1: mirrors local specifications to the registered provider. A specification
  * without a remote identity is created; one with an identity is updated.
  */
 async function syncUp(options = {}) {
   const { providerName, provider } = resolveSyncProvider(options);
+  const providerSource = providerSourceName(providerName);
   const specs = readLocalSpecifications(options)
     .sort((left, right) => left.localSpecId.localeCompare(right.localSpecId) || left.slug.localeCompare(right.slug));
   const transitions = [];
 
   for (const spec of specs) {
-    if (spec.source !== 'local' && spec.source !== providerName) {
+    if (spec.source !== 'local' && providerSourceName(spec.source) !== providerSource) {
       transitions.push({
         direction: 'sync-up',
         action: 'skipped',
@@ -155,7 +198,7 @@ async function syncUp(options = {}) {
     const state = LOCAL_TO_REMOTE_STATE[spec.registryStatus] || 'open';
     if (!spec.scmSpecId) {
       const created = await provider.createWorkItem({ title: spec.title, body: spec.content, state });
-      writeScmLink(spec, providerName, created.id);
+      writeScmLink(spec, providerSource, created.id);
       transitions.push({
         direction: 'sync-up',
         action: 'created',
@@ -183,11 +226,13 @@ async function syncUp(options = {}) {
 }
 
 /**
- * AC2: mirrors remote tracker state into local specifications. Unmatched remote
- * items are reported, never written; a closed remote item never regresses.
+ * AC2, AC8: mirrors remote tracker state into local specifications. A remote
+ * item with no local match creates one carrying its scmSpecId and source; a
+ * closed remote item never regresses a completed row.
  */
 async function syncDown(options = {}) {
   const { providerName, provider } = resolveSyncProvider(options);
+  const providerSource = providerSourceName(providerName);
   const items = await provider.queryWorkItems({ state: options.state || 'all' });
 
   const byScmSpecId = new Map();
@@ -199,14 +244,18 @@ async function syncDown(options = {}) {
   for (const item of items) {
     const spec = byScmSpecId.get(String(item.id));
     if (!spec) {
+      const created = createLocalSpecification(item, providerSource, options);
+      // Keep the in-run index current so duplicate remote identities never
+      // produce a second file in the same run.
+      byScmSpecId.set(String(item.id), created);
       transitions.push({
         direction: 'sync-down',
-        action: 'unmatched',
-        slug: null,
+        action: 'created',
+        slug: created.slug,
         id: item.id,
         from: null,
-        to: item.state || null,
-        reason: `no local specification matches ${providerName} item ${item.id}`
+        to: created.registryStatus,
+        reason: `created local specification for ${providerName} item ${item.id}`
       });
       continue;
     }
