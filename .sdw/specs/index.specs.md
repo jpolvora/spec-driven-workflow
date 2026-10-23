@@ -72,3 +72,4 @@ Central repository index tracking specification lifecycle states, metadata, and 
 | 00056 | 00056-sdw-per-role-agent-models | SDW Per-Role Agent Model Configuration | pending | local | 2026-10-22 | PASS | - |
 | 00057 | 00057-sdw-orch-delivery-report-step-contributions | SDW Delivery Report — Incremental Step Contributions, Learnings, and Retro Closure | completed | local | 2026-10-22 | PASS | - |
 | 00058 | 00058-sdw-batch-delivery-integrity | SDW Batch Delivery Integrity — Merge, Pre-Flight, Base Freshness, and Registry Truth | completed | local | 2026-10-22 | PASS | - |
+| 00059 | 00059-sdw-ship-pr-review-thread-fidelity | SDW Review Thread Fidelity — Full Thread Content in list-threads and the Fixer Input | pending | local | 2026-10-22 | PASS | - |
