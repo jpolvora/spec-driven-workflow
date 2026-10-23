@@ -3041,7 +3041,7 @@ function cmdRun(options) {
     state = stateManager.updateStepState(targetRoot, state.runId, 7, 'completed', reviewReport, null, artifactRel ? { artifact: artifactRel } : undefined);
     logStepDone(7);
     state = recordStepContributions(targetRoot, state, 7, buildStep7Contributions(reviewIterations, artifactRel), { allowDuplicates: true });
-  } else if (options.skipReview) {
+  } else if (options.skipReview && startStep <= 7 && state.steps[7].status !== 'completed') {
     logStepEnter(7);
     state = stateManager.updateStepState(targetRoot, state.runId, 7, 'skipped', { reason: 'Skipped via --skip-review' });
     logStepDone(7);
@@ -3464,7 +3464,7 @@ function cmdRun(options) {
     state = stateManager.updateStepState(targetRoot, state.runId, 8, 'completed', prPayload);
     logStepDone(8);
     state = recordStepContributions(targetRoot, state, 8, buildStep8Contributions(state, step8ShipResult, step8GateAttempts), { allowDuplicates: true });
-  } else if (options.skipPr) {
+  } else if (options.skipPr && startStep <= 8 && state.steps[8].status !== 'completed') {
     logStepEnter(8);
     state = stateManager.updateStepState(targetRoot, state.runId, 8, 'skipped', { reason: 'Skipped via --skip-pr' });
     logStepDone(8);
