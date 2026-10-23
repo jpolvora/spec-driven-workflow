@@ -7,17 +7,17 @@
 | Specification file | `.sdw/specs/00043-us-17-emphasize-step-number-progress-in.md` |
 | Specification slug | 00043-us-17-emphasize-step-number-progress-in |
 | Run ID | run-1792725694708-00043-us-17-emphasize-step-num |
-| Run status | paused |
+| Run status | completed |
 | Branch | `feature/00043-us-17-emphasize-step-number-progress-in` |
 | Base branch | `master` |
 | Base commit | `dd67c16a4c96cfc61ddb1ea5545ea584e33f3918` |
 | Delivery commit | `5b4ab524f76925e50820ef8c8ba62e28e58e2cf5` |
-| Ship status | pending |
+| Ship status | review_pending |
 | Score | 10/10 (scoreMin 8) |
 | Implementation start | 2026-10-23T03:21:35.083Z |
 | Implementation end | 2026-10-23T03:32:35.790Z |
 | Total wall-clock duration | 11m |
-| Generated at | 2026-10-23T03:40:36.541Z |
+| Generated at | 2026-10-23T03:58:19.954Z |
 | Step 1: derivation (skipped) | 1ms |
 | Step 2: refinement (completed) | 32ms |
 | Step 3: dag_generation (completed) | 3ms |
@@ -25,7 +25,7 @@
 | Step 5: scoring (completed) | 15s |
 | Step 6: delivery_commit (completed) | 353ms |
 | Step 7: code_review (completed) | 842ms |
-| Step 8: pr_preparation (in_progress) | n/a |
+| Step 8: pr_preparation (completed) | 22m 56s |
 
 
 ## Tasks
@@ -39,6 +39,10 @@
 
 | SHA | Subject | Range |
 |---|---|---|
+| `9529434` | chore(00043-us-17-emphasize-step-number-progress-in): mark the specification completed in the registry | base..HEAD |
+| `bebc1b2` | docs(00043-us-17-emphasize-step-number-progress-in): record delivery report | base..HEAD |
+| `d78a576` | fix(00043-us-17-emphasize-step-number-progress-in): guard skip-review/skip-pr headers against completed steps | base..HEAD |
+| `61c99e8` | docs(00043-us-17-emphasize-step-number-progress-in): record delivery report | base..HEAD |
 | `ecac5ad` | docs(00043-us-17-emphasize-step-number-progress-in): record delivery report | base..HEAD |
 | `5b4ab52` | task(00043-us-17-emphasize-step-number-progress-in): task-2 | base..HEAD |
 | `b2cea59` | task(00043-us-17-emphasize-step-number-progress-in): task-1 | base..HEAD |
@@ -62,11 +66,13 @@
 | File | Change |
 |---|---|
 | `.sdw/specs/00043-us-17-emphasize-step-number-progress-in-report.md` | added |
+| `.sdw/specs/00043-us-17-emphasize-step-number-progress-in.md` | modified |
+| `.sdw/specs/index.specs.md` | modified |
 
 ## Verification
 
 - test gate: status `passed`, exit code `0`, duration 2m 20s
-- Step 8 delivery: `in_progress`
+- Step 8 delivery: `completed` (ship status `review_pending`)
 
 ## Code Review
 
@@ -108,7 +114,13 @@ Not available
 
 ## Retrospective
 
-Not available
+- Status: `passed`
+- Report: `.sdw/state/00043-us-17-emphasize-step-number-progress-in/run-1792725694708-00043-us-17-emphasize-step-num/run-1792725694708-00043-us-17-emphasize-step-num.retro.md`
+- Data: `.sdw/state/00043-us-17-emphasize-step-number-progress-in/run-1792725694708-00043-us-17-emphasize-step-num/run-1792725694708-00043-us-17-emphasize-step-num.retro.json`
+- Signals: retries 4 (score 2, review 0, rounds 2, abandonments 0); leftover runs 0; missing artifacts 0; review findings 0 (0 open)
+- Candidates: 0
+- Applied fixes:
+  - none
 
 ## Breaking Changes
 
@@ -162,18 +174,18 @@ None detected.
 
 - Step 1 (derivation) skipped: not recorded
 - Task task-2 accepted after re-dispatch (sequence 2)
-- Environment: workspace: 3 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
+- Environment: workspace: 5 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
 
 ## Outcome
 
-- Result: `paused`
+- Result: `completed`
 - Delivery commit: `5b4ab524f76925e50820ef8c8ba62e28e58e2cf5`
-- Ship status: `pending`
+- Ship status: `review_pending`
 - Duration: 11m
 
 ## Step Contributions
 
-- Recorded: 8 contribution(s)
+- Recorded: 13 contribution(s)
 
 ### Step 1: derivation
 
@@ -221,8 +233,18 @@ None detected.
 
 ### Step 8: pr_preparation
 
-Not available
+- **convergence** 2026-10-23T03:58:15.455Z - Convergence iteration 1
+  - Body: `{"iteration":1,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":false}`
+- **convergence** 2026-10-23T03:58:15.827Z - Convergence iteration 2
+  - Body: `{"iteration":2,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":true}`
+- **gates** 2026-10-23T03:58:16.227Z - Pre-PR gates: 6 result(s)
+  - Body: `{"gates":[{"name":"prePrCommand","status":"skipped","detail":"prePrCommand is not configured"},{"name":"build","status":"skipped","detail":"requiredBuild is false"},{"name":"tests","status":"pass","detail":"npm test exited 0"},{"name":"security","status":"pass","detail":"sdw-security-checks found no blocking leak"},{"name":"runState","status":"pass","detail":"step 4, step 6 and step 7 completed; score 10 >= scoreMin 8"},{"name":"discovery","status":"pass","detail":"no prepare obligations discovered"}]}`
+- **ship** 2026-10-23T03:58:16.227Z - Pull request #46
+  - Body: `{"pushed":true,"branch":"feature/00043-us-17-emphasize-step-number-progress-in","pullRequest":{"number":"46","url":"https://github.com/jpolvora/spec-driven-workflow/pull/46","title":null},"shipStatus":"delivered"}`
+  - Evidence: `https://github.com/jpolvora/spec-driven-workflow/pull/46`
 
 ### Step 9: retrospective
 
-Not available
+- **retro** 2026-10-23T03:58:19.816Z - Retrospective passed: 0 candidate(s)
+  - Body: `{"status":"passed","runStatus":"completed","signals":{"retries":{"scoreIterations":2,"reviewIterations":0,"reviewRounds":2,"dispatchAbandonments":0,"total":4},"leftoverRuns":0,"missingArtifacts":0,"reviewFindings":{"total":0,"open":0}},"candidates":[],"fixes":{"recorded":[],"consolidated":null,"queuedSpecifications":[],"failures":[]},"routedCandidates":[],"reportMd":".sdw/state/00043-us-17-emphasize-step-number-progress-in/run-1792725694708-00043-us-17-emphasize-step-num/run-1792725694708-00043-us-17-emphasize-step-num.retro.md","reportJson":".sdw/state/00043-us-17-emphasize-step-number-progress-in/run-1792725694708-00043-us-17-emphasize-step-num/run-1792725694708-00043-us-17-emphasize-step-num.retro.json"}`
+  - Evidence: `.sdw/state/00043-us-17-emphasize-step-number-progress-in/run-1792725694708-00043-us-17-emphasize-step-num/run-1792725694708-00043-us-17-emphasize-step-num.retro.md`, `.sdw/state/00043-us-17-emphasize-step-number-progress-in/run-1792725694708-00043-us-17-emphasize-step-num/run-1792725694708-00043-us-17-emphasize-step-num.retro.json`
