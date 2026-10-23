@@ -7,17 +7,17 @@
 | Specification file | `.sdw/specs/00017-sdw-ac-ledger-traceability.md` |
 | Specification slug | 00017-sdw-ac-ledger-traceability |
 | Run ID | run-1792777262636-00017-sdw-ac-ledger-traceabili |
-| Run status | paused |
+| Run status | completed |
 | Branch | `feature/00017-sdw-ac-ledger-traceability` |
 | Base branch | `master` |
 | Base commit | `ebd3c4954bd66297e27bc9384b49cbd1bc101ee0` |
 | Delivery commit | `4931182b40c850e8e929419aca29d6b063e6f675` |
-| Ship status | pending |
+| Ship status | review_pending |
 | Score | 8/10 (scoreMin 8) |
 | Implementation start | 2026-10-23T17:41:04.540Z |
 | Implementation end | 2026-10-23T18:58:50.065Z |
 | Total wall-clock duration | 1h 17m 45s |
-| Generated at | 2026-10-23T19:03:44.210Z |
+| Generated at | 2026-10-23T20:21:13.947Z |
 | Step 1: derivation (skipped) | 4ms |
 | Step 2: refinement (completed) | 41ms |
 | Step 3: dag_generation (completed) | 12ms |
@@ -25,7 +25,7 @@
 | Step 5: scoring (completed) | 38s |
 | Step 6: delivery_commit (completed) | 507ms |
 | Step 7: code_review (completed) | 1s |
-| Step 8: pr_preparation (pending) | n/a |
+| Step 8: pr_preparation (completed) | 1h 17m 23s |
 
 
 ## Tasks
@@ -42,6 +42,15 @@
 
 | SHA | Subject | Range |
 |---|---|---|
+| `300c682` | chore(00017-sdw-ac-ledger-traceability): mark the specification completed in the registry | base..HEAD |
+| `2b5e0fc` | docs(00017-sdw-ac-ledger-traceability): record delivery report | base..HEAD |
+| `8bc3011` | fix(00017-sdw-ac-ledger-traceability): refuse an unknown ledger action | base..HEAD |
+| `ad6e19b` | fix(00017-sdw-ac-ledger-traceability): derive status from remaining evidence and require real files | base..HEAD |
+| `7d8e037` | fix(00017-sdw-ac-ledger-traceability): a failing review finding is not proof | base..HEAD |
+| `b92797d` | fix(00017-sdw-ac-ledger-traceability): a deleted anchored ledger fails verification | base..HEAD |
+| `545a57d` | fix(00017-sdw-ac-ledger-traceability): fail Step 5 closed when the ledger cannot record verdicts | base..HEAD |
+| `ca85899` | fix(00017-sdw-ac-ledger-traceability): a failed proof never verifies a criterion | base..HEAD |
+| `97dc4b2` | docs(00017-sdw-ac-ledger-traceability): record delivery report | base..HEAD |
 | `4931182` | task(00017-sdw-ac-ledger-traceability): task-5 | base..HEAD |
 | `216444c` | task(00017-sdw-ac-ledger-traceability): task-4 | base..HEAD |
 | `8a27d42` | task(00017-sdw-ac-ledger-traceability): task-3 | base..HEAD |
@@ -90,9 +99,18 @@
 | `skills/sdw-orch/references/orchestrator_protocol.md` | modified |
 | `tests/sdw_ac_ledger.test.cjs` | added |
 
+### Unattributed changes
+
+| File | Change |
+|---|---|
+| `.sdw/reports/00017-sdw-ac-ledger-traceability-report.md` | added |
+| `.sdw/specs/00017-sdw-ac-ledger-traceability.md` | modified |
+| `.sdw/specs/index.specs.md` | modified |
+
 ## Verification
 
 - test gate: status `passed`, exit code `0`, duration 4m 5s
+- Step 8 delivery: `completed` (ship status `review_pending`)
 
 ## Code Review
 
@@ -146,7 +164,13 @@ Not available
 
 ## Retrospective
 
-Not available
+- Status: `passed`
+- Report: `.sdw/state/00017-sdw-ac-ledger-traceability/run-1792777262636-00017-sdw-ac-ledger-traceabili/run-1792777262636-00017-sdw-ac-ledger-traceabili.retro.md`
+- Data: `.sdw/state/00017-sdw-ac-ledger-traceability/run-1792777262636-00017-sdw-ac-ledger-traceabili/run-1792777262636-00017-sdw-ac-ledger-traceabili.retro.json`
+- Signals: retries 4 (score 2, review 0, rounds 2, abandonments 0); leftover runs 0; missing artifacts 0; review findings 2 (2 open)
+- Candidates: 0
+- Applied fixes:
+  - none
 
 ## Breaking Changes
 
@@ -339,18 +363,18 @@ Not available
 - Task task-3 accepted after re-dispatch (sequence 3)
 - Task task-4 accepted after re-dispatch (sequence 4)
 - Task task-5 accepted after re-dispatch (sequence 5)
-- Environment: workspace: 4 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
+- Environment: workspace: 7 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
 
 ## Outcome
 
-- Result: `paused`
+- Result: `completed`
 - Delivery commit: `4931182b40c850e8e929419aca29d6b063e6f675`
-- Ship status: `pending`
+- Ship status: `review_pending`
 - Duration: 1h 17m 45s
 
 ## Step Contributions
 
-- Recorded: 8 contribution(s)
+- Recorded: 13 contribution(s)
 
 ### Step 1: derivation
 
@@ -398,8 +422,18 @@ Not available
 
 ### Step 8: pr_preparation
 
-Not available
+- **convergence** 2026-10-23T20:21:08.210Z - Convergence iteration 1
+  - Body: `{"iteration":1,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":false}`
+- **convergence** 2026-10-23T20:21:08.777Z - Convergence iteration 2
+  - Body: `{"iteration":2,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":true}`
+- **gates** 2026-10-23T20:21:09.415Z - Pre-PR gates: 6 result(s)
+  - Body: `{"gates":[{"name":"prePrCommand","status":"skipped","detail":"prePrCommand is not configured"},{"name":"build","status":"skipped","detail":"requiredBuild is false"},{"name":"tests","status":"pass","detail":"npm test exited 0"},{"name":"security","status":"pass","detail":"sdw-security-checks found no blocking leak"},{"name":"runState","status":"pass","detail":"step 4, step 6 and step 7 completed; score 8 >= scoreMin 8"},{"name":"discovery","status":"pass","detail":"no prepare obligations discovered"}]}`
+- **ship** 2026-10-23T20:21:09.415Z - Pull request #58
+  - Body: `{"pushed":true,"branch":"feature/00017-sdw-ac-ledger-traceability","pullRequest":{"number":"58","url":"https://github.com/jpolvora/spec-driven-workflow/pull/58","title":null},"shipStatus":"delivered"}`
+  - Evidence: `https://github.com/jpolvora/spec-driven-workflow/pull/58`
 
 ### Step 9: retrospective
 
-Not available
+- **retro** 2026-10-23T20:21:13.651Z - Retrospective passed: 0 candidate(s)
+  - Body: `{"status":"passed","runStatus":"completed","signals":{"retries":{"scoreIterations":2,"reviewIterations":0,"reviewRounds":2,"dispatchAbandonments":0,"total":4},"leftoverRuns":0,"missingArtifacts":0,"reviewFindings":{"total":2,"open":2}},"candidates":[],"fixes":{"recorded":[],"consolidated":null,"queuedSpecifications":[],"failures":[]},"routedCandidates":[],"reportMd":".sdw/state/00017-sdw-ac-ledger-traceability/run-1792777262636-00017-sdw-ac-ledger-traceabili/run-1792777262636-00017-sdw-ac-ledger-traceabili.retro.md","reportJson":".sdw/state/00017-sdw-ac-ledger-traceability/run-1792777262636-00017-sdw-ac-ledger-traceabili/run-1792777262636-00017-sdw-ac-ledger-traceabili.retro.json"}`
+  - Evidence: `.sdw/state/00017-sdw-ac-ledger-traceability/run-1792777262636-00017-sdw-ac-ledger-traceabili/run-1792777262636-00017-sdw-ac-ledger-traceabili.retro.md`, `.sdw/state/00017-sdw-ac-ledger-traceability/run-1792777262636-00017-sdw-ac-ledger-traceabili/run-1792777262636-00017-sdw-ac-ledger-traceabili.retro.json`

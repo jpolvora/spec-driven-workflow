@@ -3,7 +3,7 @@ id: null
 slug: 00017-sdw-ac-ledger-traceability
 title: "SDW Acceptance Criteria Ledger and Traceability"
 source: local
-status: awaiting-approval
+status: implemented
 specDate: 2026-10-19
 priority: high
 value: "Auditable acceptance-criteria ledger so every score is reproducible and tampering is detectable"
