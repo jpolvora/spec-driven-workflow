@@ -2151,6 +2151,14 @@ function cmdRun(options) {
     state = stateManager.updateStepState(targetRoot, state.runId, 3, 'in_progress');
     logStepEnter(3);
     dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint });
+    if (dagPlan.refused) {
+      // Spec 00030 AC13: a decomposition beyond the cap is refused, never merged.
+      const refusal = `split-required tasks-needed=${dagPlan.tasksNeeded} cap=${dagPlan.cap}`;
+      console.error(`[Step 3: DAG] ${refusal}`);
+      state = stateManager.updateStepState(targetRoot, state.runId, 3, 'failed', dagPlan, refusal);
+      options._runResult = { runId: state.runId, status: 'failed', error: refusal };
+      return 1;
+    }
     console.log(`[Step 3: DAG Generation] Complexity: ${dagPlan.complexity.level}. Generated ${dagPlan.totalTasks} task(s).`);
     state.dagTasks = dagPlan.tasks;
     state = stateManager.saveRunState(targetRoot, state);
@@ -2167,6 +2175,13 @@ function cmdRun(options) {
     dagPlan = state.steps[3].output;
   } else {
     dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint });
+    if (dagPlan.refused) {
+      const refusal = `split-required tasks-needed=${dagPlan.tasksNeeded} cap=${dagPlan.cap}`;
+      console.error(`[Step 3: DAG] ${refusal}`);
+      state = stateManager.updateStepState(targetRoot, state.runId, 3, 'failed', dagPlan, refusal);
+      options._runResult = { runId: state.runId, status: 'failed', error: refusal };
+      return 1;
+    }
   }
 
   if (state.steps[3] && state.steps[3].status === 'completed') {
