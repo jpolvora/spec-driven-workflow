@@ -10,6 +10,7 @@ const runLock = require('./run_lock.cjs');
 const specDerivation = require('./spec_derivation.cjs');
 const specGrilling = require('./spec_grilling.cjs');
 const dagPlanner = require('./dag_planner.cjs');
+const acLedger = require('./ac_ledger.cjs');
 const scoreEvaluator = require('./score_evaluator.cjs');
 const artifactWriter = require('./artifact_writer.cjs');
 const implementationRunner = require('./implementation_runner.cjs');
@@ -152,7 +153,15 @@ function parseArgs(args) {
     refineMode: false,
     newRun: false,
     noModelDetect: false,
-    refreshModels: false
+    refreshModels: false,
+    ledgerAction: null,
+    acIds: [],
+    evidenceType: null,
+    evidenceFilePath: null,
+    evidenceName: null,
+    evidenceTestStatus: null,
+    evidenceSha: null,
+    evidenceRefId: null
   };
 
   const positional = [];
@@ -179,6 +188,22 @@ function parseArgs(args) {
     else if (arg === '--new-run') result.newRun = true;
     else if (arg === '--no-model-detect') result.noModelDetect = true;
     else if (arg === '--refresh-models') result.refreshModels = true;
+    else if (arg === '--type') result.evidenceType = args[++i];
+    else if (arg.startsWith('--type=')) result.evidenceType = arg.slice(7);
+    else if (arg === '--path') result.evidenceFilePath = args[++i];
+    else if (arg.startsWith('--path=')) result.evidenceFilePath = arg.slice(7);
+    else if (arg === '--name') result.evidenceName = args[++i];
+    else if (arg.startsWith('--name=')) result.evidenceName = arg.slice(7);
+    else if (arg === '--status') result.evidenceTestStatus = args[++i];
+    else if (arg.startsWith('--status=')) result.evidenceTestStatus = arg.slice(9);
+    else if (arg === '--sha') result.evidenceSha = args[++i];
+    else if (arg.startsWith('--sha=')) result.evidenceSha = arg.slice(6);
+    else if (arg === '--id') result.evidenceRefId = args[++i];
+    else if (arg.startsWith('--id=')) result.evidenceRefId = arg.slice(5);
+    // Spec 00017 AC3: `--ac` takes one or more criterion ids until the next flag.
+    else if (arg === '--ac') {
+      while (i + 1 < args.length && !args[i + 1].startsWith('-')) result.acIds.push(args[++i]);
+    } else if (arg.startsWith('--ac=')) result.acIds.push(arg.slice(5));
     else if (arg === '--latest') result.latest = true;
     else if (arg === '--dry-run') result.dryRun = true;
     else if (arg === '--sandbox') result.sandbox = true;
@@ -221,7 +246,8 @@ function parseArgs(args) {
     'task abandon': 'task-abandon',
     'score submit': 'score-submit',
     'report re-render': 'report-re-render',
-    'dag preview': 'dag-preview'
+    'dag preview': 'dag-preview',
+    'ledger link': 'ledger'
   };
   const combinedMatch = COMBINED[positional.slice(0, 2).join(' ')];
   if (combinedMatch) {
@@ -230,7 +256,11 @@ function parseArgs(args) {
     result.specPaths = [];
     // `dag preview` keeps its --spec path; the other combined commands have none.
     if (combinedMatch !== 'dag-preview') result.specPath = null;
-    if (!result.taskId && rest[0]) result.taskId = rest[0];
+    if (combinedMatch === 'ledger') {
+      result.ledgerAction = 'link';
+    } else if (!result.taskId && rest[0]) {
+      result.taskId = rest[0];
+    }
     if (combinedMatch === 'task-finish' && !result.evidencePath && rest[1]) result.evidencePath = rest[1];
     if (combinedMatch === 'task-abandon' && !result.reason && rest[1]) result.reason = rest[1];
     if (combinedMatch === 'dag-preview' && rest[0] && !result.specPath) result.specPath = rest[0];
@@ -1817,6 +1847,30 @@ function printRunDryRunPlan(context) {
   return 0;
 }
 
+// Spec 00017 AC1: every run owns an acceptance criteria ledger in its artifact
+// directory. Initialization happens before Step 1 work, keeps a ledger the run
+// already owns (resume), and never blocks a run that cannot write one yet
+// (spec 00017 AC17 owns the fail-closed rule).
+function initializeRunLedger({ targetRoot, state, specContent }) {
+  try {
+    const artifactsDir = state.artifactsDir
+      || stateManager.getArtifactsRelDir(targetRoot, state.specSlug, state.runId);
+    const result = acLedger.initLedger({
+      root: targetRoot,
+      artifactsDir,
+      runId: state.runId,
+      specSlug: state.specSlug,
+      specContent
+    });
+    const ledgerRel = normalizePath(path.relative(targetRoot, result.ledgerPath));
+    console.log(`[Ledger] ${result.created ? 'Initialized' : 'Loaded'} ${ledgerRel} with ${result.ledger.criteria.length} acceptance criteria.`);
+    return result;
+  } catch (err) {
+    console.warn(`[Ledger] Initialization skipped: ${err.message}`);
+    return null;
+  }
+}
+
 function cmdRun(options) {
   let targetRoot = options.root ? path.resolve(options.root) : process.cwd();
   const sourceRoot = targetRoot;
@@ -2275,6 +2329,9 @@ function cmdRun(options) {
       refineMode: Boolean(options.refineMode)
     });
   }
+
+  // Spec 00017 AC1: the ledger exists before the first Step 1 mutation.
+  initializeRunLedger({ targetRoot, state, specContent: rawSpecContent });
 
   // Spec 00057 AC1: every run carries the append-only contribution list from the
   // first step boundary, including runs resumed from state written before it.
@@ -5415,6 +5472,63 @@ function cmdSandbox(options) {
   return 1;
 }
 
+// Spec 00017 AC3/AC4: `ledger link` appends one typed evidence payload to one
+// or more declared criteria. Every validation runs before the write, so a
+// refused link leaves the ledger untouched.
+function cmdLedgerLink(options) {
+  const targetRoot = options.root ? path.resolve(options.root) : process.cwd();
+  if (!options.runId) {
+    console.error('Error: --run-id is required for "ledger link".');
+    return 1;
+  }
+
+  let state;
+  try {
+    state = stateManager.loadRunState(targetRoot, options.runId);
+  } catch (err) {
+    console.error(`[Ledger] ${err.message}`);
+    return 1;
+  }
+
+  const artifactsDir = state.artifactsDir
+    || stateManager.getArtifactsRelDir(targetRoot, state.specSlug, state.runId);
+  const result = acLedger.linkEvidence({
+    root: targetRoot,
+    artifactsDir,
+    acIds: options.acIds,
+    evidence: {
+      type: options.evidenceType,
+      path: options.evidenceFilePath,
+      name: options.evidenceName,
+      status: options.evidenceTestStatus,
+      sha: options.evidenceSha,
+      id: options.evidenceRefId
+    }
+  });
+
+  if (!result.ok) {
+    for (const message of result.errors) console.error(`[Ledger] ${message}`);
+    return 1;
+  }
+
+  for (const id of result.linked) {
+    const record = result.ledger.criteria.find(criterion => criterion.id === id);
+    const types = [...new Set(record.evidence.map(entry => entry.type))].join(', ');
+    console.log(`[Ledger] ${id} ${record.status} (${types})`);
+  }
+  if (result.duplicates.length > 0) {
+    console.log(`[Ledger] Already linked for ${result.duplicates.join(', ')}.`);
+  }
+  return 0;
+}
+
+function cmdLedger(options) {
+  const action = String(options.ledgerAction || options.specPath || '').trim();
+  if (action === 'link') return cmdLedgerLink(options);
+  console.error(`Unknown ledger action "${action}". Use: ledger link --run-id <id> --ac <id> [<id> ...] --type <file|test|commit|review|sabotage>`);
+  return 1;
+}
+
 function showHelp() {
   console.log(`Usage: node sdw_orch.cjs <subcommand> [specPath] [options]
 
@@ -5428,6 +5542,7 @@ Subcommands:
   task abandon           Return the dispatched DAG task to the queue
   score submit           Submit a judge verdict for Step 5 conformance scoring
   report re-render       Refresh the delivery report and the in-progress report from run state (never commits)
+  ledger link            Link typed evidence to one or more acceptance criteria (--run-id, --ac, --type)
   dag preview            Print the plan the classifier would generate, without side effects
   status                 Check status of current or specified run state
   sandbox list           List isolated sandboxes created by --sandbox
@@ -5446,6 +5561,13 @@ Options:
   --progress-file <path> File containing the checkpoint progress JSON
   --next-action <text>   Action the next turn must take after pause-turn
   --verdict <path>       Path to judge verdict JSON file for score submit
+  --ac <id...>           Acceptance criterion ids for ledger link (one or more, until the next flag)
+  --type <type>          Evidence type for ledger link: file | test | commit | review | sabotage
+  --path <path>          Project-relative evidence path for --type file
+  --name <name>          Test name for --type test
+  --status <status>      Test status for --type test (for example passed)
+  --sha <sha>            Commit SHA for --type commit
+  --id <id>              Review or sabotage id for --type review | sabotage
   --mode <mode>          Implementation mode (subagent | command)
   --dry-run              Print the execution plan and validate the spec; execute nothing
   --sandbox              Execute the whole pipeline in an isolated local clone; never pushes
@@ -5523,6 +5645,9 @@ function main() {
       case 'report-re-render':
         code = cmdReportReRender(options);
         break;
+      case 'ledger':
+        code = cmdLedger(options);
+        break;
       case 'status':
         code = cmdStatus(options);
         break;
@@ -5575,6 +5700,8 @@ module.exports = {
   cmdScoreSubmit,
   cmdReportReRender,
   cmdSandbox,
+  cmdLedger,
+  cmdLedgerLink,
   printRunDryRunPlan,
   showHelp,
   loadProjectConfig,
