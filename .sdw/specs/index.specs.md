@@ -75,5 +75,5 @@ Central repository index tracking specification lifecycle states, metadata, and 
 | 00062 | 00062-sdw-spec-issue-provider-sync | SDW Spec-Issue Two-Way Sync with Registered Provider | completed | local | 2026-10-23 | PASS | - |
 | 00063 | 00063-orchestrator-checkpoint-commits-must-ver | Orchestrator checkpoint commits must verify the run branch | completed | local | 2026-10-23 | PASS | - |
 | 00064 | 00064-dag-planning-must-prove-acceptance-crite | DAG planning must prove acceptance-criterion file coverage | completed | local | 2026-10-23 | PASS | - |
-| 00065 | 00065-judge-verdict-contract-must-define-parti | Judge verdict contract must define partial verdict handling | pending | local | 2026-10-23 | PASS | - |
+| 00065 | 00065-judge-verdict-contract-must-define-parti | Judge verdict contract must define partial verdict handling | completed | local | 2026-10-23 | PASS | - |
 | 00066 | 00066-batch-pre-flight-must-wait-for-required- | Batch pre-flight must wait for required checks before merging | pending | local | 2026-10-23 | PASS | - |

@@ -4,7 +4,7 @@ localSpecId: "00065"
 slug: 00065-judge-verdict-contract-must-define-parti
 title: "Judge verdict contract must define partial verdict handling"
 source: local
-status: draft
+status: implemented
 specDate: 2026-10-23
 priority: medium
 value: "Aligns the judge prompt with the verdict validator so a judge answer is never rewritten by hand"
