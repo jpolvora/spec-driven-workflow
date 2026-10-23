@@ -1871,6 +1871,115 @@ function initializeRunLedger({ targetRoot, state, specContent }) {
   }
 }
 
+// Spec 00017 AC6-AC8: the run ledger path and the two links Step 4 and Step 5
+// own. The ledger lives in the run artifact directory, so resume and sandbox
+// runs resolve their own copy.
+function resolveRunLedgerPath(targetRoot, state) {
+  if (!state || !state.artifactsDir) return null;
+  return path.resolve(targetRoot, normalizePath(state.artifactsDir), acLedger.LEDGER_FILENAME);
+}
+
+// Spec 00017 AC6: an accepted task links its changed files and its checkpoint
+// commit to every acceptance criterion the evidence claims. Files keep their
+// project-relative forward-slash form and every entry names the task.
+function linkAcceptedTaskEvidence({ targetRoot, state, taskId, acIds, files, commitSha }) {
+  const ledgerPath = resolveRunLedgerPath(targetRoot, state);
+  if (!ledgerPath || !fs.existsSync(ledgerPath)) {
+    return 0;
+  }
+  const payloads = [];
+  for (const file of Array.isArray(files) ? files : []) {
+    payloads.push({ type: 'file', path: file, taskId });
+  }
+  if (commitSha) payloads.push({ type: 'commit', sha: commitSha, taskId });
+
+  let linked = 0;
+  for (const evidence of payloads) {
+    const result = acLedger.linkEvidence({ root: targetRoot, ledgerPath, acIds, evidence });
+    if (!result.ok) {
+      console.warn(`[Ledger] ${evidence.type} evidence for "${taskId}" was not linked: ${result.errors.join(' ')}`);
+      continue;
+    }
+    linked += result.linked.length;
+  }
+  if (linked > 0) {
+    console.log(`[Ledger] ${taskId} linked ${linked} evidence record(s) to ${acIds.join(', ')}.`);
+  }
+  return linked;
+}
+
+// Spec 00017 AC7/AC8: Step 5 derives its score from the run ledger. The judge
+// verdicts are written to the ledger first, so the judge stays authoritative and
+// a criterion it failed can never remain verified. A run without a ledger keeps
+// the verdict-based report instead of failing.
+function applyLedgerScore({ targetRoot, state, report, verdict, judgeResolution }) {
+  const ledgerPath = resolveRunLedgerPath(targetRoot, state);
+  if (!ledgerPath || !fs.existsSync(ledgerPath)) return report;
+
+  const recorded = acLedger.recordReviewVerdicts({
+    root: targetRoot,
+    ledgerPath,
+    reviewId: `step5-${judgeResolution || 'judge'}`,
+    verdicts: verdict.verdicts
+  });
+  if (!recorded.ok) {
+    console.warn(`[Ledger] Step 5 judge verdicts could not be recorded: ${recorded.errors.join(' ')}`);
+    return report;
+  }
+
+  const derived = acLedger.deriveScore(recorded.ledger);
+  const verdictById = new Map(verdict.verdicts.map(entry => [entry.id, entry]));
+  const verifiedAcs = recorded.ledger.criteria
+    .filter(record => record.status === acLedger.STATUS_VERIFIED)
+    .map(record => {
+      const entry = verdictById.get(record.id);
+      return { id: record.id, text: record.text, evidence: entry ? entry.evidence : 'acceptance criteria ledger' };
+    });
+  const failingAcs = recorded.ledger.criteria
+    .filter(record => record.status !== acLedger.STATUS_VERIFIED)
+    .map(record => {
+      const entry = verdictById.get(record.id);
+      return {
+        id: record.id,
+        text: record.text,
+        reason: entry && entry.verdict === 'failed'
+          ? entry.evidence
+          : 'No verified evidence entry in the acceptance criteria ledger.'
+      };
+    });
+
+  const passed = derived.totalAcs > 0 && derived.score >= report.minScore;
+  let feedback;
+  if (derived.totalAcs === 0) {
+    feedback = 'Specification has no acceptance criteria. Fails closed with score 0/10.';
+  } else if (!passed) {
+    feedback = `Conformance score is ${derived.score}/10 (minimum required: ${report.minScore}/10).\n` +
+      `The following acceptance criteria were judged unmet:\n` +
+      failingAcs.map(item => `- ${item.id}: ${item.text}\n  Reason: ${item.reason}`).join('\n') +
+      `\nAddress the reasons above and re-run the workflow.`;
+  } else {
+    feedback = `Conformance score is ${derived.score}/10 (meets or exceeds required threshold ${report.minScore}/10). ` +
+      `${derived.verifiedCount}/${derived.totalAcs} acceptance criteria verified in the acceptance criteria ledger.`;
+  }
+
+  return {
+    ...report,
+    score: derived.score,
+    passed,
+    totalAcs: derived.totalAcs,
+    verifiedCount: derived.verifiedCount,
+    failingCount: derived.failingCount,
+    verifiedAcs,
+    failingAcs,
+    judge: {
+      ...report.judge,
+      reportedScore: verdict.score,
+      scoreMismatch: verdict.score !== derived.score
+    },
+    feedback
+  };
+}
+
 function cmdRun(options) {
   let targetRoot = options.root ? path.resolve(options.root) : process.cwd();
   const sourceRoot = targetRoot;
@@ -3133,6 +3242,14 @@ function cmdRun(options) {
       minScore: effectiveMinScore,
       touchedFiles: scoringTouchedFiles,
       judge: { ...judgeMeta, mode: judgeResolution }
+    });
+    // Spec 00017 AC7/AC8: record the verdicts, then take the score from the ledger.
+    scoreReport = applyLedgerScore({
+      targetRoot,
+      state,
+      report: scoreReport,
+      verdict: verdictValidation.data,
+      judgeResolution
     });
 
     console.log(`[Step 5: Conformance Scoring] Score: ${scoreReport.score}/10 (Required: ${effectiveMinScore}/10). Passed: ${scoreReport.passed}`);
@@ -4824,6 +4941,17 @@ function cmdTaskFinish(options) {
     commitSha = getBaseCommit(targetRoot);
   }
 
+  // Spec 00017 AC6: accepted evidence links its files and checkpoint commit to
+  // every criterion the task claims, so Step 5 can derive and trace the score.
+  linkAcceptedTaskEvidence({
+    targetRoot,
+    state,
+    taskId,
+    acIds: evidenceData.acIds,
+    files: evidenceData.filesChanged,
+    commitSha
+  });
+
   // Record task completion in state (Spec 015 AC16, Spec 028 AC10)
   dispatch.activeTaskId = null;
   dispatch.dispatchedAt = null;
@@ -5310,11 +5438,17 @@ function cmdScoreSubmit(options) {
     resolveJudgeConfigWithModels(config, options.scoring || config.scoring),
     boundJudgeHint
   );
-  const report = scoreEvaluator.applyVerdict(validation.data, {
-    acs: judgeCriteria,
-    minScore,
-    touchedFiles: scoreEvaluator.getTouchedFiles(state.baseCommit, targetRoot),
-    judge: { ...judgeConfig, ...(priorOutput.judge || {}), mode: 'submitted' }
+  const report = applyLedgerScore({
+    targetRoot,
+    state,
+    report: scoreEvaluator.applyVerdict(validation.data, {
+      acs: judgeCriteria,
+      minScore,
+      touchedFiles: scoreEvaluator.getTouchedFiles(state.baseCommit, targetRoot),
+      judge: { ...judgeConfig, ...(priorOutput.judge || {}), mode: 'submitted' }
+    }),
+    verdict: validation.data,
+    judgeResolution: 'submitted'
   });
 
   state.steps[5] = state.steps[5] || { name: 'scoring', status: 'pending', output: null, artifact: null };
