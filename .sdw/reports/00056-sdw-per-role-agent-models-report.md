@@ -7,7 +7,7 @@
 | Specification file | `.sdw/specs/00056-sdw-per-role-agent-models.md` |
 | Specification slug | 00056-sdw-per-role-agent-models |
 | Run ID | run-1792750694534-00056-sdw-per-role-agent-model |
-| Run status | paused |
+| Run status | completed |
 | Branch | `feature/00056-sdw-per-role-agent-models` |
 | Base branch | `master` |
 | Base commit | `d04c2636b0e9d76cd983ac2f3bb428b7e6f085e3` |
@@ -17,7 +17,7 @@
 | Implementation start | 2026-10-23T10:18:16.125Z |
 | Implementation end | 2026-10-23T11:41:33.330Z |
 | Total wall-clock duration | 1h 23m 17s |
-| Generated at | 2026-10-23T11:55:35.913Z |
+| Generated at | 2026-10-23T11:59:19.579Z |
 | Step 1: derivation (skipped) | 1ms |
 | Step 2: refinement (completed) | 36ms |
 | Step 3: dag_generation (completed) | 37ms |
@@ -25,7 +25,7 @@
 | Step 5: scoring (completed) | 11m 39s |
 | Step 6: delivery_commit (completed) | 361ms |
 | Step 7: code_review (completed) | 974ms |
-| Step 8: pr_preparation (pending) | n/a |
+| Step 8: pr_preparation (completed) | 3m 37s |
 
 
 ## Tasks
@@ -42,6 +42,8 @@
 
 | SHA | Subject | Range |
 |---|---|---|
+| `b446ad2` | chore(00056-sdw-per-role-agent-models): mark the specification completed in the registry | base..HEAD |
+| `d04a3e7` | docs(00056-sdw-per-role-agent-models): record delivery report | base..HEAD |
 | `fb8fc9b` | task(00056-sdw-per-role-agent-models): task-5 | base..HEAD |
 | `6804b6b` | task(00056-sdw-per-role-agent-models): task-4 | base..HEAD |
 | `f9b99f2` | task(00056-sdw-per-role-agent-models): task-3 | base..HEAD |
@@ -100,9 +102,18 @@
 | `skills/sdw-orch/scripts/sdw_orch.cjs` | modified |
 | `tests/sdw_orch.test.cjs` | modified |
 
+### Unattributed changes
+
+| File | Change |
+|---|---|
+| `.sdw/reports/00056-sdw-per-role-agent-models-report.md` | added |
+| `.sdw/specs/00056-sdw-per-role-agent-models.md` | modified |
+| `.sdw/specs/index.specs.md` | modified |
+
 ## Verification
 
 - test gate: status `passed`, exit code `0`, duration 2m 12s
+- Step 8 delivery: `completed`
 
 ## Code Review
 
@@ -162,7 +173,13 @@ Not available
 
 ## Retrospective
 
-Not available
+- Status: `passed`
+- Report: `.sdw/state/00056-sdw-per-role-agent-models/run-1792750694534-00056-sdw-per-role-agent-model/run-1792750694534-00056-sdw-per-role-agent-model.retro.md`
+- Data: `.sdw/state/00056-sdw-per-role-agent-models/run-1792750694534-00056-sdw-per-role-agent-model/run-1792750694534-00056-sdw-per-role-agent-model.retro.json`
+- Signals: retries 4 (score 2, review 0, rounds 2, abandonments 0); leftover runs 0; missing artifacts 0; review findings 2 (2 open)
+- Candidates: 0
+- Applied fixes:
+  - none
 
 ## Breaking Changes
 
@@ -391,18 +408,18 @@ Not available
 - Task task-3 accepted after re-dispatch (sequence 3)
 - Task task-4 accepted after re-dispatch (sequence 4)
 - Task task-5 accepted after re-dispatch (sequence 5)
-- Environment: workspace: 14 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
+- Environment: workspace: 17 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
 
 ## Outcome
 
-- Result: `paused`
+- Result: `completed`
 - Delivery commit: `fb8fc9b36109b2fa2a2217588afdde9a47a951a3`
 - Ship status: `pending`
 - Duration: 1h 23m 17s
 
 ## Step Contributions
 
-- Recorded: 8 contribution(s)
+- Recorded: 13 contribution(s)
 
 ### Step 1: derivation
 
@@ -450,8 +467,18 @@ Not available
 
 ### Step 8: pr_preparation
 
-Not available
+- **convergence** 2026-10-23T11:59:11.919Z - Convergence iteration 1
+  - Body: `{"iteration":1,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":false}`
+- **convergence** 2026-10-23T11:59:13.093Z - Convergence iteration 2
+  - Body: `{"iteration":2,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":true}`
+- **gates** 2026-10-23T11:59:14.502Z - Pre-PR gates: 6 result(s)
+  - Body: `{"gates":[{"name":"prePrCommand","status":"skipped","detail":"prePrCommand is not configured"},{"name":"build","status":"skipped","detail":"requiredBuild is false"},{"name":"tests","status":"pass","detail":"npm test exited 0"},{"name":"security","status":"pass","detail":"sdw-security-checks found no blocking leak"},{"name":"runState","status":"pass","detail":"step 4, step 6 and step 7 completed; score 9 >= scoreMin 8"},{"name":"discovery","status":"pass","detail":"no prepare obligations discovered"}]}`
+- **ship** 2026-10-23T11:59:14.502Z - Pull request #54
+  - Body: `{"pushed":true,"branch":"feature/00056-sdw-per-role-agent-models","pullRequest":{"number":"54","url":"https://github.com/jpolvora/spec-driven-workflow/pull/54","title":null},"shipStatus":"delivered"}`
+  - Evidence: `https://github.com/jpolvora/spec-driven-workflow/pull/54`
 
 ### Step 9: retrospective
 
-Not available
+- **retro** 2026-10-23T11:59:19.205Z - Retrospective passed: 0 candidate(s)
+  - Body: `{"status":"passed","runStatus":"completed","signals":{"retries":{"scoreIterations":2,"reviewIterations":0,"reviewRounds":2,"dispatchAbandonments":0,"total":4},"leftoverRuns":0,"missingArtifacts":0,"reviewFindings":{"total":2,"open":2}},"candidates":[],"fixes":{"recorded":[],"consolidated":null,"queuedSpecifications":[],"failures":[]},"routedCandidates":[],"reportMd":".sdw/state/00056-sdw-per-role-agent-models/run-1792750694534-00056-sdw-per-role-agent-model/run-1792750694534-00056-sdw-per-role-agent-model.retro.md","reportJson":".sdw/state/00056-sdw-per-role-agent-models/run-1792750694534-00056-sdw-per-role-agent-model/run-1792750694534-00056-sdw-per-role-agent-model.retro.json"}`
+  - Evidence: `.sdw/state/00056-sdw-per-role-agent-models/run-1792750694534-00056-sdw-per-role-agent-model/run-1792750694534-00056-sdw-per-role-agent-model.retro.md`, `.sdw/state/00056-sdw-per-role-agent-models/run-1792750694534-00056-sdw-per-role-agent-model/run-1792750694534-00056-sdw-per-role-agent-model.retro.json`
