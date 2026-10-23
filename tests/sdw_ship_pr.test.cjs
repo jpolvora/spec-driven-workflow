@@ -1761,6 +1761,25 @@ test('sdw-ship-pr - AC3, AC8, AC11: a GitHub specification appends Closes #<id>'
   }
 });
 
+test('sdw-ship-pr - 00062 AC18: a scmSpecId-only specification still appends its closing keyword', () => {
+  const { tmpDir } = setupTestWorkspace();
+  const slug = '00063-scm-spec-id-link';
+  const specsDir = path.join(tmpDir, '.sdw', 'specs');
+  fs.mkdirSync(specsDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(specsDir, `${slug}.md`),
+    `---\nid: null\nscmSpecId: "789"\nslug: ${slug}\ntitle: "Scm Spec Id Link"\nsource: github\nstatus: draft\n---\n\n# Specification — Scm Spec Id Link\n`,
+    'utf8'
+  );
+  try {
+    const link = sdwShipPr.resolveIssueLink(tmpDir, slug);
+    assert.deepStrictEqual(link, { id: '789', provider: 'github', keyword: 'Closes #789', present: true },
+      'the canonical scmSpecId drives the closing keyword even when the legacy id stays null');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test('sdw-ship-pr - AC4, AC8, AC11: an Azure DevOps specification appends Fixes AB#<id>', async () => {
   const { tmpDir, config } = setupTestWorkspace();
   writeIssueSpec(tmpDir, '00061-ado-link', { id: '456', source: 'azure-devops' });
