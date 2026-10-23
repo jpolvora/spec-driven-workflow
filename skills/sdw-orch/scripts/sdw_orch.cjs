@@ -17,6 +17,44 @@ const sandbox = require('./sandbox.cjs');
 const deliveryReport = require('./delivery_report.cjs');
 const memory = require('../../sdw-memory/scripts/sdw_memory.cjs');
 
+// Spec 00043: short, consistent step-number progress headers. Additive only:
+// plain text for humans and grep, no state or exit-code change.
+const STEP_PROGRESS_NAMES = {
+  1: 'Derivation',
+  2: 'Refinement',
+  3: 'DAG Generation',
+  4: 'Implementation',
+  5: 'Conformance Scoring',
+  6: 'Delivery Commit',
+  7: 'Delegated Review',
+  8: 'PR Preparation'
+};
+function logStepEnter(step) {
+  console.log(`[Step ${step}/8] Entering Step ${step}: ${STEP_PROGRESS_NAMES[step]}.`);
+}
+function logStepDone(step) {
+  console.log(`[Step ${step}/8] Completed Step ${step}: ${STEP_PROGRESS_NAMES[step]}.`);
+}
+function logRunStarted(runId, specSlug, currentStep) {
+  console.log(`[Step ${currentStep}/8] Run "${runId}" started (${specSlug}).`);
+}
+function logRunResumed(runId, specSlug, currentStep) {
+  console.log(`[Step ${currentStep}/8] Run "${runId}" resumed (${specSlug}).`);
+}
+function getStepTaskTotals(state) {
+  const dagTasks = (Array.isArray(state.dagTasks) && state.dagTasks.length > 0)
+    ? state.dagTasks
+    : ((state.steps && state.steps[3] && state.steps[3].output && state.steps[3].output.tasks) || []);
+  const total = dagTasks.length;
+  const done = Object.values((state.steps && state.steps[4] && state.steps[4].tasks) || {})
+    .filter(t => t && t.status === 'completed').length;
+  return { total, done };
+}
+function logTaskAccepted(state, taskId) {
+  const { total, done } = getStepTaskTotals(state);
+  console.log(`[Step 4/8] Task ${done}/${total} (${taskId}) accepted.`);
+}
+
 function resolveSkillScript(targetRoot, skillName, scriptRelPath, options = {}) {
   try {
     const sdwConfig = require('../../sdw-config/scripts/sdw_config.cjs');
@@ -1894,7 +1932,9 @@ function cmdRun(options) {
 
   // Initialize or restore Run State (AC1, AC2, AC9, AC17)
   let state;
+  let resumedExistingRun = false;
   if (options.runId && fs.existsSync(stateManager.getStateFilePath(targetRoot, options.runId))) {
+    resumedExistingRun = true;
     state = stateManager.loadRunState(targetRoot, options.runId);
     state.branch = activeBranch;
     state.baseBranch = baseBranch;
@@ -1953,12 +1993,15 @@ function cmdRun(options) {
 
   console.log(`[sdw-orch] Run "${state.runId}" active at step ${startStep}/8.`);
   console.log(`[sdw-orch] State file: ${stateManager.getStateFilePath(targetRoot, state.runId)}`);
+  if (resumedExistingRun && !options._resumedLogged) logRunResumed(state.runId, specSlug, startStep);
+  else if (!resumedExistingRun) logRunStarted(state.runId, specSlug, startStep);
 
   let effectiveSpecContent = rawSpecContent;
 
   // Step 1: Spec Ingestion & Derivation (AC3, AC4)
   if (startStep <= 1 && state.steps[1].status !== 'completed' && state.steps[1].status !== 'skipped') {
     state = stateManager.updateStepState(targetRoot, state.runId, 1, 'in_progress');
+    logStepEnter(1);
     const derivationResult = specDerivation.deriveAgentSpec(rawSpecContent, { slug: specSlug });
     if (derivationResult.derivationNeeded) {
       console.log(`[Step 1: Derivation] Spec reformulated for agentic execution.`);
@@ -1968,6 +2011,7 @@ function cmdRun(options) {
       console.log(`[Step 1: Derivation] Skipped: input spec is already agent-ready.`);
       state = stateManager.updateStepState(targetRoot, state.runId, 1, 'skipped', { derivationNeeded: false });
     }
+    logStepDone(1);
     const step1Status = state.steps[1].status;
     state = recordStepContributions(targetRoot, state, 1, [{
       kind: 'derivation',
@@ -1982,8 +2026,10 @@ function cmdRun(options) {
 
   // Step 2: Refinement (Grilling + Technical Planning) (AC1, AC2)
   if (refineMode && startStep <= 2 && state.steps[2].status !== 'completed' && state.steps[2].status !== 'skipped') {
+    logStepEnter(2);
     console.log('[Step 2: Refinement] Second pass: skipping decision-gap grilling; the implementation already exists.');
     state = stateManager.updateStepState(targetRoot, state.runId, 2, 'skipped', { mode: 'refine', reason: 'second pass reviews the delivered implementation' });
+    logStepDone(2);
     state = recordStepContributions(targetRoot, state, 2, [{
       kind: 'refinement',
       title: 'Refinement skipped on the second pass',
@@ -1992,6 +2038,7 @@ function cmdRun(options) {
     }]);
   } else if (startStep <= 2 && state.steps[2].status !== 'completed' && state.steps[2].status !== 'skipped') {
     state = stateManager.updateStepState(targetRoot, state.runId, 2, 'in_progress');
+    logStepEnter(2);
     const grillingResult = specGrilling.analyzeSpecificationGaps(effectiveSpecContent, { slug: specSlug });
 
     if (grillingResult.hasGaps) {
@@ -2059,6 +2106,7 @@ function cmdRun(options) {
       artifactsDir: state.artifactsDir
     });
     state = stateManager.updateStepState(targetRoot, state.runId, 2, 'completed', refinementOutput, null, { artifact: step2Artifact });
+    logStepDone(2);
     state = recordStepContributions(targetRoot, state, 2, [{
       kind: 'refinement',
       title: grillingResult.hasGaps ? `Refinement resolved ${grillingResult.gaps.length} decision gap(s)` : 'Refinement found no decision gaps',
@@ -2077,6 +2125,7 @@ function cmdRun(options) {
   const blueprint = (state.steps[2] && state.steps[2].output && state.steps[2].output.blueprint) || null;
   if (refineMode && startStep <= 3 && state.steps[3].status !== 'completed' && state.steps[3].status !== 'skipped') {
     state = stateManager.updateStepState(targetRoot, state.runId, 3, 'in_progress');
+    logStepEnter(3);
     const refineAcIds = dagPlanner.parseAcceptanceCriteria(effectiveSpecContent)
       .map(ac => (typeof ac === 'string' ? ac : ac.id));
     dagPlan = {
@@ -2095,10 +2144,12 @@ function cmdRun(options) {
     state = stateManager.saveRunState(targetRoot, state);
     console.log('[Step 3: DAG Generation] Second pass: one refinement task.');
     state = stateManager.updateStepState(targetRoot, state.runId, 3, 'completed', dagPlan);
+    logStepDone(3);
   } else if (refineMode && state.steps[3].output) {
     dagPlan = state.steps[3].output;
   } else if (startStep <= 3 && state.steps[3].status !== 'completed') {
     state = stateManager.updateStepState(targetRoot, state.runId, 3, 'in_progress');
+    logStepEnter(3);
     dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint });
     console.log(`[Step 3: DAG Generation] Complexity: ${dagPlan.complexity.level}. Generated ${dagPlan.totalTasks} task(s).`);
     state.dagTasks = dagPlan.tasks;
@@ -2111,6 +2162,7 @@ function cmdRun(options) {
       artifactsDir: state.artifactsDir
     });
     state = stateManager.updateStepState(targetRoot, state.runId, 3, 'completed', dagPlan, null, { artifact: step3Artifact });
+    logStepDone(3);
   } else if (state.steps[3].output) {
     dagPlan = state.steps[3].output;
   } else {
@@ -2131,6 +2183,7 @@ function cmdRun(options) {
   if (startStep <= 4 && state.steps[4].status !== 'completed') {
     state.steps[4].tasks = state.steps[4].tasks || {};
     state.steps[4].gates = state.steps[4].gates || {};
+    logStepEnter(4);
 
     if (options.simulateFailure) {
       console.error(`[Step 4: Implementation] Unrecoverable failure occurred during subagent execution (AC16).`);
@@ -2363,6 +2416,7 @@ function cmdRun(options) {
         completedTaskIds.add(task.id);
         stateManager.saveRunState(targetRoot, state);
         console.log(`[Step 4: Implementation] Task ${task.id} accepted (commit ${commitSha}, ${evidenceData.acIds.length} ACs, ${evidenceData.filesChanged.length} files).`);
+        logTaskAccepted(state, task.id);
       }
 
       const gateResults = runVerificationGates(targetRoot, config, { ...options, runId: state.runId, slug: specSlug });
@@ -2380,6 +2434,7 @@ function cmdRun(options) {
         tasks: state.steps[4].tasks,
         gates: state.steps[4].gates
       });
+      logStepDone(4);
       state = recordStepContributions(targetRoot, state, 4, buildStep4Contributions(state));
     }
   }
@@ -2424,6 +2479,7 @@ function cmdRun(options) {
   let scoreReport = null;
   if (startStep <= 5 && state.steps[5].status !== 'completed') {
     state = stateManager.updateStepState(targetRoot, state.runId, 5, 'in_progress');
+    logStepEnter(5);
 
     const specAcs = dagPlanner.parseAcceptanceCriteria(effectiveSpecContent);
     const judgeConfig = scoreEvaluator.resolveJudgeConfig({ scoring: options.scoring || config.scoring });
@@ -2638,6 +2694,7 @@ function cmdRun(options) {
     }
 
     state = stateManager.updateStepState(targetRoot, state.runId, 5, 'completed', scoredOutput, null, { artifact: step5Artifact });
+    logStepDone(5);
     state.score = scoreReport.score;
     state.scoreIteration = (state.scoreIteration || 0) + 1;
     state = stateManager.saveRunState(targetRoot, state);
@@ -2652,6 +2709,7 @@ function cmdRun(options) {
 
   // Step 6: Delivery Commit (AC11, AC20, AC25)
   if (startStep <= 6 && state.steps[6].status !== 'completed') {
+    logStepEnter(6);
     // Quality gate: enforce Step 4 completion (AC20, AC25)
     if (!state.steps[4] || state.steps[4].status !== 'completed') {
       console.error(`[Step 6: Delivery Commit] Blocked: cannot create delivery commit because Step 4 is not completed.`);
@@ -2798,6 +2856,7 @@ function cmdRun(options) {
     state.deliveryCommitCreated = deliveryCommitCreated;
     state = stateManager.saveRunState(targetRoot, state);
     state = stateManager.updateStepState(targetRoot, state.runId, 6, 'completed', { deliveryCommit: commitSha, deliveryCommitCreated });
+    logStepDone(6);
     state = recordStepContributions(targetRoot, state, 6, [buildStep6Contribution(state, {
       deliveryCommit: commitSha,
       deliveryCommitCreated,
@@ -2830,8 +2889,10 @@ function cmdRun(options) {
   // CLI runner (or subagent in handoff) and inspects the JSON report.
   if (startStep <= 7 && state.steps[7].status !== 'completed' && !options.skipReview && !isGitRepo(targetRoot)) {
     // sdw-code-review requires a git range to review; a non-git workspace cannot host it.
+    logStepEnter(7);
     console.log('[Step 7: Delegated Review] Non-git workspace: review skipped.');
     state = stateManager.updateStepState(targetRoot, state.runId, 7, 'skipped', { reason: 'non-git workspace' });
+    logStepDone(7);
     state = recordStepContributions(targetRoot, state, 7, [{
       kind: 'review',
       title: 'Code review skipped',
@@ -2840,6 +2901,7 @@ function cmdRun(options) {
     }]);
   } else if (startStep <= 7 && state.steps[7].status !== 'completed' && !options.skipReview) {
     state = stateManager.updateStepState(targetRoot, state.runId, 7, 'in_progress');
+    logStepEnter(7);
     const resolvedCodeReviewScript = resolveSkillScript(targetRoot, 'sdw-code-review', path.join('scripts', 'sdw_code_review.cjs'), resolveOptions);
     const codeReviewScript = resolvedCodeReviewScript || path.resolve(__dirname, '../../sdw-code-review/scripts/sdw_code_review.cjs');
     const hasCodeReview = fs.existsSync(codeReviewScript);
@@ -2977,9 +3039,12 @@ function cmdRun(options) {
 
     state.reviewCommit = getBaseCommit(targetRoot);
     state = stateManager.updateStepState(targetRoot, state.runId, 7, 'completed', reviewReport, null, artifactRel ? { artifact: artifactRel } : undefined);
+    logStepDone(7);
     state = recordStepContributions(targetRoot, state, 7, buildStep7Contributions(reviewIterations, artifactRel), { allowDuplicates: true });
   } else if (options.skipReview) {
+    logStepEnter(7);
     state = stateManager.updateStepState(targetRoot, state.runId, 7, 'skipped', { reason: 'Skipped via --skip-review' });
+    logStepDone(7);
     state = recordStepContributions(targetRoot, state, 7, [{
       kind: 'review',
       title: 'Code review skipped',
@@ -3070,10 +3135,13 @@ function cmdRun(options) {
   };
 
   if (refineSkipShip && state.steps[8].status !== 'completed' && state.steps[8].status !== 'skipped') {
+    logStepEnter(8);
     console.log('[Step 8: PR Preparation] Second pass produced no new commit; nothing to ship.');
     state = stateManager.updateStepState(targetRoot, state.runId, 8, 'skipped', { reason: 'second pass produced no code to ship' });
+    logStepDone(8);
   } else if (startStep <= 8 && state.steps[8].status !== 'completed' && !options.skipPr) {
     state = stateManager.updateStepState(targetRoot, state.runId, 8, 'in_progress');
+    logStepEnter(8);
     const step8GateAttempts = [];
     let step8ShipResult = null;
 
@@ -3394,9 +3462,12 @@ function cmdRun(options) {
     }
 
     state = stateManager.updateStepState(targetRoot, state.runId, 8, 'completed', prPayload);
+    logStepDone(8);
     state = recordStepContributions(targetRoot, state, 8, buildStep8Contributions(state, step8ShipResult, step8GateAttempts), { allowDuplicates: true });
   } else if (options.skipPr) {
+    logStepEnter(8);
     state = stateManager.updateStepState(targetRoot, state.runId, 8, 'skipped', { reason: 'Skipped via --skip-pr' });
+    logStepDone(8);
     state = recordStepContributions(targetRoot, state, 8, [
       { kind: 'gates', title: 'Pre-PR gates skipped', body: { skipped: true, reason: 'Skipped via --skip-pr' }, evidence: [] },
       { kind: 'ship', title: 'Delivery skipped', body: { skipped: true, reason: 'Skipped via --skip-pr' }, evidence: [] }
@@ -3697,8 +3768,14 @@ function dispatchNextTask(context) {
 function printDispatchEnvelope(envelope, state, options) {
   if (options && options.json) {
     console.log(JSON.stringify(envelope, null, 2));
+    try {
+      const { total } = getStepTaskTotals(state);
+      console.error(`[Step 4/8] Task ${envelope.sequence}/${total} (${envelope.taskId}) dispatched.`);
+    } catch (e) {}
     return;
   }
+  const { total } = getStepTaskTotals(state);
+  console.log(`[Step 4/8] Task ${envelope.sequence}/${total} (${envelope.taskId}) dispatched.`);
   console.log(`\n[Step 4: Dispatch] ${envelope.taskId} dispatched (sequence ${envelope.sequence}, ${envelope.acIds.length} ACs, ${envelope.dependencies.length} dependency(ies)).`);
   console.log(`  Title:    ${envelope.title}`);
   console.log(`  Prompt:   ${envelope.promptFile} (${envelope.promptBytes} bytes)`);
@@ -4065,6 +4142,7 @@ function cmdTaskFinish(options) {
   state = stateManager.saveRunState(targetRoot, state);
 
   console.log(`[sdw-orch task finish] Task "${taskId}" successfully accepted.`);
+  logTaskAccepted(state, taskId);
   console.log(`  Covered ACs:   ${evidenceData.acIds.join(', ')}`);
   console.log(`  Files Changed: ${evidenceData.filesChanged.join(', ')}`);
   if (commitSha) {
@@ -4101,6 +4179,7 @@ function cmdTaskFinish(options) {
       tasks: state.steps[4].tasks,
       gates: state.steps[4].gates
     });
+    logStepDone(4);
     state = recordStepContributions(targetRoot, state, 4, buildStep4Contributions(state));
     console.log(`Step 4 completed successfully! Proceed to Step 5 by running:`);
     console.log(`  node "${orchCommandPath()}" resume --run-id ${state.runId}${followUpRootFlag(targetRoot)}`);
@@ -4148,6 +4227,8 @@ function cmdResume(options) {
   }
 
   let resumptionStep = stateManager.getResumptionStep(state);
+  logRunResumed(state.runId, state.specSlug, resumptionStep);
+  options._resumedLogged = true;
 
   // Only the Step 4 resumption path owns task completion and verification gates (AC20).
   // Resuming at Steps 1-3 must let cmdRun generate the DAG and enter Step 4 normally.
@@ -4237,6 +4318,7 @@ function cmdResume(options) {
       tasks: state.steps[4].tasks,
       gates: state.steps[4].gates
     });
+    logStepDone(4);
     state = recordStepContributions(targetRoot, state, 4, buildStep4Contributions(state));
     state.status = 'in_progress';
     state = stateManager.saveRunState(targetRoot, state);
