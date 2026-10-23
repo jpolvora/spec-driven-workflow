@@ -7,7 +7,7 @@
 | Specification file | `.sdw/specs/00064-dag-planning-must-prove-acceptance-crite.md` |
 | Specification slug | 00064-dag-planning-must-prove-acceptance-crite |
 | Run ID | run-1792766690904-00064-dag-planning-must-prove- |
-| Run status | paused |
+| Run status | completed |
 | Branch | `feature/00064-dag-planning-must-prove-acceptance-crite` |
 | Base branch | `master` |
 | Base commit | `bf94b22afb4832623a9a1eb1137c3e1256a9b00e` |
@@ -17,7 +17,7 @@
 | Implementation start | 2026-10-23T14:44:52.079Z |
 | Implementation end | 2026-10-23T14:57:26.380Z |
 | Total wall-clock duration | 12m 34s |
-| Generated at | 2026-10-23T15:01:28.240Z |
+| Generated at | 2026-10-23T15:06:50.217Z |
 | Step 1: derivation (skipped) | 1ms |
 | Step 2: refinement (completed) | 34ms |
 | Step 3: dag_generation (completed) | 2ms |
@@ -25,7 +25,7 @@
 | Step 5: scoring (completed) | 22s |
 | Step 6: delivery_commit (completed) | 446ms |
 | Step 7: code_review (completed) | 1s |
-| Step 8: pr_preparation (pending) | n/a |
+| Step 8: pr_preparation (completed) | 5m 17s |
 
 
 ## Tasks
@@ -38,6 +38,8 @@
 
 | SHA | Subject | Range |
 |---|---|---|
+| `35c7ade` | chore(00064-dag-planning-must-prove-acceptance-crite): mark the specification completed in the registry | base..HEAD |
+| `eaf0654` | docs(00064-dag-planning-must-prove-acceptance-crite): record delivery report | base..HEAD |
 | `6651c66` | feat(00064-dag-planning-must-prove-acceptance-crite): implement 00064-dag-planning-must-prove-acceptance-crite | base..HEAD |
 | `8fd0dca` | task(00064-dag-planning-must-prove-acceptance-crite): task-1 | base..HEAD |
 
@@ -55,11 +57,14 @@
 
 | File | Change |
 |---|---|
+| `.sdw/reports/00064-dag-planning-must-prove-acceptance-crite-report.md` | added |
 | `.sdw/specs/00064-dag-planning-must-prove-acceptance-crite.md` | modified |
+| `.sdw/specs/index.specs.md` | modified |
 
 ## Verification
 
 - test gate: status `passed`, exit code `0`, duration 3m 29s
+- Step 8 delivery: `completed`
 
 ## Code Review
 
@@ -100,7 +105,13 @@ Not available
 
 ## Retrospective
 
-Not available
+- Status: `passed`
+- Report: `.sdw/state/00064-dag-planning-must-prove-acceptance-crite/run-1792766690904-00064-dag-planning-must-prove-/run-1792766690904-00064-dag-planning-must-prove-.retro.md`
+- Data: `.sdw/state/00064-dag-planning-must-prove-acceptance-crite/run-1792766690904-00064-dag-planning-must-prove-/run-1792766690904-00064-dag-planning-must-prove-.retro.json`
+- Signals: retries 4 (score 2, review 0, rounds 2, abandonments 0); leftover runs 1; missing artifacts 0; review findings 0 (0 open)
+- Candidates: 0
+- Applied fixes:
+  - none
 
 ## Breaking Changes
 
@@ -146,18 +157,18 @@ None detected.
 ## Notes
 
 - Step 1 (derivation) skipped: not recorded
-- Environment: workspace: 4 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
+- Environment: workspace: 6 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
 
 ## Outcome
 
-- Result: `paused`
+- Result: `completed`
 - Delivery commit: `6651c66bad17bd6ad85f7cdb4c080240261e2a96`
 - Ship status: `pending`
 - Duration: 12m 34s
 
 ## Step Contributions
 
-- Recorded: 8 contribution(s)
+- Recorded: 13 contribution(s)
 
 ### Step 1: derivation
 
@@ -205,8 +216,18 @@ None detected.
 
 ### Step 8: pr_preparation
 
-Not available
+- **convergence** 2026-10-23T15:06:44.601Z - Convergence iteration 1
+  - Body: `{"iteration":1,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":false}`
+- **convergence** 2026-10-23T15:06:45.189Z - Convergence iteration 2
+  - Body: `{"iteration":2,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":true}`
+- **gates** 2026-10-23T15:06:46.148Z - Pre-PR gates: 6 result(s)
+  - Body: `{"gates":[{"name":"prePrCommand","status":"skipped","detail":"prePrCommand is not configured"},{"name":"build","status":"skipped","detail":"requiredBuild is false"},{"name":"tests","status":"pass","detail":"npm test exited 0"},{"name":"security","status":"pass","detail":"sdw-security-checks found no blocking leak"},{"name":"runState","status":"pass","detail":"step 4, step 6 and step 7 completed; score 10 >= scoreMin 8"},{"name":"discovery","status":"pass","detail":"no prepare obligations discovered"}]}`
+- **ship** 2026-10-23T15:06:46.148Z - Pull request #56
+  - Body: `{"pushed":true,"branch":"feature/00064-dag-planning-must-prove-acceptance-crite","pullRequest":{"number":"56","url":"https://github.com/jpolvora/spec-driven-workflow/pull/56","title":null},"shipStatus":"delivered"}`
+  - Evidence: `https://github.com/jpolvora/spec-driven-workflow/pull/56`
 
 ### Step 9: retrospective
 
-Not available
+- **retro** 2026-10-23T15:06:50.053Z - Retrospective passed: 0 candidate(s)
+  - Body: `{"status":"passed","runStatus":"completed","signals":{"retries":{"scoreIterations":2,"reviewIterations":0,"reviewRounds":2,"dispatchAbandonments":0,"total":4},"leftoverRuns":1,"missingArtifacts":0,"reviewFindings":{"total":0,"open":0}},"candidates":[],"fixes":{"recorded":[],"consolidated":null,"queuedSpecifications":[],"failures":[]},"routedCandidates":[],"reportMd":".sdw/state/00064-dag-planning-must-prove-acceptance-crite/run-1792766690904-00064-dag-planning-must-prove-/run-1792766690904-00064-dag-planning-must-prove-.retro.md","reportJson":".sdw/state/00064-dag-planning-must-prove-acceptance-crite/run-1792766690904-00064-dag-planning-must-prove-/run-1792766690904-00064-dag-planning-must-prove-.retro.json"}`
+  - Evidence: `.sdw/state/00064-dag-planning-must-prove-acceptance-crite/run-1792766690904-00064-dag-planning-must-prove-/run-1792766690904-00064-dag-planning-must-prove-.retro.md`, `.sdw/state/00064-dag-planning-must-prove-acceptance-crite/run-1792766690904-00064-dag-planning-must-prove-/run-1792766690904-00064-dag-planning-must-prove-.retro.json`
