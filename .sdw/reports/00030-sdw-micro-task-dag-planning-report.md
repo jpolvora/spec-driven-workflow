@@ -7,7 +7,7 @@
 | Specification file | `.sdw/specs/00030-sdw-micro-task-dag-planning.md` |
 | Specification slug | 00030-sdw-micro-task-dag-planning |
 | Run ID | run-1792735164388-00030-sdw-micro-task-dag-plann |
-| Run status | paused |
+| Run status | completed |
 | Branch | `feature/00030-sdw-micro-task-dag-planning` |
 | Base branch | `master` |
 | Base commit | `395912d44005311393d71961d9407694098615fd` |
@@ -17,7 +17,7 @@
 | Implementation start | 2026-10-23T05:59:26.530Z |
 | Implementation end | 2026-10-23T06:56:20.990Z |
 | Total wall-clock duration | 56m 54s |
-| Generated at | 2026-10-23T08:13:29.851Z |
+| Generated at | 2026-10-23T08:17:41.106Z |
 | Step 1: derivation (skipped) | 1ms |
 | Step 2: refinement (completed) | 39ms |
 | Step 3: dag_generation (completed) | 4ms |
@@ -25,7 +25,7 @@
 | Step 5: scoring (completed) | 29m 48s |
 | Step 6: delivery_commit (completed) | 516ms |
 | Step 7: code_review (completed) | 1s |
-| Step 8: pr_preparation (blocked_convergence) | n/a |
+| Step 8: pr_preparation (completed) | 47m 45s |
 
 
 ## Tasks
@@ -39,6 +39,8 @@
 
 | SHA | Subject | Range |
 |---|---|---|
+| `68cff12` | chore(00030-sdw-micro-task-dag-planning): mark the specification completed in the registry | base..HEAD |
+| `6b70fc4` | docs(00030-sdw-micro-task-dag-planning): record delivery report | base..HEAD |
 | `8fe5669` | fix(review): refuse a plan that would emit a task without criteria | base..HEAD |
 | `f21f28f` | fix(review): anchor touchpoint regexes so prose no longer escalates specs | base..HEAD |
 | `5060715` | fix(review): make the DAG task cap configurable via maxTasksPerSpec | base..HEAD |
@@ -74,13 +76,15 @@
 | `.sdw/config.json` | modified |
 | `.sdw/config.schema.json` | modified |
 | `.sdw/reports/00030-sdw-micro-task-dag-planning-report.md` | added |
+| `.sdw/specs/00030-sdw-micro-task-dag-planning.md` | modified |
+| `.sdw/specs/index.specs.md` | modified |
 | `skills/sdw-config/references/config_spec.md` | modified |
 | `skills/sdw-config/scripts/sdw_config.cjs` | modified |
 
 ## Verification
 
 - test gate: status `passed`, exit code `0`, duration 3m 14s
-- Step 8 delivery: `blocked_convergence` (ship status `review_pending`)
+- Step 8 delivery: `completed` (ship status `review_pending`)
 
 ## Code Review
 
@@ -153,7 +157,13 @@ Not available
 
 ## Retrospective
 
-Not available
+- Status: `passed`
+- Report: `.sdw/state/00030-sdw-micro-task-dag-planning/run-1792735164388-00030-sdw-micro-task-dag-plann/run-1792735164388-00030-sdw-micro-task-dag-plann.retro.md`
+- Data: `.sdw/state/00030-sdw-micro-task-dag-planning/run-1792735164388-00030-sdw-micro-task-dag-plann/run-1792735164388-00030-sdw-micro-task-dag-plann.retro.json`
+- Signals: retries 4 (score 2, review 0, rounds 2, abandonments 0); leftover runs 0; missing artifacts 0; review findings 1 (1 open)
+- Candidates: 0
+- Applied fixes:
+  - none
 
 ## Breaking Changes
 
@@ -340,18 +350,18 @@ Not available
 
 - Step 1 (derivation) skipped: not recorded
 - Task task-2 accepted after re-dispatch (sequence 2)
-- Environment: workspace: 12 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
+- Environment: workspace: 14 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
 
 ## Outcome
 
-- Result: `paused`
+- Result: `completed`
 - Delivery commit: `865da01114377098787a36cbd284f6f43b07adb2`
 - Ship status: `review_pending`
 - Duration: 56m 54s
 
 ## Step Contributions
 
-- Recorded: 10 contribution(s)
+- Recorded: 13 contribution(s)
 
 ### Step 1: derivation
 
@@ -399,11 +409,18 @@ Not available
 
 ### Step 8: pr_preparation
 
-- **convergence** 2026-10-23T07:38:53.152Z - Convergence iteration 1
+- **convergence** 2026-10-23T08:17:33.615Z - Convergence iteration 1
   - Body: `{"iteration":1,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":false}`
-- **convergence** 2026-10-23T07:38:53.965Z - Convergence iteration 2
-  - Body: `{"iteration":2,"rounds":2,"failingChecks":[{"name":"review","status":""}],"openThreads":1,"resolvedThreads":0,"fixCommit":null,"converged":false}`
+- **convergence** 2026-10-23T08:17:35.060Z - Convergence iteration 2
+  - Body: `{"iteration":2,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":true}`
+- **gates** 2026-10-23T08:17:35.883Z - Pre-PR gates: 6 result(s)
+  - Body: `{"gates":[{"name":"prePrCommand","status":"skipped","detail":"prePrCommand is not configured"},{"name":"build","status":"skipped","detail":"requiredBuild is false"},{"name":"tests","status":"pass","detail":"npm test exited 0"},{"name":"security","status":"pass","detail":"sdw-security-checks found no blocking leak"},{"name":"runState","status":"pass","detail":"step 4, step 6 and step 7 completed; score 10 >= scoreMin 8"},{"name":"discovery","status":"pass","detail":"no prepare obligations discovered"}]}`
+- **ship** 2026-10-23T08:17:35.883Z - Pull request #52
+  - Body: `{"pushed":true,"branch":"feature/00030-sdw-micro-task-dag-planning","pullRequest":{"number":"52","url":"https://github.com/jpolvora/spec-driven-workflow/pull/52","title":null},"shipStatus":"delivered"}`
+  - Evidence: `https://github.com/jpolvora/spec-driven-workflow/pull/52`
 
 ### Step 9: retrospective
 
-Not available
+- **retro** 2026-10-23T08:17:40.493Z - Retrospective passed: 0 candidate(s)
+  - Body: `{"status":"passed","runStatus":"completed","signals":{"retries":{"scoreIterations":2,"reviewIterations":0,"reviewRounds":2,"dispatchAbandonments":0,"total":4},"leftoverRuns":0,"missingArtifacts":0,"reviewFindings":{"total":1,"open":1}},"candidates":[],"fixes":{"recorded":[],"consolidated":null,"queuedSpecifications":[],"failures":[]},"routedCandidates":[],"reportMd":".sdw/state/00030-sdw-micro-task-dag-planning/run-1792735164388-00030-sdw-micro-task-dag-plann/run-1792735164388-00030-sdw-micro-task-dag-plann.retro.md","reportJson":".sdw/state/00030-sdw-micro-task-dag-planning/run-1792735164388-00030-sdw-micro-task-dag-plann/run-1792735164388-00030-sdw-micro-task-dag-plann.retro.json"}`
+  - Evidence: `.sdw/state/00030-sdw-micro-task-dag-planning/run-1792735164388-00030-sdw-micro-task-dag-plann/run-1792735164388-00030-sdw-micro-task-dag-plann.retro.md`, `.sdw/state/00030-sdw-micro-task-dag-planning/run-1792735164388-00030-sdw-micro-task-dag-plann/run-1792735164388-00030-sdw-micro-task-dag-plann.retro.json`
