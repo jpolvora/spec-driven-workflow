@@ -5,13 +5,14 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { spawnSync } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 
 const stateManager = require('../skills/sdw-orch/scripts/state_manager.cjs');
 const runLock = require('../skills/sdw-orch/scripts/run_lock.cjs');
 
 const CLI_PATH = path.resolve(__dirname, '../skills/sdw-orch/scripts/sdw_orch.cjs');
 const STATE_MANAGER_PATH = path.resolve(__dirname, '../skills/sdw-orch/scripts/state_manager.cjs');
+const RUN_LOCK_PATH = path.resolve(__dirname, '../skills/sdw-orch/scripts/run_lock.cjs');
 const RUN_ID = 'run-checkpoint-demo';
 
 // A pid the operating system cannot have assigned, so the owner is provably absent.
@@ -986,6 +987,59 @@ test('AC10 & AC17: an unreadable lock is reclaimed only once it is older than lo
       'a young unreadable lock is refused with the manual-removal message'
     );
     fs.unlinkSync(lockFile);
+  } finally {
+    cleanup(root);
+  }
+});
+
+// Spec 00019 AC9 & AC17: reclaim is serialized, so two processes that both see
+// the same abandoned lock cannot both acquire it by unlinking each other's lock.
+test('AC9 & AC17: two concurrent reclaimers of one stale lock never both acquire it', async () => {
+  const root = makeRoot();
+  try {
+    const stateFile = stateManager.getStateFilePath(root, RUN_ID);
+    const startFile = path.join(root, 'start.reclaim');
+    fs.writeFileSync(
+      `${stateFile}.lock`,
+      JSON.stringify({ pid: DEAD_PID, host: os.hostname(), acquiredAt: new Date(Date.now() - 600000).toISOString() }, null, 2) + '\n',
+      'utf8'
+    );
+
+    // Both children wait for the same start file, so their acquire attempts begin
+    // within the winner's holding window instead of one after the other.
+    const script = [
+      "const fs = require('fs');",
+      `const runLock = require(${JSON.stringify(RUN_LOCK_PATH)});`,
+      `while (!fs.existsSync(${JSON.stringify(startFile)})) {`,
+      '  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);',
+      '}',
+      'try {',
+      `  const handle = runLock.acquire(${JSON.stringify(stateFile)}, { staleMs: 60000 });`,
+      "  process.stdout.write('acquired');",
+      '  setTimeout(() => { runLock.release(handle); }, 3000);',
+      '} catch (err) {',
+      "  process.stdout.write('refused:' + (err.code || 'ERROR'));",
+      '}'
+    ].join('\n');
+
+    const attempt = () => new Promise((resolve) => {
+      const child = spawn(process.execPath, ['-e', script], { stdio: ['ignore', 'pipe', 'pipe'] });
+      let out = '';
+      child.stdout.on('data', (chunk) => { out += chunk; });
+      child.on('close', () => resolve(out.trim()));
+    });
+
+    const attempts = Promise.all([attempt(), attempt()]);
+    // Give both children time to reach the wait loop before releasing them.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    fs.writeFileSync(startFile, 'go\n', 'utf8');
+    const results = await attempts;
+
+    const acquired = results.filter((result) => result === 'acquired');
+    assert.equal(acquired.length, 1, `exactly one reclaimer acquires the lock: ${JSON.stringify(results)}`);
+    assert.match(results.find((result) => result !== 'acquired') || '', /^refused:RUN_LOCKED$/, 'the loser reports contention');
+    assert.equal(fs.existsSync(`${stateFile}.lock`), false, 'the winner releases the reclaimed lock');
+    assert.equal(fs.existsSync(`${stateFile}.lock.reclaim`), false, 'the reclaim guard is cleaned up');
   } finally {
     cleanup(root);
   }

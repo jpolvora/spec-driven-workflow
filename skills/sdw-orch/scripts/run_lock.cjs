@@ -124,6 +124,73 @@ function unreadableMessage(lockFile) {
   return `Run lock "${displayPath(lockFile)}" exists but does not contain a readable pid, host, and acquiredAt record. Another process may be acquiring it. If no other process is using this run, delete the lock file manually and retry.`;
 }
 
+// The unlink/recreate window is serialized through a guard file: two processes
+// that both observed the same stale record cannot both reclaim it. The loser
+// re-reads under the guard, finds a record that is not the one it decided to
+// reclaim, and reports contention instead of deleting the winner's lock.
+function reclaim(lockFile, expected, lock, staleMs) {
+  const guardFile = `${lockFile}.reclaim`;
+  let guardFd = null;
+  try {
+    guardFd = fs.openSync(guardFile, 'wx');
+  } catch (err) {
+    if (err.code !== 'EEXIST') throw err;
+    // A guard left by a crash is only reclaimed after the same staleness bound.
+    let guardAgeMs = Number.POSITIVE_INFINITY;
+    try {
+      guardAgeMs = Math.max(0, Date.now() - fs.statSync(guardFile).mtimeMs);
+    } catch (e) {
+      if (e.code !== 'ENOENT') throw err;
+    }
+    if (guardAgeMs >= staleMs) {
+      try {
+        fs.unlinkSync(guardFile);
+      } catch (e) {}
+      try {
+        guardFd = fs.openSync(guardFile, 'wx');
+      } catch (e) {}
+    }
+    if (guardFd === null) {
+      throw new RunLockError(expected === null
+        ? unreadableMessage(lockFile)
+        : contentionMessage(lockFile, expected, staleMs, 'live'));
+    }
+  }
+
+  try {
+    const verified = readLockFile(lockFile);
+    const sameRecord = isLockRecord(verified) && isLockRecord(expected)
+      && verified.pid === expected.pid
+      && verified.host === expected.host
+      && verified.acquiredAt === expected.acquiredAt;
+    const stillUnreadable = expected === null && !isLockRecord(verified);
+    if (!sameRecord && !stillUnreadable) {
+      if (isLockRecord(verified)) throw new RunLockError(contentionMessage(lockFile, verified, staleMs, 'live'));
+      throw new RunLockError(unreadableMessage(lockFile));
+    }
+    try {
+      fs.unlinkSync(lockFile);
+    } catch (err) {
+      if (err.code !== 'ENOENT') throw new RunLockError(unreadableMessage(lockFile));
+    }
+    if (writeLockFile(lockFile, lock)) {
+      return { lockFile, lock, reclaimed: true };
+    }
+    const winner = readLockFile(lockFile);
+    if (!isLockRecord(winner)) throw new RunLockError(unreadableMessage(lockFile));
+    throw new RunLockError(contentionMessage(lockFile, winner, staleMs, 'live'));
+  } finally {
+    if (guardFd !== null) {
+      try {
+        fs.closeSync(guardFd);
+      } catch (e) {}
+    }
+    try {
+      fs.unlinkSync(guardFile);
+    } catch (e) {}
+  }
+}
+
 // AC9: acquire before mutation. Returns a handle the caller must release.
 function acquire(stateFilePath, options = {}) {
   const lockFile = lockFileFor(stateFilePath);
@@ -154,15 +221,7 @@ function acquire(stateFilePath, options = {}) {
     if (ageMs < staleMs) {
       throw new RunLockError(unreadableMessage(lockFile));
     }
-    try {
-      fs.unlinkSync(lockFile);
-    } catch (err) {
-      if (err.code !== 'ENOENT') throw new RunLockError(unreadableMessage(lockFile));
-    }
-    if (writeLockFile(lockFile, lock)) {
-      return { lockFile, lock, reclaimed: true };
-    }
-    throw new RunLockError(unreadableMessage(lockFile));
+    return reclaim(lockFile, null, lock, staleMs);
   }
 
   const stale = lockAgeMs(existing, lockFile) >= staleMs;
@@ -170,22 +229,9 @@ function acquire(stateFilePath, options = {}) {
   const ownerAlive = sameHost ? isProcessAlive(existing.pid) : null;
 
   // Reclaim only when both conditions hold: the record is older than the
-  // threshold and the owner is proven absent. The unlink plus retry can lose a
-  // race; the loser then reports the new owner instead of mutating.
+  // threshold and the owner is proven absent.
   if (stale && sameHost && ownerAlive === false) {
-    try {
-      fs.unlinkSync(lockFile);
-    } catch (err) {
-      if (err.code !== 'ENOENT') throw new RunLockError(unreadableMessage(lockFile));
-    }
-    if (writeLockFile(lockFile, lock)) {
-      return { lockFile, lock, reclaimed: true };
-    }
-    const winner = readLockFile(lockFile);
-    if (!isLockRecord(winner)) {
-      throw new RunLockError(unreadableMessage(lockFile));
-    }
-    throw new RunLockError(contentionMessage(lockFile, winner, staleMs, 'live'));
+    return reclaim(lockFile, existing, lock, staleMs);
   }
 
   if (!sameHost) throw new RunLockError(contentionMessage(lockFile, existing, staleMs, 'foreign-host'));
