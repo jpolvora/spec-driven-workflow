@@ -289,6 +289,9 @@ function parseArgs(args) {
     allowArchived: false,
     step: null,
     json: false,
+    watch: false,
+    intervalSeconds: null,
+    stallWindowSeconds: null,
     latest: false,
     unattended: false,
     skipSecurity: false,
@@ -337,6 +340,11 @@ function parseArgs(args) {
     else if (arg === '--skip-review') result.skipReview = true;
     else if (arg === '--skip-pr') result.skipPr = true;
     else if (arg === '--poll-pr') result.pollPr = true;
+    else if (arg === '--watch') result.watch = true;
+    else if (arg === '--interval') result.intervalSeconds = Number(args[++i]);
+    else if (arg.startsWith('--interval=')) result.intervalSeconds = Number(arg.slice(11));
+    else if (arg === '--stall-window') result.stallWindowSeconds = Number(args[++i]);
+    else if (arg.startsWith('--stall-window=')) result.stallWindowSeconds = Number(arg.slice(15));
     else if (arg === '--push') result.push = true;
     else if (arg === '--abort-on-gaps') result.abortOnGaps = true;
     else if (arg === '--simulate-failure') result.simulateFailure = true;
@@ -5783,23 +5791,39 @@ function cmdResume(options) {
   });
 }
 
-// Spec 00021 AC4: print the active-run snapshot. Read-only: nothing here
-// initializes the state layout or writes state, the ledger, or telemetry.
+// Spec 00021 AC4/AC5/AC6/AC7/AC8: print the active-run snapshot. Read-only:
+// nothing here initializes the state layout or writes state, the ledger, or
+// telemetry. `--watch` refreshes until the scoped run is terminal; `--json`
+// serializes the same snapshot object the table renders.
 function cmdMonitor(options) {
   const targetRoot = options.root ? path.resolve(options.root) : process.cwd();
-  let snapshot;
+  const print = snapshot => {
+    console.log(options.json ? JSON.stringify(snapshot, null, 2) : monitor.renderMonitor(snapshot));
+  };
+  const monitorOptions = {
+    targetRoot,
+    runId: options.runId || null,
+    now: options.now,
+    stallWindowSeconds: options.stallWindowSeconds,
+    intervalSeconds: options.intervalSeconds
+  };
   try {
-    snapshot = monitor.listActiveRuns({
-      targetRoot,
-      runId: options.runId || null,
-      now: options.now
-    });
+    if (options.watch) {
+      monitor.watchMonitor({
+        ...monitorOptions,
+        onSnapshot: (snapshot, poll) => {
+          if (poll > 1 && !options.json) console.log('');
+          print(snapshot);
+        }
+      });
+      return 0;
+    }
+    print(monitor.listActiveRuns(monitorOptions));
+    return 0;
   } catch (err) {
     console.error(`[sdw-orch monitor] Error: ${err.message}`);
     return 1;
   }
-  console.log(monitor.renderMonitor(snapshot));
-  return 0;
 }
 
 function cmdStatus(options) {
@@ -6317,7 +6341,7 @@ Subcommands:
   ledger audit           List acceptance criteria without evidence (--run-id, --format md|json; exit 1 when any remain)
   dag preview            Print the plan the classifier would generate, without side effects
   status                 Check status of current or specified run state
-  monitor                List active runs with status, current step, and age (--run-id to scope)
+  monitor                List active runs with status, current step, and age (--run-id to scope, --watch to follow)
   sandbox list           List isolated sandboxes created by --sandbox
   sandbox report         Regenerate and print the report for a sandbox (--run-id)
   sandbox clean          Delete a sandbox clone, keeping its report (--run-id)
@@ -6352,6 +6376,9 @@ Options:
   --step <n>             Start or run specific step (1-8)
   --min-score <n>        Minimum acceptable conformance score (default: 8)
   --poll-pr              Enable remote PR review polling
+  --watch                Monitor: refresh until the scoped run reaches a terminal status
+  --interval <seconds>   Monitor: watch refresh interval (default: monitor.intervalSeconds or 60)
+  --stall-window <seconds> Monitor: stall window (default: monitor.stallWindowSeconds or 900)
   --abort-on-gaps        Halt at grilling gate if decision gaps are detected (ignored in unattended mode)
   --simulate-failure     Simulate subagent unrecoverable failure for testing
   --latest               (status/resume/task finish) Target the most recent run state

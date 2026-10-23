@@ -10,12 +10,63 @@ const telemetry = require('./telemetry.cjs');
 // Spec 00021 AC5/AC6: a run in one of these statuses has nothing left to watch.
 const TERMINAL_STATUSES = ['completed', 'failed', 'cancelled'];
 
+// Spec 00021 AC6/AC5: documented defaults for the configurable stall window and
+// watch interval. `.sdw/config.json` overrides them per workspace.
+const DEFAULT_STALL_WINDOW_SECONDS = 900;
+const DEFAULT_INTERVAL_SECONDS = 60;
+
 function normalizePath(p) {
   return String(p || '').replace(/\\/g, '/');
 }
 
 function isTerminalStatus(status) {
   return TERMINAL_STATUSES.includes(String(status === undefined || status === null ? '' : status).toLowerCase());
+}
+
+function positiveNumber(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : null;
+}
+
+// Spec 00021 AC4/AC6: read `.sdw/config.json` without initializing the layout.
+// A missing or unreadable file is the empty configuration.
+function readConfigObject(targetRoot) {
+  try {
+    const configFile = path.join(path.resolve(targetRoot || process.cwd()), '.sdw', 'config.json');
+    if (!fs.existsSync(configFile)) return {};
+    const raw = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+    return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  } catch (e) {
+    return {};
+  }
+}
+
+// Spec 00021 AC6: `monitor.stallWindowSeconds` configures the stall window;
+// AC5: `monitor.intervalSeconds` configures the watch refresh interval.
+function readMonitorConfig(targetRoot) {
+  const raw = readConfigObject(targetRoot);
+  const monitorConfig = raw && raw.monitor && typeof raw.monitor === 'object' && !Array.isArray(raw.monitor)
+    ? raw.monitor
+    : {};
+  return {
+    stallWindowSeconds: positiveNumber(monitorConfig.stallWindowSeconds) ?? DEFAULT_STALL_WINDOW_SECONDS,
+    intervalSeconds: positiveNumber(monitorConfig.intervalSeconds) ?? DEFAULT_INTERVAL_SECONDS
+  };
+}
+
+function resolveStallWindowMs(options, config) {
+  const explicitMs = positiveNumber(options.stallWindowMs);
+  if (explicitMs !== null) return explicitMs;
+  const seconds = positiveNumber(options.stallWindowSeconds);
+  return (seconds !== null ? seconds : config.stallWindowSeconds) * 1000;
+}
+
+function resolveIntervalMs(options, config) {
+  const explicitMs = positiveNumber(options.intervalMs);
+  if (explicitMs !== null) return explicitMs;
+  const seconds = positiveNumber(options.intervalSeconds);
+  return (seconds !== null ? seconds : config.intervalSeconds) * 1000;
 }
 
 function timestampMs(value) {
@@ -45,12 +96,9 @@ function resolveStateDirReadOnly(targetRoot) {
   const root = targetRoot ? path.resolve(targetRoot) : process.cwd();
   let stateDir = path.join(root, '.sdw', 'state');
   try {
-    const configFile = path.join(root, '.sdw', 'config.json');
-    if (fs.existsSync(configFile)) {
-      const raw = JSON.parse(fs.readFileSync(configFile, 'utf8'));
-      if (raw && typeof raw.stateDir === 'string' && raw.stateDir.trim()) {
-        stateDir = path.resolve(root, raw.stateDir.trim().replace(/\{projectRoot\}/g, normalizePath(root)));
-      }
+    const raw = readConfigObject(root);
+    if (raw && typeof raw.stateDir === 'string' && raw.stateDir.trim()) {
+      stateDir = path.resolve(root, raw.stateDir.trim().replace(/\{projectRoot\}/g, normalizePath(root)));
     }
   } catch (e) {
     // An unreadable configuration keeps the documented default layout.
@@ -84,10 +132,26 @@ function newestEventTs(events) {
 }
 
 /**
- * Spec 00021 AC4: one snapshot row. `ageSeconds` is the run age from
- * `createdAt` (falling back to `updatedAt` when a state file lacks it); the raw
- * timestamps stay in the snapshot so `--json` and stall classification can be
- * added later without changing this projection.
+ * Spec 00021 AC6: the monitor classification. A non-terminal run whose newest
+ * activity clock is older than the stall window is `stalled`; an explicit turn
+ * pause is a handoff, not a hang, so it stays `paused`. A run exactly at the
+ * window boundary is not yet stale because the rule is "older than".
+ */
+function classifyStatus(options) {
+  if (isTerminalStatus(options.status)) return 'terminal';
+  const stale = options.lastActivityMs === null || (options.nowMs - options.lastActivityMs) > options.stallWindowMs;
+  if (!stale) return 'active';
+  return String(options.status === undefined || options.status === null ? '' : options.status).toLowerCase() === 'paused'
+    ? 'paused'
+    : 'stalled';
+}
+
+/**
+ * Spec 00021 AC4/AC6: one snapshot row. `ageSeconds` is the run age from
+ * `createdAt` (falling back to `updatedAt` when a state file lacks it).
+ * `lastActivityAt` is the newest of the state file mtime, `updatedAt`, and the
+ * newest telemetry event; AC6 compares that clock with the stall window and
+ * AC8 serializes the same fields the table shows.
  */
 function buildSnapshot(state, options = {}) {
   const nowMs = resolveNowMs(options.now);
@@ -114,6 +178,13 @@ function buildSnapshot(state, options = {}) {
     // Telemetry is a clock hint only; its absence never hides the run.
   }
 
+  const lastEventMs = timestampMs(lastEventAt);
+  const updatedAtMs = timestampMs(updatedAt);
+  const stateMtimeMs = Number.isFinite(options.stateMtimeMs) ? options.stateMtimeMs : null;
+  const activityClocks = [updatedAtMs, stateMtimeMs, lastEventMs].filter(ms => ms !== null);
+  const lastActivityMs = activityClocks.length === 0 ? null : Math.max(...activityClocks);
+  const stallWindowMs = positiveNumber(options.stallWindowMs) ?? (DEFAULT_STALL_WINDOW_SECONDS * 1000);
+
   return {
     runId: state && state.runId ? String(state.runId) : null,
     specSlug: state && state.specSlug ? String(state.specSlug) : null,
@@ -126,20 +197,133 @@ function buildSnapshot(state, options = {}) {
     updatedAt,
     ageSeconds: ageStart === null ? null : Math.max(0, Math.round((nowMs - ageStart) / 1000)),
     lastEventAt,
+    lastActivityAt: lastActivityMs === null ? null : new Date(lastActivityMs).toISOString(),
     artifactsDir: state && state.artifactsDir ? normalizePath(state.artifactsDir) : null,
-    stateFile: options.stateFile ? normalizePath(options.stateFile) : null
+    stateFile: options.stateFile ? normalizePath(options.stateFile) : null,
+    classification: classifyStatus({
+      status: state && state.status ? String(state.status) : null,
+      lastActivityMs,
+      nowMs,
+      stallWindowMs
+    }),
+    severity: null
   };
 }
 
+function listFilesRecursive(dir) {
+  const files = [];
+  let entries = [];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch (e) {
+    return files;
+  }
+  for (const entry of entries) {
+    const absolutePath = path.join(dir, entry.name);
+    if (entry.isDirectory()) files.push(...listFilesRecursive(absolutePath));
+    else if (entry.isFile()) files.push(absolutePath);
+  }
+  return files;
+}
+
 /**
- * Spec 00021 AC4: discover every run state under the configured state
- * directory and project each one. Reads only; a corrupt state file is named in
- * the error so the operator can fix or discard it.
+ * Spec 00021 AC7: an artifact directory that contains step files but has no
+ * state file is still worth reporting. It is a warning while its newest
+ * artifact (or telemetry event) is inside the stall window and info once older.
+ */
+function buildRunWithoutStateSnapshot(fields) {
+  const ageMs = fields.lastActivityMs === null ? null : Math.max(0, fields.nowMs - fields.lastActivityMs);
+  return {
+    runId: fields.runId,
+    specSlug: fields.specSlug,
+    status: null,
+    currentStep: null,
+    totalSteps: null,
+    stepName: null,
+    stepStatus: null,
+    createdAt: null,
+    updatedAt: null,
+    ageSeconds: ageMs === null ? null : Math.round(ageMs / 1000),
+    lastEventAt: fields.lastEventAt,
+    lastActivityAt: fields.lastActivityMs === null ? null : new Date(fields.lastActivityMs).toISOString(),
+    artifactsDir: fields.artifactsDir,
+    stateFile: null,
+    classification: 'run-without-state',
+    severity: ageMs !== null && ageMs <= fields.stallWindowMs ? 'warning' : 'info'
+  };
+}
+
+// Spec 00021 AC7: scan the documented `.sdw/state/{slug}/{runId}/` layout for
+// artifact directories whose run has no `{runId}.state.json` beside them.
+function discoverRunsWithoutState(stateDir, targetRoot, options) {
+  const results = [];
+  let slugEntries = [];
+  try {
+    slugEntries = fs.readdirSync(stateDir, { withFileTypes: true });
+  } catch (e) {
+    return results;
+  }
+  for (const slugEntry of slugEntries) {
+    if (!slugEntry.isDirectory()) continue;
+    const slugDir = path.join(stateDir, slugEntry.name);
+    let runEntries = [];
+    try {
+      runEntries = fs.readdirSync(slugDir, { withFileTypes: true });
+    } catch (e) {
+      continue;
+    }
+    for (const runEntry of runEntries) {
+      if (!runEntry.isDirectory()) continue;
+      if (options.runId && runEntry.name !== options.runId) continue;
+      if (fs.existsSync(path.join(stateDir, `${runEntry.name}.state.json`))) continue;
+      const artifactsAbs = path.join(slugDir, runEntry.name);
+      const files = listFilesRecursive(artifactsAbs);
+      if (files.length === 0) continue;
+
+      let newestMtimeMs = null;
+      for (const file of files) {
+        try {
+          const stat = fs.statSync(file);
+          if (newestMtimeMs === null || stat.mtimeMs > newestMtimeMs) newestMtimeMs = stat.mtimeMs;
+        } catch (e) {
+          // A vanished artifact cannot be the newest clock.
+        }
+      }
+
+      const artifactsRel = normalizePath(path.relative(targetRoot, artifactsAbs));
+      const newestEventAt = newestEventTs(
+        telemetry.readEvents(telemetry.telemetryPathFor(artifactsRel), targetRoot)
+      );
+      const eventMs = timestampMs(newestEventAt);
+      const lastActivityMs = eventMs !== null && (newestMtimeMs === null || eventMs > newestMtimeMs)
+        ? eventMs
+        : newestMtimeMs;
+
+      results.push(buildRunWithoutStateSnapshot({
+        runId: runEntry.name,
+        specSlug: slugEntry.name,
+        artifactsDir: artifactsRel,
+        lastEventAt: newestEventAt,
+        lastActivityMs,
+        nowMs: options.nowMs,
+        stallWindowMs: options.stallWindowMs
+      }));
+    }
+  }
+  return results;
+}
+
+/**
+ * Spec 00021 AC4/AC6/AC7: discover every run state under the configured state
+ * directory plus artifact directories that have no state, and project each one.
+ * Reads only; a corrupt state file is named in the error so the operator can
+ * fix or discard it.
  */
 function discoverRuns(options = {}) {
   const targetRoot = options.targetRoot ? path.resolve(options.targetRoot) : process.cwd();
   const stateDir = resolveStateDirReadOnly(targetRoot);
   const nowMs = resolveNowMs(options.now);
+  const stallWindowMs = resolveStallWindowMs(options, readMonitorConfig(targetRoot));
   const runs = [];
 
   let names = [];
@@ -150,8 +334,10 @@ function discoverRuns(options = {}) {
   for (const name of names) {
     const stateFileAbs = path.join(stateDir, name);
     let state;
+    let stateMtimeMs = null;
     try {
       state = JSON.parse(fs.readFileSync(stateFileAbs, 'utf8'));
+      stateMtimeMs = fs.statSync(stateFileAbs).mtimeMs;
     } catch (err) {
       throw new Error(`cannot read run state "${normalizePath(path.relative(targetRoot, stateFileAbs))}": ${err.message}`);
     }
@@ -159,7 +345,9 @@ function discoverRuns(options = {}) {
     runs.push(buildSnapshot(state, {
       now: nowMs,
       targetRoot,
-      stateFile: path.relative(targetRoot, stateFileAbs)
+      stateFile: path.relative(targetRoot, stateFileAbs),
+      stateMtimeMs,
+      stallWindowMs
     }));
   }
 
@@ -169,17 +357,26 @@ function discoverRuns(options = {}) {
     return (bMs - aMs) || String(a.runId).localeCompare(String(b.runId));
   });
 
+  const withoutState = discoverRunsWithoutState(stateDir, targetRoot, {
+    runId: options.runId || null,
+    nowMs,
+    stallWindowMs
+  });
+
   return {
     stateDir: normalizePath(path.relative(targetRoot, stateDir)) || '.',
-    runs
+    stallWindowSeconds: Math.round(stallWindowMs / 1000),
+    runs: [...runs, ...withoutState]
   };
 }
 
 // Spec 00021 AC4: the monitor lists active runs; terminal runs are history.
+// Artifact-only entries are always listed because they have no status to resolve.
 function listActiveRuns(options = {}) {
   const discovered = discoverRuns(options);
   return {
     stateDir: discovered.stateDir,
+    stallWindowSeconds: discovered.stallWindowSeconds,
     runs: discovered.runs.filter(run => !isTerminalStatus(run.status))
   };
 }
@@ -190,8 +387,10 @@ function cell(value) {
 }
 
 /**
- * Spec 00021 AC4: the table. `--json` (AC8) can reuse `listActiveRuns` and
- * serialize the same fields, so the two outputs cannot drift.
+ * Spec 00021 AC4/AC6/AC7/AC8: the table. `--json` serializes the same snapshot
+ * object, so the two outputs cannot drift. Only terminal runs are filtered out
+ * before rendering; the classification cell carries `stalled`, `paused`, and
+ * `run-without-state` signals.
  */
 function renderMonitor(snapshot = {}) {
   const runs = Array.isArray(snapshot.runs) ? snapshot.runs : [];
@@ -206,24 +405,77 @@ function renderMonitor(snapshot = {}) {
     return lines.join('\n');
   }
   lines.push(`Active runs: ${runs.length}`, '');
-  lines.push('| Run | Spec | Status | Step | Age |');
-  lines.push('| --- | --- | --- | --- | --- |');
+  lines.push('| Run | Spec | Status | Step | Age | Classification |');
+  lines.push('| --- | --- | --- | --- | --- | --- |');
   for (const run of runs) {
     const step = run.currentStep === null
       ? '-'
       : `${run.currentStep}/${run.totalSteps === null ? '?' : run.totalSteps}${run.stepName ? ` ${run.stepName}` : ''}`;
-    lines.push(`| ${cell(run.runId)} | ${cell(run.specSlug)} | ${cell(run.status)} | ${cell(step)} | ${formatAge(run.ageSeconds)} |`);
+    lines.push(`| ${cell(run.runId)} | ${cell(run.specSlug)} | ${cell(run.status)} | ${cell(step)} | ${formatAge(run.ageSeconds)} | ${cell(run.classification)} |`);
   }
   return lines.join('\n');
 }
 
+// Spec 00021 AC5: block between refreshes. `Atomics.wait` keeps the watch loop
+// synchronous for the CLI; tests inject a no-op or a state-advancing sleep.
+function defaultSleep(ms) {
+  if (!(ms > 0)) return;
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function watchComplete(snapshot, scoped) {
+  if (!scoped) {
+    return !snapshot.runs.some(run => run.status !== null && !isTerminalStatus(run.status));
+  }
+  if (snapshot.runs.length === 0) return true;
+  return snapshot.runs.every(run => run.classification === 'run-without-state' || isTerminalStatus(run.status));
+}
+
+/**
+ * Spec 00021 AC5: refresh the snapshot until the scoped run is terminal. The
+ * sleep and the clock are injectable so tests run instantly; `onSnapshot` is
+ * called once per refresh (the CLI prints it). Read-only: every refresh is a
+ * fresh discovery, never a state, ledger, or telemetry write.
+ */
+function watchMonitor(options = {}) {
+  const targetRoot = options.targetRoot ? path.resolve(options.targetRoot) : process.cwd();
+  const scoped = Boolean(options.runId);
+  const intervalMs = resolveIntervalMs(options, readMonitorConfig(targetRoot));
+  const sleep = typeof options.sleep === 'function' ? options.sleep : defaultSleep;
+  const onSnapshot = typeof options.onSnapshot === 'function' ? options.onSnapshot : null;
+  const readSnapshot = () => {
+    const discovered = scoped
+      ? discoverRuns({ ...options, targetRoot })
+      : listActiveRuns({ ...options, targetRoot });
+    return {
+      stateDir: discovered.stateDir,
+      stallWindowSeconds: discovered.stallWindowSeconds,
+      runs: discovered.runs
+    };
+  };
+
+  let snapshot = readSnapshot();
+  let poll = 0;
+  while (true) {
+    poll += 1;
+    if (onSnapshot) onSnapshot(snapshot, poll);
+    if (watchComplete(snapshot, scoped)) return snapshot;
+    sleep(intervalMs);
+    snapshot = readSnapshot();
+  }
+}
+
 module.exports = {
   TERMINAL_STATUSES,
+  DEFAULT_STALL_WINDOW_SECONDS,
+  DEFAULT_INTERVAL_SECONDS,
   isTerminalStatus,
+  readMonitorConfig,
   resolveStateDirReadOnly,
   formatAge,
   buildSnapshot,
   discoverRuns,
   listActiveRuns,
-  renderMonitor
+  renderMonitor,
+  watchMonitor
 };

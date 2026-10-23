@@ -1,8 +1,8 @@
 'use strict';
 
-// Spec 00021 (slice 1): append-only JSONL telemetry emitted from the existing
-// step-entry/completion points, and the read-only `monitor` projection.
-// AC1-AC4 are this slice; watch, stall classification, JSON output, report
+// Spec 00021 (slice 2): watch termination, stall classification, artifact
+// directories without state, and machine-readable monitor snapshots.
+// AC5-AC8 are this slice; event emission, resume preservation, report
 // aggregation, and dispatch/gate events belong to the remaining slices.
 
 const test = require('node:test');
@@ -109,7 +109,25 @@ function readTelemetry(repoRoot, artifactsDir) {
 function writeStateFile(root, state) {
   const stateDir = path.join(root, '.sdw', 'state');
   fs.mkdirSync(stateDir, { recursive: true });
-  fs.writeFileSync(path.join(stateDir, `${state.runId}.state.json`), `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+  const stateFile = path.join(stateDir, `${state.runId}.state.json`);
+  fs.writeFileSync(stateFile, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+  return stateFile;
+}
+
+// Spec 00021 AC6: stall clocks are read from files, so tests set them exactly.
+function setMtime(file, iso) {
+  const when = new Date(iso);
+  fs.utimesSync(file, when, when);
+}
+
+function writeMonitorConfig(root, monitorConfig) {
+  const sdwDir = path.join(root, '.sdw');
+  fs.mkdirSync(sdwDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(sdwDir, 'config.json'),
+    `${JSON.stringify({ specsDir: '{projectRoot}/.sdw/specs', monitor: monitorConfig }, null, 2)}\n`,
+    'utf8'
+  );
 }
 
 // Every file under `root`, keyed by project-relative path with its exact bytes.
@@ -315,8 +333,8 @@ test('AC4: monitor lists an active run with status, current step, and age from t
 
     const rendered = monitor.renderMonitor(active);
     assert.match(rendered, /^SDW Orchestrator Monitor$/m);
-    assert.match(rendered, /^\| Run \| Spec \| Status \| Step \| Age \|$/m);
-    assert.match(rendered, /^\| run-monitor-active \| 021-monitor-demo \| in_progress \| 2\/8 refinement \| 10m \|$/m);
+    assert.match(rendered, /^\| Run \| Spec \| Status \| Step \| Age \| Classification \|$/m);
+    assert.match(rendered, /^\| run-monitor-active \| 021-monitor-demo \| in_progress \| 2\/8 refinement \| 10m \| active \|$/m);
     assert.equal(rendered.includes('run-monitor-finished'), false, 'terminal runs are history, not active work');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -408,4 +426,368 @@ test('AC1: `monitor` is wired as a subcommand and a telemetry append failure sta
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('AC5: monitor.watchMonitor refreshes with an injected sleep until the scoped run is terminal', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-monitor-watch-'));
+  try {
+    const slug = '021-watch-demo';
+    const runId = 'run-watch-demo';
+    const artifactsRel = `.sdw/state/${slug}/${runId}`;
+    const artifactsAbs = path.join(root, artifactsRel);
+    fs.mkdirSync(artifactsAbs, { recursive: true });
+    const telemetryFile = path.join(artifactsAbs, telemetry.TELEMETRY_FILENAME);
+    const telemetryLine = JSON.stringify({
+      ts: '2026-10-23T19:59:30.000Z',
+      runId,
+      specSlug: slug,
+      event: 'step',
+      step: 4,
+      stepName: 'implementation',
+      status: 'in_progress'
+    });
+    fs.writeFileSync(telemetryFile, `${telemetryLine}\n`, 'utf8');
+
+    const state = {
+      orchestrator: 'sdw-orch',
+      runId,
+      specSlug: slug,
+      status: 'in_progress',
+      currentStep: 4,
+      totalSteps: 8,
+      createdAt: '2026-10-23T19:00:00.000Z',
+      updatedAt: '2026-10-23T19:59:30.000Z',
+      artifactsDir: artifactsRel,
+      steps: {
+        4: { name: 'implementation', status: 'in_progress', startedAt: '2026-10-23T19:59:00.000Z', completedAt: null }
+      }
+    };
+    const stateFile = writeStateFile(root, state);
+    setMtime(stateFile, '2026-10-23T19:59:30.000Z');
+
+    const sleeps = [];
+    const snapshots = [];
+    const final = monitor.watchMonitor({
+      targetRoot: root,
+      runId,
+      now: '2026-10-23T20:00:00.000Z',
+      intervalMs: 5000,
+      sleep: ms => {
+        sleeps.push(ms);
+        // The run finishes between polls; only the test writes the state file.
+        writeStateFile(root, {
+          ...state,
+          status: 'completed',
+          currentStep: 8,
+          updatedAt: '2026-10-23T20:00:01.000Z',
+          steps: {
+            ...state.steps,
+            4: { ...state.steps[4], status: 'completed', completedAt: '2026-10-23T20:00:01.000Z' }
+          }
+        });
+      },
+      onSnapshot: snapshot => snapshots.push(snapshot)
+    });
+
+    assert.deepEqual(sleeps, [5000], 'AC5: the refresh interval is injectable');
+    assert.equal(snapshots.length, 2, 'AC5: the watch refreshed until the terminal status');
+    assert.equal(snapshots[0].runs[0].status, 'in_progress');
+    assert.equal(snapshots[0].runs[0].classification, 'active');
+    assert.equal(snapshots[1].runs[0].status, 'completed');
+    assert.equal(final.runs[0].classification, 'terminal', 'AC5: the watch returns the terminal snapshot');
+    assert.equal(final.stallWindowSeconds, 900, 'the documented default stall window is reported');
+
+    // Read-only: the monitor never appended telemetry or wrote a ledger.
+    assert.equal(fs.readFileSync(telemetryFile, 'utf8'), `${telemetryLine}\n`);
+    assert.equal(fs.existsSync(path.join(artifactsAbs, 'ac-ledger.json')), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC5: the monitor command follows a scoped run to its terminal snapshot and exits 0', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-monitor-watch-cli-'));
+  try {
+    const slug = '021-watch-cli';
+    const runId = 'run-watch-cli';
+    writeStateFile(root, {
+      orchestrator: 'sdw-orch',
+      runId,
+      specSlug: slug,
+      status: 'completed',
+      currentStep: 8,
+      totalSteps: 8,
+      createdAt: '2026-10-23T19:00:00.000Z',
+      updatedAt: '2026-10-23T19:30:00.000Z',
+      artifactsDir: `.sdw/state/${slug}/${runId}`,
+      steps: { 8: { name: 'pr_preparation', status: 'completed' } }
+    });
+
+    const result = spawnSync(process.execPath, [
+      ORCH, 'monitor', '--watch', '--run-id', runId, '--root', root
+    ], { encoding: 'utf8', timeout: 30000 });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, new RegExp(`\\| ${runId} \\| ${slug} \\| completed \\| 8/8 pr_preparation \\|`));
+    assert.match(result.stdout, /\| terminal \|$/m, 'AC5: the final snapshot shows the terminal classification');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC6: a run is active inside the stall window, stalled beyond it, and active exactly at the boundary', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-monitor-stall-'));
+  try {
+    const slug = '021-stall-demo';
+    const runId = 'run-stall-demo';
+    const artifactsRel = `.sdw/state/${slug}/${runId}`;
+    const artifactsAbs = path.join(root, artifactsRel);
+    fs.mkdirSync(artifactsAbs, { recursive: true });
+    const telemetryFile = path.join(artifactsAbs, telemetry.TELEMETRY_FILENAME);
+    const now = '2026-10-23T20:00:00.000Z';
+
+    const state = {
+      orchestrator: 'sdw-orch',
+      runId,
+      specSlug: slug,
+      status: 'in_progress',
+      currentStep: 2,
+      totalSteps: 8,
+      createdAt: '2026-10-23T18:00:00.000Z',
+      updatedAt: '2026-10-23T19:50:00.000Z',
+      artifactsDir: artifactsRel,
+      steps: {
+        1: { name: 'derivation', status: 'completed' },
+        2: { name: 'refinement', status: 'in_progress', startedAt: '2026-10-23T19:50:00.000Z', completedAt: null }
+      }
+    };
+    const stateFile = writeStateFile(root, state);
+
+    // Both clocks are set explicitly: the state file mtime and the newest event.
+    const setClocks = (iso, status = 'in_progress') => {
+      state.status = status;
+      state.updatedAt = iso;
+      state.steps[2].startedAt = iso;
+      fs.writeFileSync(stateFile, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+      setMtime(stateFile, iso);
+      fs.writeFileSync(telemetryFile, `${JSON.stringify({
+        ts: iso,
+        runId,
+        specSlug: slug,
+        event: 'step',
+        step: 2,
+        stepName: 'refinement',
+        status
+      })}\n`, 'utf8');
+    };
+
+    setClocks('2026-10-23T19:50:00.000Z');
+    let [run] = monitor.listActiveRuns({ targetRoot: root, now }).runs;
+    assert.equal(run.classification, 'active', '600s inside the 900s window is active');
+    assert.equal(run.lastActivityAt, '2026-10-23T19:50:00.000Z', 'the newest clock is projected');
+
+    setClocks('2026-10-23T19:45:00.000Z');
+    [run] = monitor.listActiveRuns({ targetRoot: root, now }).runs;
+    assert.equal(run.classification, 'active', 'AC6: exactly at the window is not yet older');
+
+    setClocks('2026-10-23T19:44:59.999Z');
+    [run] = monitor.listActiveRuns({ targetRoot: root, now }).runs;
+    assert.equal(run.classification, 'stalled', 'AC6: one millisecond past the window is stalled');
+    assert.match(monitor.renderMonitor({ runs: [run], stateDir: '.sdw/state' }), /\| stalled \|$/m);
+
+    // Either clock advancing is enough to clear the stall.
+    setClocks('2026-10-23T19:00:00.000Z');
+    fs.writeFileSync(telemetryFile, `${JSON.stringify({
+      ts: '2026-10-23T19:59:00.000Z', runId, specSlug: slug, event: 'step', step: 2, status: 'in_progress'
+    })}\n`, 'utf8');
+    [run] = monitor.listActiveRuns({ targetRoot: root, now }).runs;
+    assert.equal(run.classification, 'active', 'the newest telemetry event keeps a stale state file fresh');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC6: monitor.stallWindowSeconds configures the window, the flag overrides it, and a turn pause is paused', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-monitor-stall-config-'));
+  try {
+    writeMonitorConfig(root, { stallWindowSeconds: 120 });
+    const slug = '021-stall-config';
+    const runId = 'run-stall-config';
+    const artifactsRel = `.sdw/state/${slug}/${runId}`;
+    fs.mkdirSync(path.join(root, artifactsRel), { recursive: true });
+    const now = '2026-10-23T20:00:00.000Z';
+
+    const state = {
+      orchestrator: 'sdw-orch',
+      runId,
+      specSlug: slug,
+      status: 'in_progress',
+      currentStep: 4,
+      totalSteps: 8,
+      createdAt: '2026-10-23T18:00:00.000Z',
+      updatedAt: '2026-10-23T19:55:00.000Z',
+      artifactsDir: artifactsRel,
+      steps: { 4: { name: 'implementation', status: 'in_progress' } }
+    };
+    const stateFile = writeStateFile(root, state);
+    setMtime(stateFile, '2026-10-23T19:55:00.000Z');
+
+    let [run] = monitor.listActiveRuns({ targetRoot: root, now }).runs;
+    assert.equal(run.classification, 'stalled', 'AC6: the configured 120s window makes 300s stale');
+
+    [run] = monitor.listActiveRuns({ targetRoot: root, now, stallWindowSeconds: 600 }).runs;
+    assert.equal(run.classification, 'active', 'the stall-window flag overrides the configuration');
+
+    state.status = 'paused';
+    fs.writeFileSync(stateFile, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+    setMtime(stateFile, '2026-10-23T19:55:00.000Z');
+    [run] = monitor.listActiveRuns({ targetRoot: root, now }).runs;
+    assert.equal(run.classification, 'paused', 'an explicit pause is a handoff, not a hang');
+
+    assert.equal(monitor.DEFAULT_STALL_WINDOW_SECONDS, 900, 'the documented default is 900 seconds');
+    assert.equal(monitor.DEFAULT_INTERVAL_SECONDS, 60, 'the documented watch interval is 60 seconds');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC7: an artifact directory with no state file is reported as run-without-state', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-monitor-orphan-'));
+  try {
+    const slug = '021-orphan-demo';
+    const runId = 'run-orphan-demo';
+    const artifactsRel = `.sdw/state/${slug}/${runId}`;
+    const artifactsAbs = path.join(root, artifactsRel);
+    fs.mkdirSync(artifactsAbs, { recursive: true });
+    const stepFile = path.join(artifactsAbs, `${slug}-step-1.md`);
+    fs.writeFileSync(stepFile, '# Derivation\n', 'utf8');
+    setMtime(stepFile, '2026-10-23T19:59:00.000Z');
+    const now = '2026-10-23T20:00:00.000Z';
+
+    const active = monitor.listActiveRuns({ targetRoot: root, now });
+    assert.equal(active.runs.length, 1, 'AC7: the artifact-only directory is discovered');
+    const [orphan] = active.runs;
+    assert.equal(orphan.runId, runId);
+    assert.equal(orphan.specSlug, slug);
+    assert.equal(orphan.status, null, 'there is no state to report a status from');
+    assert.equal(orphan.stateFile, null);
+    assert.equal(orphan.classification, 'run-without-state');
+    assert.equal(orphan.severity, 'warning', 'a recent artifact is a warning');
+    assert.equal(orphan.ageSeconds, 60);
+    assert.match(
+      monitor.renderMonitor(active),
+      new RegExp(`^\\| ${runId} \\| ${slug} \\| - \\| - \\| 1m \\| run-without-state \\|$`, 'm')
+    );
+
+    setMtime(stepFile, '2026-10-23T19:00:00.000Z');
+    const [old] = monitor.listActiveRuns({ targetRoot: root, now }).runs;
+    assert.equal(old.classification, 'run-without-state');
+    assert.equal(old.severity, 'info', 'AC7: an artifact older than the window is informational');
+    assert.equal(old.ageSeconds, 3600);
+
+    // Once the run has a state file, it is reported once, as a normal run.
+    writeStateFile(root, {
+      runId,
+      specSlug: slug,
+      status: 'in_progress',
+      currentStep: 1,
+      totalSteps: 8,
+      updatedAt: '2026-10-23T19:59:00.000Z',
+      artifactsDir: artifactsRel,
+      steps: { 1: { name: 'derivation', status: 'in_progress' } }
+    });
+    const withState = monitor.listActiveRuns({ targetRoot: root, now });
+    assert.deepEqual(withState.runs.map(run => run.runId), [runId], 'no duplicate artifact-only row');
+    assert.notEqual(withState.runs[0].classification, 'run-without-state');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC8: --json emits every snapshot field the table shows', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-monitor-json-'));
+  try {
+    const nowMs = Date.now();
+    const freshIso = new Date(nowMs - 60_000).toISOString();
+    const staleIso = new Date(nowMs - 3_600_000).toISOString();
+
+    const activeStateFile = writeStateFile(root, {
+      orchestrator: 'sdw-orch',
+      runId: 'run-json-active',
+      specSlug: '021-json-demo',
+      status: 'in_progress',
+      currentStep: 2,
+      totalSteps: 8,
+      createdAt: new Date(nowMs - 600_000).toISOString(),
+      updatedAt: freshIso,
+      artifactsDir: '.sdw/state/021-json-demo/run-json-active',
+      steps: { 2: { name: 'refinement', status: 'in_progress' } }
+    });
+    setMtime(activeStateFile, freshIso);
+
+    const stalledStateFile = writeStateFile(root, {
+      orchestrator: 'sdw-orch',
+      runId: 'run-json-stalled',
+      specSlug: '021-json-demo',
+      status: 'in_progress',
+      currentStep: 4,
+      totalSteps: 8,
+      createdAt: new Date(nowMs - 7_200_000).toISOString(),
+      updatedAt: staleIso,
+      artifactsDir: '.sdw/state/021-json-demo/run-json-stalled',
+      steps: { 4: { name: 'implementation', status: 'in_progress' } }
+    });
+    setMtime(stalledStateFile, staleIso);
+
+    const orphanDir = path.join(root, '.sdw', 'state', '021-json-demo', 'run-json-orphan');
+    fs.mkdirSync(orphanDir, { recursive: true });
+    const orphanFile = path.join(orphanDir, '021-json-demo-step-1.md');
+    fs.writeFileSync(orphanFile, '# Derivation\n', 'utf8');
+    setMtime(orphanFile, new Date(nowMs - 120_000).toISOString());
+
+    const json = spawnSync(process.execPath, [ORCH, 'monitor', '--json', '--root', root], { encoding: 'utf8' });
+    assert.equal(json.status, 0, json.stderr);
+    const snapshot = JSON.parse(json.stdout);
+    assert.equal(snapshot.stateDir, '.sdw/state');
+    assert.equal(snapshot.stallWindowSeconds, 900, 'AC8: the effective stall window is in the JSON');
+    assert.equal(snapshot.runs.length, 3);
+
+    const byId = new Map(snapshot.runs.map(run => [run.runId, run]));
+    assert.equal(byId.get('run-json-active').classification, 'active');
+    assert.equal(byId.get('run-json-stalled').classification, 'stalled');
+    assert.equal(byId.get('run-json-orphan').classification, 'run-without-state');
+
+    const requiredFields = [
+      'runId', 'specSlug', 'status', 'currentStep', 'totalSteps', 'stepName', 'stepStatus',
+      'createdAt', 'updatedAt', 'ageSeconds', 'lastEventAt', 'lastActivityAt',
+      'artifactsDir', 'stateFile', 'classification', 'severity'
+    ];
+    for (const run of snapshot.runs) {
+      for (const field of requiredFields) {
+        assert.ok(Object.prototype.hasOwnProperty.call(run, field), `AC8: JSON carries "${field}"`);
+      }
+    }
+
+    const table = spawnSync(process.execPath, [ORCH, 'monitor', '--root', root], { encoding: 'utf8' });
+    assert.equal(table.status, 0, table.stderr);
+    assert.match(table.stdout, /^\| Run \| Spec \| Status \| Step \| Age \| Classification \|$/m);
+    assert.match(table.stdout, /Active runs: 3/);
+    for (const run of snapshot.runs) {
+      assert.ok(table.stdout.includes(`| ${run.runId} |`), 'AC8: every JSON run appears in the table');
+      assert.ok(table.stdout.includes(`| ${run.classification} |`), 'AC8: the table shows the JSON classification');
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC5, AC6, AC8: monitor parses --watch, --json, --interval, and --stall-window', () => {
+  const parsed = sdwOrch.parseArgs([
+    'monitor', '--watch', '--json', '--interval', '5', '--stall-window', '120', '--run-id', 'run-1'
+  ]);
+  assert.equal(parsed.subcommand, 'monitor');
+  assert.equal(parsed.watch, true);
+  assert.equal(parsed.json, true);
+  assert.equal(parsed.intervalSeconds, 5);
+  assert.equal(parsed.stallWindowSeconds, 120);
+  assert.equal(parsed.runId, 'run-1');
 });
