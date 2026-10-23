@@ -5,8 +5,8 @@ title: "SDW Orchestrator Diagnostic Run Mode — Upstream Issue Detection and Fo
 source: local
 status: draft
 specDate: 2026-10-21
-priority: low
-value: "Diagnostic run mode with follow-up specification suggestions"
+priority: medium
+value: "Diagnostic run mode that turns recurring upstream defects into follow-up specifications"
 effort: S
 ---
 

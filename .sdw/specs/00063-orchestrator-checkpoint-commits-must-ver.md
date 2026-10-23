@@ -6,6 +6,9 @@ title: "Orchestrator checkpoint commits must verify the run branch"
 source: local
 status: draft
 specDate: 2026-10-23
+priority: high
+value: "Stops accepted task work landing on the integration branch when another session owns the checkout"
+effort: S
 ---
 
 # Specification — Orchestrator checkpoint commits must verify the run branch

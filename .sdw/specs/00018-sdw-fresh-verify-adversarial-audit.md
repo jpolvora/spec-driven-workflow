@@ -5,9 +5,10 @@ title: "SDW Fresh-Context Verification and Adversarial Audit"
 source: local
 status: awaiting-approval
 specDate: 2026-10-19
-priority: low
-value: "Independent fresh-context re-verification with fault injection, so tests must prove they can fail and claimed work is audited against the real diff"
+priority: medium
+value: "Independent fresh-context verification with fault injection, so tests must prove they can fail"
 effort: L
+blockedBy: ["00017"]
 ---
 
 # Specification — SDW Fresh-Context Verification and Adversarial Audit

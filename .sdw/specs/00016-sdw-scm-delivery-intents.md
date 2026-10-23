@@ -3,13 +3,12 @@ id: null
 slug: 00016-sdw-scm-delivery-intents
 title: "SDW SCM Delivery Intents — GitHub and Azure DevOps Pull Request Lifecycle"
 source: local
-status: awaiting-approval
+status: abandoned
 specDate: 2026-10-19
 priority: low
-value: "SCM delivery intents; largely superseded by 00024, 00050, and 00051"
+value: "Superseded by 00024, 00050, and 00051; keep only as the abandoned design record"
 effort: M
 ---
-
 # Specification — SDW SCM Delivery Intents — GitHub and Azure DevOps Pull Request Lifecycle
 
 ## Description

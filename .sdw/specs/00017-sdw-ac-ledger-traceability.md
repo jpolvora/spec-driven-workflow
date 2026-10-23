@@ -5,8 +5,8 @@ title: "SDW Acceptance Criteria Ledger and Traceability"
 source: local
 status: awaiting-approval
 specDate: 2026-10-19
-priority: low
-value: "Single auditable source of truth linking every change, test, and review finding to its acceptance criterion, so scores stay reproducible and tampering is detectable"
+priority: high
+value: "Auditable acceptance-criteria ledger so every score is reproducible and tampering is detectable"
 effort: L
 ---
 

@@ -5,8 +5,8 @@ title: "SDW Live Run Monitor and Append-Only Telemetry"
 source: local
 status: awaiting-approval
 specDate: 2026-10-19
-priority: low
-value: "Durable per-run event stream plus read-only live monitor, so operators can see active runs and tell slow steps from hung ones without inspecting state files"
+priority: medium
+value: "Durable per-run event stream plus read-only live monitor, so slow steps are distinguishable from hung ones"
 effort: M
 ---
 

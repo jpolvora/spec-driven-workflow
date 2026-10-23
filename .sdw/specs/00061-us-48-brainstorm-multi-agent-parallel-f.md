@@ -5,6 +5,9 @@ title: "Brainstorm: multi-agent parallel features via sandboxes plus a coordinat
 source: github
 status: draft
 specDate: 2026-10-23
+priority: low
+value: "Design direction only for cross-spec sandbox parallelism; needs grilling before it can be implemented"
+effort: L
 ---
 
 # Specification — Brainstorm: multi-agent parallel features via sandboxes plus a coordinator merge to develop

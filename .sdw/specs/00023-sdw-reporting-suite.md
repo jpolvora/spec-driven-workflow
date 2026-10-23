@@ -6,7 +6,7 @@ source: local
 status: awaiting-approval
 specDate: 2026-10-19
 priority: medium
-value: "Activity, standup, and specification-explanation reporting"
+value: "Activity, standup, and specification-explanation reporting from existing run data"
 effort: M
 ---
 

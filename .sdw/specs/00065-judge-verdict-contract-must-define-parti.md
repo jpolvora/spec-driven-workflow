@@ -6,6 +6,9 @@ title: "Judge verdict contract must define partial verdict handling"
 source: local
 status: draft
 specDate: 2026-10-23
+priority: medium
+value: "Aligns the judge prompt with the verdict validator so a judge answer is never rewritten by hand"
+effort: S
 ---
 
 # Specification — Judge verdict contract must define partial verdict handling

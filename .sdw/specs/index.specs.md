@@ -26,7 +26,7 @@ Central repository index tracking specification lifecycle states, metadata, and 
 | 00013 | 00013-sdw-orch-refinement-and-pre-pr-gates | SDW Orchestrator Refinement Step & Pre-PR Verification Gates | completed | local | 2026-10-19 | PASS | - |
 | 00014 | 00014-sdw-orch-step-artifacts-persistence | SDW Orchestrator Step Artifacts Persistence | completed | local | 2026-10-19 | PASS | - |
 | 00015 | 00015-sdw-orch-implementation-execution | SDW Orchestrator Implementation Execution Contract & Evidence Gate | completed | local | 2026-10-19 | PASS | - |
-| 00016 | 00016-sdw-scm-delivery-intents | SDW SCM Delivery Intents — GitHub and Azure DevOps Pull Request Lifecycle | pending | local | 2026-10-19 | PASS | - |
+| 00016 | 00016-sdw-scm-delivery-intents | SDW SCM Delivery Intents — GitHub and Azure DevOps Pull Request Lifecycle | archived | local | 2026-10-19 | PASS | 2026-10-23 |
 | 00017 | 00017-sdw-ac-ledger-traceability | SDW Acceptance Criteria Ledger and Traceability | pending | local | 2026-10-19 | PASS | - |
 | 00018 | 00018-sdw-fresh-verify-adversarial-audit | SDW Fresh-Context Verification and Adversarial Audit | pending | local | 2026-10-19 | PASS | - |
 | 00019 | 00019-sdw-orch-checkpoint-resume | SDW Orchestrator Checkpoint, Turn Pause, and Crash-Safe Resume | pending | local | 2026-10-19 | PASS | - |

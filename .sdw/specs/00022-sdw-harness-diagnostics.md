@@ -6,7 +6,7 @@ source: local
 status: awaiting-approval
 specDate: 2026-10-19
 priority: low
-value: "Harness diagnostics beyond `sdw-doctor`: pipeline simulation and Tier-1 budget audit"
+value: "Pipeline simulation and Tier-1 budget audit beyond sdw-doctor"
 effort: M
 ---
 
