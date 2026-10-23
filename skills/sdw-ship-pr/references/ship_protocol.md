@@ -163,6 +163,17 @@ Proactive sweep: {proactiveFixed or "None (single instance)"}
 - **GitHub:** Executed via GraphQL mutation atomically calling `addPullRequestReviewThreadReply` and `resolveReviewThread`.
 - **Azure DevOps:** Posts a reply comment via `pullRequestThreadComments` and updates thread status to `fixed` (`2`).
 
+### 4.5 Review Thread Output & Fixer Evidence Fidelity
+
+`sdw-ship-pr list-threads --pr <n>` renders the whole thread, never a preview of it:
+
+- One header line per thread carries the resolution status (`[ACTIVE]` or `[RESOLVED]`), the thread id, `path:line`, and `N comment(s)`.
+- Each comment prints in full: a separator line with its index, author, and `createdAt`, then the body verbatim with its line breaks; a blank line separates consecutive comments and consecutive threads.
+- No body is cut at 80 or 500 characters, and a thread is never reduced to its first comment. A thread without comments prints `(no comments)` and the command still exits `0`.
+- `--json` keeps the provider's thread shape (`id`, `isResolved`, `path`, `line`, `comments[]` with complete `body`, `author`, and `createdAt`), so a script reads the same fields the text output shows.
+- The default fixer findings, built when `reviewFixCommand` is unset, set the finding's `evidence` to **every** comment body of the thread joined in chronological order; no length cut applies, and a thread without comment text falls back to `Review feedback`.
+- `resolve-thread` is unchanged by fidelity: resolution status stays the thread's `isResolved` flag, and the resolution reply posts and prints like any other comment.
+
 ---
 
 ## 5. Structured Output Schema

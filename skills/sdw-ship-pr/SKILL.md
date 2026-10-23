@@ -26,6 +26,8 @@ node skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs resolve-thread --pr <number> --t
 node skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs check-status --pr <number>
 ```
 
+`list-threads` prints each thread's resolution status, identifier, `path:line`, and comment count, then every comment in full with its author and timestamp; the default fixer findings carry every comment body verbatim, in chronological order.
+
 Parameters:
 - `--run-id <id>`: Active orchestrator run identifier (validates run-state evidence; updates `.sdw/state/{runId}.state.json`).
 - `--ack-prepare "<note>"`: Acknowledge discovered prepare obligations and record `prepareAck` in the report.
@@ -93,7 +95,7 @@ When the working tree is dirty, the host agent (LLM) selects what belongs to thi
    - **Wait for code-review & CI:** Await remote CI workflows and automated/agentic review runs (`provider.checkPrStatus` / `gh pr checks`) to finish.
    - Loop up to configured iteration ceiling (default 3 rounds):
      a. **Check active threads:** Call `provider.listReviewThreads(prNumber)`. If all checks pass and `activeCount === 0`, mark converged and exit loop.
-     b. **Fetch it all:** If active threads exist, retrieve all open threads, file locations, line numbers, and reviewer comments.
+     b. **Fetch it all:** If active threads exist, retrieve all open threads, file locations, line numbers, and every reviewer comment in full; the default fixer findings carry every comment body verbatim and in chronological order.
      c. **Cooperative & proactive fix:** Analyze feedback critically. Name the underlying defect class (e.g. unhandled error, type mismatch, missing validation). Proactively sweep sibling files and related PR modifications for the same pattern, fixing all occurrences rather than patching only the reported line. Apply minimal surgical fixes (`sdw-rules` simplicity first; no unrequested refactorings).
      d. **Verify:** Run test suite (`npm test`) and project build to ensure fixes pass cleanly without regressions.
      e. **Commit:** Stage only surgical fix paths and commit: `git commit -m "fix(review): address review feedback"`.
