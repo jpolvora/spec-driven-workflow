@@ -249,8 +249,12 @@ function buildDefaultFixerCommand(projectRoot, activeList) {
   const findings = threads.map(t => {
     const rawPath = typeof t.path === 'string' ? t.path.trim().replace(/\\/g, '/') : '';
     const safe = rawPath && !path.isAbsolute(rawPath) && !/^[A-Za-z]:[\\/]/.test(rawPath) && !rawPath.split('/').includes('..');
-    const firstComment = t.comments && t.comments[0] ? String(t.comments[0].body || '') : '';
-    const evidence = (firstComment.trim() || 'Review feedback').slice(0, 500) || 'Review feedback';
+    // Every comment body, in the provider's chronological order, without a
+    // length cut: the fixer must see the reasoning that names the defect.
+    const bodies = (Array.isArray(t.comments) ? t.comments : [])
+      .map(comment => String((comment && comment.body) || ''))
+      .filter(body => body.trim().length > 0);
+    const evidence = bodies.length > 0 ? bodies.join('\n\n') : 'Review feedback';
     return {
       threadId: t.id || null,
       file: safe ? rawPath : 'REVIEW_THREADS.md',
@@ -1930,8 +1934,8 @@ function formatThreadsReport(result, prNumber) {
   const sections = threads.map(thread => {
     const status = thread.isResolved ? 'RESOLVED' : 'ACTIVE';
     const location = thread.path ? ` [${thread.path}:${thread.line || 1}]` : '';
-    const lines = [`  - [${status}] Thread ${thread.id}${location}`];
     const comments = Array.isArray(thread.comments) ? thread.comments : [];
+    const lines = [`  - [${status}] Thread ${thread.id}${location} · ${comments.length} comment(s)`];
     if (comments.length === 0) {
       lines.push('    (no comments)');
       return lines.join('\n');

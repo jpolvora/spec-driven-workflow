@@ -2150,7 +2150,7 @@ test('sdw-ship-pr - 00059 AC5: a thread without comments prints a placeholder an
   const run = runListThreadsCli([listThreadsGraphQlNodes()[1]]);
 
   assert.strictEqual(run.status, 0, run.stderr);
-  assert.match(run.stdout, /\[RESOLVED\] Thread PRRT_empty \[src\/empty\.js:7\]\n +\(no comments\)/);
+  assert.match(run.stdout, /\[RESOLVED\] Thread PRRT_empty \[src\/empty\.js:7\] · 0 comment\(s\)\n +\(no comments\)/);
 });
 
 test('sdw-ship-pr - 00059 AC6: consecutive comments and consecutive threads are separated so long threads stay readable', () => {
@@ -2177,9 +2177,78 @@ test('sdw-ship-pr - 00059 AC6: consecutive comments and consecutive threads are 
     ]
   }, '42');
 
-  assert.ok(text.includes('Thread T1 [a.js:2]\n\n    comment 1/2'), 'a blank line separates the thread header from its first comment');
+  assert.ok(text.includes('Thread T1 [a.js:2] · 2 comment(s)\n\n    comment 1/2'), 'a blank line separates the thread header from its first comment');
   assert.ok(text.includes('first body\n\n    comment 2/2 · r2 · 2026-01-02T00:00:00Z'), 'a blank line separates consecutive comments');
   assert.ok(text.includes('with a second line\n\n  - [RESOLVED] Thread T2'), 'a blank line separates consecutive threads');
   assert.strictEqual(text.includes('undefined'), false, 'the header renders real counts');
+});
+
+test('sdw-ship-pr - 00059 AC8: each thread header prints resolution status, id, path, line, and comment count', () => {
+  const run = runListThreadsCli(listThreadsGraphQlNodes());
+
+  assert.strictEqual(run.status, 0, run.stderr);
+  assert.ok(
+    run.stdout.includes('[ACTIVE] Thread PRRT_full [src/parser.js:42] · 3 comment(s)'),
+    `the active thread header carries every field: ${run.stdout}`
+  );
+  assert.ok(
+    run.stdout.includes('[RESOLVED] Thread PRRT_empty [src/empty.js:7] · 0 comment(s)'),
+    `the resolved empty thread header carries every field: ${run.stdout}`
+  );
+});
+
+test('sdw-ship-pr - 00059 AC7, AC11: the default fixer finding carries every comment body verbatim in chronological order', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-fixer-findings-'));
+  try {
+    const fixerScript = path.join(tmpDir, 'skills', 'sdw-fixer', 'scripts', 'sdw_fixer.cjs');
+    fs.mkdirSync(path.dirname(fixerScript), { recursive: true });
+    fs.writeFileSync(fixerScript, '// stub fixer entrypoint\n', 'utf8');
+
+    const comments = [
+      { body: LONG_REVIEW_COMMENT_BODY, author: 'reviewer-one', createdAt: '2026-01-02T03:04:05Z' },
+      ...SHORT_REVIEW_COMMENTS
+    ];
+    const built = sdwShipPr.buildDefaultFixerCommand(tmpDir, [
+      {
+        id: 'PRRT_full',
+        isResolved: false,
+        path: 'src/parser.js',
+        line: 42,
+        comments
+      },
+      {
+        id: 'PRRT_empty',
+        isResolved: false,
+        path: 'src/empty.js',
+        line: 7,
+        comments: []
+      }
+    ]);
+
+    assert.ok(built, 'the fixer command is built for active threads');
+    const findings = JSON.parse(fs.readFileSync(built.findingsPath, 'utf8'));
+    const full = findings.findings.find(finding => finding.threadId === 'PRRT_full');
+    assert.ok(full, 'one finding is built per active thread');
+    assert.strictEqual(
+      full.evidence,
+      comments.map(comment => comment.body).join('\n\n'),
+      'the evidence is every comment body in chronological order, with nothing cut'
+    );
+    assert.ok(
+      full.evidence.length > 500,
+      'the evidence runs past the 500-character cut the old builder applied'
+    );
+    assert.ok(
+      full.evidence.includes('Suggested correction: guard `payload.items` before indexing.'),
+      'text past 80 characters survives into the finding'
+    );
+    assert.strictEqual(
+      findings.findings.find(finding => finding.threadId === 'PRRT_empty').evidence,
+      'Review feedback',
+      'a thread without comment text keeps the fallback evidence'
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });
 
