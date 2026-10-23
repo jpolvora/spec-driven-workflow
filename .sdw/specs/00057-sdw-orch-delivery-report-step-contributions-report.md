@@ -7,7 +7,7 @@
 | Specification file | `.sdw/specs/00057-sdw-orch-delivery-report-step-contributions.md` |
 | Specification slug | 00057-sdw-orch-delivery-report-step-contributions |
 | Run ID | run-1792704547205-00057-sdw-orch-delivery-report |
-| Run status | paused |
+| Run status | completed |
 | Branch | `feature/00057-sdw-orch-delivery-report-step-contributions` |
 | Base branch | `master` |
 | Base commit | `fb3d8494d41fea5a3a6a9cf77066f93507f260c4` |
@@ -17,7 +17,7 @@
 | Implementation start | 2026-10-22T21:29:08.835Z |
 | Implementation end | 2026-10-22T23:04:00.074Z |
 | Total wall-clock duration | 1h 34m 51s |
-| Generated at | 2026-10-23T00:00:35.814Z |
+| Generated at | 2026-10-23T00:03:44.471Z |
 | Step 1: derivation (skipped) | 2ms |
 | Step 2: refinement (completed) | 36ms |
 | Step 3: dag_generation (completed) | 2ms |
@@ -25,7 +25,7 @@
 | Step 5: scoring (completed) | 27m 43s |
 | Step 6: delivery_commit (completed) | 327ms |
 | Step 7: code_review (completed) | 1s |
-| Step 8: pr_preparation (blocked_convergence) | n/a |
+| Step 8: pr_preparation (completed) | 28m 41s |
 
 
 ## Tasks
@@ -39,6 +39,8 @@
 
 | SHA | Subject | Range |
 |---|---|---|
+| `ef86ddc` | chore(00057-sdw-orch-delivery-report-step-contributions): mark the specification completed in the registry | base..HEAD |
+| `2af4acc` | docs(00057-sdw-orch-delivery-report-step-contributions): record delivery report | base..HEAD |
 | `7797f42` | fix(00057-sdw-orch-delivery-report-step-contributions): replace the Step 5 verdict on a re-judge instead of stacking it | base..HEAD |
 | `8809bb9` | docs(00057-sdw-orch-delivery-report-step-contributions): record delivery report | base..HEAD |
 | `f879353` | fix(00057-sdw-orch-delivery-report-step-contributions): pass the apply options object so the CLI records an applied learning | base..HEAD |
@@ -86,12 +88,13 @@
 | `.sdw/directory-structure.md` | modified |
 | `.sdw/specs/00057-sdw-orch-delivery-report-step-contributions-report.md` | added |
 | `.sdw/specs/00057-sdw-orch-delivery-report-step-contributions.md` | modified |
+| `.sdw/specs/index.specs.md` | modified |
 | `skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs` | modified |
 
 ## Verification
 
 - test gate: status `passed`, exit code `0`, duration 1m 54s
-- Step 8 delivery: `blocked_convergence` (ship status `review_pending`)
+- Step 8 delivery: `completed` (ship status `review_pending`)
 
 ## Code Review
 
@@ -166,7 +169,13 @@ Not available
 
 ## Retrospective
 
-Not available
+- Status: `passed`
+- Report: `.sdw/state/00057-sdw-orch-delivery-report-step-contributions/run-1792704547205-00057-sdw-orch-delivery-report/run-1792704547205-00057-sdw-orch-delivery-report.retro.md`
+- Data: `.sdw/state/00057-sdw-orch-delivery-report-step-contributions/run-1792704547205-00057-sdw-orch-delivery-report/run-1792704547205-00057-sdw-orch-delivery-report.retro.json`
+- Signals: retries 4 (score 2, review 0, rounds 2, abandonments 0); leftover runs 0; missing artifacts 0; review findings 3 (3 open)
+- Candidates: 0
+- Applied fixes:
+  - none
 
 ## Breaking Changes
 
@@ -283,18 +292,18 @@ Not available
 
 - Step 1 (derivation) skipped: not recorded
 - Task task-2 accepted after re-dispatch (sequence 2)
-- Environment: workspace: 19 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
+- Environment: workspace: 20 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
 
 ## Outcome
 
-- Result: `paused`
+- Result: `completed`
 - Delivery commit: `8396afbf6cc8a63cbd774ec54154ef1bf66c5626`
 - Ship status: `review_pending`
 - Duration: 1h 34m 51s
 
 ## Step Contributions
 
-- Recorded: 10 contribution(s)
+- Recorded: 15 contribution(s)
 
 ### Step 1: derivation
 
@@ -346,7 +355,18 @@ Not available
   - Body: `{"iteration":1,"rounds":2,"failingChecks":[],"openThreads":1,"resolvedThreads":0,"fixCommit":null,"converged":false}`
 - **convergence** 2026-10-22T23:53:12.261Z - Convergence iteration 2
   - Body: `{"iteration":2,"rounds":2,"failingChecks":[{"name":"review","status":""}],"openThreads":1,"resolvedThreads":0,"fixCommit":null,"converged":false}`
+- **convergence** 2026-10-23T00:03:40.349Z - Convergence iteration 1
+  - Body: `{"iteration":1,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":false}`
+- **convergence** 2026-10-23T00:03:41.464Z - Convergence iteration 2
+  - Body: `{"iteration":2,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":true}`
+- **gates** 2026-10-23T00:03:42.638Z - Pre-PR gates: 6 result(s)
+  - Body: `{"gates":[{"name":"prePrCommand","status":"skipped","detail":"prePrCommand is not configured"},{"name":"build","status":"skipped","detail":"requiredBuild is false"},{"name":"tests","status":"pass","detail":"npm test exited 0"},{"name":"security","status":"pass","detail":"sdw-security-checks found no blocking leak"},{"name":"runState","status":"pass","detail":"step 4, step 6 and step 7 completed; score 9 >= scoreMin 8"},{"name":"discovery","status":"pass","detail":"no prepare obligations discovered"}]}`
+- **ship** 2026-10-23T00:03:42.638Z - Pull request #45
+  - Body: `{"pushed":true,"branch":"feature/00057-sdw-orch-delivery-report-step-contributions","pullRequest":{"number":"45","url":"https://github.com/jpolvora/spec-driven-workflow/pull/45","title":null},"shipStatus":"delivered"}`
+  - Evidence: `https://github.com/jpolvora/spec-driven-workflow/pull/45`
 
 ### Step 9: retrospective
 
-Not available
+- **retro** 2026-10-23T00:03:43.769Z - Retrospective passed: 0 candidate(s)
+  - Body: `{"status":"passed","runStatus":"completed","signals":{"retries":{"scoreIterations":2,"reviewIterations":0,"reviewRounds":2,"dispatchAbandonments":0,"total":4},"leftoverRuns":0,"missingArtifacts":0,"reviewFindings":{"total":3,"open":3}},"candidates":[],"fixes":{"recorded":[],"consolidated":null,"queuedSpecifications":[],"failures":[]},"routedCandidates":[],"reportMd":".sdw/state/00057-sdw-orch-delivery-report-step-contributions/run-1792704547205-00057-sdw-orch-delivery-report/run-1792704547205-00057-sdw-orch-delivery-report.retro.md","reportJson":".sdw/state/00057-sdw-orch-delivery-report-step-contributions/run-1792704547205-00057-sdw-orch-delivery-report/run-1792704547205-00057-sdw-orch-delivery-report.retro.json"}`
+  - Evidence: `.sdw/state/00057-sdw-orch-delivery-report-step-contributions/run-1792704547205-00057-sdw-orch-delivery-report/run-1792704547205-00057-sdw-orch-delivery-report.retro.md`, `.sdw/state/00057-sdw-orch-delivery-report-step-contributions/run-1792704547205-00057-sdw-orch-delivery-report/run-1792704547205-00057-sdw-orch-delivery-report.retro.json`
