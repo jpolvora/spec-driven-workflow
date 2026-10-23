@@ -11,6 +11,7 @@ const stateManager = require('../skills/sdw-orch/scripts/state_manager.cjs');
 const runLock = require('../skills/sdw-orch/scripts/run_lock.cjs');
 
 const CLI_PATH = path.resolve(__dirname, '../skills/sdw-orch/scripts/sdw_orch.cjs');
+const STATE_MANAGER_PATH = path.resolve(__dirname, '../skills/sdw-orch/scripts/state_manager.cjs');
 const RUN_ID = 'run-checkpoint-demo';
 
 // A pid the operating system cannot have assigned, so the owner is provably absent.
@@ -669,4 +670,264 @@ test('AC14: the orchestrator protocol documents the state schema, revision, lock
   assert.match(protocol, /\{stateFile\}\.tmp-\{pid\}/, 'the atomic write temp file is documented');
   assert.match(protocol, /stale temp file is a warning, not a failure/i, 'the recovery failure policy is documented');
   assert.match(protocol, /turn pause is a handoff marker, not a failure/i, 'the turn pause semantics are documented');
+});
+
+// Spec 00019 AC15: unknown checkpoint step.
+test('AC15: a checkpoint for a step outside 1..totalSteps is refused and writes nothing', () => {
+  const root = makeRoot();
+  try {
+    const stateFile = stateManager.getStateFilePath(root, RUN_ID);
+    const before = fs.readFileSync(stateFile, 'utf8');
+
+    const refused = runOrch(
+      ['checkpoint', '--run-id', RUN_ID, '--step', '99', '--progress', '{"note":"unknown step"}'],
+      root
+    );
+    assert.equal(refused.status, 1, `an unknown step exits non-zero: ${refused.stderr}`);
+    assert.match(refused.stderr, /Invalid checkpoint step 99/, 'the refusal names the unknown step');
+    assert.match(refused.stderr, /the valid range is 1\.\.8/, 'the refusal names the valid range');
+    assert.doesNotMatch(refused.stderr, /at Object\./, 'the refusal is not an unhandled stack trace');
+
+    const state = stateManager.loadRunState(root, RUN_ID);
+    assert.equal(state.revision, 0, 'a rejected checkpoint does not advance the revision');
+    assert.deepEqual(state.stepCheckpoints, {}, 'a rejected checkpoint stores no checkpoint record');
+    assert.deepEqual(state.reportContributions || [], [], 'a rejected checkpoint emits no telemetry');
+    assert.equal(fs.readFileSync(stateFile, 'utf8'), before, 'the rejected checkpoint leaves the state file untouched');
+  } finally {
+    cleanup(root);
+  }
+});
+
+// Spec 00019 AC15: unknown turn-pause step.
+test('AC15: a pause-turn for a step outside 1..totalSteps is refused and writes nothing', () => {
+  const root = makeRoot();
+  try {
+    const stateFile = stateManager.getStateFilePath(root, RUN_ID);
+    const before = fs.readFileSync(stateFile, 'utf8');
+
+    const refused = runOrch(
+      ['pause-turn', '--run-id', RUN_ID, '--step', '99', '--reason', 'host turn ended', '--next-action', 'resume'],
+      root
+    );
+    assert.equal(refused.status, 1, `an unknown step exits non-zero: ${refused.stderr}`);
+    assert.match(refused.stderr, /Invalid turn-pause step 99/, 'the refusal names the unknown step');
+    assert.match(refused.stderr, /the valid range is 1\.\.8/, 'the refusal names the valid range');
+
+    const state = stateManager.loadRunState(root, RUN_ID);
+    assert.equal(state.revision, 0, 'a rejected pause does not advance the revision');
+    assert.equal(state.turnPause, null, 'a rejected pause stores no turn-pause record');
+    assert.deepEqual(state.reportContributions || [], [], 'a rejected pause emits no telemetry');
+    assert.equal(fs.readFileSync(stateFile, 'utf8'), before, 'the rejected pause leaves the state file untouched');
+  } finally {
+    cleanup(root);
+  }
+});
+
+// Spec 00019 AC15: the upper bound is state.totalSteps, never a fixed 8.
+test('AC15: the accepted step range follows state.totalSteps', () => {
+  const root = makeRoot();
+  try {
+    const stateFile = stateManager.getStateFilePath(root, RUN_ID);
+    const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+    state.totalSteps = 3;
+    fs.writeFileSync(stateFile, JSON.stringify(state, null, 2) + '\n', 'utf8');
+
+    const above = runOrch(['checkpoint', '--run-id', RUN_ID, '--step', '4', '--progress', '{}'], root);
+    assert.equal(above.status, 1, 'a step above a non-default total is refused');
+    assert.match(above.stderr, /step 4/, 'the refusal names the step');
+    assert.match(above.stderr, /the valid range is 1\.\.3/, 'the refusal uses state.totalSteps');
+
+    const zero = runOrch(
+      ['pause-turn', '--run-id', RUN_ID, '--step', '0', '--reason', 'host turn ended', '--next-action', 'resume'],
+      root
+    );
+    assert.equal(zero.status, 1, 'a step below the range is refused');
+    assert.match(zero.stderr, /step 0/, 'the refusal names the step');
+    assert.match(zero.stderr, /the valid range is 1\.\.3/, 'the refusal uses state.totalSteps');
+
+    const inside = runOrch(['checkpoint', '--run-id', RUN_ID, '--step', '3', '--progress', '{}'], root);
+    assert.equal(inside.status, 0, `a step inside the range is accepted: ${inside.stderr}`);
+    assert.match(inside.stdout, /\[Checkpoint\] step 3 revision 1 saved/);
+  } finally {
+    cleanup(root);
+  }
+});
+
+// Spec 00019 AC16 & AC17: pause persistence and pause resume.
+test('AC16 & AC17: a turn pause survives a process restart and resume honours its next action', () => {
+  const root = makeRoot();
+  try {
+    stateManager.updateStepState(root, RUN_ID, 1, 'completed', {});
+    stateManager.updateStepState(root, RUN_ID, 2, 'completed', {});
+    stateManager.updateStepState(root, RUN_ID, 3, 'completed', {
+      tasks: [
+        { id: 'task-1', title: 'Task 1', dependencies: [] },
+        { id: 'task-2', title: 'Task 2', dependencies: ['task-1'] }
+      ]
+    });
+    stateManager.updateStepState(root, RUN_ID, 4, 'in_progress');
+    stateManager.updateTaskState(root, RUN_ID, 'task-1', { status: 'completed' });
+
+    const pause = runOrch(
+      ['pause-turn', '--run-id', RUN_ID, '--step', '4', '--reason', 'host turn ended', '--next-action', 'resume task-2 implementation'],
+      root
+    );
+    assert.equal(pause.status, 0, `pause-turn exits 0: ${pause.stderr}`);
+
+    // Read the pause from disk in a fresh process: nothing is shared in memory.
+    const readScript = [
+      `const stateManager = require(${JSON.stringify(STATE_MANAGER_PATH)});`,
+      `const state = stateManager.loadRunState(${JSON.stringify(root)}, ${JSON.stringify(RUN_ID)});`,
+      'process.stdout.write(JSON.stringify(state.turnPause));'
+    ].join('\n');
+    const fresh = spawnSync(process.execPath, ['-e', readScript], { encoding: 'utf8' });
+    assert.equal(fresh.status, 0, `a fresh process reads the run state: ${fresh.stderr}`);
+    const pauseFromDisk = JSON.parse(fresh.stdout);
+    assert.equal(pauseFromDisk.step, 4, 'the fresh process finds the paused step');
+    assert.equal(pauseFromDisk.reason, 'host turn ended', 'the fresh process finds the pause reason');
+    assert.equal(pauseFromDisk.nextAction, 'resume task-2 implementation', 'the fresh process finds the recorded next action');
+
+    const resumed = runOrch(['resume', '--run-id', RUN_ID], root);
+    assert.equal(resumed.status, 4, `resume continues from the paused step into the pending task: ${resumed.stderr}`);
+    assert.match(resumed.stdout, /\[sdw-orch resume\] Turn pause at step 4: host turn ended/);
+    assert.match(resumed.stdout, /\[sdw-orch resume\] Next action: resume task-2 implementation/);
+    assert.match(resumed.stdout, /\[PENDING\] task-2: Task 2/, 'resume follows the recorded next action');
+
+    assert.equal(
+      stateManager.loadRunState(root, RUN_ID).turnPause.nextAction,
+      'resume task-2 implementation',
+      'the pause stays persisted until the paused step finishes'
+    );
+  } finally {
+    cleanup(root);
+  }
+});
+
+// Spec 00019 AC17: concurrent writers.
+test('AC17: concurrent writers contend on the run lock and the loser names the owner', () => {
+  const root = makeRoot();
+  try {
+    const stateFile = stateManager.getStateFilePath(root, RUN_ID);
+    const lockFile = `${stateFile}.lock`;
+    const handle = runLock.acquire(stateFile, { staleMs: 60000 });
+    try {
+      const loser = runOrch(['checkpoint', '--run-id', RUN_ID, '--step', '4', '--progress', '{}'], root);
+      assert.equal(loser.status, 1, `the second writer is refused: ${loser.stderr}`);
+      assert.ok(loser.stderr.includes(`pid ${process.pid}`), 'the refusal names the lock owner pid');
+      assert.ok(loser.stderr.includes(os.hostname()), 'the refusal names the owner host');
+      assert.ok(loser.stderr.includes(stateManager.normalizePath(lockFile)), 'the refusal names the lock file');
+      assert.match(loser.stderr, /Another sdw-orch process is mutating this run state/, 'the refusal names the contention');
+
+      const blockedState = stateManager.loadRunState(root, RUN_ID);
+      assert.equal(blockedState.revision, 0, 'the losing writer changes no state');
+      assert.deepEqual(blockedState.stepCheckpoints, {}, 'the losing writer stores no checkpoint');
+    } finally {
+      runLock.release(handle);
+    }
+    assert.equal(fs.existsSync(lockFile), false, 'the owner releases the lock after the critical section');
+
+    const winner = runOrch(['checkpoint', '--run-id', RUN_ID, '--step', '4', '--progress', '{}'], root);
+    assert.equal(winner.status, 0, `the writer proceeds once the lock is released: ${winner.stderr}`);
+    assert.equal(stateManager.loadRunState(root, RUN_ID).revision, 1, 'only the lock-holding writer lands');
+  } finally {
+    cleanup(root);
+  }
+});
+
+// Spec 00019 AC17: interrupted writes.
+test('AC17: a fresh process ignores interrupted-write temp files and keeps the last valid state', () => {
+  const root = makeRoot();
+  try {
+    const stateFile = stateManager.getStateFilePath(root, RUN_ID);
+    const stateDir = path.dirname(stateFile);
+    const validBefore = fs.readFileSync(stateFile, 'utf8');
+
+    // A partial temp file and a complete-looking newer temp file from a dead
+    // writer: neither may replace the last valid state.
+    fs.writeFileSync(`${stateFile}.tmp-${DEAD_PID}`, '{"orchestrator": "sdw-orch", "revis', 'utf8');
+    const rogue = JSON.parse(validBefore);
+    rogue.revision = 99;
+    rogue.currentStep = 8;
+    fs.writeFileSync(`${stateFile}.tmp-${DEAD_PID + 1}`, JSON.stringify(rogue, null, 2) + '\n', 'utf8');
+
+    const written = runOrch(['checkpoint', '--run-id', RUN_ID, '--step', '4', '--progress', '{"note":"after crash"}'], root);
+    assert.equal(written.status, 0, `the write recovers from the temp files: ${written.stderr}`);
+    assert.match(written.stderr, /Warning: stale state temp file/, 'the stale temp files are reported');
+
+    const state = stateManager.loadRunState(root, RUN_ID);
+    assert.equal(state.revision, 1, 'the write starts from the last valid revision, not the rogue revision');
+    assert.equal(state.currentStep, 1, 'the rogue temp state never replaced the last valid state');
+    assert.equal(state.stepCheckpoints['4'].revision, 1, 'the checkpoint uses the recovered revision');
+    assert.equal(fs.readFileSync(stateFile, 'utf8').includes('"currentStep": 8'), false, 'the rogue content is absent from the state file');
+    assert.deepEqual(
+      fs.readdirSync(stateDir).filter((name) => name.includes('.tmp-')),
+      [],
+      'the successful write removes every stale temp file'
+    );
+  } finally {
+    cleanup(root);
+  }
+});
+
+// Spec 00019 AC17: revision mismatch.
+test('AC17: a missing or unsupported revision is refused by resume without mutating state', () => {
+  const root = makeRoot();
+  try {
+    const stateFile = stateManager.getStateFilePath(root, RUN_ID);
+    const base = fs.readFileSync(stateFile, 'utf8');
+    const cases = [
+      ['missing', (state) => { delete state.revision; }, /revision is missing/],
+      ['unsupported', (state) => { state.revision = '3'; }, /revision is "3"/]
+    ];
+
+    for (const [label, mutate, revisionPattern] of cases) {
+      const state = JSON.parse(base);
+      mutate(state);
+      const written = JSON.stringify(state, null, 2) + '\n';
+      fs.writeFileSync(stateFile, written, 'utf8');
+
+      const refused = runOrch(['resume', '--run-id', RUN_ID], root);
+      assert.equal(refused.status, 1, `${label} revision refuses resume: ${refused.stderr}`);
+      assert.match(refused.stderr, /not resumable/, `${label}: the refusal names the state`);
+      assert.match(refused.stderr, revisionPattern, `${label}: the refusal names the revision defect`);
+      assert.ok(refused.stderr.includes(stateManager.normalizePath(stateFile)), `${label}: the refusal names the state file`);
+      assert.match(refused.stderr, /Remediation:/, `${label}: the refusal states the remediation`);
+      assert.equal(fs.readFileSync(stateFile, 'utf8'), written, `${label}: the refused resume leaves the file untouched`);
+    }
+  } finally {
+    cleanup(root);
+  }
+});
+
+// Spec 00019 AC17: idempotent completed steps.
+test('AC17: resuming an open run leaves its completed steps untouched', () => {
+  const root = makeRoot();
+  try {
+    stateManager.updateStepState(root, RUN_ID, 1, 'completed', { derivationNeeded: false });
+    stateManager.updateStepState(root, RUN_ID, 2, 'completed', { mode: 'refine' });
+    stateManager.updateStepState(root, RUN_ID, 3, 'completed', {
+      tasks: [
+        { id: 'task-1', title: 'Task 1', dependencies: [] },
+        { id: 'task-2', title: 'Task 2', dependencies: ['task-1'] }
+      ]
+    });
+    stateManager.updateStepState(root, RUN_ID, 4, 'in_progress');
+    const before = stateManager.loadRunState(root, RUN_ID);
+
+    const first = runOrch(['resume', '--run-id', RUN_ID], root);
+    assert.equal(first.status, 4, `the first resume waits for the pending task: ${first.stderr}`);
+    const second = runOrch(['resume', '--run-id', RUN_ID], root);
+    assert.equal(second.status, 4, `the second resume reaches the same point: ${second.stderr}`);
+
+    const after = stateManager.loadRunState(root, RUN_ID);
+    assert.equal(after.revision, before.revision, 'resume of an open run mutates no state');
+    for (const step of [1, 2, 3, 4]) {
+      assert.deepEqual(after.steps[step], before.steps[step], `step ${step} is not re-executed or rewritten`);
+    }
+    assert.equal(after.stepCheckpoints['1'], undefined, 'a completed step keeps no checkpoint');
+    assert.equal(after.stepCheckpoints['2'], undefined, 'a completed step keeps no checkpoint');
+    assert.equal(after.stepCheckpoints['3'], undefined, 'a completed step keeps no checkpoint');
+  } finally {
+    cleanup(root);
+  }
 });

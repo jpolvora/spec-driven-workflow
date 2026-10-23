@@ -379,15 +379,28 @@ function recordTelemetry(state, step, kind, title, body) {
   }));
 }
 
+// AC15: a checkpoint or turn pause may only name a step the run owns. The upper
+// bound comes from state.totalSteps, so a non-default step count is respected.
+function assertStepInRange(action, state, step) {
+  const totalSteps = state.totalSteps;
+  if (!Number.isInteger(totalSteps) || totalSteps < 1) {
+    throw new Error(`Cannot record a ${action} for run "${state.runId}": state.totalSteps is not a positive integer.`);
+  }
+  if (step < 1 || step > totalSteps) {
+    throw new Error(`Invalid ${action} step ${step} for run "${state.runId}": the valid range is 1..${totalSteps}.`);
+  }
+}
+
 // AC2: store arbitrary, caller-supplied progress JSON for one step. The step's
 // current status is snapshotted so the checkpoint is readable on its own.
 function recordCheckpoint(targetRoot, runId, stepNum, progress) {
   const step = Number(stepNum);
-  if (!Number.isInteger(step) || step < 1) {
-    throw new Error(`Invalid checkpoint step "${stepNum}". Expected a positive integer.`);
+  if (!Number.isInteger(step)) {
+    throw new Error(`Invalid checkpoint step "${stepNum}". Expected an integer.`);
   }
   return withStateLock(targetRoot, getStateFilePath(targetRoot, runId), () => {
     const state = loadRunState(targetRoot, runId);
+    assertStepInRange('checkpoint', state, step);
     const stepObj = state.steps && state.steps[step];
     const checkpoint = writeStepCheckpoint(state, step, stepObj ? stepObj.status : 'unknown', new Date().toISOString());
     checkpoint.progress = progress === undefined ? null : progress;
@@ -406,8 +419,8 @@ function recordCheckpoint(targetRoot, runId, stepNum, progress) {
 // a step status change; it survives process restarts because it lives in state.
 function recordTurnPause(targetRoot, runId, stepNum, reason, nextAction) {
   const step = Number(stepNum);
-  if (!Number.isInteger(step) || step < 1) {
-    throw new Error(`Invalid turn-pause step "${stepNum}". Expected a positive integer.`);
+  if (!Number.isInteger(step)) {
+    throw new Error(`Invalid turn-pause step "${stepNum}". Expected an integer.`);
   }
   const cleanReason = String(reason === undefined || reason === null ? '' : reason).trim();
   const cleanNextAction = String(nextAction === undefined || nextAction === null ? '' : nextAction).trim();
@@ -415,6 +428,7 @@ function recordTurnPause(targetRoot, runId, stepNum, reason, nextAction) {
   if (!cleanNextAction) throw new Error('A turn pause requires a non-empty next action.');
   return withStateLock(targetRoot, getStateFilePath(targetRoot, runId), () => {
     const state = loadRunState(targetRoot, runId);
+    assertStepInRange('turn-pause', state, step);
     state.turnPause = {
       step,
       reason: cleanReason,
