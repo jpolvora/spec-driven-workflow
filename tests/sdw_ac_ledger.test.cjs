@@ -1107,3 +1107,66 @@ test('AC17: ledger initialization failure fails the run before Step 1 completes'
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+// Spec 00017 AC7 & AC8: a refused proof is not proof. A failed test entry never
+// verifies a criterion, and a criterion the judge failed is never promoted by a
+// later file, commit, or passing test link.
+test('AC7 & AC8: failed test evidence never verifies a criterion', () => {
+  const root = setupProject();
+  try {
+    const { ledgerPath } = seedRun(root);
+
+    const failedLink = link(root, 'run-ac-ledger-test', [
+      '--ac', 'AC1', '--type', 'test', '--name', 'invalid input is rejected', '--status', 'failed'
+    ]);
+    assert.equal(failedLink.status, 0, failedLink.stderr);
+
+    let ledger = readLedgerFile(ledgerPath);
+    let record = ledger.criteria.find(criterion => criterion.id === 'AC1');
+    assert.equal(record.evidence.length, 1, 'the failed test entry is kept for audit');
+    assert.equal(record.status, 'unverified', 'failed test evidence does not verify the criterion');
+    assert.equal(acLedger.deriveScore(ledger).verifiedCount, 0, 'the refused proof is not counted');
+
+    const passedLink = link(root, 'run-ac-ledger-test', [
+      '--ac', 'AC1', '--type', 'test', '--name', 'invalid input is rejected', '--status', 'passed'
+    ]);
+    assert.equal(passedLink.status, 0, passedLink.stderr);
+    ledger = readLedgerFile(ledgerPath);
+    record = ledger.criteria.find(criterion => criterion.id === 'AC1');
+    assert.equal(record.status, 'verified', 'the observed passing test verifies the criterion');
+    assert.equal(acLedger.deriveScore(ledger).verifiedCount, 1);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC7 & AC8: a failed judge verdict is never promoted by later evidence', () => {
+  const root = setupProject();
+  try {
+    const { ledgerPath } = seedRun(root);
+    const recorded = acLedger.recordReviewVerdicts({
+      root,
+      ledgerPath,
+      reviewId: 'step5-judge',
+      verdicts: [{ id: 'AC1', verdict: 'failed', evidence: 'the behaviour is missing from the diff' }]
+    });
+    assert.equal(recorded.ok, true);
+
+    const fileLink = link(root, 'run-ac-ledger-test', [
+      '--ac', 'AC1', '--type', 'file', '--path', 'skills/sdw-orch/scripts/ac_ledger.cjs'
+    ]);
+    assert.equal(fileLink.status, 0, fileLink.stderr);
+    const testLink = link(root, 'run-ac-ledger-test', [
+      '--ac', 'AC1', '--type', 'test', '--name', 'a passing test', '--status', 'passed'
+    ]);
+    assert.equal(testLink.status, 0, testLink.stderr);
+
+    const ledger = readLedgerFile(ledgerPath);
+    const record = ledger.criteria.find(criterion => criterion.id === 'AC1');
+    assert.equal(record.status, 'failed', 'the failed verdict stays authoritative');
+    assert.ok(record.evidence.length >= 3, 'the later evidence is recorded for audit');
+    assert.equal(acLedger.deriveScore(ledger).verifiedCount, 0, 'a failed criterion never counts');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

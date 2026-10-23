@@ -160,7 +160,9 @@ function buildEvidenceEntry(payload = {}, projectRoot) {
 
 function evidenceIdentity(entry) {
   if (entry.type === 'file') return entry.path;
-  if (entry.type === 'test') return entry.name;
+  // A test result is identified by its name and its outcome: replaying the same
+  // result never duplicates, while a re-run that now passes is new proof.
+  if (entry.type === 'test') return `${entry.name}|${entry.status}`;
   if (entry.type === 'commit') return entry.sha;
   return entry.id;
 }
@@ -218,6 +220,10 @@ function linkEvidence(options = {}) {
 
   const linked = [];
   const duplicates = [];
+  // A refused proof is not proof: a failed test entry never verifies a criterion,
+  // and a criterion the judge failed stays failed even when other evidence links
+  // to it later (protocol: a failed verdict is never counted).
+  const proofBearing = entry.type !== 'test' || String(entry.status || '').trim().toLowerCase() === 'passed';
   for (const id of acIds) {
     const record = records.get(id);
     if (!Array.isArray(record.evidence)) record.evidence = [];
@@ -226,7 +232,9 @@ function linkEvidence(options = {}) {
       continue;
     }
     record.evidence.push({ ...entry });
-    record.status = STATUS_VERIFIED;
+    if (proofBearing && record.status !== STATUS_FAILED) {
+      record.status = STATUS_VERIFIED;
+    }
     linked.push(id);
   }
 
