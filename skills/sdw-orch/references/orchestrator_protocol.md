@@ -137,6 +137,19 @@ Step 4 turns each DAG task into a dispatched worker. Exactly one task is in flig
   - Sanitizes environment using allowlist (`PATH`, `HOME`, `USERPROFILE`, `SYSTEMROOT`, `TEMP`, `TMP`, etc.) and injects `SDW_*` variables.
   - Corroborates task changes and evidence on zero exit status; creates no dispatch state.
 
+### Step Progress Headers (Step 4)
+
+Every visible transition prints one short, consistent header line, additive only over the existing detail lines:
+
+- Run start: `[Step {current}/8] Run "<runId>" started (<specSlug>).`
+- Run resume: `[Step {current}/8] Run "<runId>" resumed (<specSlug>).`
+- Step entry: `[Step N/8] Entering Step N: <Name>.`
+- Step completion: `[Step N/8] Completed Step N: <Name>.`
+- Task dispatch: `[Step 4/8] Task {sequence}/{total} ({taskId}) dispatched.` on stdout, and on stderr when `--json` (so the JSON envelope on stdout stays parseable).
+- Task accept: `[Step 4/8] Task {done}/{total} ({taskId}) accepted.` where `done` counts completed Step 4 tasks and `total` counts DAG tasks.
+
+Headers are plain text for humans and grep. They change no exit code, no state file, and no scoped commit. Verification gates, scoring, delivery commit, review, and ship PR keep their current detail lines underneath the header.
+
 ### Dispatch Commands
 - **Dispatch:** `node skills/sdw-orch/scripts/sdw_orch.cjs task next --run-id <runId> [--json]`
   - Rejects a second dispatch while one is in flight, naming the active task.
@@ -206,6 +219,7 @@ Prohibitions carried by every prompt: no `git commit`/`push`/`branch`/`checkout`
 
 
 ### Delivery Commit Guard (Step 6)
+- Step 6 prints `[Step 6/8] Entering Step 6: Delivery Commit.` on entry and `[Step 6/8] Completed Step 6: Delivery Commit.` on completion, with the guard detail lines underneath, same header contract as Step 4.
 - Delivery commit is refused if Step 4 is not `completed`, any DAG task is unaccepted, or any verification gate is not `passed`.
 - **Registry untouched:** Step 6 never writes `index.specs.md` or the specification header. The registry transition belongs to Step 8, so a run that fails at Step 6 or 7 leaves the row unchanged (or `pending` where Step 1 normalized it).
 - **Scoped commits only:** never run `git add -A`. Stage exactly the tracked spec files: accepted evidence `filesChanged` plus `index.specs.md`. Unrelated worktree changes are left uncommitted.
