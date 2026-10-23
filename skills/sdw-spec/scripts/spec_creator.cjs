@@ -2,7 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { resolvePaths, registerSpec } = require('./spec_index.cjs');
+const { resolvePaths, registerSpec, isSpecificationFile } = require('./spec_index.cjs');
 const { createScmProvider, resolveScmProvider, checkScmCapability } = require('./scm_provider_contract.cjs');
 const { validateFile } = require('./validate_spec.cjs');
 
@@ -15,6 +15,9 @@ function getNextPrefix(specsDir) {
   const prefixes = [];
 
   for (const f of files) {
+    // Spec 00060 AC6: a delivery report companion consumes no prefix, so the
+    // allocator scans specifications only.
+    if (!isSpecificationFile(f)) continue;
     const m = f.match(/^(\d{5})-.*\.md$/);
     if (m) {
       prefixes.push(parseInt(m[1], 10));

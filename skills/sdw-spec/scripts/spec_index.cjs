@@ -75,9 +75,19 @@ function normalizeHeaderValue(value) {
 // delivery artifacts, never registry targets (spec 00054).
 function specFileForSlug(specsDir, slug) {
   if (!slug) return null;
-  const direct = path.join(specsDir, `${slug}.md`);
+  const fileName = `${slug}.md`;
+  // Spec 00060 AC5: resolution only ever lands on a specification file.
+  if (!isSpecificationFile(fileName)) return null;
+  const direct = path.join(specsDir, fileName);
   if (fs.existsSync(direct) && fs.statSync(direct).isFile()) return direct;
   return null;
+}
+
+// Spec 00060 AC3, AC5: a report companion is not a specification wherever it is
+// located, so a registry row for one never wins a key lookup.
+function isReportEntry(entry) {
+  const slug = entry && entry.slug ? String(entry.slug) : '';
+  return slug !== '' && /-report\.md$/.test(`${slug}.md`);
 }
 
 function isSpecificationFile(fileName) {
@@ -329,7 +339,9 @@ function archiveSpec(slugOrPrefix, options = {}) {
   }
 
   const target = String(slugOrPrefix).trim();
-  const index = entries.findIndex(e => e.slug === target || e.prefix === target || target.includes(e.slug));
+  const index = entries.findIndex(
+    e => !isReportEntry(e) && (e.slug === target || e.prefix === target || target.includes(e.slug))
+  );
 
   if (index === -1) {
     throw new Error(`Specification "${slugOrPrefix}" not found in specification index.`);
@@ -351,7 +363,9 @@ function updateSpecStatus(slugOrPrefix, newStatus, options = {}) {
   if (!exists) return null;
 
   const target = String(slugOrPrefix).trim();
-  const entry = entries.find(e => e.slug === target || e.prefix === target || target.includes(e.slug));
+  const entry = entries.find(
+    e => !isReportEntry(e) && (e.slug === target || e.prefix === target || target.includes(e.slug))
+  );
   if (!entry) return null;
 
   entry.status = newStatus;

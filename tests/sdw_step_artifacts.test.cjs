@@ -242,8 +242,8 @@ test('sdw-step-artifacts - 00054 AC11-AC14: Step 2 records spec observations in 
     assert.ok(artifact.includes('060-newer'), 'AC12: the artifact names the superseding specification');
     assert.ok(artifact.includes('070-conflict'), 'AC13: the artifact names the conflicting specification');
 
-    const reportPath = path.join(specsDir, `${slug}-report.md`);
-    assert.ok(fs.existsSync(reportPath), 'the delivery report exists beside the specification');
+    const reportPath = path.join(repoRoot, '.sdw', 'reports', `${slug}-report.md`);
+    assert.ok(fs.existsSync(reportPath), 'the delivery report lives in the artifact directory, not beside the specification');
     assert.ok(fs.readFileSync(reportPath, 'utf8').includes('## Spec Observations'), 'AC10: the report carries the observations');
   } finally {
     fs.rmSync(repoRoot, { recursive: true, force: true });

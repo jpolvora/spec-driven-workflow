@@ -674,8 +674,9 @@ title: Delivery Fixture
     }
 
     assert.equal(code, 0, 'Run completes');
-    const reportPath = path.join(tmpDir, '.sdw', 'specs', 'delivery-report.md');
-    assert.ok(fs.existsSync(reportPath), 'AC1: report is the specification sibling named {specFileNameWithoutExtension}-report.md');
+    const reportPath = path.join(tmpDir, '.sdw', 'reports', 'delivery-report.md');
+    assert.ok(fs.existsSync(reportPath), 'AC1: report is `.sdw/reports/{specFileNameWithoutExtension}-report.md`');
+    assert.ok(!fs.existsSync(path.join(tmpDir, '.sdw', 'specs', 'delivery-report.md')), 'AC1: the report no longer sits beside the specification');
     assert.ok(!fs.existsSync(path.join(tmpDir, '.sdw', 'state', 'delivery-report.md')), 'AC1: report does not live in run state');
 
     const markdown = fs.readFileSync(reportPath, 'utf8');
@@ -703,9 +704,9 @@ title: Delivery Fixture
     assert.ok(markdown.includes('## Notes'), 'AC9: report includes the Notes section');
     assert.ok(markdown.includes('## Outcome'), 'Report closes with the outcome section');
 
-    assert.equal(state.deliveryReport, '.sdw/specs/delivery-report.md', 'Run state records the report path');
+    assert.equal(state.deliveryReport, '.sdw/reports/delivery-report.md', 'Run state records the report path');
     assert.equal(state.steps[7].status, 'skipped', 'Report is written after Step 7 resolves');
-    assert.match(output, /Delivery report written: \.sdw\/specs\/delivery-report\.md/, 'One console line names the written report');
+    assert.match(output, /Delivery report written: \.sdw\/reports\/delivery-report\.md/, 'One console line names the written report');
 
     // AC15: the report lands in its own scoped commit that stages only that file.
     assert.equal(
@@ -717,7 +718,7 @@ title: Delivery Fixture
       .split(/\r?\n/)
       .map((line) => line.trim())
       .filter(Boolean);
-    assert.deepEqual(committedFiles, ['.sdw/specs/delivery-report.md'], 'AC15: the report commit stages only the report');
+    assert.deepEqual(committedFiles, ['.sdw/reports/delivery-report.md'], 'AC15: the report commit stages only the report');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
@@ -1173,7 +1174,7 @@ Names \`skills/sdw-orch/scripts/sdw_orch.cjs\`.
     assert.equal(code, 0, 'AC18: a valid specification plans cleanly');
     assert.match(output, /Spec observation \(overlap, high\)/, 'AC18: observations are printed');
     assert.match(output, /No steps executed \(--dry-run\)/);
-    assert.ok(!fs.existsSync(path.join(specsDir, '00054-dry-report.md')), 'AC18: no report is written');
+    assert.ok(!fs.existsSync(path.join(tmpDir, '.sdw', 'reports', '00054-dry-report.md')), 'AC18: no report is written');
     assert.ok(!fs.existsSync(path.join(tmpDir, '.sdw', 'state')), 'AC18: no run state or Step 2 artifact is written');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -1184,8 +1185,8 @@ test('00054 AC16: an unwritable report path records a warning and delivery still
   const slug = 'delivery';
   const tmpDir = setupDeliveryReportRepo(slug);
   try {
-    const reportPath = path.join(tmpDir, '.sdw', 'specs', `${slug}-report.md`);
-    fs.mkdirSync(reportPath);
+    const reportPath = path.join(tmpDir, '.sdw', 'reports', `${slug}-report.md`);
+    fs.mkdirSync(reportPath, { recursive: true });
 
     const runId = `run-${Date.now()}-${slug}`;
     const origWarn = console.warn;
@@ -1236,7 +1237,7 @@ test('00054 AC17: a resumed run rewrites the report from current state instead o
     });
     assert.equal(code, 0);
 
-    const reportPath = path.join(tmpDir, '.sdw', 'specs', `${slug}-report.md`);
+    const reportPath = path.join(tmpDir, '.sdw', 'reports', `${slug}-report.md`);
     assert.ok(fs.existsSync(reportPath), 'the first run wrote the report');
     fs.appendFileSync(reportPath, '\nSTALE APPENDIX\n', 'utf8');
 
@@ -1253,7 +1254,7 @@ test('00054 AC17: a resumed run rewrites the report from current state instead o
     assert.equal((markdown.match(/# Delivery Report — /g) || []).length, 1, 'AC17: exactly one report is written');
     assert.equal(
       stateManager.loadRunState(tmpDir, runId).deliveryReport,
-      '.sdw/specs/delivery-report.md',
+      '.sdw/reports/delivery-report.md',
       'AC17: the regenerated report keeps the same recorded path'
     );
   } finally {
@@ -1487,7 +1488,7 @@ test('00057 AC1, AC2, AC3, AC4, AC5, AC9 & AC11: step boundaries append contribu
     assert.match(inProgress, /### Step 4: implementation[\s\S]*Task task-1 accepted/, 'AC8: the task contribution is rendered');
     assert.match(inProgress, /### Step 8: pr_preparation[\s\S]*Pre-PR gates skipped/, 'AC9: the last completed step is rendered');
 
-    const companion = fs.readFileSync(path.join(tmpDir, '.sdw', 'specs', `${slug}-report.md`), 'utf8');
+    const companion = fs.readFileSync(path.join(tmpDir, '.sdw', 'reports', `${slug}-report.md`), 'utf8');
     assert.match(companion, /### Step 7: code_review[\s\S]*Code review skipped/, 'AC11: the companion is rendered from the contribution set');
     assert.match(companion, /### Step 8: pr_preparation\n\nNot available/, 'AC8: absent contributions render Not available');
   } finally {
@@ -1638,7 +1639,7 @@ test('00057 AC12: a malformed contribution is skipped with a run-state warning a
       resumed.errors.some(entry => entry.warning === true && /Contribution\[\d+\] is malformed/.test(entry.error)),
       'AC12: the warning is recorded in run state'
     );
-    const companion = fs.readFileSync(path.join(tmpDir, '.sdw', 'specs', `${slug}-report.md`), 'utf8');
+    const companion = fs.readFileSync(path.join(tmpDir, '.sdw', 'reports', `${slug}-report.md`), 'utf8');
     assert.match(companion, /Skipped malformed: 1 entry/, 'AC12: the report states the skipped entry');
     assert.match(companion, /### Step 4: implementation[\s\S]*Task task-1 accepted/, 'AC12: the remaining contributions render');
   } finally {
@@ -1779,7 +1780,7 @@ test('00057 AC14: --dry-run prints the contribution summary and writes no report
     assert.equal(code, 0);
     assert.match(output, /Report contributions: 0 contributions recorded/, 'AC14: the contribution summary is printed');
     assert.match(output, /no report written \(--dry-run\)/, 'AC14: the summary states that no report was written');
-    assert.ok(!fs.existsSync(path.join(tmpDir, '.sdw', 'specs', `${slug}-report.md`)), 'AC14: no companion report is written');
+    assert.ok(!fs.existsSync(path.join(tmpDir, '.sdw', 'reports', `${slug}-report.md`)), 'AC14: no companion report is written');
     assert.ok(!fs.existsSync(path.join(tmpDir, '.sdw', 'state')), 'AC14: no run state or in-progress report is written');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -1979,7 +1980,7 @@ test('00057 AC19: contributions present, absent, malformed, across steps, the at
     assert.equal(code, 0, 'AC19: the dry run exits 0');
     assert.match(output, /Report contributions: 0 contributions recorded/, 'AC19: the dry run prints the contribution summary');
     assert.match(output, /planned kinds per step: 3 plan, 4 task, 5 verdict\+judgment, 6 delivery, 7 review, 8 gates\+ship\+convergence/, 'AC19: the dry run prints the planned kinds');
-    assert.ok(!fs.existsSync(path.join(dryRoot, '.sdw', 'specs', `${slug}-report.md`)), 'AC19: the dry run writes no report');
+    assert.ok(!fs.existsSync(path.join(dryRoot, '.sdw', 'reports', `${slug}-report.md`)), 'AC19: the dry run writes no report');
   } finally {
     fs.rmSync(dryRoot, { recursive: true, force: true });
   }
@@ -2090,7 +2091,7 @@ test('00057 AC25 & AC28: the retrospective contribution renders and a re-render 
     assert.ok(Array.isArray(retroEntries[0].body.candidates), 'AC25: the contribution carries the candidates');
     assert.equal(typeof retroEntries[0].body.fixes, 'object', 'AC25: the contribution carries the applied fixes');
 
-    const companionPath = path.join(tmpDir, '.sdw', 'specs', `${slug}-report.md`);
+    const companionPath = path.join(tmpDir, '.sdw', 'reports', `${slug}-report.md`);
     const companion = fs.readFileSync(companionPath, 'utf8');
     assert.match(companion, /## Retrospective/, 'AC25: the report renders the retrospective section');
     assert.match(companion, /- Status: `passed`/, 'AC25: the section names the retrospective status');
@@ -2120,7 +2121,7 @@ test('00057 AC25 & AC28: the retrospective contribution renders and a re-render 
     assert.match(refreshed, /- Status: `passed`/);
     assert.equal(execSync('git rev-parse HEAD', { cwd: tmpDir, encoding: 'utf8' }).trim(), headBefore, 'AC28: no commit is created or amended');
     const status = execSync('git status --porcelain', { cwd: tmpDir, encoding: 'utf8' }).trim();
-    assert.match(status, new RegExp(`.sdw/specs/${slug}-report.md`), 'AC28: the refreshed companion stays uncommitted');
+    assert.match(status, new RegExp(`.sdw/reports/${slug}-report.md`), 'AC28: the refreshed companion stays uncommitted');
 
     const after = stateManager.loadRunState(tmpDir, runId);
     assert.equal(after.reportContributions.filter(entry => entry.kind === 'retro').length, 1, 'AC28: a re-render never duplicates the retro contribution');
