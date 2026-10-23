@@ -157,7 +157,7 @@ const INTENT_RULES = {
     recommendedOption: 'Author, grill, validate, or synchronize specifications using sdw-spec'
   },
   'sdw-orch': {
-    primaryKeywords: ['orch', 'orchestrator', 'orchestration', 'implement spec', 'run spec', 'execute spec', 'specification implementation', 'workflow execution'],
+    primaryKeywords: ['orch', 'orchestrator', 'orchestration', 'implement spec', 'run spec', 'execute spec', 'specification implementation', 'workflow execution', 'diagnostic run', 'diagnose run', 'run diagnostics'],
     secondaryKeywords: ['workflow', 'implement', 'implementation', 'execute', 'execution', 'resumption', 'resume', 'status', 'dag', 'conformance', 'delivery commit', 'automated review', 'pull request', 'push'],
     recommendedOption: 'Orchestrate end-to-end implementation and delivery using sdw-orch'
   },

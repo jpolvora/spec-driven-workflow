@@ -806,4 +806,12 @@ test('AC12: diagnostic intents are registered in the sdw-router routing table fo
   const routed = sdwRouter.routePrompt('sdw-orch run .sdw/specs/diag-demo.md --diagnostic');
   assert.equal(routed.matched, true);
   assert.equal(routed.targetSkill, 'sdw-orch', 'the documented diagnostic invocation routes to sdw-orch');
+
+  // The runtime keyword rules carry the same intents, so a bare intent reaches
+  // sdw-orch instead of passing through.
+  for (const intent of ['diagnostic run', 'diagnose run', 'run diagnostics']) {
+    const runtime = sdwRouter.routePrompt(intent);
+    assert.equal(runtime.matched, true, `"${intent}" matches the runtime router`);
+    assert.equal(runtime.targetSkill, 'sdw-orch', `"${intent}" routes to sdw-orch at runtime`);
+  }
 });
