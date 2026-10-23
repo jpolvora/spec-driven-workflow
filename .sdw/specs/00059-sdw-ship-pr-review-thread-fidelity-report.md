@@ -7,7 +7,7 @@
 | Specification file | `.sdw/specs/00059-sdw-ship-pr-review-thread-fidelity.md` |
 | Specification slug | 00059-sdw-ship-pr-review-thread-fidelity |
 | Run ID | run-1792729641976-00059-sdw-ship-pr-review-threa |
-| Run status | paused |
+| Run status | completed |
 | Branch | `feature/00059-sdw-ship-pr-review-thread-fidelity` |
 | Base branch | `master` |
 | Base commit | `40c3517555b4d1f976e860f38931900cd304ef68` |
@@ -17,7 +17,7 @@
 | Implementation start | 2026-10-23T04:27:23.886Z |
 | Implementation end | 2026-10-23T04:39:50.705Z |
 | Total wall-clock duration | 12m 26s |
-| Generated at | 2026-10-23T04:50:43.194Z |
+| Generated at | 2026-10-23T05:04:46.847Z |
 | Step 1: derivation (skipped) | 1ms |
 | Step 2: refinement (completed) | 35ms |
 | Step 3: dag_generation (completed) | 3ms |
@@ -25,7 +25,7 @@
 | Step 5: scoring (completed) | 8m 28s |
 | Step 6: delivery_commit (completed) | 390ms |
 | Step 7: code_review (completed) | 1s |
-| Step 8: pr_preparation (pending) | n/a |
+| Step 8: pr_preparation (completed) | 13m 57s |
 
 
 ## Tasks
@@ -39,6 +39,8 @@
 
 | SHA | Subject | Range |
 |---|---|---|
+| `8f58094` | chore(00059-sdw-ship-pr-review-thread-fidelity): mark the specification completed in the registry | base..HEAD |
+| `71a26c4` | docs(00059-sdw-ship-pr-review-thread-fidelity): record delivery report | base..HEAD |
 | `fa82f9d` | task(00059-sdw-ship-pr-review-thread-fidelity): task-2 | base..HEAD |
 | `6b34227` | task(00059-sdw-ship-pr-review-thread-fidelity): task-1 | base..HEAD |
 
@@ -60,9 +62,18 @@
 | `skills/sdw-ship-pr/references/ship_protocol.md` | modified |
 | `tests/sdw_ship_pr.test.cjs` | modified |
 
+### Unattributed changes
+
+| File | Change |
+|---|---|
+| `.sdw/specs/00059-sdw-ship-pr-review-thread-fidelity-report.md` | added |
+| `.sdw/specs/00059-sdw-ship-pr-review-thread-fidelity.md` | modified |
+| `.sdw/specs/index.specs.md` | modified |
+
 ## Verification
 
 - test gate: status `passed`, exit code `0`, duration 2m 16s
+- Step 8 delivery: `completed`
 
 ## Code Review
 
@@ -115,7 +126,13 @@ Not available
 
 ## Retrospective
 
-Not available
+- Status: `passed`
+- Report: `.sdw/state/00059-sdw-ship-pr-review-thread-fidelity/run-1792729641976-00059-sdw-ship-pr-review-threa/run-1792729641976-00059-sdw-ship-pr-review-threa.retro.md`
+- Data: `.sdw/state/00059-sdw-ship-pr-review-thread-fidelity/run-1792729641976-00059-sdw-ship-pr-review-threa/run-1792729641976-00059-sdw-ship-pr-review-threa.retro.json`
+- Signals: retries 4 (score 2, review 0, rounds 2, abandonments 0); leftover runs 0; missing artifacts 0; review findings 0 (0 open)
+- Candidates: 0
+- Applied fixes:
+  - none
 
 ## Breaking Changes
 
@@ -172,18 +189,18 @@ None detected.
 
 - Step 1 (derivation) skipped: not recorded
 - Task task-2 accepted after re-dispatch (sequence 2)
-- Environment: workspace: 4 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
+- Environment: workspace: 7 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
 
 ## Outcome
 
-- Result: `paused`
+- Result: `completed`
 - Delivery commit: `fa82f9d2b24b225de01c553a3ab2ecd100d81af3`
 - Ship status: `pending`
 - Duration: 12m 26s
 
 ## Step Contributions
 
-- Recorded: 8 contribution(s)
+- Recorded: 13 contribution(s)
 
 ### Step 1: derivation
 
@@ -231,8 +248,18 @@ None detected.
 
 ### Step 8: pr_preparation
 
-Not available
+- **convergence** 2026-10-23T05:04:40.973Z - Convergence iteration 1
+  - Body: `{"iteration":1,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":false}`
+- **convergence** 2026-10-23T05:04:41.279Z - Convergence iteration 2
+  - Body: `{"iteration":2,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":true}`
+- **gates** 2026-10-23T05:04:41.543Z - Pre-PR gates: 6 result(s)
+  - Body: `{"gates":[{"name":"prePrCommand","status":"skipped","detail":"prePrCommand is not configured"},{"name":"build","status":"skipped","detail":"requiredBuild is false"},{"name":"tests","status":"pass","detail":"npm test exited 0"},{"name":"security","status":"pass","detail":"sdw-security-checks found no blocking leak"},{"name":"runState","status":"pass","detail":"step 4, step 6 and step 7 completed; score 10 >= scoreMin 8"},{"name":"discovery","status":"pass","detail":"no prepare obligations discovered"}]}`
+- **ship** 2026-10-23T05:04:41.543Z - Pull request #50
+  - Body: `{"pushed":true,"branch":"feature/00059-sdw-ship-pr-review-thread-fidelity","pullRequest":{"number":"50","url":"https://github.com/jpolvora/spec-driven-workflow/pull/50","title":null},"shipStatus":"delivered"}`
+  - Evidence: `https://github.com/jpolvora/spec-driven-workflow/pull/50`
 
 ### Step 9: retrospective
 
-Not available
+- **retro** 2026-10-23T05:04:46.697Z - Retrospective passed: 0 candidate(s)
+  - Body: `{"status":"passed","runStatus":"completed","signals":{"retries":{"scoreIterations":2,"reviewIterations":0,"reviewRounds":2,"dispatchAbandonments":0,"total":4},"leftoverRuns":0,"missingArtifacts":0,"reviewFindings":{"total":0,"open":0}},"candidates":[],"fixes":{"recorded":[],"consolidated":null,"queuedSpecifications":[],"failures":[]},"routedCandidates":[],"reportMd":".sdw/state/00059-sdw-ship-pr-review-thread-fidelity/run-1792729641976-00059-sdw-ship-pr-review-threa/run-1792729641976-00059-sdw-ship-pr-review-threa.retro.md","reportJson":".sdw/state/00059-sdw-ship-pr-review-thread-fidelity/run-1792729641976-00059-sdw-ship-pr-review-threa/run-1792729641976-00059-sdw-ship-pr-review-threa.retro.json"}`
+  - Evidence: `.sdw/state/00059-sdw-ship-pr-review-thread-fidelity/run-1792729641976-00059-sdw-ship-pr-review-threa/run-1792729641976-00059-sdw-ship-pr-review-threa.retro.md`, `.sdw/state/00059-sdw-ship-pr-review-thread-fidelity/run-1792729641976-00059-sdw-ship-pr-review-threa/run-1792729641976-00059-sdw-ship-pr-review-threa.retro.json`
