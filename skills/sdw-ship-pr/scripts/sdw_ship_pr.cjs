@@ -586,8 +586,7 @@ function evaluateRunStateGate(projectRoot, runId, specSlug, config = {}, options
 }
 
 /**
- * Commits a dirty working tree before publishing (adapted from the ws-fix-pr /
- * ws-goal-fix-pr auto-commit posture). Returns null when the tree is clean.
+ * Commits a dirty working tree before publishing. Returns null when the tree is clean.
  */
 function shellQuote(value) {
   const text = String(value);
@@ -1914,6 +1913,44 @@ async function runShipPr(options = {}, customExecutor = null) {
 }
 
 /**
+ * Renders a review-thread report with every comment printed in full.
+ * A review thread is the specification of a defect, so the report keeps each
+ * body verbatim (line breaks included) and separates consecutive comments and
+ * consecutive threads instead of narrowing the thread to its first comment.
+ */
+function formatThreadsReport(result, prNumber) {
+  const threads = result && Array.isArray(result.threads) ? result.threads : [];
+  const activeCount = result && Number.isInteger(result.activeCount)
+    ? result.activeCount
+    : threads.filter(t => !t.isResolved).length;
+  const totalCount = result && Number.isInteger(result.totalCount)
+    ? result.totalCount
+    : threads.length;
+
+  const sections = threads.map(thread => {
+    const status = thread.isResolved ? 'RESOLVED' : 'ACTIVE';
+    const location = thread.path ? ` [${thread.path}:${thread.line || 1}]` : '';
+    const lines = [`  - [${status}] Thread ${thread.id}${location}`];
+    const comments = Array.isArray(thread.comments) ? thread.comments : [];
+    if (comments.length === 0) {
+      lines.push('    (no comments)');
+      return lines.join('\n');
+    }
+    comments.forEach((comment, index) => {
+      const author = comment.author || 'unknown';
+      const createdAt = comment.createdAt || 'unknown';
+      lines.push('');
+      lines.push(`    comment ${index + 1}/${comments.length} · ${author} · ${createdAt}`);
+      lines.push(String(comment.body || ''));
+    });
+    return lines.join('\n');
+  });
+
+  const header = `[sdw-ship-pr] PR #${prNumber} Review Threads (${activeCount} active, ${totalCount} total):`;
+  return [header, ...sections].join('\n\n');
+}
+
+/**
  * Lists review threads for a pull request
  */
 async function cmdListThreads(options, customExecutor) {
@@ -2059,16 +2096,21 @@ if (require.main === module) {
 
   runnerPromise
     .then(result => {
+      const hasActivePr = Boolean(result && result.pullRequest && (result.pullRequest.url || result.pullRequest.number));
+      const ok = options.subcommand === 'check-status'
+        ? Boolean(result && result.allPassed === true)
+        : Boolean(result && (result.success !== false || (hasActivePr && result.shipStatus === 'review_pending')) && result.resolved !== false);
+      if (options.subcommand === 'list-threads') {
+        // The full-thread report can be large; exit from the write callback so a
+        // piped stdout is flushed before the process ends.
+        const output = options.json
+          ? `${JSON.stringify(result, null, 2)}\n`
+          : `\n${formatThreadsReport(result, options.pr)}\n`;
+        process.stdout.write(output, () => process.exit(ok ? 0 : 1));
+        return;
+      }
       if (options.json) {
         process.stdout.write(JSON.stringify(result, null, 2) + '\n');
-      } else if (options.subcommand === 'list-threads') {
-        console.log(`\n[sdw-ship-pr] PR #${options.pr} Review Threads (${result.activeCount} active, ${result.totalCount} total):`);
-        for (const t of result.threads) {
-          const status = t.isResolved ? 'RESOLVED' : 'ACTIVE';
-          const fileLoc = t.path ? ` [${t.path}:${t.line || 1}]` : '';
-          const snippet = t.comments && t.comments[0] ? t.comments[0].body.split('\n')[0].slice(0, 80) : '';
-          console.log(`  - [${status}] Thread ${t.id}${fileLoc}: ${snippet}`);
-        }
       } else if (options.subcommand === 'resolve-thread') {
         console.log(`\n[sdw-ship-pr] Resolved thread ${options.threadId} on PR #${options.pr}:`);
         console.log(`  Status: ${result.resolved ? 'Resolved' : 'Pending'}`);
@@ -2086,10 +2128,6 @@ if (require.main === module) {
           console.log(`  PR URL:       ${result.pullRequest.url}`);
         }
       }
-      const hasActivePr = Boolean(result && result.pullRequest && (result.pullRequest.url || result.pullRequest.number));
-      const ok = options.subcommand === 'check-status'
-        ? Boolean(result && result.allPassed === true)
-        : Boolean(result && (result.success !== false || (hasActivePr && result.shipStatus === 'review_pending')) && result.resolved !== false);
       process.exit(ok ? 0 : 1);
     })
     .catch(err => {
@@ -2115,6 +2153,7 @@ module.exports = {
   discoverPrepareObligations,
   evaluateRunStateGate,
   cmdListThreads,
+  formatThreadsReport,
   cmdResolveThread,
   cmdCheckStatus,
   listBranchCommits,

@@ -1997,3 +1997,189 @@ test('sdw-ship-pr - AC8, AC11: CLI failure JSON includes issueLink', () => {
   }
 });
 
+const LONG_REVIEW_COMMENT_BODY = [
+  'Missing null check in the response parser.',
+  '',
+  '```js',
+  'const value = payload.items[0].id;',
+  '```',
+  '',
+  'Suggested correction: guard `payload.items` before indexing.',
+  '',
+  'The reviewer explained the scenario, the missing protection, and the suggested fix in the same comment; cutting this text would remove the reasoning the fixer needs to repair the defect instead of only its title.',
+  'This final paragraph exists so the body runs past the eighty-character line the old renderer printed and past any fixed-length cut applied to a single comment.'
+].join('\n');
+
+const SHORT_REVIEW_COMMENTS = [
+  {
+    body: 'Applied the null guard in abc1234.\n\nRegression test added in tests/parser.test.js.',
+    author: 'author-two',
+    createdAt: '2026-01-03T04:05:06Z'
+  },
+  {
+    body: 'Confirmed on the latest run.',
+    author: 'reviewer-one',
+    createdAt: '2026-01-04T05:06:07Z'
+  }
+];
+
+function listThreadsGraphQlNodes() {
+  return [
+    {
+      id: 'PRRT_full',
+      isResolved: false,
+      path: 'src/parser.js',
+      line: 42,
+      comments: {
+        nodes: [
+          {
+            id: 'PRRC_1',
+            databaseId: 101,
+            body: LONG_REVIEW_COMMENT_BODY,
+            author: { login: 'reviewer-one' },
+            createdAt: '2026-01-02T03:04:05Z'
+          },
+          {
+            id: 'PRRC_2',
+            databaseId: 102,
+            body: SHORT_REVIEW_COMMENTS[0].body,
+            author: { login: SHORT_REVIEW_COMMENTS[0].author },
+            createdAt: SHORT_REVIEW_COMMENTS[0].createdAt
+          },
+          {
+            id: 'PRRC_3',
+            databaseId: 103,
+            body: SHORT_REVIEW_COMMENTS[1].body,
+            author: { login: SHORT_REVIEW_COMMENTS[1].author },
+            createdAt: SHORT_REVIEW_COMMENTS[1].createdAt
+          }
+        ]
+      }
+    },
+    {
+      id: 'PRRT_empty',
+      isResolved: true,
+      path: 'src/empty.js',
+      line: 7,
+      comments: { nodes: [] }
+    }
+  ];
+}
+
+/**
+ * Runs the real CLI `list-threads` command with a preloaded `gh` stub, so the
+ * test proves stdout, exit code, and the provider-to-renderer path together.
+ */
+function runListThreadsCli(threadNodes, extraArgs = []) {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-list-threads-'));
+  fs.mkdirSync(path.join(tmpDir, '.sdw'), { recursive: true });
+  fs.writeFileSync(
+    path.join(tmpDir, '.sdw', 'config.json'),
+    JSON.stringify({ scmProvider: 'github' }, null, 2),
+    'utf8'
+  );
+  const preloadPath = path.join(tmpDir, 'stub-gh.cjs');
+  const graphQlPayload = JSON.stringify({
+    data: { repository: { pullRequest: { reviewThreads: { nodes: threadNodes } } } }
+  });
+  fs.writeFileSync(preloadPath, [
+    "'use strict';",
+    "const childProcess = require('child_process');",
+    'const realExecSync = childProcess.execSync;',
+    `const graphQlPayload = ${JSON.stringify(graphQlPayload)};`,
+    'childProcess.execSync = function (command, options) {',
+    '  const cmd = String(command);',
+    "  if (cmd.includes('gh repo view')) return JSON.stringify({ owner: { login: 'owner' }, name: 'repo' });",
+    "  if (cmd.includes('gh api graphql')) return graphQlPayload;",
+    '  return realExecSync.call(childProcess, command, options);',
+    '};',
+    ''
+  ].join('\n'), 'utf8');
+
+  const scriptPath = path.resolve(__dirname, '../skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs');
+  try {
+    return spawnSync(process.execPath, [
+      '--require', preloadPath, scriptPath, 'list-threads', '--pr', '42', ...extraArgs
+    ], {
+      cwd: tmpDir,
+      encoding: 'utf8',
+      timeout: 60000
+    });
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
+test('sdw-ship-pr - 00059 AC1, AC2, AC4: list-threads prints every comment with its full body, author, and timestamp', () => {
+  assert.ok(LONG_REVIEW_COMMENT_BODY.length > 300, 'the fixture body is long enough to expose a truncating renderer');
+  const run = runListThreadsCli(listThreadsGraphQlNodes());
+
+  assert.strictEqual(run.status, 0, run.stderr);
+  const stdout = run.stdout;
+  const comments = [
+    { body: LONG_REVIEW_COMMENT_BODY, author: 'reviewer-one', createdAt: '2026-01-02T03:04:05Z' },
+    ...SHORT_REVIEW_COMMENTS
+  ];
+
+  for (const comment of comments) {
+    assert.ok(stdout.includes(comment.body), `comment body prints in full: ${comment.body.slice(0, 48)}`);
+    const metaLine = stdout.split('\n').find(line => line.includes(comment.author) && line.includes(comment.createdAt));
+    assert.ok(metaLine, `author ${comment.author} and timestamp ${comment.createdAt} print for their comment`);
+  }
+
+  const positions = comments.map(comment => stdout.indexOf(comment.body));
+  assert.deepStrictEqual([...positions].sort((a, b) => a - b), positions, 'comments print in chronological order');
+});
+
+test('sdw-ship-pr - 00059 AC3, AC4: list-threads --json emits every comment body, author, and timestamp', () => {
+  const run = runListThreadsCli(listThreadsGraphQlNodes(), ['--json']);
+
+  assert.strictEqual(run.status, 0, run.stderr);
+  const payload = JSON.parse(run.stdout);
+  assert.strictEqual(payload.threads.length, 2);
+  assert.strictEqual(payload.threads[0].comments.length, 3);
+  assert.strictEqual(payload.threads[0].comments[0].body, LONG_REVIEW_COMMENT_BODY, 'the JSON body is byte-for-byte complete');
+  assert.deepStrictEqual(
+    payload.threads[0].comments.slice(1).map(comment => ({ body: comment.body, author: comment.author, createdAt: comment.createdAt })),
+    SHORT_REVIEW_COMMENTS
+  );
+  assert.deepStrictEqual(payload.threads[1].comments, []);
+});
+
+test('sdw-ship-pr - 00059 AC5: a thread without comments prints a placeholder and still exits 0', () => {
+  const run = runListThreadsCli([listThreadsGraphQlNodes()[1]]);
+
+  assert.strictEqual(run.status, 0, run.stderr);
+  assert.match(run.stdout, /\[RESOLVED\] Thread PRRT_empty \[src\/empty\.js:7\]\n +\(no comments\)/);
+});
+
+test('sdw-ship-pr - 00059 AC6: consecutive comments and consecutive threads are separated so long threads stay readable', () => {
+  const text = sdwShipPr.formatThreadsReport({
+    activeCount: 1,
+    threads: [
+      {
+        id: 'T1',
+        path: 'a.js',
+        line: 2,
+        isResolved: false,
+        comments: [
+          { body: 'first body', author: 'r1', createdAt: '2026-01-01T00:00:00Z' },
+          { body: 'second body\nwith a second line', author: 'r2', createdAt: '2026-01-02T00:00:00Z' }
+        ]
+      },
+      {
+        id: 'T2',
+        path: 'b.js',
+        line: 3,
+        isResolved: true,
+        comments: [{ body: 'resolved body', author: 'r3', createdAt: '2026-01-03T00:00:00Z' }]
+      }
+    ]
+  }, '42');
+
+  assert.ok(text.includes('Thread T1 [a.js:2]\n\n    comment 1/2'), 'a blank line separates the thread header from its first comment');
+  assert.ok(text.includes('first body\n\n    comment 2/2 · r2 · 2026-01-02T00:00:00Z'), 'a blank line separates consecutive comments');
+  assert.ok(text.includes('with a second line\n\n  - [RESOLVED] Thread T2'), 'a blank line separates consecutive threads');
+  assert.strictEqual(text.includes('undefined'), false, 'the header renders real counts');
+});
+
