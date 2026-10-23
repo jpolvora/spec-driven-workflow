@@ -1075,27 +1075,49 @@ function failingChecksReason(prNumber, failing) {
 function mergeEarlierDelivery({ config, manifest, prior, item, prNumber, command, source, options = {} } = {}) {
   const provider = config.scmProvider;
   const mergePr = typeof options._mergePr === 'function' ? options._mergePr : runMergeCommand;
+  // Spec 00066 AC4: the check gate keeps its evidence on the merge record. The
+  // fields are additive, so a record written before the gate (or by the per-item
+  // path) stays readable: its check fields are simply absent.
+  const attempts = [];
+  let observed = null;
+  let retryOutcome = null;
   const record = fields => {
     prior.merge = {
       requested: true,
-      attempted: false,
+      attempted: attempts.length > 0,
       ok: null,
       status: null,
       reason: null,
       prNumber,
       source,
       at: new Date().toISOString(),
+      checks: observed ? { state: observed.state, failing: observed.failing.slice() } : null,
+      attempts: attempts.map(entry => ({ ...entry })),
+      retryOutcome,
       ...fields
     };
     saveManifest(config, manifest);
     return prior.merge;
   };
-  const attempt = () => mergePr({ config, item: prior, prNumber, command, provider });
+  // One merge attempt, timestamped: the record proves how often and when the
+  // provider was asked, whatever the outcome.
+  const attempt = () => {
+    const at = new Date().toISOString();
+    try {
+      mergePr({ config, item: prior, prNumber, command, provider });
+      attempts.push({ at, ok: true, reason: null });
+    } catch (err) {
+      attempts.push({ at, ok: false, reason: err && err.message ? err.message : String(err) });
+      throw err;
+    }
+  };
 
   // AC1: the merge request is created only after the required checks pass.
   const checks = checksStatus({ config, prNumber, provider, options });
+  observed = checks;
   if (checks && checks.state === 'fail') {
     const reason = failingChecksReason(prNumber, checks.failing);
+    retryOutcome = 'not-needed';
     record({ ok: false, status: 'failed', reason });
     return { halt: reason };
   }
@@ -1106,20 +1128,26 @@ function mergeEarlierDelivery({ config, manifest, prior, item, prNumber, command
     say(options, `[sdw-batch] Waiting for required checks on pull request ${prNumber} before merging it.`);
     const waited = waitForChecks({ config, prNumber, provider, options });
     if (waited.state === 'fail') {
+      observed = { state: 'fail', failing: waited.failing };
+      retryOutcome = 'not-needed';
       const reason = failingChecksReason(prNumber, waited.failing);
       record({ ok: false, status: 'failed', reason });
       return { halt: reason };
     }
     if (waited.state === 'timeout') {
+      observed = { state: 'pending', failing: waited.failing };
+      retryOutcome = 'not-needed';
       const reason = `pull request #${prNumber} did not report a terminal check state after ${waited.attempts} poll(s)`;
       record({ ok: false, status: 'failed', reason });
       return { halt: reason };
     }
     // pass, or a provider that stopped reporting: fall through to the merge.
+    observed = waited.state === 'pass' ? { state: 'pass', failing: [] } : null;
   }
 
   try {
     attempt();
+    retryOutcome = 'not-needed';
     record({ attempted: true, ok: true, status: 'merged' });
     say(options, `[sdw-batch] Merged ${prNumber} for ${prior.slug} before delegating ${item.slug}.`);
     return { ok: true };
@@ -1128,7 +1156,9 @@ function mergeEarlierDelivery({ config, manifest, prior, item, prNumber, command
     // AC2: the refusal is only a check refusal when the checks are still pending;
     // anything else keeps the established single-attempt failure.
     const refusal = checksStatus({ config, prNumber, provider, options });
+    observed = refusal;
     if (!refusal || refusal.state !== 'pending') {
+      retryOutcome = 'not-needed';
       record({ attempted: true, ok: false, status: 'failed', reason: detail });
       return { halt: `the pre-flight merge of pull request #${prNumber} failed: ${detail}` };
     }
@@ -1136,6 +1166,13 @@ function mergeEarlierDelivery({ config, manifest, prior, item, prNumber, command
     say(options, `[sdw-batch] Merge of pull request ${prNumber} was refused while its checks are pending; waiting for them to finish.`);
     const waited = waitForChecks({ config, prNumber, provider, options });
     if (waited.state !== 'pass') {
+      // The retry never ran: the checks never reached a passing state.
+      retryOutcome = 'not-attempted';
+      observed = waited.state === 'fail'
+        ? { state: 'fail', failing: waited.failing }
+        : waited.state === 'timeout'
+          ? { state: 'pending', failing: waited.failing }
+          : null;
       const reason = waited.state === 'fail'
         ? failingChecksReason(prNumber, waited.failing)
         : waited.state === 'timeout'
@@ -1144,12 +1181,15 @@ function mergeEarlierDelivery({ config, manifest, prior, item, prNumber, command
       record({ attempted: true, ok: false, status: 'failed', reason });
       return { halt: reason };
     }
+    observed = { state: 'pass', failing: [] };
     try {
       attempt();
+      retryOutcome = 'succeeded';
       record({ attempted: true, ok: true, status: 'merged' });
       say(options, `[sdw-batch] Merged ${prNumber} for ${prior.slug} after its required checks passed.`);
       return { ok: true };
     } catch (retryErr) {
+      retryOutcome = 'failed';
       const retryDetail = retryErr && retryErr.message ? retryErr.message : String(retryErr);
       const reason = `pull request #${prNumber} is not mergeable after its checks passed: ${retryDetail}`;
       record({ attempted: true, ok: false, status: 'failed', reason });
