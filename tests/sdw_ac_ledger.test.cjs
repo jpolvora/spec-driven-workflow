@@ -615,6 +615,60 @@ test('AC10: a tampered ledger fails Step 5 verification and is never repaired', 
   }
 });
 
+test('AC10: deleting an anchored ledger fails verification instead of skipping it', () => {
+  const root = setupGitProject();
+  try {
+    fs.writeFileSync(path.join(root, SCORE_SPEC_REL), FOUR_AC_SPEC, 'utf8');
+    const state = seedScoringRun(root);
+    const init = acLedger.initLedger({
+      root,
+      artifactsDir: state.artifactsDir,
+      runId: state.runId,
+      specSlug: state.specSlug,
+      specContent: FOUR_AC_SPEC,
+      generatedAt: '2026-10-19T12:00:00.000Z'
+    });
+    const linked = link(root, state.runId, ['--ac', 'AC1', '--type', 'test', '--name', 'ledger contract', '--status', 'passed']);
+    assert.equal(linked.status, 0, linked.stderr);
+    const anchored = stateManager.loadRunState(root, state.runId);
+    assert.match(anchored.acLedgerSha256, /^[0-9a-f]{64}$/, 'the ledger is anchored');
+
+    fs.rmSync(init.ledgerPath, { force: true });
+
+    const verification = acLedger.verifyLedgerHash({
+      root,
+      ledgerPath: init.ledgerPath,
+      expectedSha256: anchored.acLedgerSha256
+    });
+    assert.equal(verification.ok, false, 'a recorded anchor with no file is a mismatch');
+    assert.match(verification.error, /missing/, 'the failure states the ledger is missing');
+
+    let errors = '';
+    const originalLog = console.log;
+    const originalError = console.error;
+    console.log = () => {};
+    console.error = (...args) => { errors += `${args.map(String).join(' ')}\n`; };
+    let code;
+    try {
+      code = sdwOrch.cmdRun({
+        root,
+        specPath: SCORE_SPEC_REL,
+        runId: state.runId,
+        step: 5,
+        skipReview: true,
+        skipPr: true
+      });
+    } finally {
+      console.log = originalLog;
+      console.error = originalError;
+    }
+    assert.equal(code, 2, 'Step 5 refuses to score a deleted ledger');
+    assert.match(errors, /ledger hash mismatch/i, 'the failure names the mismatch');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('AC11: ledger report renders AC status and evidence as Markdown and JSON', () => {
   const root = setupProject();
   try {

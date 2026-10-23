@@ -367,15 +367,25 @@ function hashLedgerFile(ledgerPath) {
 
 // AC10: compare the digest anchored in run state with the ledger file. A run
 // without a ledger, or a state written before the anchor existed, is not a
-// mismatch: only a recorded hash that disagrees with the file fails.
+// mismatch: only a recorded hash that disagrees with the file fails. A recorded
+// anchor whose file is gone is a mismatch too: deleting the ledger must not
+// silently skip the check.
 function verifyLedgerHash(options = {}) {
   const ledgerPath = options.ledgerPath || null;
   const expectedSha256 = trimmed(options.expectedSha256).toLowerCase();
-  if (!ledgerPath || !fs.existsSync(ledgerPath)) {
-    return { ok: true, verified: false, expectedSha256, actualSha256: null, error: null };
-  }
   if (!expectedSha256) {
     return { ok: true, verified: false, expectedSha256, actualSha256: null, error: null };
+  }
+  if (!ledgerPath || !fs.existsSync(ledgerPath)) {
+    return {
+      ok: false,
+      verified: true,
+      expectedSha256,
+      actualSha256: null,
+      error: 'Acceptance criteria ledger hash mismatch: run state records SHA-256 '
+        + `${expectedSha256} but the ledger file is missing. The ledger was removed after its last accepted `
+        + 'update; verification fails closed.'
+    };
   }
   let actualSha256;
   try {
