@@ -16,6 +16,10 @@ Single remediation authority for Spec-Driven Workflow. Scores one finding batch 
 
 > **Rules:** apply [`sdw-rules`](../sdw-rules/SKILL.md) — simplicity, surgical scope, verification — before any edit. Reviewer and fixer stay separate; never self-approve.
 
+An orchestrated `sdw-orch` Step 7 or Step 8 brief may carry an advisory
+`Model: {name}` line resolved from `models.fixer`. Standalone runs ignore an
+absent hint, never probe host capabilities, and never change remediation scope.
+
 ## Subcommands
 
 - `run --findings <path> --report <path> [--markdown <path>] [--dry-run] [--json] [--verify <cmd>] [--no-learn]`: Validate, score, gather context, apply trivial patches, register traps, write the JSON report (and an optional Markdown round report).

@@ -400,3 +400,84 @@ test('sdw-config: cmdCheck rejects an unknown branching strategy end to end', ()
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+// Spec 00056 AC12: model hints are shape-validated deterministically. A
+// malformed hint is a configuration error, never a detection or network action.
+test('00056 AC12: validateConfigSchema accepts model hints and rejects malformed ones', () => {
+  const valid = sdwConfig.validateConfigSchema({
+    specsDir: '.sdw/specs',
+    models: {
+      default: { model: 'default-model', provider: null, effort: 'low', apiEndpoint: null },
+      worker: null,
+      detection: { enabled: true, command: 'node probe.cjs', timeoutMs: 5000 }
+    }
+  });
+  assert.equal(valid.valid, true, 'AC12: a well-formed models block passes');
+  assert.equal(valid.errors.length, 0);
+
+  const wrongEffort = sdwConfig.validateConfigSchema({
+    specsDir: '.sdw/specs',
+    models: { worker: { model: 'worker-model', effort: 3 } }
+  });
+  assert.equal(wrongEffort.valid, false, 'AC12: a non-string effort is rejected');
+  assert.ok(wrongEffort.errors.some(error => error.includes('models.worker.effort')), 'AC12: the error names the malformed property');
+
+  const unknownRole = sdwConfig.validateConfigSchema({
+    specsDir: '.sdw/specs',
+    models: { planner: { model: 'planner-model' } }
+  });
+  assert.equal(unknownRole.valid, false, 'AC12: an unknown role key is rejected');
+  assert.ok(unknownRole.errors.some(error => error.includes('models.planner')));
+
+  const wrongHintShape = sdwConfig.validateConfigSchema({
+    specsDir: '.sdw/specs',
+    models: { worker: 'worker-model' }
+  });
+  assert.equal(wrongHintShape.valid, false, 'AC12: a non-object hint is rejected');
+
+  const unknownHintKey = sdwConfig.validateConfigSchema({
+    specsDir: '.sdw/specs',
+    models: { worker: { model: 'worker-model', temperature: 1 } }
+  });
+  assert.equal(unknownHintKey.valid, false, 'AC12: an unknown hint key is rejected');
+
+  const wrongDetection = sdwConfig.validateConfigSchema({
+    specsDir: '.sdw/specs',
+    models: { detection: { enabled: 'yes', timeoutMs: 0 } }
+  });
+  assert.equal(wrongDetection.valid, false, 'AC12: malformed detection settings are rejected');
+  assert.ok(wrongDetection.errors.some(error => error.includes('models.detection.enabled')));
+  assert.ok(wrongDetection.errors.some(error => error.includes('models.detection.timeoutMs')));
+});
+
+test('00056 AC12: cmdCheck rejects a malformed model hint and runs no detection command', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-56-model-check-'));
+  try {
+    sdwConfig.cmdInit({ root: tmpDir });
+    const marker = path.join(tmpDir, 'detection-ran.txt').replace(/\\/g, '/');
+    const configPath = path.join(tmpDir, '.sdw', 'config.json');
+    fs.writeFileSync(configPath, JSON.stringify({
+      specsDir: '{projectRoot}/.sdw/specs',
+      models: {
+        worker: { model: 'worker-model', effort: 3 },
+        detection: { enabled: true, command: `node -e "require('fs').writeFileSync('${marker}', 'ran')"` }
+      }
+    }, null, 2), 'utf8');
+
+    let output = '';
+    const originalLog = console.log;
+    console.log = (message) => { output += `${String(message)}\n`; };
+    let code;
+    try {
+      code = sdwConfig.cmdCheck({ root: tmpDir, skillsRoot: path.resolve(__dirname, '../skills') });
+    } finally {
+      console.log = originalLog;
+    }
+
+    assert.equal(code, 1, 'AC12: cmdCheck exits 1 for a malformed hint');
+    assert.match(output, /models\.worker\.effort/, 'AC12: cmdCheck names the malformed property');
+    assert.equal(fs.existsSync(marker), false, 'AC12: no detection command runs during shape validation');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

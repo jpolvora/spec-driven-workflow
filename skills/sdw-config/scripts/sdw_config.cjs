@@ -801,6 +801,70 @@ SDW supports three installation topologies with automatic \`{skillsRoot}\` token
 In **Hybrid Mode**, skills are installed once globally under \`$HOME/.agents/skills/\` and shared across all projects on the workstation, while each consumer project strictly maintains its own isolated \`.sdw/\` directory. All configuration (\`.sdw/config.json\`), specs (\`.sdw/specs/\`), and run states (\`.sdw/state/\`) remain local to the consumer repository and never leak into global storage.
 `;
 
+// Spec 00056 AC12: model hints are opaque strings, so shape validation is the
+// only deterministic check. Malformed hints are a configuration error and never
+// trigger detection, a command, or a provider call.
+const MODEL_ROLE_KEYS = ['default', 'orchestrator', 'worker', 'reviewer', 'fixer', 'judge', 'ship', 'retro'];
+const MODEL_HINT_FIELDS = ['model', 'provider', 'effort', 'apiEndpoint'];
+const MODEL_DETECTION_FIELDS = ['enabled', 'command', 'timeoutMs'];
+
+function validateModelHintShape(entry, pathName) {
+  if (entry === null || entry === undefined) return [];
+  if (typeof entry !== 'object' || Array.isArray(entry)) {
+    return [`Property "${pathName}" must be an object or null.`];
+  }
+  const errors = [];
+  for (const key of Object.keys(entry)) {
+    if (!MODEL_HINT_FIELDS.includes(key)) {
+      errors.push(`Property "${pathName}.${key}" is not a recognized key. Expected one of: ${MODEL_HINT_FIELDS.join(', ')}.`);
+    } else if (entry[key] !== null && typeof entry[key] !== 'string') {
+      errors.push(`Property "${pathName}.${key}" must be a string or null.`);
+    }
+  }
+  return errors;
+}
+
+function validateModelsShape(models) {
+  if (models === null || models === undefined) {
+    return ['Property "models" must be an object.'];
+  }
+  if (typeof models !== 'object' || Array.isArray(models)) {
+    return ['Property "models" must be an object.'];
+  }
+  const errors = [];
+  const allowedKeys = [...MODEL_ROLE_KEYS, 'detection'];
+  for (const key of Object.keys(models)) {
+    if (!allowedKeys.includes(key)) {
+      errors.push(`Property "models.${key}" is not a recognized key. Expected one of: ${allowedKeys.join(', ')}.`);
+    }
+  }
+  for (const role of MODEL_ROLE_KEYS) {
+    if (role in models) errors.push(...validateModelHintShape(models[role], `models.${role}`));
+  }
+  if ('detection' in models) {
+    const detection = models.detection;
+    if (!detection || typeof detection !== 'object' || Array.isArray(detection)) {
+      errors.push('Property "models.detection" must be an object.');
+    } else {
+      for (const key of Object.keys(detection)) {
+        if (!MODEL_DETECTION_FIELDS.includes(key)) {
+          errors.push(`Property "models.detection.${key}" is not a recognized key. Expected one of: ${MODEL_DETECTION_FIELDS.join(', ')}.`);
+        }
+      }
+      if ('enabled' in detection && typeof detection.enabled !== 'boolean') {
+        errors.push('Property "models.detection.enabled" must be a boolean.');
+      }
+      if ('command' in detection && detection.command !== null && typeof detection.command !== 'string') {
+        errors.push('Property "models.detection.command" must be a string or null.');
+      }
+      if ('timeoutMs' in detection && (!Number.isInteger(detection.timeoutMs) || detection.timeoutMs < 1)) {
+        errors.push('Property "models.detection.timeoutMs" must be a positive integer.');
+      }
+    }
+  }
+  return errors;
+}
+
 function validateConfigSchema(config) {
   const errors = [];
   if (!config || typeof config !== 'object' || Array.isArray(config)) {
@@ -838,6 +902,11 @@ function validateConfigSchema(config) {
         }
       }
     }
+  }
+
+  // models (Spec 00056 AC12)
+  if ('models' in config) {
+    errors.push(...validateModelsShape(config.models));
   }
 
   // scmCodeReviewEnabled
@@ -1686,6 +1755,7 @@ module.exports = {
   cmdParse,
   loadConfig,
   validateConfigSchema,
+  validateModelsShape,
   resolveBranching,
   resolveSkillsRoot,
   hasSdwSkills,

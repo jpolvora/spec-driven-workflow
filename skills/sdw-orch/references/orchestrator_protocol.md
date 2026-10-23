@@ -80,6 +80,15 @@ Each field is a `{ model, provider, effort, apiEndpoint }` record of nullable st
 
 `models.detection` is the start-of-run capability toggle: `{ enabled, command, timeoutMs }` with defaults `false`, `null`, `30000`. A disabled toggle (the default) skips detection entirely, performs no probe, writes no capabilities cache, and records `state.models.detection.status: "skipped"`; hints then come from static resolution only, and the run stays free of per-step model concern.
 
+When detection is enabled, Step 1 binds once before task dispatch and every later step reuses the bound entry (`task next`, `resume`, Step 7, and Step 8 never probe again):
+
+- **Cache:** consumer-local, gitignored `.sdw/host-capabilities.json`, one key per session model (`{hostId}::{sessionModel}`, supplied by the host or `SDW_MODELS_SESSION_KEY`), each value `{ capabilities, supportedModels, probedAt, source }`. A hit records `detection.status` and `detection.source` of `hit` with `transport: cache` and reuses the entry; a miss records `probe` and runs exactly one probe, upserting only the current key while preserving every other key. Missing or unreadable cache behaves as a miss.
+- **Probe:** `models.detection.command` runs with `{capabilitiesFile}`, `{targetRoot}`, `{slug}`, `{runId}` and writes the capabilities contract `{ harness, models: [{ model, provider, effort, available }] }` to `.sdw/state/{runId}/model-capabilities.probe.json`. With a null command the host consults its harness and writes the same file shape before dispatch.
+- **Invalidation:** re-probe only on `--refresh-models`, a different session key, or a new run; `--no-model-detect` skips detection for one invocation.
+- **Failure:** a missing, unreadable, malformed, or timed-out capabilities file fails open. `state.models.detection.status` and `source` become `failed-open`, `transport` names `command` or `host`, the warning lands in `state.errors`, and the run proceeds on static hints.
+- **Adaptation:** when the statically resolved hint names a model flagged unavailable in `supportedModels` or the capabilities list, the orchestrator walks the role fallback chain (`ship` through `fixer`, `judge` through `scoring.judge*`, every role through `models.default`) to the first available entry, then null. `state.models.adaptations` records `{ role, requested, resolved, reason }`, `state.models.static` keeps the pre-adaptation view, and the requested id travels as `configuredModel` on the resolved hint and the Step 4 dispatch envelope.
+- **Snapshot:** `state.models` records `detection` (enabled, status, source, transport, key, command, probedAt), `static`, `capabilities`, `supportedModels`, `resolved`, `adaptations`, and the flat `orchestratorHint`, `workerHint`, `reviewerHint`, `fixerHint`, `judgeHint`, `shipHint`, and `retroHint` the steps consume.
+
 ## 2. 8-Step State Machine
 
 1. **Derivation:** Identifies whether the spec is already agent-ready (EARS ACs, DoR, YAML frontmatter). Skips derivation if ready; otherwise reformulates human stories.

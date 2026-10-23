@@ -15,6 +15,7 @@ const implementationRunner = require('./implementation_runner.cjs');
 const evidenceValidator = require('./evidence_validator.cjs');
 const sandbox = require('./sandbox.cjs');
 const deliveryReport = require('./delivery_report.cjs');
+const modelCapabilities = require('./model_capabilities.cjs');
 const memory = require('../../sdw-memory/scripts/sdw_memory.cjs');
 
 // Spec 00043: short, consistent step-number progress headers. Additive only:
@@ -145,7 +146,9 @@ function parseArgs(args) {
     skillsRoot: null,
     implementationMode: null,
     refineMode: false,
-    newRun: false
+    newRun: false,
+    noModelDetect: false,
+    refreshModels: false
   };
 
   const positional = [];
@@ -170,6 +173,8 @@ function parseArgs(args) {
     else if (arg === '--allow-archived') result.allowArchived = true;
     else if (arg === '--second-pass' || arg === '--refine') result.refineMode = true;
     else if (arg === '--new-run') result.newRun = true;
+    else if (arg === '--no-model-detect') result.noModelDetect = true;
+    else if (arg === '--refresh-models') result.refreshModels = true;
     else if (arg === '--latest') result.latest = true;
     else if (arg === '--dry-run') result.dryRun = true;
     else if (arg === '--sandbox') result.sandbox = true;
@@ -899,6 +904,79 @@ function resolveModelHints(config, scoring) {
     // AC7: ship falls back to the fixer hint; AC8: retro falls back to default.
     ship: resolveShipModelHint(models),
     retro: resolveModelHint(models, 'retro')
+  };
+}
+
+// Spec 00056 AC11: the adaptation chain mirrors each role's static resolution
+// order, including the legacy scoring.judge* fields for the judge.
+function buildModelChains(config, scoring) {
+  const models = config && config.models;
+  const legacyJudge = normalizeModelHint({
+    model: scoring && scoring.judgeModel,
+    provider: scoring && scoring.judgeProvider,
+    effort: scoring && scoring.judgeEffort,
+    apiEndpoint: scoring && scoring.judgeApiEndpoint
+  });
+  return {
+    orchestrator: [normalizeModelHint(models && models.orchestrator), normalizeModelHint(models && models.default)],
+    worker: [normalizeModelHint(models && models.worker), normalizeModelHint(models && models.default)],
+    reviewer: [normalizeModelHint(models && models.reviewer), normalizeModelHint(models && models.default)],
+    fixer: [normalizeModelHint(models && models.fixer), normalizeModelHint(models && models.default)],
+    judge: [normalizeModelHint(models && models.judge), legacyJudge, normalizeModelHint(models && models.default)],
+    ship: [normalizeModelHint(models && models.ship), normalizeModelHint(models && models.fixer), normalizeModelHint(models && models.default)],
+    retro: [normalizeModelHint(models && models.retro), normalizeModelHint(models && models.default)]
+  };
+}
+
+// Spec 00056 AC10: the bound snapshot records static resolution, captured
+// capabilities, adapted resolution, and the reason for every adaptation. The
+// flat *Hint fields stay the values the steps consume.
+function buildEnabledModelSnapshot(binding, staticHints, adapted) {
+  return {
+    detection: binding.detection,
+    static: staticHints,
+    capabilities: binding.capabilities,
+    supportedModels: binding.supportedModels,
+    resolved: adapted.resolved,
+    adaptations: adapted.adaptations,
+    orchestratorHint: adapted.resolved.orchestrator,
+    workerHint: adapted.resolved.worker,
+    reviewerHint: adapted.resolved.reviewer,
+    fixerHint: adapted.resolved.fixer,
+    judgeHint: adapted.resolved.judge,
+    shipHint: adapted.resolved.ship,
+    retroHint: adapted.resolved.retro
+  };
+}
+
+// Spec 00056 AC10: later steps read the bound entry instead of re-resolving or
+// re-probing. Older states without a bound snapshot keep static resolution.
+function resolveBoundRoleHint(stateOrModels, role) {
+  const models = stateOrModels && stateOrModels.models ? stateOrModels.models : stateOrModels;
+  if (!models || typeof models !== 'object') return undefined;
+  const resolved = models.resolved && typeof models.resolved === 'object' ? models.resolved : null;
+  if (resolved && Object.prototype.hasOwnProperty.call(resolved, role)) return resolved[role];
+  const flatKey = `${role}Hint`;
+  if (Object.prototype.hasOwnProperty.call(models, flatKey)) return models[flatKey];
+  return undefined;
+}
+
+function readConfiguredModel(hint) {
+  return hint && typeof hint.configuredModel === 'string' && hint.configuredModel.trim()
+    ? hint.configuredModel.trim()
+    : null;
+}
+
+// Spec 00056 AC11: Step 5 and the score-submit path consume the bound or
+// adapted judge hint instead of re-resolving it statically.
+function applyJudgeModelHint(judgeConfig, hint) {
+  if (hint === undefined) return judgeConfig;
+  return {
+    ...judgeConfig,
+    model: hint ? hint.model : null,
+    provider: hint ? hint.provider : null,
+    effort: hint ? hint.effort : null,
+    apiEndpoint: hint ? hint.apiEndpoint : null
   };
 }
 
@@ -1666,6 +1744,19 @@ function cmdRun(options) {
     sdwConfig = sdwConfigScript ? require(sdwConfigScript) : require('../../sdw-config/scripts/sdw_config.cjs');
   } catch (e) {}
   let config = loadProjectConfig(targetRoot, options);
+
+  // Spec 00056 AC12: malformed model hints are a configuration shape error, not
+  // a detection failure. Refuse the run before any probe, branch, or state write.
+  if (sdwConfig && typeof sdwConfig.validateModelsShape === 'function' && config && config.models !== undefined) {
+    const modelShapeErrors = sdwConfig.validateModelsShape(config.models);
+    if (modelShapeErrors.length > 0) {
+      const message = `Invalid models configuration: ${modelShapeErrors.join(' ')}`;
+      console.error(`[sdw-orch] ${message}`);
+      options._runResult = { error: message };
+      return 1;
+    }
+  }
+
   // AC9/AC10: fail closed, but resolve configuration first so a configured
   // skillsRoot (or {skillsRoot} token) is honored instead of only CLI options.
   const detectedSkillsRoot = config && config.skillsMode && config.skillsMode !== 'unknown'
@@ -2121,23 +2212,66 @@ function cmdRun(options) {
     state = stateManager.saveRunState(targetRoot, state);
   }
 
-  // Spec 00056 AC1-AC8: resolve the static hint snapshot once. Steps 1-3 carry
-  // orchestratorHint; every Step 4 envelope carries workerHint; Step 7 briefs
-  // carry reviewerHint/fixerHint; Step 5 carries judgeHint; Step 8 convergence
-  // carries shipHint (AC7) and retro analysis carries retroHint (AC8). Detection
-  // is disabled by default (AC9), so the static path records the skipped status.
-  const modelHints = resolveModelHints(config, options.scoring || config.scoring);
-  state.models = {
-    detection: { status: 'skipped' },
-    orchestratorHint: modelHints.orchestrator,
-    workerHint: modelHints.worker,
-    reviewerHint: modelHints.reviewer,
-    fixerHint: modelHints.fixer,
-    judgeHint: modelHints.judge,
-    shipHint: modelHints.ship,
-    retroHint: modelHints.retro
-  };
-  state = stateManager.saveRunState(targetRoot, state);
+  // Spec 00056 AC10/AC11: bind host capabilities once at run start, before any
+  // task dispatch, then reuse the recorded entry across steps. Detection stays
+  // opt-in; a disabled toggle keeps static resolution and records the skipped
+  // status (AC9). A resumed run reuses its bound entry unless the session key
+  // changed or --refresh-models was passed.
+  const modelScoring = options.scoring || config.scoring;
+  const staticHints = resolveModelHints(config, modelScoring);
+  const sessionKey = modelCapabilities.resolveSessionKey(options);
+  const boundEntry = state.models && state.models.resolved && state.models.detection;
+  const reuseBound = !options.noModelDetect
+    && !options.refreshModels
+    && boundEntry
+    && boundEntry.key === sessionKey
+    && boundEntry.status !== 'skipped';
+  let modelHints;
+  if (reuseBound) {
+    modelHints = {};
+    for (const role of modelCapabilities.MODEL_ROLES) {
+      modelHints[role] = resolveBoundRoleHint(state.models, role);
+    }
+    console.log(`[Step 1: Model Capabilities] Reusing bound entry key=${boundEntry.key} source=${boundEntry.source || 'hit'} transport=${boundEntry.transport || 'cache'}.`);
+  } else {
+    const binding = modelCapabilities.bindModelCapabilities({
+      targetRoot,
+      config,
+      runId: state.runId,
+      slug: specSlug,
+      options
+    });
+    const adapted = modelCapabilities.adaptModelHints({
+      staticHints,
+      chains: buildModelChains(config, modelScoring),
+      capabilities: binding.capabilities,
+      supportedModels: binding.supportedModels
+    });
+    modelHints = adapted.resolved;
+    state.models = binding.detection.status === 'skipped'
+      ? {
+        detection: { status: 'skipped' },
+        orchestratorHint: staticHints.orchestrator,
+        workerHint: staticHints.worker,
+        reviewerHint: staticHints.reviewer,
+        fixerHint: staticHints.fixer,
+        judgeHint: staticHints.judge,
+        shipHint: staticHints.ship,
+        retroHint: staticHints.retro
+      }
+      : buildEnabledModelSnapshot(binding, staticHints, adapted);
+    state = stateManager.saveRunState(targetRoot, state);
+    if (binding.warning) {
+      console.warn(`[Step 1: Model Capabilities] ${binding.warning}`);
+      state = stateManager.recordWarning(targetRoot, state.runId, 1, binding.warning);
+    }
+    if (binding.detection.status === 'probe' || binding.detection.status === 'hit') {
+      const modelCount = binding.capabilities && Array.isArray(binding.capabilities.models)
+        ? binding.capabilities.models.length
+        : 0;
+      console.log(`[Step 1: Model Capabilities] status=${binding.detection.status} source=${binding.detection.source} transport=${binding.detection.transport || 'none'} key=${binding.detection.key} models=${modelCount} adaptation(s)=${adapted.adaptations.length}.`);
+    }
+  }
 
   console.log(`[sdw-orch] Run "${state.runId}" active at step ${startStep}/8.`);
   console.log(`[sdw-orch] State file: ${stateManager.getStateFilePath(targetRoot, state.runId)}`);
@@ -2667,7 +2801,10 @@ function cmdRun(options) {
     const specAcs = dagPlanner.parseAcceptanceCriteria(effectiveSpecContent);
     // Spec 00056 AC6: the judge hint prefers models.judge over scoring.judge*,
     // then models.default, then the current session model.
-    const judgeConfig = resolveJudgeConfigWithModels(config, options.scoring || config.scoring);
+    const judgeConfig = applyJudgeModelHint(
+      resolveJudgeConfigWithModels(config, modelScoring),
+      modelHints.judge
+    );
     if (judgeConfig.model || judgeConfig.provider || judgeConfig.effort || judgeConfig.apiEndpoint) {
       console.log(`[Step 5: Conformance Scoring] Judge model hint: ${formatModelHint(judgeConfig)}.`);
     }
@@ -3931,6 +4068,9 @@ function readSpecAcsForState(targetRoot, state) {
 function dispatchNextTask(context) {
   const { targetRoot, state, dagPlan, specAcs, specSlug, specPath, options } = context;
   const workerHint = context.workerHint ? normalizeModelHint(context.workerHint) : null;
+  // Spec 00056 AC11: keep the requested id beside the adapted hint so telemetry
+  // stays auditable when detection resolved a different model.
+  const workerConfiguredModel = readConfiguredModel(context.workerHint);
   const step4 = state.steps[4];
   step4.tasks = step4.tasks || {};
   const tasks = step4.tasks;
@@ -4054,6 +4194,7 @@ function dispatchNextTask(context) {
     dependencies: ready.dependencies || [],
     learnings: digestEnvelope,
     workerHint: workerHint || null,
+    configuredModel: workerConfiguredModel,
     subagentBrief: `Spawn one subagent for this task only. Give it: read ${sandboxed ? `"${displayPrompt}"` : displayPrompt} and execute it exactly as written, then report back per its report contract.${workerHint ? ` Model hint: ${formatModelHint(workerHint)}.` : ''}${digestEnvelope.length > 0 ? ` The prompt carries ${digestEnvelope.length} run learning(s) recorded earlier in this run; require the worker to apply them and record each application with \`sdw-memory apply --run ${state.runId} --slug <slug> --step <n> --evidence <locator>\`.` : ''}${sandboxed ? ` Run every command with cwd "${displayWorkingDir}".` : ''}`,
     finishCommand: `node "${orchCommandPath()}" task finish --run-id ${state.runId} --task ${ready.id} --evidence ${evidenceArg}${rootFlag}`
   };
@@ -4162,6 +4303,9 @@ function cmdTaskNext(options) {
     return 1;
   }
 
+  // Spec 00056 AC10: reuse the entry bound in Step 1 instead of re-resolving or
+  // re-probing; only a state without a bound snapshot falls back to statics.
+  const boundWorkerHint = resolveBoundRoleHint(state, 'worker');
   const result = dispatchNextTask({
     targetRoot,
     state,
@@ -4169,7 +4313,7 @@ function cmdTaskNext(options) {
     specAcs,
     specSlug: state.specSlug,
     specPath: state.specPath,
-    workerHint: resolveModelHints(dispatchConfig).worker,
+    workerHint: boundWorkerHint === undefined ? resolveModelHints(dispatchConfig).worker : boundWorkerHint,
     options
   });
 
@@ -4617,7 +4761,9 @@ function cmdResume(options) {
           // AC31: re-emit the in-flight envelope so a lost dispatch is recoverable.
           const activeRecord = (state.steps[4].tasks || {})[dispatch.activeTaskId] || {};
           const activeTask = dagTasks.find(t => t.id === dispatch.activeTaskId) || {};
-          const resumeWorkerHint = resolveModelHints(resumeConfig).worker;
+          // Spec 00056 AC10: the re-emitted envelope reuses the Step 1 binding.
+          const boundResumeHint = resolveBoundRoleHint(state, 'worker');
+          const resumeHint = boundResumeHint === undefined ? resolveModelHints(resumeConfig).worker : boundResumeHint;
           const envelope = {
             runId: state.runId,
             specSlug: state.specSlug,
@@ -4632,8 +4778,9 @@ function cmdResume(options) {
             workingDir: activeRecord.workingDir || '.',
             acIds: activeRecord.coveredAcs || activeTask.coveredAcs || [],
             dependencies: activeRecord.dependencies || activeTask.dependencies || [],
-            workerHint: resumeWorkerHint,
-            subagentBrief: `Spawn one subagent for this task only. Give it: read ${activeRecord.promptPath} and execute it exactly as written, then report back per its report contract.${resumeWorkerHint ? ` Model hint: ${formatModelHint(resumeWorkerHint)}.` : ''}`,
+            workerHint: resumeHint ? normalizeModelHint(resumeHint) : null,
+            configuredModel: readConfiguredModel(resumeHint),
+            subagentBrief: `Spawn one subagent for this task only. Give it: read ${activeRecord.promptPath} and execute it exactly as written, then report back per its report contract.${resumeHint ? ` Model hint: ${formatModelHint(resumeHint)}.` : ''}`,
             finishCommand: `node "${orchCommandPath()}" task finish --run-id ${state.runId} --task ${dispatch.activeTaskId} --evidence ${sandbox.readMarker(targetRoot) ? `"${activeRecord.evidencePath}"` : activeRecord.evidencePath}${sandbox.readMarker(targetRoot) ? ` --root "${normalizePath(targetRoot)}"` : ''}`
           };
           printDispatchEnvelope(envelope, state, options);
@@ -4851,7 +4998,11 @@ function cmdScoreSubmit(options) {
   const minScore = options.minScore !== undefined
     ? options.minScore
     : (config.scoreMin !== undefined ? config.scoreMin : 8);
-  const judgeConfig = resolveJudgeConfigWithModels(config, options.scoring || config.scoring);
+  const boundJudgeHint = resolveBoundRoleHint(state, 'judge');
+  const judgeConfig = applyJudgeModelHint(
+    resolveJudgeConfigWithModels(config, options.scoring || config.scoring),
+    boundJudgeHint
+  );
   const report = scoreEvaluator.applyVerdict(validation.data, {
     acs: judgeCriteria,
     minScore,
@@ -5066,6 +5217,8 @@ Options:
   --second-pass          Refine an already implemented spec (alias: --refine):
                          review what was delivered, simplify, report, commit only
                          on a real change, and ship only when a commit was created
+  --no-model-detect      Skip host capability detection for this invocation
+  --refresh-models       Force a fresh capability probe instead of a cache hit
   --json                 Output response in JSON format
   -h, --help             Show help message
 `);

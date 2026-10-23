@@ -14,6 +14,7 @@ const dagPlanner = require('../skills/sdw-orch/scripts/dag_planner.cjs');
 const scoreEvaluator = require('../skills/sdw-orch/scripts/score_evaluator.cjs');
 const reviewRunner = require('../skills/sdw-orch/scripts/review_runner.cjs');
 const deliveryReport = require('../skills/sdw-orch/scripts/delivery_report.cjs');
+const modelCapabilities = require('../skills/sdw-orch/scripts/model_capabilities.cjs');
 const sdwOrch = require('../skills/sdw-orch/scripts/sdw_orch.cjs');
 
 // Spec 027: wire the deterministic judge stub for unattended runs past Step 4.
@@ -2434,6 +2435,331 @@ test('00056 AC7-AC9: Step 8 applies the ship hint, retro applies its hint, and d
 
     const sdwConfig = require('../skills/sdw-config/scripts/sdw_config.cjs');
     assert.equal(sdwConfig.DEFAULT_CONFIG.models.detection.enabled, false, 'AC9: the detection toggle defaults to disabled');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// Spec 00056 AC10-AC12 fixtures: a local detection command writes the
+// capabilities contract and appends one line per probe. No network, no provider.
+function writeModelDetectionFixture(tmpDir, capabilities, mode = 'valid') {
+  const scriptPath = path.join(tmpDir, 'detect-models.cjs');
+  const counterPath = path.join(tmpDir, 'model-probes.log');
+  const writeLine = mode === 'malformed'
+    ? `fs.writeFileSync(out, '{ not valid json');`
+    : `fs.writeFileSync(out, ${JSON.stringify(JSON.stringify(capabilities))});`;
+  fs.writeFileSync(scriptPath, [
+    "'use strict';",
+    "const fs = require('fs');",
+    'const out = process.argv[2];',
+    'const counter = process.argv[3];',
+    writeLine,
+    "fs.appendFileSync(counter, 'probe\\n');",
+    ''
+  ].join('\n'), 'utf8');
+  const slash = value => String(value).replace(/\\/g, '/');
+  return {
+    scriptPath,
+    counterPath,
+    command: `node "${slash(scriptPath)}" {capabilitiesFile} "${slash(counterPath)}"`,
+    probeCount: () => fs.existsSync(counterPath)
+      ? fs.readFileSync(counterPath, 'utf8').split('\n').filter(Boolean).length
+      : 0
+  };
+}
+
+const detectedCapabilities = {
+  harness: 'test-host',
+  models: [
+    { model: 'slow-model', provider: null, effort: 'high', available: false },
+    { model: 'fast-model', provider: null, effort: 'low', available: true },
+    { model: 'review-model', provider: null, effort: 'high', available: true }
+  ]
+};
+
+// Spec 00056 AC11: adaptation walks the role fallback chain, records the three
+// fields, and stops at the session model when nothing is available.
+test('00056 AC11: adaptation records requested, resolved, and reason per role', () => {
+  const capabilities = {
+    harness: 'unit-host',
+    models: [
+      { model: 'slow-model', provider: null, effort: 'high', available: false },
+      { model: 'fast-model', provider: null, effort: 'low', available: true },
+      { model: 'review-model', provider: null, effort: 'high', available: true }
+    ]
+  };
+  const fast = { model: 'fast-model', provider: null, effort: 'low', apiEndpoint: null };
+  const slow = { model: 'slow-model', provider: null, effort: 'high', apiEndpoint: null };
+  const staticHints = {
+    worker: slow,
+    reviewer: { model: 'review-model', provider: null, effort: 'high', apiEndpoint: null },
+    ship: slow
+  };
+  const chains = {
+    worker: [slow, fast],
+    reviewer: [staticHints.reviewer, fast],
+    ship: [null, slow, fast]
+  };
+
+  const result = modelCapabilities.adaptModelHints({
+    staticHints,
+    chains,
+    capabilities,
+    supportedModels: ['fast-model', 'review-model']
+  });
+  assert.equal(result.resolved.worker.model, 'fast-model', 'AC11: the worker hint adapts to models.default');
+  assert.equal(result.resolved.worker.configuredModel, 'slow-model', 'AC11: the requested id is preserved as configuredModel');
+  assert.equal(result.resolved.ship.model, 'fast-model', 'AC11: the ship hint walks ship -> fixer -> default');
+  assert.equal(result.resolved.reviewer.model, 'review-model', 'AC11: an available hint is not adapted');
+  assert.equal(result.resolved.reviewer.configuredModel, undefined, 'AC11: no configuredModel is added without adaptation');
+  assert.equal(result.adaptations.length, 2, 'AC11: one adaptation record per adapted role');
+  const workerAdaptation = result.adaptations.find(entry => entry.role === 'worker');
+  assert.equal(workerAdaptation.requested, 'slow-model');
+  assert.equal(workerAdaptation.resolved, 'fast-model');
+  assert.match(workerAdaptation.reason, /slow-model/, 'AC11: the reason names the requested model');
+  assert.match(workerAdaptation.reason, /fast-model/, 'AC11: the reason names the resolved model');
+
+  const exhausted = modelCapabilities.adaptModelHints({
+    staticHints: { worker: slow },
+    chains: { worker: [slow, null] },
+    capabilities,
+    supportedModels: ['fast-model']
+  });
+  assert.equal(exhausted.resolved.worker, null, 'AC11: an exhausted chain resolves to the session model');
+  assert.equal(exhausted.adaptations[0].resolved, null);
+});
+
+// Spec 00056 AC10: the cache is keyed per session model, a hit reuses the entry,
+// and --refresh-models or a different key forces a fresh probe.
+test('00056 AC10: a cache hit reuses the bound entry and forces a probe only on refresh', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-56-cache-'));
+  try {
+    const detection = writeModelDetectionFixture(tmpDir, detectedCapabilities);
+    const config = {
+      stateDir: path.join(tmpDir, '.sdw', 'state'),
+      models: {
+        default: { model: 'fast-model' },
+        detection: { enabled: true, command: detection.command, timeoutMs: 10000 }
+      }
+    };
+    const cacheFile = path.join(tmpDir, '.sdw', 'host-capabilities.json');
+    fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
+    fs.writeFileSync(cacheFile, JSON.stringify({
+      'other::model': {
+        capabilities: { harness: 'other-host', models: [] },
+        supportedModels: [],
+        probedAt: '2026-10-22T00:00:00.000Z',
+        source: 'command'
+      }
+    }, null, 2), 'utf8');
+
+    const options = { modelsSessionKey: 'host::model-1', now: () => '2026-10-23T00:00:00.000Z' };
+    const first = modelCapabilities.bindModelCapabilities({ targetRoot: tmpDir, config, runId: 'run-a', slug: 'demo', options });
+    assert.equal(first.detection.status, 'probe', 'AC10: a cache miss probes');
+    assert.equal(first.detection.source, 'probe');
+    assert.equal(first.detection.transport, 'command');
+    assert.equal(first.detection.key, 'host::model-1');
+    assert.equal(first.detection.probedAt, '2026-10-23T00:00:00.000Z');
+    assert.equal(detection.probeCount(), 1);
+
+    const cache = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+    assert.ok(cache['other::model'], 'AC10: the upsert preserves other session keys');
+    assert.equal(cache['host::model-1'].capabilities.harness, 'test-host');
+    assert.equal(cache['host::model-1'].probedAt, '2026-10-23T00:00:00.000Z');
+
+    const hit = modelCapabilities.bindModelCapabilities({ targetRoot: tmpDir, config, runId: 'run-b', slug: 'demo', options });
+    assert.equal(hit.detection.status, 'hit', 'AC10: an unchanged key reuses the cached entry');
+    assert.equal(hit.detection.source, 'hit');
+    assert.equal(hit.detection.transport, 'cache');
+    assert.equal(hit.capabilities.harness, 'test-host');
+    assert.equal(detection.probeCount(), 1, 'AC10: a hit performs no probe');
+
+    const refreshed = modelCapabilities.bindModelCapabilities({ targetRoot: tmpDir, config, runId: 'run-c', slug: 'demo', options: { ...options, refreshModels: true } });
+    assert.equal(refreshed.detection.status, 'probe', 'AC10: --refresh-models forces a fresh probe');
+    assert.equal(detection.probeCount(), 2);
+
+    const otherKey = modelCapabilities.bindModelCapabilities({ targetRoot: tmpDir, config, runId: 'run-d', slug: 'demo', options: { ...options, modelsSessionKey: 'host::model-2' } });
+    assert.equal(otherKey.detection.status, 'probe', 'AC10: a different session key probes');
+    assert.equal(detection.probeCount(), 3);
+
+    const skipped = modelCapabilities.bindModelCapabilities({ targetRoot: tmpDir, config, runId: 'run-e', slug: 'demo', options: { ...options, noModelDetect: true } });
+    assert.deepEqual(skipped.detection, { status: 'skipped' }, 'AC10: --no-model-detect skips detection');
+    assert.equal(detection.probeCount(), 3, 'AC10: a skipped detection never probes');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// Spec 00056 AC10 & AC11 end to end: Step 1 binds once before dispatch, the
+// worker hint adapts to the captured capabilities, and task next reuses the
+// bound entry without probing again.
+test('00056 AC10 & AC11: Step 1 binds once, adapts the worker hint, and later steps reuse it', () => {
+  const slug = 'model-detection-bind';
+  const tmpDir = setupDeliveryReportRepo(slug);
+  try {
+    const detection = writeModelDetectionFixture(tmpDir, detectedCapabilities);
+    const configPath = path.join(tmpDir, '.sdw', 'config.json');
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    fs.writeFileSync(configPath, JSON.stringify({
+      ...config,
+      models: {
+        default: { model: 'fast-model', effort: 'low' },
+        worker: { model: 'slow-model', effort: 'high' },
+        detection: { enabled: true, command: detection.command, timeoutMs: 10000 }
+      }
+    }, null, 2), 'utf8');
+    execSync('git add -A && git commit -qm "configure model detection"', { cwd: tmpDir, stdio: 'ignore' });
+
+    const runId = 'run-00056-ac10-bind';
+    let output = '';
+    const originalLog = console.log;
+    console.log = (message) => { output += `${String(message)}\n`; };
+    let code;
+    try {
+      code = sdwOrch.cmdRun({
+        root: tmpDir,
+        specPath: `.sdw/specs/${slug}.md`,
+        runId,
+        implementation: { mode: 'subagent' },
+        modelsSessionKey: 'test-host::session-a'
+      });
+    } finally {
+      console.log = originalLog;
+    }
+
+    assert.equal(code, 4, 'the run pauses at the Step 4 dispatch');
+    assert.equal(detection.probeCount(), 1, 'AC10: Step 1 probes once before task dispatch');
+    assert.match(output, /\[Step 1: Model Capabilities\] status=probe source=probe transport=command key=test-host::session-a/, 'AC10: one bind telemetry line is emitted');
+
+    let state = stateManager.loadRunState(tmpDir, runId);
+    assert.equal(state.models.detection.status, 'probe');
+    assert.equal(state.models.detection.key, 'test-host::session-a');
+    assert.equal(state.models.detection.source, 'probe');
+    assert.equal(state.models.detection.transport, 'command');
+    assert.equal(state.models.capabilities.harness, 'test-host');
+    assert.ok(state.models.supportedModels.includes('fast-model'), 'AC10: the captured supportedModels are recorded');
+    assert.equal(state.models.static.worker.model, 'slow-model', 'AC11: the static view keeps the configured hint');
+    assert.equal(state.models.resolved.worker.model, 'fast-model', 'AC11: the resolved view adapts to the default');
+    assert.equal(state.models.resolved.worker.configuredModel, 'slow-model', 'AC11: the resolved hint preserves the requested id');
+    assert.deepEqual(
+      state.models.adaptations.map(entry => ({ role: entry.role, requested: entry.requested, resolved: entry.resolved })),
+      [{ role: 'worker', requested: 'slow-model', resolved: 'fast-model' }],
+      'AC11: the snapshot records one adaptation for the unavailable worker hint'
+    );
+    assert.match(state.models.adaptations[0].reason, /slow-model[\s\S]*fast-model/, 'AC11: the reason names requested and resolved');
+
+    const task = Object.values(state.steps[4].tasks)[0];
+    const prompt = fs.readFileSync(path.resolve(tmpDir, task.promptPath), 'utf8');
+    assert.match(prompt, /## Worker Model Hint\n\nModel: fast-model, effort low/, 'AC11: the worker brief carries the adapted hint');
+
+    let nextOutput = '';
+    const originalNextLog = console.log;
+    console.log = (message) => { nextOutput += `${String(message)}\n`; };
+    let nextCode;
+    try {
+      nextCode = sdwOrch.cmdResume({ root: tmpDir, runId, json: true, modelsSessionKey: 'test-host::session-a' });
+    } finally {
+      console.log = originalNextLog;
+    }
+    assert.equal(nextCode, 4, 'AC10: resume re-emits the paused dispatch from the bound entry');
+    const envelope = JSON.parse(nextOutput.slice(nextOutput.indexOf('{'), nextOutput.lastIndexOf('}') + 1));
+    assert.equal(envelope.workerHint.model, 'fast-model', 'AC10: the later step reuses the bound worker hint');
+    assert.equal(envelope.configuredModel, 'slow-model', 'AC11: the envelope preserves the requested model');
+    assert.equal(detection.probeCount(), 1, 'AC10: no later step re-probes capabilities');
+
+    state = stateManager.loadRunState(tmpDir, runId);
+    assert.equal(state.models.detection.status, 'probe', 'AC10: the bound entry survives the later step');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// Spec 00056 AC10: detection errors fail open; the run proceeds on static hints.
+test('00056 AC10: malformed capabilities fail open with a warning and static hints', () => {
+  const slug = 'model-detection-failopen';
+  const tmpDir = setupDeliveryReportRepo(slug);
+  try {
+    const detection = writeModelDetectionFixture(tmpDir, null, 'malformed');
+    const configPath = path.join(tmpDir, '.sdw', 'config.json');
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    fs.writeFileSync(configPath, JSON.stringify({
+      ...config,
+      models: {
+        default: { model: 'fast-model' },
+        worker: { model: 'slow-model' },
+        detection: { enabled: true, command: detection.command, timeoutMs: 10000 }
+      }
+    }, null, 2), 'utf8');
+    execSync('git add -A && git commit -qm "configure failing detection"', { cwd: tmpDir, stdio: 'ignore' });
+
+    const runId = 'run-00056-ac10-failopen';
+    let output = '';
+    const originalLog = console.log;
+    console.log = (message) => { output += `${String(message)}\n`; };
+    let code;
+    try {
+      code = sdwOrch.cmdRun({
+        root: tmpDir,
+        specPath: `.sdw/specs/${slug}.md`,
+        runId,
+        implementation: { mode: 'subagent' },
+        modelsSessionKey: 'test-host::session-fail'
+      });
+    } finally {
+      console.log = originalLog;
+    }
+
+    assert.equal(code, 4, 'AC10: a detection error never blocks the dispatch');
+    const state = stateManager.loadRunState(tmpDir, runId);
+    assert.equal(state.models.detection.status, 'failed-open', 'AC10: the snapshot records the fail-open status');
+    assert.equal(state.models.detection.source, 'failed-open');
+    assert.equal(state.models.detection.transport, 'command');
+    assert.equal(state.models.resolved.worker.model, 'slow-model', 'AC10: fail-open keeps static resolution');
+    assert.ok(state.errors.some(entry => /Model detection failed open/.test(entry.error)), 'AC10: the warning is recorded in state.errors');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// Spec 00056 AC12: a malformed hint is a shape error. The run refuses before any
+// probe and before creating run state.
+test('00056 AC12: malformed model hints refuse the run before any probe', () => {
+  const slug = 'model-hint-malformed';
+  const tmpDir = setupDeliveryReportRepo(slug);
+  try {
+    const detection = writeModelDetectionFixture(tmpDir, detectedCapabilities);
+    const configPath = path.join(tmpDir, '.sdw', 'config.json');
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    fs.writeFileSync(configPath, JSON.stringify({
+      ...config,
+      models: {
+        worker: { model: 'slow-model', effort: 42 },
+        detection: { enabled: true, command: detection.command, timeoutMs: 10000 }
+      }
+    }, null, 2), 'utf8');
+    execSync('git add -A && git commit -qm "configure malformed hint"', { cwd: tmpDir, stdio: 'ignore' });
+
+    const runId = 'run-00056-ac12';
+    let errors = '';
+    const originalError = console.error;
+    console.error = (message) => { errors += `${String(message)}\n`; };
+    let code;
+    try {
+      code = sdwOrch.cmdRun({
+        root: tmpDir,
+        specPath: `.sdw/specs/${slug}.md`,
+        runId,
+        implementation: { mode: 'subagent' },
+        modelsSessionKey: 'test-host::session-bad'
+      });
+    } finally {
+      console.error = originalError;
+    }
+
+    assert.equal(code, 1, 'AC12: the run refuses the malformed hint');
+    assert.match(errors, /models\.worker\.effort/, 'AC12: the error names the malformed property');
+    assert.equal(detection.probeCount(), 0, 'AC12: no detection command runs for a malformed hint');
+    assert.equal(fs.existsSync(path.join(tmpDir, '.sdw', 'state', `${runId}.state.json`)), false, 'AC12: no run state is created');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
