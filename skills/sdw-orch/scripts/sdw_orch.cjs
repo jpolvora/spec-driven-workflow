@@ -2363,7 +2363,7 @@ function cmdRun(options) {
   if (startStep <= 1 && state.steps[1].status !== 'completed' && state.steps[1].status !== 'skipped') {
     state = stateManager.updateStepState(targetRoot, state.runId, 1, 'in_progress');
     logStepEnter(1);
-    const derivationResult = specDerivation.deriveAgentSpec(rawSpecContent, { slug: specSlug });
+    const derivationResult = specDerivation.deriveAgentSpec(rawSpecContent, { slug: specSlug, orchestratorHint: modelHints.orchestrator });
     if (derivationResult.derivationNeeded) {
       console.log(`[Step 1: Derivation] Spec reformulated for agentic execution.`);
       effectiveSpecContent = derivationResult.specContent;
@@ -2400,7 +2400,7 @@ function cmdRun(options) {
   } else if (startStep <= 2 && state.steps[2].status !== 'completed' && state.steps[2].status !== 'skipped') {
     state = stateManager.updateStepState(targetRoot, state.runId, 2, 'in_progress');
     logStepEnter(2);
-    const grillingResult = specGrilling.analyzeSpecificationGaps(effectiveSpecContent, { slug: specSlug });
+    const grillingResult = specGrilling.analyzeSpecificationGaps(effectiveSpecContent, { slug: specSlug, orchestratorHint: modelHints.orchestrator });
 
     if (grillingResult.hasGaps) {
       console.log(`[Step 2: Refinement] Detected ${grillingResult.gapsCount} specification decision gaps.`);
@@ -2518,7 +2518,7 @@ function cmdRun(options) {
   } else if (startStep <= 3 && state.steps[3].status !== 'completed') {
     state = stateManager.updateStepState(targetRoot, state.runId, 3, 'in_progress');
     logStepEnter(3);
-    dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint, maxTasksPerSpec: config.maxTasksPerSpec });
+    dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint, maxTasksPerSpec: config.maxTasksPerSpec, orchestratorHint: modelHints.orchestrator });
     if (dagPlan.refused) {
       // Spec 00030 AC13/AC14: a decomposition beyond the cap is refused with a
       // split proposal, never merged into coarse tasks and never planned.
@@ -2546,7 +2546,7 @@ function cmdRun(options) {
   } else if (state.steps[3].output) {
     dagPlan = state.steps[3].output;
   } else {
-    dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint, maxTasksPerSpec: config.maxTasksPerSpec });
+    dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint, maxTasksPerSpec: config.maxTasksPerSpec, orchestratorHint: modelHints.orchestrator });
     if (dagPlan.refused) {
       const refusal = `split-required tasks-needed=${dagPlan.tasksNeeded} cap=${dagPlan.cap}${dagPlan.detail === 'criteria-undersupplied' ? ` criteria=${dagPlan.acs}` : ''}`;
       console.error(`[Step 3: DAG] ${refusal}`);

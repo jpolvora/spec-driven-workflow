@@ -69,10 +69,12 @@ function quoteToken(value) {
 
 function substituteCommand(command, tokens) {
   return String(command)
-    .replace(/\{capabilitiesFile\}/g, quoteToken(tokens.capabilitiesFile))
-    .replace(/\{targetRoot\}/g, quoteToken(tokens.targetRoot))
-    .replace(/\{slug\}/g, tokens.slug || '')
-    .replace(/\{runId\}/g, tokens.runId || '');
+    .replace(/\{capabilitiesFile\}/g, () => quoteToken(tokens.capabilitiesFile))
+    .replace(/\{targetRoot\}/g, () => quoteToken(tokens.targetRoot))
+    // Function replacers: `$` sequences in a value must never be expanded, and
+    // the slug/runId come from file names, so they are quoted like paths.
+    .replace(/\{slug\}/g, () => quoteToken(tokens.slug || ''))
+    .replace(/\{runId\}/g, () => quoteToken(tokens.runId || ''));
 }
 
 // Spec 00056 AC12: shape validation only. The helper never checks reachability
@@ -370,6 +372,7 @@ function bindModelCapabilities(options = {}) {
 }
 
 module.exports = {
+  substituteCommand,
   DETECTION_DEFAULTS,
   CACHE_FILE_REL,
   MODEL_ROLES,

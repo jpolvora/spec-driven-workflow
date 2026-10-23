@@ -2961,3 +2961,27 @@ test('00056 AC15: the modified skill definitions stay within the Tier-1 line bud
   const orchSkill = fs.readFileSync(path.join(repoRoot, 'skills', 'sdw-orch', 'SKILL.md'), 'utf8');
   assert.ok(orchSkill.split(/\r?\n/).length <= 120, 'AC15: sdw-orch/SKILL.md stays within 120 lines');
 });
+
+test('00056 AC2: the DAG planner records the orchestrator model hint it received', () => {
+  const content = [
+    '---',
+    'slug: 099-demo-hint',
+    'title: "Demo Hint"',
+    '---',
+    '# Specification',
+    '## Acceptance Criteria',
+    '- AC1: The system shall work.'
+  ].join('\n');
+  const plan = dagPlanner.generateDagPlan(content, { slug: '099-demo-hint', targetFiles: ['a.cjs'], orchestratorHint: 'opus' });
+  assert.equal(plan.orchestratorHint, 'opus', 'the planner that produced the plan carries the hint it consumed');
+  const withoutHint = dagPlanner.generateDagPlan(content, { slug: '099-demo-hint', targetFiles: ['a.cjs'] });
+  assert.equal(withoutHint.orchestratorHint, undefined, 'no hint means no plan metadata');
+});
+
+test('00056 AC11: detection command tokens are shell-quoted', () => {
+  const { substituteCommand } = require('../skills/sdw-orch/scripts/model_capabilities.cjs');
+  const slugToken = substituteCommand('{slug}', { slug: 'a;b' });
+  assert.match(slugToken, /^['"]a;b['"]$/, 'the slug token is quoted, so a semicolon never reaches the shell');
+  const runToken = substituteCommand('{runId}', { runId: 'run-$HOME' });
+  assert.match(runToken, /^['"]run-\$HOME['"]$/, 'a $ sequence stays literal inside the quoted token');
+});

@@ -466,9 +466,15 @@ function generateDagPlan(specContent, options) {
   const maxTasksPerSpec = resolveTaskCap(opts);
   const context = { slug, acs, complexity, targetFiles, architecturalApproach, testPlan, maxTasksPerSpec };
 
-  if (complexity.level === 'complex') return buildComplexPlan(context);
-  if (complexity.level === 'standard') return buildStandardPlan(context);
-  return buildSingleTaskPlan(context);
+  // Spec 00056 AC2: the orchestrator model hint is an input to the DAG step, so
+  // the planner that produces the plan records it instead of the caller tagging
+  // the plan afterwards.
+  let plan;
+  if (complexity.level === 'complex') plan = buildComplexPlan(context);
+  else if (complexity.level === 'standard') plan = buildStandardPlan(context);
+  else plan = buildSingleTaskPlan(context);
+  if (opts.orchestratorHint) plan.orchestratorHint = opts.orchestratorHint;
+  return plan;
 }
 
 module.exports = {
