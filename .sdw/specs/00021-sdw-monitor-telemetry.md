@@ -6,7 +6,7 @@ source: local
 status: awaiting-approval
 specDate: 2026-10-19
 priority: low
-value: "Append-only run telemetry"
+value: "Durable per-run event stream plus read-only live monitor, so operators can see active runs and tell slow steps from hung ones without inspecting state files"
 effort: M
 ---
 

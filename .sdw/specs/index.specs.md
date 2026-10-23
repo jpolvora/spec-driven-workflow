@@ -49,7 +49,7 @@ Central repository index tracking specification lifecycle states, metadata, and 
 | 00036 | 00036-sdw-changelog-delivery-records | SDW Changelog Delivery Records | completed | local | 2026-10-21 | PASS | - |
 | 00037 | 00037-sdw-run-retrospective-candidates | SDW Run Retrospective Candidates | completed | local | 2026-10-21 | PASS | - |
 | 00038 | 00038-sdw-spec-drift-repair | SDW Spec Drift Repair | completed | local | 2026-10-21 | PASS | - |
-| 00038 | 00038-sdw-spec-drift-repair-report | Delivery Report — SDW Spec Drift Repair | pending | local | 2026-10-22 | FAIL | - |
+| 00038 | 00038-sdw-spec-drift-repair-report | Delivery Report — SDW Spec Drift Repair | completed | local | 2026-10-22 | FAIL | - |
 | 00039 | 00039-sdw-batch-skill | SDW Batch Skill — Multi-Spec Queue Delegating to Single sdw-orch Runs | completed | local | 2026-10-21 | PASS | - |
 | 00040 | 00040-sdw-branching-strategy | SDW Branching Strategy — Configurable Presets, Branch Lanes, and Post-Merge Sync | completed | local | 2026-10-21 | PASS | - |
 | 00041 | 00041-us-20-versioned-spec-files-for-creation | Versioned spec files for creation, editing, and drift repair | pending | github | 2026-10-21 | PASS | - |
@@ -66,10 +66,12 @@ Central repository index tracking specification lifecycle states, metadata, and 
 | 00052 | 00052-sdw-fresh-subagent-code-review | SDW Fresh-Subagent Code Review Isolation | completed | local | 2026-10-22 | PASS | - |
 | 00053 | 00053-batch-auto-merge-sdw-batch-merges-each-d | batch auto-merge: sdw-batch merges each delivered pull request before advancing to the next specification | completed | local | 2026-10-22 | PASS | - |
 | 00054 | 00054-sdw-orch-delivery-report-companion-file- | sdw-orch delivery report companion file and spec-conflict observations at ingestion | completed | local | 2026-10-22 | PASS | - |
-| 00054 | 00054-sdw-orch-delivery-report-companion-file--report | Delivery Report — sdw-orch delivery report companion file and spec-conflict observations at ingestion | pending | local | 2026-10-22 | FAIL | - |
+| 00054 | 00054-sdw-orch-delivery-report-companion-file--report | Delivery Report — sdw-orch delivery report companion file and spec-conflict observations at ingestion | completed | local | 2026-10-22 | FAIL | - |
 | 00055 | 00055-sdw-spec-list-by-priority | SDW Spec Priority Ranking — Declared Priority Fields and the list-by-priority Subcommand | completed | local | 2026-10-22 | PASS | - |
-| 00055 | 00055-sdw-spec-list-by-priority-report | Delivery Report — SDW Spec Priority Ranking — Declared Priority Fields and the list-by-priority Subcommand | pending | local | 2026-10-22 | FAIL | - |
+| 00055 | 00055-sdw-spec-list-by-priority-report | Delivery Report — SDW Spec Priority Ranking — Declared Priority Fields and the list-by-priority Subcommand | completed | local | 2026-10-22 | FAIL | - |
 | 00056 | 00056-sdw-per-role-agent-models | SDW Per-Role Agent Model Configuration | pending | local | 2026-10-22 | PASS | - |
 | 00057 | 00057-sdw-orch-delivery-report-step-contributions | SDW Delivery Report — Incremental Step Contributions, Learnings, and Retro Closure | completed | local | 2026-10-22 | PASS | - |
+| 00057 | 00057-sdw-orch-delivery-report-step-contributions-report | Delivery Report — SDW Delivery Report — Incremental Step Contributions, Learnings, and Retro Closure | pending | local | 2026-10-23 | FAIL | - |
 | 00058 | 00058-sdw-batch-delivery-integrity | SDW Batch Delivery Integrity — Merge, Pre-Flight, Base Freshness, and Registry Truth | completed | local | 2026-10-22 | PASS | - |
+| 00058 | 00058-sdw-batch-delivery-integrity-report | Delivery Report — SDW Batch Delivery Integrity — Merge, Pre-Flight, Base Freshness, and Registry Truth | pending | local | 2026-10-23 | FAIL | - |
 | 00059 | 00059-sdw-ship-pr-review-thread-fidelity | SDW Review Thread Fidelity — Full Thread Content in list-threads and the Fixer Input | pending | local | 2026-10-22 | PASS | - |

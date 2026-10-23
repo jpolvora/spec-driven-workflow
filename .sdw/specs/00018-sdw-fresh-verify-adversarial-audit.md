@@ -6,7 +6,7 @@ source: local
 status: awaiting-approval
 specDate: 2026-10-19
 priority: low
-value: "Fresh-context verification and adversarial audit"
+value: "Independent fresh-context re-verification with fault injection, so tests must prove they can fail and claimed work is audited against the real diff"
 effort: L
 ---
 
