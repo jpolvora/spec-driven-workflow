@@ -140,6 +140,20 @@ function buildEvidenceEntry(payload = {}, projectRoot) {
           : 'Evidence type "file" requires a project-relative path (--path <path>).'
       };
     }
+    // Evidence points at a real file: the project root itself, a directory, or a
+    // mistyped path would otherwise verify a criterion without any artifact.
+    const resolved = path.resolve(projectRoot || process.cwd(), entry.path);
+    let stats = null;
+    try {
+      stats = fs.statSync(resolved);
+    } catch (err) {
+      stats = null;
+    }
+    if (entry.path === '.' || !stats || !stats.isFile()) {
+      return {
+        error: `Evidence path "${entry.path}" is not a file inside the project root; ledger file evidence must name an existing file.`
+      };
+    }
   } else if (type === 'test') {
     entry.name = trimmed(payload.name);
     entry.status = trimmed(payload.status);
@@ -239,8 +253,14 @@ function linkEvidence(options = {}) {
       // instead of adding a second entry: a re-run that now passes is proof.
       if (entry.status && duplicate.status !== entry.status) {
         duplicate.status = entry.status;
-        if (proofBearing && record.status !== STATUS_FAILED) {
-          record.status = STATUS_VERIFIED;
+        if (record.status !== STATUS_FAILED) {
+          // A refused proof must not verify: the record follows the outcome the
+          // remaining evidence proves, so a downgrade can unverify it again.
+          const proven = record.evidence.some(item => {
+            const itemOutcome = String(item.status || '').trim().toLowerCase();
+            return !itemOutcome || itemOutcome === 'passed';
+          });
+          record.status = proven ? STATUS_VERIFIED : STATUS_UNVERIFIED;
         }
         linked.push(id);
       } else {

@@ -127,6 +127,17 @@ function seedRun(root, runId = 'run-ac-ledger-test') {
 }
 
 function link(root, runId, args) {
+  // File evidence must name a real file, so a CLI link in these fixtures
+  // materializes the declared path inside the project root first.
+  const pathIndex = args.indexOf('--path');
+  if (pathIndex !== -1) {
+    const rel = args[pathIndex + 1];
+    if (rel && !path.isAbsolute(rel) && !rel.includes('..')) {
+      const abs = path.join(root, rel);
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      if (!fs.existsSync(abs)) fs.writeFileSync(abs, '// evidence fixture\n', 'utf8');
+    }
+  }
   return spawnSync(process.execPath, [ORCH, 'ledger', 'link', '--root', root, '--run-id', runId, ...args], {
     encoding: 'utf8'
   });
@@ -134,6 +145,15 @@ function link(root, runId, args) {
 
 function readLedgerFile(ledgerPath) {
   return JSON.parse(fs.readFileSync(ledgerPath, 'utf8'));
+}
+
+// File evidence must point at a real file, so a programmatic link needs the
+// fixture file to exist on disk.
+function ensureEvidenceFile(root, rel = 'skills/demo.cjs') {
+  const abs = path.join(root, rel);
+  fs.mkdirSync(path.dirname(abs), { recursive: true });
+  fs.writeFileSync(abs, '// evidence fixture\n', 'utf8');
+  return rel;
 }
 
 // Runs an orchestrator command while collecting the lines it writes to stdout and
@@ -214,6 +234,7 @@ test('AC3: ledger link accepts one and several AC ids for one evidence payload',
 
     // The path is given absolute; the stored identity is project-relative with
     // forward slashes so the ledger never depends on the machine.
+    ensureEvidenceFile(root, 'skills/sdw-orch/scripts/ac_ledger.cjs');
     const absolutePath = path.join(root, 'skills', 'sdw-orch', 'scripts', 'ac_ledger.cjs');
     const several = link(root, state.runId, ['--ac', 'AC2', 'AC3', '--type', 'file', '--path', absolutePath]);
     assert.equal(several.status, 0, several.stderr);
@@ -421,6 +442,7 @@ test('AC7 & AC8: score submit records the judge verdicts and derives the score f
       specContent: FOUR_AC_SPEC,
       generatedAt: '2026-10-19T12:00:00.000Z'
     });
+    ensureEvidenceFile(root);
     const seeded = acLedger.linkEvidence({
       root,
       ledgerPath: init.ledgerPath,
@@ -930,6 +952,8 @@ test('AC14: ledger evidence paths are project-relative with forward slashes, and
   const root = setupProject();
   try {
     const { state, ledgerPath } = seedRun(root);
+    ensureEvidenceFile(root, 'skills/sdw-orch/scripts/ac_ledger.cjs');
+    ensureEvidenceFile(root, 'skills/sdw-orch/scripts/sdw_orch.cjs');
     const absolute = path.join(root, 'skills', 'sdw-orch', 'scripts', 'ac_ledger.cjs');
 
     const fromAbsolute = link(root, state.runId, ['--ac', 'AC1', '--type', 'file', '--path', absolute]);
@@ -1077,6 +1101,7 @@ test('AC15: re-linking the same evidence adds no duplicate entry and rewrites no
       'AC15: a duplicate link does not re-anchor run state');
 
     // Step 4 acceptance replay: the same accepted file and task id stay one entry.
+    ensureEvidenceFile(root);
     const step4Link = {
       root,
       ledgerPath,
@@ -1303,6 +1328,58 @@ test('AC7 & AC8: a ledger that cannot record verdicts fails Step 5 closed', () =
     const after = stateManager.loadRunState(root, state.runId);
     assert.equal(after.score, null, 'no judge-authored score is accepted');
     assert.notEqual(after.steps[5].status, 'judged', 'Step 5 is not marked as judged');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Spec 00017 AC7 & AC8: a re-linked result that now fails demotes the criterion,
+// so a verified status never survives on failing evidence alone.
+test('AC7 & AC8: a re-linked failing result unverifies a previously proven criterion', () => {
+  const root = setupProject();
+  try {
+    const { ledgerPath } = seedRun(root);
+    assert.equal(link(root, 'run-ac-ledger-test', [
+      '--ac', 'AC1', '--type', 'test', '--name', 'guard test', '--status', 'passed'
+    ]).status, 0);
+    let record = readLedgerFile(ledgerPath).criteria[0];
+    assert.equal(record.status, 'verified');
+
+    assert.equal(link(root, 'run-ac-ledger-test', [
+      '--ac', 'AC1', '--type', 'test', '--name', 'guard test', '--status', 'failed'
+    ]).status, 0);
+    record = readLedgerFile(ledgerPath).criteria[0];
+    assert.equal(record.evidence.length, 1, 'the result is updated in place');
+    assert.equal(record.evidence[0].status, 'failed');
+    assert.equal(record.status, 'unverified', 'a failing result unverifies the criterion');
+    assert.equal(acLedger.deriveScore(readLedgerFile(ledgerPath)).verifiedCount, 0);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Spec 00017 AC14: file evidence must name an existing file inside the project.
+test('AC14: file evidence refuses the project root, directories, and missing files', () => {
+  const root = setupGitProject();
+  try {
+    const { ledgerPath } = seedRun(root);
+    const snapshot = fs.readFileSync(ledgerPath, 'utf8');
+
+    for (const bad of ['.', 'skills', 'skills/missing.cjs']) {
+      const refused = spawnSync(
+        process.execPath,
+        [ORCH, 'ledger', 'link', '--root', root, '--run-id', 'run-ac-ledger-test', '--ac', 'AC1', '--type', 'file', '--path', bad],
+        { encoding: 'utf8' }
+      );
+      assert.equal(refused.status, 1, `"${bad}" is refused: ${refused.stderr}`);
+      assert.match(refused.stderr, /not a file inside the project root/, `"${bad}" names the defect`);
+    }
+    assert.equal(fs.readFileSync(ledgerPath, 'utf8'), snapshot, 'refused links leave the ledger byte-identical');
+
+    const good = ensureEvidenceFile(root, 'skills/real.cjs');
+    const accepted = link(root, 'run-ac-ledger-test', ['--ac', 'AC1', '--type', 'file', '--path', good]);
+    assert.equal(accepted.status, 0, accepted.stderr);
+    assert.equal(readLedgerFile(ledgerPath).criteria[0].status, 'verified', 'a real file verifies the criterion');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
