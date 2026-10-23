@@ -151,6 +151,10 @@ function buildEvidenceEntry(payload = {}, projectRoot) {
   } else {
     entry.id = trimmed(payload.id);
     if (!entry.id) return { error: `Evidence type "${type}" requires an id (--id <id>).` };
+    // A review or sabotage finding may carry an explicit outcome: a failing
+    // finding is audit evidence, never proof.
+    const outcome = trimmed(payload.status);
+    if (outcome) entry.status = outcome;
   }
   // AC6: accepted task evidence names the task that produced it.
   const taskId = trimmed(payload.taskId);
@@ -160,11 +164,11 @@ function buildEvidenceEntry(payload = {}, projectRoot) {
 
 function evidenceIdentity(entry) {
   if (entry.type === 'file') return entry.path;
-  // A test result is identified by its name and its outcome: replaying the same
-  // result never duplicates, while a re-run that now passes is new proof.
-  if (entry.type === 'test') return `${entry.name}|${entry.status}`;
   if (entry.type === 'commit') return entry.sha;
-  return entry.id;
+  // A test result, review finding, or sabotage outcome is identified by its
+  // stable name or id: replaying the same fact never duplicates it, while a
+  // re-run that now passes updates the stored outcome to the new proof.
+  return entry.type === 'test' ? entry.name : entry.id;
 }
 
 // Evidence is de-duplicated by type plus its stable identity, so re-linking the
@@ -220,15 +224,28 @@ function linkEvidence(options = {}) {
 
   const linked = [];
   const duplicates = [];
-  // A refused proof is not proof: a failed test entry never verifies a criterion,
-  // and a criterion the judge failed stays failed even when other evidence links
-  // to it later (protocol: a failed verdict is never counted).
-  const proofBearing = entry.type !== 'test' || String(entry.status || '').trim().toLowerCase() === 'passed';
+  // A refused proof is not proof: an entry with an explicit failing outcome never
+  // verifies a criterion (this covers failed tests and failing review/sabotage
+  // findings), and a criterion the judge failed stays failed even when other
+  // evidence links to it later (protocol: a failed verdict is never counted).
+  const outcome = String(entry.status || '').trim().toLowerCase();
+  const proofBearing = !outcome || outcome === 'passed';
   for (const id of acIds) {
     const record = records.get(id);
     if (!Array.isArray(record.evidence)) record.evidence = [];
-    if (record.evidence.some(existing => evidenceKey(existing) === key)) {
-      duplicates.push(id);
+    const duplicate = record.evidence.find(existing => evidenceKey(existing) === key);
+    if (duplicate) {
+      // The same fact replayed with a changed outcome updates the stored result
+      // instead of adding a second entry: a re-run that now passes is proof.
+      if (entry.status && duplicate.status !== entry.status) {
+        duplicate.status = entry.status;
+        if (proofBearing && record.status !== STATUS_FAILED) {
+          record.status = STATUS_VERIFIED;
+        }
+        linked.push(id);
+      } else {
+        duplicates.push(id);
+      }
       continue;
     }
     record.evidence.push({ ...entry });

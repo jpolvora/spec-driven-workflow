@@ -1225,6 +1225,46 @@ test('AC7 & AC8: a failed judge verdict is never promoted by later evidence', ()
   }
 });
 
+// Spec 00017 AC7 & AC8: a review or sabotage finding with an explicit failing
+// outcome is audit evidence, not proof; an unqualified or passing finding counts.
+test('AC7 & AC8: a failing review finding never verifies a criterion', () => {
+  const root = setupProject();
+  try {
+    const { ledgerPath } = seedRun(root);
+
+    const failedFinding = link(root, 'run-ac-ledger-test', [
+      '--ac', 'AC2', '--type', 'review', '--id', 'thread-9', '--status', 'failed'
+    ]);
+    assert.equal(failedFinding.status, 0, failedFinding.stderr);
+    let ledger = readLedgerFile(ledgerPath);
+    let record = ledger.criteria.find(criterion => criterion.id === 'AC2');
+    assert.equal(record.status, 'unverified', 'a failing review finding is not proof');
+    assert.equal(record.evidence[0].status, 'failed', 'the failing outcome is preserved for audit');
+    assert.equal(acLedger.deriveScore(ledger).verifiedCount, 0);
+
+    const failedSabotage = link(root, 'run-ac-ledger-test', [
+      '--ac', 'AC2', '--type', 'sabotage', '--id', 'sabotage-1', '--status', 'failed'
+    ]);
+    assert.equal(failedSabotage.status, 0, failedSabotage.stderr);
+    ledger = readLedgerFile(ledgerPath);
+    record = ledger.criteria.find(criterion => criterion.id === 'AC2');
+    assert.equal(record.status, 'unverified', 'a failing sabotage outcome is not proof');
+
+    const passedFinding = link(root, 'run-ac-ledger-test', [
+      '--ac', 'AC2', '--type', 'review', '--id', 'thread-9', '--status', 'passed'
+    ]);
+    assert.equal(passedFinding.status, 0, passedFinding.stderr);
+    ledger = readLedgerFile(ledgerPath);
+    record = ledger.criteria.find(criterion => criterion.id === 'AC2');
+    assert.equal(record.status, 'verified', 'a passing review finding verifies the criterion');
+    const reviewEntry = record.evidence.find(entry => entry.type === 'review');
+    assert.equal(reviewEntry.status, 'passed', 'the re-review updates the same finding');
+    assert.equal(record.evidence.filter(entry => entry.type === 'review').length, 1, 'no duplicate review entry');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 // Spec 00017 AC7 & AC8: when the ledger exists, a ledger that cannot record the
 // verdicts must not fall back to the judge-authored score.
 test('AC7 & AC8: a ledger that cannot record verdicts fails Step 5 closed', () => {
