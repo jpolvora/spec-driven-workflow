@@ -252,7 +252,8 @@ function parseArgs(args) {
     'report re-render': 'report-re-render',
     'dag preview': 'dag-preview',
     'ledger link': 'ledger',
-    'ledger report': 'ledger'
+    'ledger report': 'ledger',
+    'ledger audit': 'ledger'
   };
   const combinedMatch = COMBINED[positional.slice(0, 2).join(' ')];
   if (combinedMatch) {
@@ -262,7 +263,7 @@ function parseArgs(args) {
     // `dag preview` keeps its --spec path; the other combined commands have none.
     if (combinedMatch !== 'dag-preview') result.specPath = null;
     if (combinedMatch === 'ledger') {
-      result.ledgerAction = positional[1] === 'report' ? 'report' : 'link';
+      result.ledgerAction = ['link', 'report', 'audit'].includes(positional[1]) ? positional[1] : 'link';
     } else if (!result.taskId && rest[0]) {
       result.taskId = rest[0];
     }
@@ -1940,6 +1941,15 @@ function linkAcceptedTaskEvidence({ targetRoot, state, taskId, acIds, files, com
   return linked;
 }
 
+// Spec 00017 AC13: a capped score names the cap and the criteria that triggered
+// it, wherever Step 5 reports its result.
+function describeScoreCap(scoreCap) {
+  const headline = scoreCap.applied
+    ? `Score capped at ${scoreCap.limit}/10 (uncapped ${scoreCap.uncappedScore}/10)`
+    : `Score cap in force at ${scoreCap.limit}/10 (uncapped ${scoreCap.uncappedScore}/10)`;
+  return `${headline}: ${scoreCap.reasons.join(' ')}`;
+}
+
 // Spec 00017 AC7/AC8: Step 5 derives its score from the run ledger. The judge
 // verdicts are written to the ledger first, so the judge stays authoritative and
 // a criterion it failed can never remain verified. A run without a ledger keeps
@@ -1965,6 +1975,16 @@ function applyLedgerScore({ targetRoot, state, report, verdict, judgeResolution 
   stateManager.saveRunState(targetRoot, state);
 
   const derived = acLedger.deriveScore(recorded.ledger);
+  // Spec 00017 AC13: the negative-scenario cap travels with the score so a
+  // caller can report it and a later reader can see why the score stopped at 8.
+  const scoreCap = derived.capLimit === null
+    ? null
+    : {
+        limit: derived.capLimit,
+        applied: derived.capped,
+        uncappedScore: derived.uncappedScore,
+        reasons: derived.capReasons
+      };
   const verdictById = new Map(verdict.verdicts.map(entry => [entry.id, entry]));
   const verifiedAcs = recorded.ledger.criteria
     .filter(record => record.status === acLedger.STATUS_VERIFIED)
@@ -1986,6 +2006,7 @@ function applyLedgerScore({ targetRoot, state, report, verdict, judgeResolution 
     });
 
   const passed = derived.totalAcs > 0 && derived.score >= report.minScore;
+  const capNote = scoreCap === null ? '' : `\n${describeScoreCap(scoreCap)}`;
   let feedback;
   if (derived.totalAcs === 0) {
     feedback = 'Specification has no acceptance criteria. Fails closed with score 0/10.';
@@ -1993,10 +2014,10 @@ function applyLedgerScore({ targetRoot, state, report, verdict, judgeResolution 
     feedback = `Conformance score is ${derived.score}/10 (minimum required: ${report.minScore}/10).\n` +
       `The following acceptance criteria were judged unmet:\n` +
       failingAcs.map(item => `- ${item.id}: ${item.text}\n  Reason: ${item.reason}`).join('\n') +
-      `\nAddress the reasons above and re-run the workflow.`;
+      `\nAddress the reasons above and re-run the workflow.` + capNote;
   } else {
     feedback = `Conformance score is ${derived.score}/10 (meets or exceeds required threshold ${report.minScore}/10). ` +
-      `${derived.verifiedCount}/${derived.totalAcs} acceptance criteria verified in the acceptance criteria ledger.`;
+      `${derived.verifiedCount}/${derived.totalAcs} acceptance criteria verified in the acceptance criteria ledger.` + capNote;
   }
 
   return {
@@ -2006,6 +2027,7 @@ function applyLedgerScore({ targetRoot, state, report, verdict, judgeResolution 
     totalAcs: derived.totalAcs,
     verifiedCount: derived.verifiedCount,
     failingCount: derived.failingCount,
+    scoreCap,
     verifiedAcs,
     failingAcs,
     judge: {
@@ -3302,6 +3324,10 @@ function cmdRun(options) {
     console.log(`  Failing ACs:  ${scoreReport.failingCount}/${scoreReport.totalAcs}`);
     if (scoreReport.passed && scoreReport.failingCount > 0) {
       console.warn(`[Step 5: Conformance Scoring] Warning: ${scoreReport.failingCount} AC(s) failed verification despite meeting minScore threshold (${effectiveMinScore}/10).`);
+    }
+    // Spec 00017 AC13: a capped score always names its cap and its reason.
+    if (scoreReport.scoreCap) {
+      console.warn(`[Step 5: Conformance Scoring] ${describeScoreCap(scoreReport.scoreCap)}`);
     }
 
     const step5Artifact = artifactWriter.writeStep5Artifact({
@@ -5526,6 +5552,10 @@ function cmdScoreSubmit(options) {
   console.log(`[sdw-orch score submit] Score: ${report.score}/10 (Required: ${minScore}/10). Passed: ${report.passed}`);
   console.log(`  Verified ACs: ${report.verifiedCount}/${report.totalAcs}`);
   console.log(`  Failing ACs:  ${report.failingCount}/${report.totalAcs}`);
+  // Spec 00017 AC13: the submitted-verdict path reports the cap and its reason.
+  if (report.scoreCap) {
+    console.warn(`[sdw-orch score submit] ${describeScoreCap(report.scoreCap)}`);
+  }
   if (report.judge.scoreMismatch) {
     console.warn(`[sdw-orch score submit] Warning: the judge reported ${report.judge.reportedScore}/10 while its per-criterion verdicts yield ${report.score}/10; the verdicts are authoritative.`);
   }
@@ -5755,11 +5785,54 @@ function cmdLedgerReport(options) {
   return 0;
 }
 
+// Spec 00017 AC12: `ledger audit --run-id <id> [--format md|json]` lists every
+// criterion that carries no evidence. Exit code 0 means the ledger proves every
+// criterion; exit code 1 means at least one criterion is still unproven (or the
+// run, ledger, or format is invalid). It reads the ledger and never rewrites it.
+function cmdLedgerAudit(options) {
+  const targetRoot = options.root ? path.resolve(options.root) : process.cwd();
+  if (!options.runId) {
+    console.error('Error: --run-id is required for "ledger audit".');
+    return 1;
+  }
+  let state;
+  try {
+    state = stateManager.loadRunState(targetRoot, options.runId);
+  } catch (err) {
+    console.error(`[Ledger] ${err.message}`);
+    return 1;
+  }
+
+  const ledgerPath = resolveRunLedgerPath(targetRoot, state);
+  if (!ledgerPath || !fs.existsSync(ledgerPath)) {
+    const ledgerRel = ledgerPath ? ` at ${normalizePath(path.relative(targetRoot, ledgerPath))}` : '';
+    console.error(`[Ledger] No acceptance criteria ledger found${ledgerRel}. Start the run before auditing.`);
+    return 1;
+  }
+
+  let ledger;
+  let rendered;
+  try {
+    ledger = acLedger.readLedger(ledgerPath);
+    rendered = acLedger.renderLedgerAudit(ledger, options.reportFormat || 'md');
+  } catch (err) {
+    console.error(`[Ledger] ${err.message}`);
+    return 1;
+  }
+  const missing = acLedger.summarizeAudit(ledger).missingCount;
+  console.log(rendered.replace(/\n$/, ''));
+  if (missing > 0) {
+    console.error(`[Ledger] ${missing} acceptance criterion${missing === 1 ? '' : 'a'} without evidence remain.`);
+  }
+  return missing > 0 ? 1 : 0;
+}
+
 function cmdLedger(options) {
   const action = String(options.ledgerAction || options.specPath || '').trim();
   if (action === 'link') return cmdLedgerLink(options);
   if (action === 'report') return cmdLedgerReport(options);
-  console.error(`Unknown ledger action "${action}". Use: ledger link --run-id <id> --ac <id> [<id> ...] --type <file|test|commit|review|sabotage> | ledger report --run-id <id> [--format md|json]`);
+  if (action === 'audit') return cmdLedgerAudit(options);
+  console.error(`Unknown ledger action "${action}". Use: ledger link --run-id <id> --ac <id> [<id> ...] --type <file|test|commit|review|sabotage> | ledger report --run-id <id> [--format md|json] | ledger audit --run-id <id> [--format md|json]`);
   return 1;
 }
 
@@ -5778,6 +5851,7 @@ Subcommands:
   report re-render       Refresh the delivery report and the in-progress report from run state (never commits)
   ledger link            Link typed evidence to one or more acceptance criteria (--run-id, --ac, --type)
   ledger report          Print the AC status and evidence summary (--run-id, --format md|json)
+  ledger audit           List acceptance criteria without evidence (--run-id, --format md|json; exit 1 when any remain)
   dag preview            Print the plan the classifier would generate, without side effects
   status                 Check status of current or specified run state
   sandbox list           List isolated sandboxes created by --sandbox
@@ -5798,12 +5872,12 @@ Options:
   --verdict <path>       Path to judge verdict JSON file for score submit
   --ac <id...>           Acceptance criterion ids for ledger link (one or more, until the next flag)
   --type <type>          Evidence type for ledger link: file | test | commit | review | sabotage
-  --path <path>          Project-relative evidence path for --type file
+  --path <path>          Evidence path for --type file (stored project-relative with forward slashes; outside-root paths are refused)
   --name <name>          Test name for --type test
   --status <status>      Test status for --type test (for example passed)
   --sha <sha>            Commit SHA for --type commit
   --id <id>              Review or sabotage id for --type review | sabotage
-  --format <format>      Report format for ledger report: md | json (default: md)
+  --format <format>      Report format for ledger report and ledger audit: md | json (default: md)
   --mode <mode>          Implementation mode (subagent | command)
   --dry-run              Print the execution plan and validate the spec; execute nothing
   --sandbox              Execute the whole pipeline in an isolated local clone; never pushes

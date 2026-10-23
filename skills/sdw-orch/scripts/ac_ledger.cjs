@@ -1,14 +1,14 @@
 'use strict';
 
 /**
- * Spec 00017 AC1-AC11: the per-run acceptance criteria ledger.
+ * Spec 00017 AC1-AC14: the per-run acceptance criteria ledger.
  *
  * The ledger is the run's record of which acceptance criteria are verified and
  * which typed evidence proves them. This file owns initialization, the record
  * schema, evidence linking, evidence-type validation, recording the Step 5
- * judge verdicts, deriving the score from the ledger, the canonical SHA-256
- * anchor, and the Markdown/JSON report. Auditing is a later slice; it reads the
- * same stable JSON, so nothing here needs to change.
+ * judge verdicts, deriving the score from the ledger (including the AC13
+ * negative-scenario cap), the canonical SHA-256 anchor, and the Markdown/JSON
+ * report and audit.
  */
 
 const crypto = require('crypto');
@@ -25,6 +25,12 @@ const STATUS_VERIFIED = 'verified';
 // record keeps that evidence but takes this status, so the score never counts it.
 const STATUS_FAILED = 'failed';
 const REVIEW_EVIDENCE_ID = 'step5-judge';
+// AC13: a ledger that declares a negative scenario without an observed passing
+// test never earns a perfect score, however many criteria the judge verified.
+const NEGATIVE_SCENARIO_SCORE_CAP = 8;
+// AC13: a criterion declares a negative scenario when its text or one of its
+// test evidence entries names a failing, invalid, or rejected case.
+const NEGATIVE_SCENARIO_PATTERN = /\b(negative|fail(?:s|ed|ing|ure)?|reject(?:s|ed|ion)?|invalid|unknown|missing|mismatch|error)\b/i;
 
 function normalizePath(value) {
   return String(value == null ? '' : value).replace(/\\/g, '/');
@@ -34,14 +40,19 @@ function trimmed(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-// Evidence paths are always project-relative with forward slashes so the ledger
-// does not depend on the machine, the working directory, or the separator.
+// AC14: evidence paths are always project-relative with forward slashes so the
+// ledger does not depend on the machine, the working directory, or the
+// separator. Absolute and backslashed input is normalized; a path that resolves
+// outside the project root is refused (empty result), never recorded.
 function normalizeProjectPath(filePath, projectRoot) {
   const raw = normalizePath(trimmed(filePath)).replace(/^\.\//, '');
   if (!raw) return '';
-  if (!path.isAbsolute(raw)) return raw;
-  const relative = normalizePath(path.relative(path.resolve(projectRoot || process.cwd()), raw));
-  return relative || '.';
+  const root = path.resolve(projectRoot || process.cwd());
+  const absolute = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(root, raw);
+  const relative = normalizePath(path.relative(root, absolute));
+  if (!relative || relative === '.') return '.';
+  if (relative === '..' || relative.startsWith('../') || path.isAbsolute(relative)) return '';
+  return relative;
 }
 
 // AC2: one record per acceptance criterion, in declaration order. A derived or
@@ -120,8 +131,15 @@ function buildEvidenceEntry(payload = {}, projectRoot) {
   }
   const entry = { type };
   if (type === 'file') {
-    entry.path = normalizeProjectPath(payload.path, projectRoot);
-    if (!entry.path) return { error: 'Evidence type "file" requires a project-relative path (--path <path>).' };
+    const rawPath = trimmed(payload.path);
+    entry.path = normalizeProjectPath(rawPath, projectRoot);
+    if (!entry.path) {
+      return {
+        error: rawPath
+          ? `Evidence path "${rawPath}" resolves outside the project root; ledger evidence paths must stay inside it.`
+          : 'Evidence type "file" requires a project-relative path (--path <path>).'
+      };
+    }
   } else if (type === 'test') {
     entry.name = trimmed(payload.name);
     entry.status = trimmed(payload.status);
@@ -276,21 +294,46 @@ function recordReviewVerdicts(options = {}) {
   return { ok: true, ledger, ledgerPath, recorded };
 }
 
-// AC7/AC8: count only records that carry at least one evidence entry, and derive
-// the 0-10 score as round(verifiedCount / totalAcs * 10). A record marked
-// verified without evidence is not counted, so the ledger cannot inflate itself.
+// AC13: a criterion declares a negative scenario when its own text names a
+// failure path or when one of its test evidence entries names a failing or
+// negative case. Either way the declaration is part of the ledger record.
+function declaresNegativeScenario(record) {
+  if (NEGATIVE_SCENARIO_PATTERN.test(trimmed(record && record.text))) return true;
+  const evidence = Array.isArray(record && record.evidence) ? record.evidence : [];
+  return evidence.some(entry => entry.type === 'test' && NEGATIVE_SCENARIO_PATTERN.test(trimmed(entry.name)));
+}
+
+// AC13: the observed passing test that proves the declared negative scenario.
+function hasPassingTest(record) {
+  const evidence = Array.isArray(record && record.evidence) ? record.evidence : [];
+  return evidence.some(entry =>
+    entry.type === 'test' && String(entry.status || '').trim().toLowerCase() === 'passed');
+}
+
+// AC7/AC8/AC13: count only records that carry at least one evidence entry, derive
+// the 0-10 score as round(verifiedCount / totalAcs * 10), and cap it at 8 while
+// any criterion declares a negative scenario with no observed passing test.
 function deriveScore(ledger) {
   const criteria = ledger && Array.isArray(ledger.criteria) ? ledger.criteria : [];
   const totalAcs = criteria.length;
   const evidenced = criteria.filter(record => Array.isArray(record.evidence) && record.evidence.length > 0);
   const verifiedCount = evidenced.filter(record => record.status === STATUS_VERIFIED).length;
-  const score = totalAcs === 0 ? 0 : Math.max(0, Math.min(10, Math.round((verifiedCount / totalAcs) * 10)));
+  const uncappedScore = totalAcs === 0 ? 0 : Math.max(0, Math.min(10, Math.round((verifiedCount / totalAcs) * 10)));
+  const capReasons = criteria
+    .filter(record => declaresNegativeScenario(record) && !hasPassingTest(record))
+    .map(record => `${record.id} declares a negative scenario without an observed passing test.`);
+  const capLimit = capReasons.length > 0 ? NEGATIVE_SCENARIO_SCORE_CAP : null;
+  const score = capLimit === null ? uncappedScore : Math.min(uncappedScore, capLimit);
   return {
     totalAcs,
     evidencedCount: evidenced.length,
     verifiedCount,
     failingCount: totalAcs - verifiedCount,
-    score
+    uncappedScore,
+    score,
+    capLimit,
+    capped: score < uncappedScore,
+    capReasons
   };
 }
 
@@ -415,6 +458,49 @@ function renderLedgerReport(ledger, format) {
   throw new Error(`Unknown ledger report format "${format}". Use: md | json.`);
 }
 
+// AC12: the audit lists every criterion that carries no evidence at all, which
+// is exactly the set Step 5 cannot count (AC7).
+function summarizeAudit(ledger) {
+  const criteria = ledger && Array.isArray(ledger.criteria) ? ledger.criteria : [];
+  const missing = criteria.filter(record => !Array.isArray(record.evidence) || record.evidence.length === 0);
+  return {
+    runId: ledger && ledger.runId ? ledger.runId : null,
+    specSlug: ledger && ledger.specSlug ? ledger.specSlug : null,
+    total: criteria.length,
+    missingCount: missing.length,
+    criteria: missing.map(record => ({ id: record.id, text: record.text }))
+  };
+}
+
+function renderAuditMarkdown(summary) {
+  const lines = [
+    '# Acceptance Criteria Audit',
+    '',
+    `- Run: ${summary.runId || 'unknown'}`,
+    `- Specification: ${summary.specSlug || 'unknown'}`,
+    `- Criteria without evidence: ${summary.missingCount}/${summary.total}`,
+    ''
+  ];
+  if (summary.missingCount === 0) {
+    lines.push(`All ${summary.total} acceptance criteria carry evidence.`);
+  } else {
+    lines.push('| AC | Criterion |', '| --- | --- |');
+    for (const record of summary.criteria) {
+      lines.push(`| ${record.id} | ${escapeTableCell(record.text)} |`);
+    }
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+// AC12: `ledger audit --format md|json`, like the report. An unknown format is
+// refused instead of silently falling back to another representation.
+function renderLedgerAudit(ledger, format) {
+  const normalized = String(format || 'md').trim().toLowerCase();
+  if (normalized === 'json') return `${JSON.stringify(summarizeAudit(ledger), null, 2)}\n`;
+  if (normalized === 'md') return renderAuditMarkdown(summarizeAudit(ledger));
+  throw new Error(`Unknown ledger audit format "${format}". Use: md | json.`);
+}
+
 module.exports = {
   LEDGER_FILENAME,
   EVIDENCE_TYPES,
@@ -422,6 +508,7 @@ module.exports = {
   STATUS_VERIFIED,
   STATUS_FAILED,
   REVIEW_EVIDENCE_ID,
+  NEGATIVE_SCENARIO_SCORE_CAP,
   normalizeProjectPath,
   parseCriteria,
   buildLedger,
@@ -439,5 +526,7 @@ module.exports = {
   hashLedgerFile,
   verifyLedgerHash,
   summarizeLedger,
-  renderLedgerReport
+  renderLedgerReport,
+  summarizeAudit,
+  renderLedgerAudit
 };

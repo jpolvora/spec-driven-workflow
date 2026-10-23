@@ -63,6 +63,27 @@ Exercises ledger-derived scoring.
 
 const SCORE_SPEC_REL = '.sdw/specs/ac-ledger-score.md';
 
+// Spec 00017 AC13: AC2 declares a negative scenario (an invalid input is
+// rejected) and needs an observed passing test before it can score 10.
+const NEGATIVE_SPEC_REL = '.sdw/specs/ac-ledger-negative.md';
+const NEGATIVE_SPEC = `---
+slug: ac-ledger-negative
+title: "AC Ledger Negative Scenario"
+---
+
+# Specification — AC Ledger Negative Scenario
+
+## Description
+
+Exercises the negative-scenario score cap.
+
+## Acceptance Criteria
+
+- AC1: The system shall record the first criterion.
+- AC2: If the input is invalid, the system shall reject it.
+- AC3: The system shall record the third criterion.
+`;
+
 function setupProject() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-ac-ledger-'));
   const specsDir = path.join(root, '.sdw', 'specs');
@@ -119,7 +140,9 @@ function readLedgerFile(ledgerPath) {
 // not pay for the earlier pipeline steps.
 function seedScoringRun(root, options = {}) {
   const runId = options.runId || 'run-ac-ledger-score';
-  const state = stateManager.createRunState({ root, specPath: SCORE_SPEC_REL, slug: 'ac-ledger-score', runId });
+  const specRel = options.specRel || SCORE_SPEC_REL;
+  const slug = options.slug || 'ac-ledger-score';
+  const state = stateManager.createRunState({ root, specPath: specRel, slug, runId });
   for (const step of [1, 2, 3, 4]) {
     stateManager.updateStepState(root, state.runId, step, 'completed', {});
   }
@@ -622,6 +645,259 @@ test('AC11: ledger report renders AC status and evidence as Markdown and JSON', 
     );
     assert.notEqual(unknown.status, 0, 'an unknown report format is refused');
     assert.match(unknown.stderr, /Unknown ledger report format "yaml"/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC12: ledger audit lists criteria without evidence and exits non-zero while any remain', () => {
+  const root = setupProject();
+  try {
+    const { state } = seedRun(root);
+    assert.equal(link(root, state.runId, ['--ac', 'AC1', '--type', 'file', '--path', 'skills/demo.cjs']).status, 0);
+    assert.equal(link(root, state.runId, ['--ac', 'AC2', '--type', 'test', '--name', 'ledger contract', '--status', 'passed']).status, 0);
+
+    const markdown = spawnSync(
+      process.execPath,
+      [ORCH, 'ledger', 'audit', '--root', root, '--run-id', state.runId],
+      { encoding: 'utf8' }
+    );
+    assert.equal(markdown.status, 1, 'AC12: a criterion without evidence exits non-zero');
+    assert.match(markdown.stdout, /^# Acceptance Criteria Audit/);
+    assert.match(markdown.stdout, /- Criteria without evidence: 1\/3/);
+    assert.match(markdown.stdout, /\| AC3 \| The system shall link typed evidence to one or more criteria\. \|/);
+    assert.doesNotMatch(markdown.stdout, /\| AC1 \|/);
+    assert.match(markdown.stderr, /1 acceptance criterion without evidence remain/);
+
+    const json = spawnSync(
+      process.execPath,
+      [ORCH, 'ledger', 'audit', '--root', root, '--run-id', state.runId, '--format', 'json'],
+      { encoding: 'utf8' }
+    );
+    assert.equal(json.status, 1, 'AC12: the JSON form keeps the non-zero exit code');
+    const summary = JSON.parse(json.stdout);
+    assert.equal(summary.runId, state.runId);
+    assert.equal(summary.specSlug, 'ac-ledger-demo');
+    assert.equal(summary.total, 3);
+    assert.equal(summary.missingCount, 1);
+    assert.deepEqual(summary.criteria, [{
+      id: 'AC3',
+      text: 'The system shall link typed evidence to one or more criteria.'
+    }]);
+
+    assert.equal(link(root, state.runId, ['--ac', 'AC3', '--type', 'commit', '--sha', 'a1b2c3d']).status, 0);
+    const clean = spawnSync(
+      process.execPath,
+      [ORCH, 'ledger', 'audit', '--root', root, '--run-id', state.runId, '--format=json'],
+      { encoding: 'utf8' }
+    );
+    assert.equal(clean.status, 0, 'AC12: a fully evidenced ledger exits 0');
+    const cleanSummary = JSON.parse(clean.stdout);
+    assert.equal(cleanSummary.missingCount, 0);
+    assert.deepEqual(cleanSummary.criteria, []);
+
+    const cleanMarkdown = spawnSync(
+      process.execPath,
+      [ORCH, 'ledger', 'audit', '--root', root, '--run-id', state.runId, '--format', 'md'],
+      { encoding: 'utf8' }
+    );
+    assert.equal(cleanMarkdown.status, 0);
+    assert.match(cleanMarkdown.stdout, /All 3 acceptance criteria carry evidence\./);
+
+    const unknown = spawnSync(
+      process.execPath,
+      [ORCH, 'ledger', 'audit', '--root', root, '--run-id', state.runId, '--format', 'yaml'],
+      { encoding: 'utf8' }
+    );
+    assert.notEqual(unknown.status, 0, 'AC12: an unknown audit format is refused');
+    assert.match(unknown.stderr, /Unknown ledger audit format "yaml"/);
+
+    const noRunId = spawnSync(process.execPath, [ORCH, 'ledger', 'audit', '--root', root], { encoding: 'utf8' });
+    assert.equal(noRunId.status, 1, 'AC12: --run-id is required');
+    assert.match(noRunId.stderr, /--run-id is required for "ledger audit"/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC13: a declared negative scenario caps the score at 8 until a passing test is observed', () => {
+  const negative = acLedger.buildLedger({
+    runId: 'run-negative-cap',
+    specSlug: 'ac-ledger-negative',
+    specContent: NEGATIVE_SPEC,
+    generatedAt: '2026-10-19T12:00:00.000Z'
+  });
+  for (const record of negative.criteria) {
+    record.status = 'verified';
+    record.evidence = [{ type: 'review', id: 'step5-judge', status: 'passed' }];
+  }
+  // AC1 and AC3 carry an observed passing test; AC2 declares its negative
+  // scenario in the criterion text and only has review evidence.
+  negative.criteria[0].evidence.push({ type: 'test', name: 'first criterion', status: 'passed' });
+  negative.criteria[2].evidence.push({ type: 'test', name: 'third criterion', status: 'passed' });
+
+  const capped = acLedger.deriveScore(negative);
+  assert.equal(capped.uncappedScore, 10, 'every criterion is evidenced and verified');
+  assert.equal(capped.score, 8, 'AC13: the score is capped at 8');
+  assert.equal(capped.capLimit, 8);
+  assert.equal(capped.capped, true);
+  assert.deepEqual(capped.capReasons, ['AC2 declares a negative scenario without an observed passing test.']);
+
+  negative.criteria[1].evidence.push({ type: 'test', name: 'invalid input is rejected', status: 'passed' });
+  const lifted = acLedger.deriveScore(negative);
+  assert.equal(lifted.score, 10, 'AC13: an observed passing test lifts the cap');
+  assert.equal(lifted.capLimit, null);
+  assert.equal(lifted.capped, false);
+  assert.deepEqual(lifted.capReasons, []);
+
+  // A test evidence entry that names a failing/negative case declares the same
+  // scenario, even when the criterion text itself is neutral.
+  const declaredByTest = acLedger.deriveScore({
+    criteria: [
+      {
+        id: 'AC1',
+        text: 'The system shall record the first criterion.',
+        status: 'verified',
+        evidence: [{ type: 'test', name: 'unknown acceptance criterion is rejected', status: 'failed' }]
+      },
+      {
+        id: 'AC2',
+        text: 'The system shall record the second criterion.',
+        status: 'verified',
+        evidence: [{ type: 'test', name: 'second criterion', status: 'passed' }]
+      }
+    ]
+  });
+  assert.equal(declaredByTest.uncappedScore, 10);
+  assert.equal(declaredByTest.score, 8, 'AC13: a failing test entry still declares the scenario');
+  assert.deepEqual(declaredByTest.capReasons, ['AC1 declares a negative scenario without an observed passing test.']);
+
+  // A ledger with no declared negative scenario is never capped.
+  const positive = acLedger.deriveScore({
+    criteria: [{
+      id: 'AC1',
+      text: 'The system shall record the first criterion.',
+      status: 'verified',
+      evidence: [{ type: 'test', name: 'first criterion', status: 'passed' }]
+    }]
+  });
+  assert.equal(positive.capLimit, null);
+  assert.equal(positive.score, 10);
+});
+
+test('AC13: Step 5 reports the cap and its reason, and lifts it when a passing test is linked', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-ac-ledger-cap-'));
+  try {
+    fs.mkdirSync(path.join(root, '.sdw', 'specs'), { recursive: true });
+    fs.writeFileSync(path.join(root, NEGATIVE_SPEC_REL), NEGATIVE_SPEC, 'utf8');
+    const state = seedScoringRun(root, { runId: 'run-negative-step5', specRel: NEGATIVE_SPEC_REL, slug: 'ac-ledger-negative' });
+    const init = acLedger.initLedger({
+      root,
+      artifactsDir: state.artifactsDir,
+      runId: state.runId,
+      specSlug: state.specSlug,
+      specContent: NEGATIVE_SPEC,
+      generatedAt: '2026-10-19T12:00:00.000Z'
+    });
+
+    assert.equal(link(root, state.runId, ['--ac', 'AC1', '--type', 'file', '--path', 'skills/demo.cjs']).status, 0);
+    assert.equal(link(root, state.runId, ['--ac', 'AC2', '--type', 'review', '--id', 'review-1']).status, 0);
+    assert.equal(link(root, state.runId, ['--ac', 'AC3', '--type', 'file', '--path', 'skills/demo3.cjs']).status, 0);
+
+    const verdictPath = path.join(root, 'verdict.json');
+    fs.writeFileSync(verdictPath, JSON.stringify({
+      score: 10,
+      verdicts: ['AC1', 'AC2', 'AC3'].map(id => ({ id, verdict: 'verified', evidence: 'skills/demo.cjs:1' }))
+    }), 'utf8');
+
+    const originalWarn = console.warn;
+    let warnings = '';
+    console.warn = (...args) => { warnings += `${args.map(String).join(' ')}\n`; };
+    let code;
+    try {
+      code = sdwOrch.cmdScoreSubmit({ root, runId: state.runId, verdictPath });
+    } finally {
+      console.warn = originalWarn;
+    }
+
+    assert.equal(code, 0, 'AC13: the capped score still meets the default threshold of 8');
+    const submitted = stateManager.loadRunState(root, state.runId);
+    assert.equal(submitted.score, 8, 'AC13: Step 5 records the capped score');
+    assert.deepEqual(submitted.steps[5].output.scoreCap, {
+      limit: 8,
+      applied: true,
+      uncappedScore: 10,
+      reasons: ['AC2 declares a negative scenario without an observed passing test.']
+    });
+    assert.match(warnings, /Score capped at 8\/10 \(uncapped 10\/10\)/, 'AC13: Step 5 reports the cap');
+    assert.match(warnings, /AC2 declares a negative scenario without an observed passing test/,
+      'AC13: Step 5 reports the cap reason');
+    assert.match(submitted.steps[5].output.feedback, /Score capped at 8\/10 \(uncapped 10\/10\)/,
+      'AC13: the persisted feedback carries the cap and its reason');
+    assert.equal(acLedger.deriveScore(readLedgerFile(init.ledgerPath)).score, submitted.score,
+      'the reported score equals the ledger-derived score');
+
+    const passingTest = link(root, state.runId, [
+      '--ac', 'AC2', '--type', 'test', '--name', 'invalid input is rejected', '--status', 'passed'
+    ]);
+    assert.equal(passingTest.status, 0, passingTest.stderr);
+    assert.equal(sdwOrch.cmdScoreSubmit({ root, runId: state.runId, verdictPath }), 0);
+
+    const rescored = stateManager.loadRunState(root, state.runId);
+    assert.equal(rescored.score, 10, 'AC13: the linked passing test lifts the cap');
+    assert.equal(rescored.steps[5].output.scoreCap, null);
+    assert.equal(acLedger.deriveScore(readLedgerFile(init.ledgerPath)).score, rescored.score);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC14: ledger evidence paths are project-relative with forward slashes, and outside-root paths are refused', () => {
+  const root = setupProject();
+  try {
+    const { state, ledgerPath } = seedRun(root);
+    const absolute = path.join(root, 'skills', 'sdw-orch', 'scripts', 'ac_ledger.cjs');
+
+    const fromAbsolute = link(root, state.runId, ['--ac', 'AC1', '--type', 'file', '--path', absolute]);
+    assert.equal(fromAbsolute.status, 0, fromAbsolute.stderr);
+    const fromBackslashes = link(root, state.runId, [
+      '--ac', 'AC2', '--type', 'file', '--path', 'skills\\sdw-orch\\scripts\\sdw_orch.cjs'
+    ]);
+    assert.equal(fromBackslashes.status, 0, fromBackslashes.stderr);
+
+    const ledger = readLedgerFile(ledgerPath);
+    const stored = [ledger.criteria[0].evidence[0].path, ledger.criteria[1].evidence[0].path];
+    assert.deepEqual(stored, [
+      'skills/sdw-orch/scripts/ac_ledger.cjs',
+      'skills/sdw-orch/scripts/sdw_orch.cjs'
+    ], 'AC14: absolute and backslashed input is stored project-relative');
+    for (const evidencePath of stored) {
+      assert.ok(!evidencePath.includes('\\'), 'AC14: no stored path keeps a backslash');
+      assert.equal(path.isAbsolute(evidencePath), false, 'AC14: no stored path is absolute');
+    }
+    assert.equal(
+      acLedger.normalizeProjectPath(absolute, root),
+      'skills/sdw-orch/scripts/ac_ledger.cjs',
+      'AC14: the normalizer resolves an absolute path against the project root'
+    );
+    assert.equal(
+      acLedger.normalizeProjectPath('skills\\demo.cjs', root),
+      'skills/demo.cjs',
+      'AC14: the normalizer converts a relative backslashed path'
+    );
+
+    const before = fs.readFileSync(ledgerPath, 'utf8');
+    const outside = path.join(root, '..', 'outside-evidence.cjs');
+    const refused = link(root, state.runId, ['--ac', 'AC3', '--type', 'file', '--path', outside]);
+    assert.notEqual(refused.status, 0, 'AC14: an absolute path outside the root is refused');
+    assert.match(refused.stderr, /outside the project root/);
+    assert.equal(fs.readFileSync(ledgerPath, 'utf8'), before, 'AC14: the refused path leaves the ledger unchanged');
+
+    const escape = link(root, state.runId, ['--ac', 'AC3', '--type', 'file', '--path', '..\\outside-evidence.cjs']);
+    assert.notEqual(escape.status, 0, 'AC14: a relative path that escapes the root is refused');
+    assert.match(escape.stderr, /outside the project root/);
+    assert.equal(fs.readFileSync(ledgerPath, 'utf8'), before);
+    assert.equal(acLedger.normalizeProjectPath('../outside-evidence.cjs', root), '');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
