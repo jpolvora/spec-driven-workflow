@@ -17,7 +17,7 @@
 | Implementation start | 2026-10-22T21:29:08.835Z |
 | Implementation end | 2026-10-22T23:04:00.074Z |
 | Total wall-clock duration | 1h 34m 51s |
-| Generated at | 2026-10-22T23:46:53.517Z |
+| Generated at | 2026-10-23T00:00:35.814Z |
 | Step 1: derivation (skipped) | 2ms |
 | Step 2: refinement (completed) | 36ms |
 | Step 3: dag_generation (completed) | 2ms |
@@ -39,6 +39,8 @@
 
 | SHA | Subject | Range |
 |---|---|---|
+| `7797f42` | fix(00057-sdw-orch-delivery-report-step-contributions): replace the Step 5 verdict on a re-judge instead of stacking it | base..HEAD |
+| `8809bb9` | docs(00057-sdw-orch-delivery-report-step-contributions): record delivery report | base..HEAD |
 | `f879353` | fix(00057-sdw-orch-delivery-report-step-contributions): pass the apply options object so the CLI records an applied learning | base..HEAD |
 | `7315a0f` | docs(00057-sdw-orch-delivery-report-step-contributions): record delivery report | base..HEAD |
 | `8396afb` | fix(00057-sdw-orch-delivery-report-step-contributions): record per-round convergence and commit the final report | base..HEAD |
@@ -292,7 +294,7 @@ Not available
 
 ## Step Contributions
 
-- Recorded: 8 contribution(s)
+- Recorded: 10 contribution(s)
 
 ### Step 1: derivation
 
@@ -339,6 +341,10 @@ Not available
 - **convergence** 2026-10-22T23:39:55.985Z - Convergence iteration 1
   - Body: `{"iteration":1,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":false}`
 - **convergence** 2026-10-22T23:39:56.957Z - Convergence iteration 2
+  - Body: `{"iteration":2,"rounds":2,"failingChecks":[{"name":"review","status":""}],"openThreads":1,"resolvedThreads":0,"fixCommit":null,"converged":false}`
+- **convergence** 2026-10-22T23:53:11.015Z - Convergence iteration 1
+  - Body: `{"iteration":1,"rounds":2,"failingChecks":[],"openThreads":1,"resolvedThreads":0,"fixCommit":null,"converged":false}`
+- **convergence** 2026-10-22T23:53:12.261Z - Convergence iteration 2
   - Body: `{"iteration":2,"rounds":2,"failingChecks":[{"name":"review","status":""}],"openThreads":1,"resolvedThreads":0,"fixCommit":null,"converged":false}`
 
 ### Step 9: retrospective
