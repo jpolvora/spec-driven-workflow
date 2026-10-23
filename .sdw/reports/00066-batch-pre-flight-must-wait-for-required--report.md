@@ -12,12 +12,12 @@
 | Base branch | `master` |
 | Base commit | `71d6d366501936f514eebd6344ea4d68b5ebca26` |
 | Delivery commit | `c7bd91c099601bf315c7260af3235334a5d4170a` |
-| Ship status | pending |
+| Ship status | review_pending |
 | Score | 8/10 (scoreMin 8) |
 | Implementation start | 2026-10-23T22:16:47.787Z |
 | Implementation end | 2026-10-23T22:43:22.149Z |
 | Total wall-clock duration | 26m 34s |
-| Generated at | 2026-10-23T22:48:53.961Z |
+| Generated at | 2026-10-23T23:15:20.995Z |
 | Step 1: derivation (skipped) | 5ms |
 | Step 2: refinement (completed) | 31ms |
 | Step 3: dag_generation (completed) | 12ms |
@@ -25,7 +25,7 @@
 | Step 5: scoring (completed) | 2m 42s |
 | Step 6: delivery_commit (completed) | 465ms |
 | Step 7: code_review (completed) | 1s |
-| Step 8: pr_preparation (pending) | n/a |
+| Step 8: pr_preparation (blocked_convergence) | n/a |
 
 
 ## Tasks
@@ -39,6 +39,9 @@
 
 | SHA | Subject | Range |
 |---|---|---|
+| `0332b39` | fix(00066-batch-pre-flight-must-wait-for-required-): halt when checks stop reporting mid-wait | base..HEAD |
+| `44df1d9` | fix(00066-batch-pre-flight-must-wait-for-required-): gate the pre-flight merge on required checks only | base..HEAD |
+| `3de3e75` | docs(00066-batch-pre-flight-must-wait-for-required-): record delivery report | base..HEAD |
 | `c7bd91c` | docs(00066-batch-pre-flight-must-wait-for-required-): describe the pre-flight check gate | base..HEAD |
 | `54a0e47` | task(00066-batch-pre-flight-must-wait-for-required-): task-2 | base..HEAD |
 | `40437ea` | task(00066-batch-pre-flight-must-wait-for-required-): task-1 | base..HEAD |
@@ -64,11 +67,13 @@
 
 | File | Change |
 |---|---|
+| `.sdw/reports/00066-batch-pre-flight-must-wait-for-required--report.md` | added |
 | `skills/sdw-batch/SKILL.md` | modified |
 
 ## Verification
 
 - test gate: status `passed`, exit code `0`, duration 2m 36s
+- Step 8 delivery: `blocked_convergence` (ship status `review_pending`)
 
 ## Code Review
 
@@ -114,7 +119,7 @@ Not available
 
 ## Breaking Changes
 
-None detected.
+- **CLI flag** `--required` added in `skills/sdw-batch/scripts/batch_queue.cjs`
 
 ## Quality
 
@@ -133,18 +138,18 @@ None.
 
 - Step 1 (derivation) skipped: not recorded
 - Task task-2 accepted after re-dispatch (sequence 2)
-- Environment: workspace: 4 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
+- Environment: workspace: 5 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
 
 ## Outcome
 
 - Result: `paused`
 - Delivery commit: `c7bd91c099601bf315c7260af3235334a5d4170a`
-- Ship status: `pending`
+- Ship status: `review_pending`
 - Duration: 26m 34s
 
 ## Step Contributions
 
-- Recorded: 8 contribution(s)
+- Recorded: 10 contribution(s)
 
 ### Step 1: derivation
 
@@ -192,7 +197,10 @@ None.
 
 ### Step 8: pr_preparation
 
-Not available
+- **convergence** 2026-10-23T22:55:28.743Z - Convergence iteration 1
+  - Body: `{"iteration":1,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":false}`
+- **convergence** 2026-10-23T22:55:29.137Z - Convergence iteration 2
+  - Body: `{"iteration":2,"rounds":2,"failingChecks":[{"name":"review","status":""}],"openThreads":1,"resolvedThreads":0,"fixCommit":null,"converged":false}`
 
 ### Step 9: retrospective
 
