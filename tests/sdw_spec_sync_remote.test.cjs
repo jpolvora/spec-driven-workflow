@@ -7,7 +7,7 @@ const path = require('path');
 const os = require('os');
 const { spawnSync } = require('child_process');
 
-const { registerSpec, readIndex, parseFrontmatter } = require('../skills/sdw-spec/scripts/spec_index.cjs');
+const { registerSpec, readIndex, parseFrontmatter, readHeaderStatus } = require('../skills/sdw-spec/scripts/spec_index.cjs');
 const { syncUp, syncDown, runSyncDirection } = require('../skills/sdw-spec/scripts/spec_sync_remote.cjs');
 
 const CLI = path.join(__dirname, '..', 'skills', 'sdw-spec', 'scripts', 'sdw_spec.cjs');
@@ -521,5 +521,231 @@ test('sdw-spec sync-remote - AC12: sync-down --dry-run never queries the provide
     assert.deepStrictEqual(snapshotSpecs(root), before, 'the dry-run must not modify disk');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('sdw-spec sync-remote - AC13: sync-up --json emits the transition list with direction, action, and identifiers', async () => {
+  const root = setupWorkspace();
+  try {
+    writeSpecification(root, { prefix: '00020', slug: '00020-demo-phi', title: 'Demo Phi' });
+    registerFixture(root, { prefix: '00020', slug: '00020-demo-phi', title: 'Demo Phi' });
+    writeSpecification(root, { prefix: '00021', slug: '00021-demo-chi', title: 'Demo Chi', scmSpecId: '701' });
+    registerFixture(root, { prefix: '00021', slug: '00021-demo-chi', title: 'Demo Chi' });
+
+    const executor = createGithubExecutor({
+      'gh issue create': 'https://github.com/org/repo/issues/700\n',
+      'gh issue view': JSON.stringify({ number: 701, title: 'Demo Chi', body: 'old remote body', state: 'OPEN', url: 'https://github.com/org/repo/issues/701' }),
+      'gh issue edit': ''
+    });
+
+    const { result, messages } = await captureStdout(() => runSyncDirection('sync-up', { root, executor, json: true }));
+
+    assert.strictEqual(result, 0);
+    const payload = JSON.parse(messages.join('\n'));
+    assert.strictEqual(payload.direction, 'sync-up');
+    assert.strictEqual(payload.provider, 'github');
+    assert.strictEqual(payload.transitions.length, 2);
+
+    const created = payload.transitions.find((transition) => transition.action === 'created');
+    assert.strictEqual(created.direction, 'sync-up');
+    assert.strictEqual(created.slug, '00020-demo-phi');
+    assert.strictEqual(created.id, '700', 'the created transition carries the returned remote id');
+
+    const updated = payload.transitions.find((transition) => transition.action === 'updated');
+    assert.strictEqual(updated.direction, 'sync-up');
+    assert.strictEqual(updated.slug, '00021-demo-chi');
+    assert.strictEqual(updated.id, '701', 'the updated transition carries the linked remote id');
+
+    for (const transition of payload.transitions) {
+      assert.strictEqual(transition.direction, 'sync-up', 'every transition names its direction');
+      assert.ok(transition.action, 'every transition names its action');
+      assert.ok(transition.slug || transition.id, 'every transition carries an identifier');
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('sdw-spec sync-remote - AC13: sync-down --json emits created and updated transitions with identifiers', async () => {
+  const root = setupWorkspace();
+  try {
+    const filePath = writeSpecification(root, { prefix: '00022', slug: '00022-demo-psi', title: 'Demo Psi', scmSpecId: '702' });
+    registerFixture(root, { prefix: '00022', slug: '00022-demo-psi', title: 'Demo Psi' });
+
+    const executor = createGithubExecutor({
+      'gh issue list': JSON.stringify([
+        { number: 702, title: 'Demo Psi', body: fs.readFileSync(filePath, 'utf8'), state: 'CLOSED', labels: [] },
+        { number: 703, title: 'Remote Omega', body: 'remote only', state: 'OPEN', labels: [] }
+      ])
+    });
+
+    const { result, messages } = await captureStdout(() => runSyncDirection('sync-down', { root, executor, json: true }));
+
+    assert.strictEqual(result, 0);
+    const payload = JSON.parse(messages.join('\n'));
+    assert.strictEqual(payload.direction, 'sync-down');
+    assert.strictEqual(payload.provider, 'github');
+
+    const updated = payload.transitions.find((transition) => transition.action === 'updated');
+    assert.strictEqual(updated.direction, 'sync-down');
+    assert.strictEqual(updated.slug, '00022-demo-psi');
+    assert.strictEqual(updated.id, '702');
+    assert.strictEqual(updated.from, 'pending');
+    assert.strictEqual(updated.to, 'completed');
+
+    const created = payload.transitions.find((transition) => transition.action === 'created');
+    assert.strictEqual(created.direction, 'sync-down');
+    assert.strictEqual(created.id, '703');
+    assert.match(created.slug, /^\d{5}-us-703-/, 'the created transition names the local specification it wrote');
+
+    for (const transition of payload.transitions) {
+      assert.strictEqual(transition.direction, 'sync-down');
+      assert.ok(transition.action);
+      assert.ok(transition.slug || transition.id);
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('sdw-spec sync-remote - AC13: the CLI --json output is machine-readable', () => {
+  const root = setupWorkspace();
+  const emptyPath = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-json-path-'));
+  try {
+    writeSpecification(root, { prefix: '00023', slug: '00023-demo-omega', title: 'Demo Omega' });
+    registerFixture(root, { prefix: '00023', slug: '00023-demo-omega', title: 'Demo Omega' });
+    writeSpecification(root, { prefix: '00024', slug: '00024-demo-beta-two', title: 'Demo Beta Two', scmSpecId: '704' });
+    registerFixture(root, { prefix: '00024', slug: '00024-demo-beta-two', title: 'Demo Beta Two', status: 'completed' });
+
+    const cli = spawnSync(process.execPath, [CLI, 'sync-up', '--dry-run', '--json', '--root', root], {
+      encoding: 'utf8',
+      env: { ...process.env, PATH: emptyPath, Path: emptyPath }
+    });
+
+    assert.strictEqual(cli.status, 0);
+    assert.ok(cli.stdout.trim().startsWith('{'), 'the JSON emitter prints no human-readable prefix');
+    const payload = JSON.parse(cli.stdout);
+    assert.strictEqual(payload.direction, 'sync-up');
+    assert.strictEqual(payload.transitions.length, 2);
+
+    const plannedCreate = payload.transitions.find((transition) => transition.action === 'create');
+    assert.strictEqual(plannedCreate.slug, '00023-demo-omega');
+    assert.strictEqual(plannedCreate.id, null);
+
+    const plannedUpdate = payload.transitions.find((transition) => transition.action === 'update');
+    assert.strictEqual(plannedUpdate.slug, '00024-demo-beta-two');
+    assert.strictEqual(plannedUpdate.id, '704');
+    assert.strictEqual(plannedUpdate.to, 'closed');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(emptyPath, { recursive: true, force: true });
+  }
+});
+
+test('sdw-spec sync-remote - AC14: sync-down repairs the header only through the registry projection rule', async () => {
+  const root = setupWorkspace();
+  try {
+    const filePath = writeSpecification(root, {
+      prefix: '00025',
+      slug: '00025-demo-rho-two',
+      title: 'Demo Rho Two',
+      scmSpecId: '705',
+      status: 'ready-to-implement'
+    });
+    registerFixture(root, { prefix: '00025', slug: '00025-demo-rho-two', title: 'Demo Rho Two' });
+    const before = fs.readFileSync(filePath, 'utf8');
+
+    const executor = createGithubExecutor({
+      'gh issue list': JSON.stringify([
+        { number: 705, title: 'Demo Rho Two', body: before, state: 'CLOSED', labels: [] }
+      ])
+    });
+
+    const report = await syncDown({ root, executor });
+
+    const row = readIndex({ root }).entries.find((entry) => entry.slug === '00025-demo-rho-two');
+    assert.strictEqual(row.status, 'completed');
+    const after = fs.readFileSync(filePath, 'utf8');
+    assert.strictEqual(readHeaderStatus(after), 'implemented', 'the registry projection repairs the authored header');
+    assert.notStrictEqual(readHeaderStatus(after), 'completed', 'the header never receives registry vocabulary');
+    assert.notStrictEqual(readHeaderStatus(after), 'closed', 'the header never receives remote vocabulary');
+    assert.strictEqual(
+      after,
+      before.replace('status: ready-to-implement', 'status: implemented'),
+      'the repair rewrites only the header status line'
+    );
+    assert.strictEqual(report.drift.length, 0);
+    assert.strictEqual(report.transitions[0].action, 'updated');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('sdw-spec sync-remote - AC14: sync-down leaves the authored header alone when remote state does not repair it', async () => {
+  const root = setupWorkspace();
+  try {
+    const openPath = writeSpecification(root, {
+      prefix: '00026',
+      slug: '00026-demo-sigma-two',
+      title: 'Demo Sigma Two',
+      scmSpecId: '706',
+      status: 'ready-to-implement'
+    });
+    registerFixture(root, { prefix: '00026', slug: '00026-demo-sigma-two', title: 'Demo Sigma Two' });
+    const completedPath = writeSpecification(root, {
+      prefix: '00027',
+      slug: '00027-demo-tau-two',
+      title: 'Demo Tau Two',
+      scmSpecId: '707',
+      status: 'implemented'
+    });
+    registerFixture(root, { prefix: '00027', slug: '00027-demo-tau-two', title: 'Demo Tau Two', status: 'completed' });
+    const openBefore = fs.readFileSync(openPath, 'utf8');
+    const completedBefore = fs.readFileSync(completedPath, 'utf8');
+
+    const executor = createGithubExecutor({
+      'gh issue list': JSON.stringify([
+        { number: 706, title: 'Demo Sigma Two', body: openBefore, state: 'OPEN', labels: [] },
+        { number: 707, title: 'Demo Tau Two', body: completedBefore, state: 'OPEN', labels: [] }
+      ])
+    });
+
+    const report = await syncDown({ root, executor });
+
+    const unchanged = report.transitions.find((transition) => transition.slug === '00026-demo-sigma-two');
+    assert.strictEqual(unchanged.action, 'unchanged');
+    const guarded = report.transitions.find((transition) => transition.slug === '00027-demo-tau-two');
+    assert.strictEqual(guarded.action, 'skipped');
+
+    assert.strictEqual(fs.readFileSync(openPath, 'utf8'), openBefore, 'an open remote state never rewrites the authored header');
+    assert.strictEqual(readHeaderStatus(openBefore), 'ready-to-implement');
+    assert.strictEqual(fs.readFileSync(completedPath, 'utf8'), completedBefore, 'a skipped no-regress transition repairs nothing');
+    assert.strictEqual(readHeaderStatus(completedBefore), 'implemented');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('sdw-spec sync-remote - AC15: skill docs document both directions with the status mapping table', () => {
+  const skill = fs.readFileSync(path.join(__dirname, '..', 'skills', 'sdw-spec', 'SKILL.md'), 'utf8');
+  const contract = fs.readFileSync(
+    path.join(__dirname, '..', 'skills', 'sdw-spec', 'references', 'scm_contract.md'),
+    'utf8'
+  );
+
+  assert.match(skill, /`sync-up \[--root <path>\]/, 'the skill documents the sync-up direction and its flags');
+  assert.match(skill, /`sync-down \[--root <path>\]/, 'the skill documents the sync-down direction and its flags');
+
+  assert.match(contract, /^## 4\. Spec-Issue Mirroring \(`sync-up` \/ `sync-down`\)$/m);
+  assert.ok(
+    contract.includes('| Local registry | `sync-up` remote state | Remote state | `sync-down` local effect |'),
+    'the status mapping table carries both directions'
+  );
+  for (const row of [
+    '| `pending` | `open` | `open` |',
+    '| `completed` | `closed` | `closed` |',
+    '| `archived` | `closed` while still open | n/a |'
+  ]) {
+    assert.ok(contract.includes(row), `the status mapping table documents ${row}`);
   }
 });
