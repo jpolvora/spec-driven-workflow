@@ -70,13 +70,19 @@ function listBranchFiles(executor, base, head) {
   return out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).slice(0, 100);
 }
 
+// Spec 00060 AC7: a delivery report companion is never the specification a slug
+// names, wherever that companion sits.
+function isReportCompanion(fileName) {
+  return /-report\.md$/.test(String(fileName || ''));
+}
+
 function getSpecTitle(projectRoot, specSlug) {
   try {
     if (!specSlug) return null;
     const dir = path.join(projectRoot, '.sdw', 'specs');
     if (!fs.existsSync(dir)) return null;
     const normSlug = String(specSlug).replace(/^\d+-/, '');
-    const files = fs.readdirSync(dir).filter((f) => f === `${specSlug}.md` || f.replace(/^\d+-/, '').replace(/\.md$/, '') === normSlug);
+    const files = fs.readdirSync(dir).filter((f) => !isReportCompanion(f) && (f === `${specSlug}.md` || f.replace(/^\d+-/, '').replace(/\.md$/, '') === normSlug));
     for (const f of files) {
       const content = fs.readFileSync(path.join(dir, f), 'utf8').split(/\r?\n/).slice(0, 25).join('\n');
       const m = content.match(/^title:\s*["']?(.+?)["']?\s*$/m);
@@ -116,7 +122,7 @@ function resolveIssueLink(projectRoot, specSlug) {
     const dir = path.join(projectRoot, '.sdw', 'specs');
     if (!fs.existsSync(dir)) return empty;
     const normSlug = String(specSlug).replace(/^\d+-/, '');
-    const files = fs.readdirSync(dir).filter((f) => f === `${specSlug}.md` || f.replace(/^\d+-/, '').replace(/\.md$/, '') === normSlug);
+    const files = fs.readdirSync(dir).filter((f) => !isReportCompanion(f) && (f === `${specSlug}.md` || f.replace(/^\d+-/, '').replace(/\.md$/, '') === normSlug));
     for (const f of files) {
       const content = fs.readFileSync(path.join(dir, f), 'utf8').split(/\r?\n/).slice(0, 25).join('\n');
       const id = parseFrontmatterValue(content, 'id');

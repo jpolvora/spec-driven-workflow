@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-const { initIndex, listIndex, archiveSpec, resolvePaths, readIndex, parseFrontmatter, readDeclaredFields } = require('./spec_index.cjs');
+const { initIndex, listIndex, archiveSpec, resolvePaths, readIndex, parseFrontmatter, readDeclaredFields, isSpecificationFile } = require('./spec_index.cjs');
 const { createNewSpec, importRemoteSpec } = require('./spec_creator.cjs');
 const { syncIndex } = require('./spec_sync.cjs');
 const { validateFile, SPEC_STATUSES, PRIORITY_VALUES, EFFORT_VALUES } = require('./validate_spec.cjs');
@@ -490,6 +490,11 @@ function cmdSync(options) {
           console.log(`  * [${t.slug}] ${t.field}: "${t.from || 'none'}" -> "${t.to}" (${t.reason})`);
         });
       }
+      // Spec 00060 AC4: discovery reports how many delivery report files it
+      // excluded, so an operator can see the exclusion instead of guessing.
+      if (report.excludedCount > 0) {
+        console.log(`  Excluded ${report.excludedCount} delivery report file(s): ${report.excludedFiles.join(', ')}`);
+      }
       // Spec 00058 AC20: every registry row whose header disagrees is named with
       // its file, its registry value, and its header value.
       if (report.headerDriftCount === 0) {
@@ -584,9 +589,11 @@ function cmdArchive(options) {
 
 function findSpecFile(specsDir, key) {
   const direct = path.join(specsDir, `${key}.md`);
-  if (fs.existsSync(direct)) return direct;
+  // Spec 00060 AC5: a key resolves to a specification file and never to a
+  // delivery report companion, wherever that companion sits.
+  if (isSpecificationFile(`${key}.md`) && fs.existsSync(direct)) return direct;
   if (!fs.existsSync(specsDir)) return null;
-  const files = fs.readdirSync(specsDir).filter(name => /^\d{5}-.*\.md$/.test(name));
+  const files = fs.readdirSync(specsDir).filter(name => isSpecificationFile(name) && /^\d{5}-.*\.md$/.test(name));
   const match = files.find(name => {
     const base = name.replace(/\.md$/, '');
     return base === key || base.startsWith(`${key}-`) || base.includes(key);

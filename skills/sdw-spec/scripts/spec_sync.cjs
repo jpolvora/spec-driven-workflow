@@ -61,12 +61,20 @@ function syncIndex(options = {}) {
 
   const runStates = loadRunStates(stateDir);
   const onDiskSpecs = new Map();
+  const excludedFiles = [];
 
   if (fs.existsSync(specsDir)) {
     const files = fs.readdirSync(specsDir).filter(f => f.endsWith('.md') && f !== 'index.specs.md');
     for (const f of files) {
       const fullPath = path.join(specsDir, f);
       const baseSlug = path.basename(f, '.md');
+      // Spec 00060 AC3, AC4: the name decides, never the directory. A delivery
+      // report companion is not a specification on disk, so discovery skips it
+      // and the caller reports how many files that excluded.
+      if (!isSpecificationFile(f)) {
+        excludedFiles.push(f);
+        continue;
+      }
       onDiskSpecs.set(baseSlug, { file: f, fullPath });
     }
   }
@@ -239,6 +247,8 @@ function syncIndex(options = {}) {
     totalEntries: entries.length,
     transitionsCount: transitions.length,
     transitions,
+    excludedCount: excludedFiles.length,
+    excludedFiles,
     headerDrift,
     headerDriftCount: headerDrift.length,
     unresolvedHeaderDrift: headerDrift.filter((drift) => !drift.repaired && !drift.expectedHeaderStatus),

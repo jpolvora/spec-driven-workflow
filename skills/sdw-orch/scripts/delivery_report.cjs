@@ -5,6 +5,7 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const REPORT_SUFFIX = '-report.md';
+const REPORT_DIR = '.sdw/reports';
 const IN_PROGRESS_REPORT_NAME = 'report.md';
 const REPORT_CONTRIBUTIONS_KEY = 'reportContributions';
 
@@ -51,8 +52,10 @@ function toProjectRelative(root, absPath) {
 }
 
 /**
- * Spec 00054 AC1: the report is the companion file beside the specification,
- * named `{specFileNameWithoutExtension}-report.md`.
+ * Spec 00060 AC1: the committed companion is a delivery artifact, not a
+ * specification, so it lives in `.sdw/reports/` named
+ * `{specFileNameWithoutExtension}-report.md`. One directory holds one file class;
+ * the relocation alone keeps a report out of the specification directory.
  */
 function resolveReportPath(targetRoot, specPath) {
   if (!specPath) return null;
@@ -60,7 +63,7 @@ function resolveReportPath(targetRoot, specPath) {
   const absSpec = path.isAbsolute(specPath) ? specPath : path.resolve(root, specPath);
   const extension = path.extname(absSpec);
   const baseName = extension ? path.basename(absSpec, extension) : path.basename(absSpec);
-  return path.join(path.dirname(absSpec), `${baseName}${REPORT_SUFFIX}`);
+  return path.join(root, REPORT_DIR, `${baseName}${REPORT_SUFFIX}`);
 }
 
 function resolveNowIso(now) {
@@ -257,6 +260,8 @@ function resolveInProgressReportPath(targetRoot, state) {
 /**
  * Spec 00057 AC10: renders to a sibling temporary file and renames it over the
  * destination, so a failed write leaves the previous report byte-identical.
+ * Spec 00060 AC1: the destination directory (`.sdw/reports/`) is created when it
+ * is absent, so a fresh workspace writes its first report without setup.
  */
 function writeReportAtomic(reportPath, content) {
   const dir = path.dirname(reportPath);
@@ -1309,6 +1314,7 @@ function writeInProgressReport(options) {
 
 module.exports = {
   REPORT_SUFFIX,
+  REPORT_DIR,
   IN_PROGRESS_REPORT_NAME,
   REPORT_CONTRIBUTIONS_KEY,
   STEP_NAMES,

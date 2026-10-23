@@ -1784,6 +1784,32 @@ test('sdw-ship-pr - AC4, AC8, AC11: an Azure DevOps specification appends Fixes 
   }
 });
 
+test('sdw-ship-pr - 00060 AC7 & AC14: slug resolution ignores a report companion', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-ship-pr-report-'));
+  try {
+    const specsDir = path.join(tmpDir, '.sdw', 'specs');
+    fs.mkdirSync(specsDir, { recursive: true });
+    // The companion sorts first, so it shadows the specification unless the scan excludes it.
+    fs.writeFileSync(
+      path.join(specsDir, '00038-aaa-report.md'),
+      '---\nid: 999\ntitle: "Delivery Report — Legacy"\nsource: azure-devops\n---\n\n# Delivery Report — Legacy\n',
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(specsDir, '00038-zzz-spec.md'),
+      '---\nid: 38\ntitle: "Spec Drift Repair"\nsource: azure-devops\n---\n\n# Specification — Spec Drift Repair\n',
+      'utf8'
+    );
+
+    assert.equal(sdwShipPr.getSpecTitle(tmpDir, '00038-zzz-spec'), 'Spec Drift Repair', 'the title comes from the specification');
+    const link = sdwShipPr.resolveIssueLink(tmpDir, '00038-zzz-spec');
+    assert.equal(link.id, '38', 'the issue link comes from the specification, never the report');
+    assert.equal(link.keyword, 'Fixes AB#38');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test('sdw-ship-pr - AC5, AC8, AC11: a local specification omits the closing keyword', async () => {
   const { tmpDir, config } = setupTestWorkspace();
   writeIssueSpec(tmpDir, '00062-local-link', { id: null, source: 'local' });

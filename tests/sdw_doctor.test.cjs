@@ -135,6 +135,42 @@ test('sdw-doctor: consumer-local install passes with valid workspace', () => {
   }
 });
 
+// Spec 00060 AC11: a report companion still sitting in the specification directory
+// is a legacy location. Doctor names the move target and stays green.
+test('00060 AC11: a legacy report companion is an advisory with its move target, never an audit failure', () => {
+  const { root, home } = tempDirs();
+  try {
+    makeInstall(path.join(root, '.agents', 'skills'));
+    makeWorkspace(root);
+    const specsDir = path.join(root, '.sdw', 'specs');
+    fs.writeFileSync(path.join(specsDir, '00001-demo-report.md'), '# Delivery Report — Demo\n', 'utf8');
+
+    const legacy = runDoctor({ root, homeDir: home });
+    assert.equal(legacy.ok, true, JSON.stringify(legacy.findings));
+    const advisory = legacy.findings.find(f => f.code === 'spec-report-legacy-location');
+    assert.ok(advisory, 'the legacy companion is reported');
+    assert.equal(advisory.level, 'warning', 'the advisory never fails the audit');
+    assert.equal(advisory.subject, '00001-demo-report.md');
+    assert.match(advisory.message, /\.sdw\/reports\/00001-demo-report\.md/, 'the advisory carries the move target');
+    assert.ok(!legacy.findings.some(f => f.level === 'error' && f.subject === '00001-demo-report.md'), 'the report is never audited as a specification');
+
+    // A relocated report is silent, and a stale report row neither demands a file nor
+    // fails the audit: a report row is never a specification row.
+    fs.mkdirSync(path.join(root, '.sdw', 'reports'), { recursive: true });
+    fs.renameSync(path.join(specsDir, '00001-demo-report.md'), path.join(root, '.sdw', 'reports', '00001-demo-report.md'));
+    const indexPath = path.join(specsDir, 'index.specs.md');
+    fs.writeFileSync(indexPath, `${fs.readFileSync(indexPath, 'utf8')}| 00002 | 00002-legacy-report | Delivery Report — Legacy | completed | local | 2026-10-22 | FAIL | - |\n`, 'utf8');
+
+    const relocated = runDoctor({ root, homeDir: home });
+    assert.equal(relocated.ok, true, JSON.stringify(relocated.findings));
+    assert.ok(!relocated.findings.some(f => f.code === 'spec-report-legacy-location'), 'a relocated report is not flagged');
+    assert.ok(!relocated.findings.some(f => f.code === 'spec-file-missing' && f.subject === '00002-legacy-report'), 'a stale report row is not a missing specification');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test('sdw-doctor: hybrid mode checks the global install quickly', () => {
   const { root, home } = tempDirs();
   try {

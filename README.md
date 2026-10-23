@@ -86,7 +86,7 @@ flowchart TD
    - Generates an actionable Markdown fix plan (`{slug}-step-7.md`) and applies surgical fixes in an iterative loop.
 
 8. **PR Preparation, Delivery & Review Convergence (Delegated to `sdw-ship-pr`)**
-   - Compiles and commits the companion delivery report `{specFileNameWithoutExtension}-report.md` beside the specification before delegating to shipping.
+   - Compiles and commits the companion delivery report `.sdw/reports/{specFileNameWithoutExtension}-report.md` before delegating to shipping.
    - Delegates pre-PR verification gates (`requiredBuild`, `runAllTests`, `prePrCommand`, `prePrInstructions`) and delivery publishing to `sdw-ship-pr`.
    - Targets the pull request base at `branching.integrationBranch`, so Git Flow, GitHub flow, and trunk repositories merge into their own integration lane.
    - Executes cooperative and proactive review convergence with push-before-resolve guarantees, posting structured resolution comments before closing threads.
@@ -116,6 +116,7 @@ spec-driven-workflow/
 │   └── specs/                    # Storage directory for feature specifications
 │       ├── index.specs.md        # Central specification index
 │       └── *.md                  # Canonical feature specifications
+│   ├── reports/                  # Committed delivery reports ({specFileNameWithoutExtension}-report.md)
 │   ├── state/                    # Ephemeral execution run state and step artifacts
 │   │   └── {slug}/{runId}/       # Human-auditable step artifacts ({slug}-step-{N}.md)
 │   ├── memory/                   # Product knowledge entries (versioned)

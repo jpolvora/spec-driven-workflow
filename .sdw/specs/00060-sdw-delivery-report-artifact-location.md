@@ -3,7 +3,7 @@ id: null
 slug: 00060-sdw-delivery-report-artifact-location
 title: "SDW Delivery Report Artifact — Relocate to .sdw/reports and Exclude It From Every Specification Scanner"
 source: local
-status: ready-to-implement
+status: implemented
 specDate: 2026-10-22
 priority: high
 value: "Stops delivery reports from being registered as specifications, shadowing a spec lookup, and polluting the backlog the priority ranking reads"
