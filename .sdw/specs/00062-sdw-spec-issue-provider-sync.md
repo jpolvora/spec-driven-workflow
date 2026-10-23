@@ -3,7 +3,7 @@ id: null
 slug: 00062-sdw-spec-issue-provider-sync
 title: "SDW Spec-Issue Two-Way Sync with Registered Provider"
 source: local
-status: draft
+status: implemented
 specDate: 2026-10-23
 priority: medium
 value: "Keeps local specs and remote tracker issues mirrored in both directions including status changes"
