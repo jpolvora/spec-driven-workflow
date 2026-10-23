@@ -5848,6 +5848,7 @@ function cmdScoreSubmit(options) {
   if (!validation.valid) {
     console.error('Error: Judge verdict rejected:');
     validation.errors.forEach(item => console.error(`  - ${item}`));
+    console.error(`  Allowed per-criterion verdict values: ${scoreEvaluator.VERDICT_VALUES.join(', ')}. A criterion that is only partly met must be submitted as "failed"; the submitted value is never rewritten.`);
     return 1;
   }
 
@@ -6200,7 +6201,7 @@ Subcommands:
   task next              Dispatch the next ready DAG task to one worker (subagent mode)
   task finish            Submit accepted evidence for the dispatched DAG task
   task abandon           Return the dispatched DAG task to the queue
-  score submit           Submit a judge verdict for Step 5 conformance scoring
+  score submit           Submit a judge verdict for Step 5 conformance scoring (per-criterion verdicts: ${scoreEvaluator.VERDICT_VALUES.join(' | ')})
   report re-render       Refresh the delivery report and the in-progress report from run state (never commits)
   ledger link            Link typed evidence to one or more acceptance criteria (--run-id, --ac, --type)
   ledger report          Print the AC status and evidence summary (--run-id, --format md|json)
@@ -6222,7 +6223,7 @@ Options:
   --progress <json>      Progress payload JSON for checkpoint
   --progress-file <path> File containing the checkpoint progress JSON
   --next-action <text>   Action the next turn must take after pause-turn
-  --verdict <path>       Path to judge verdict JSON file for score submit
+  --verdict <path>       Path to judge verdict JSON file for score submit (per-criterion verdicts: ${scoreEvaluator.VERDICT_VALUES.join(' | ')})
   --ac <id...>           Acceptance criterion ids for ledger link (one or more, until the next flag)
   --type <type>          Evidence type for ledger link: file | test | commit | review | sabotage
   --path <path>          Evidence path for --type file (stored project-relative with forward slashes; outside-root paths are refused)
