@@ -1159,6 +1159,19 @@ function buildConvergenceContributions(shipResult) {
 }
 
 /**
+ * Spec 00057 AC4/AC15: a re-judge replaces the Step 5 verdict and judgment
+ * instead of stacking a second, conflicting pair, so the report always renders
+ * the judgment that produced the score run state currently carries.
+ */
+function replaceStep5Contributions(state) {
+  if (!state || !Array.isArray(state.reportContributions)) return state;
+  state.reportContributions = state.reportContributions.filter(
+    (entry) => !(entry && Number(entry.step) === 5 && (entry.kind === 'verdict' || entry.kind === 'judgment'))
+  );
+  return state;
+}
+
+/**
  * Spec 00057 AC7: the pre-PR gate results and the push/pull-request outcome.
  * Gate rows come from sdw-ship-pr when it ran, otherwise from the attempts the
  * orchestrator executed itself, so a failed-then-passed gate appears twice.
@@ -2600,6 +2613,7 @@ function cmdRun(options) {
     state.score = scoreReport.score;
     state.scoreIteration = (state.scoreIteration || 0) + 1;
     state = stateManager.saveRunState(targetRoot, state);
+    state = replaceStep5Contributions(state);
     state = recordStepContributions(targetRoot, state, 5, buildStep5Contributions(state, state.steps[5].output, effectiveMinScore));
   } else if (state.steps[5] && state.steps[5].output) {
     scoreReport = state.steps[5].output;
@@ -4375,6 +4389,7 @@ function cmdScoreSubmit(options) {
   state = stateManager.saveRunState(targetRoot, state);
   // Spec 00057 AC15: the submitted summary, risks, and follow-ups persist as the
   // Step 5 verdict and judgment contributions before the run pauses.
+  state = replaceStep5Contributions(state);
   state = recordStepContributions(targetRoot, state, 5, buildStep5Contributions(state, state.steps[5].output, minScore));
 
   console.log(`[sdw-orch score submit] Score: ${report.score}/10 (Required: ${minScore}/10). Passed: ${report.passed}`);
