@@ -24,7 +24,7 @@ Orchestrates spec execution from input requirement to delivery commit, automated
 ## Subcommands
 
 - `run <specPath>`: Executes the full 8-step workflow pipeline for one specification.
-- `run <specPath> --dry-run`: Validates the specification, prints the execution plan and the spec observations it found; executes nothing and writes no state, report, or artifact.
+- `run <specPath> --dry-run`: Validates the specification, prints the execution plan, the model-detection status with the resolved per-role hints, and the spec observations it found; executes nothing and writes no state, report, or artifact.
 - `run <specPath> --second-pass` (alias `--refine`): Refines an already implemented specification: audits how it was delivered, fills acceptance criteria that are missing or drifted from the spec, then applies clear simplification or quality gains. Writes a `{slug}-refine.md` report, commits only when the pass changed code, and runs Step 8 only when that commit exists. Producing no change is valid only when every criterion already holds and no drift remains.
 - `run <specPath> --sandbox`: Executes the whole pipeline against an isolated local clone of `HEAD`; never pushes or opens a pull request.
 - `sandbox list | report --run-id <runId> | clean --run-id <runId>`: Lists isolated sandboxes with status, branch, and age; regenerates and prints a sandbox report; or deletes the clone keeping its metadata and report.
@@ -57,7 +57,7 @@ Orchestrates spec execution from input requirement to delivery commit, automated
 ## Steps
 
 1. **Spec Ingestion & Derivation**
-   Resolve project root and create isolated run state in `.sdw/state/{runId}.state.json`. If `useFeatureBranches: true`, activate feature branch (`feature/{specSlug}`); dirty trees are allowed and never block execution. If the spec is human-friendly, derive an agentic spec; if already formatted, skip derivation.
+   Resolve project root and create isolated run state in `.sdw/state/{runId}.state.json`. If `useFeatureBranches: true`, activate feature branch (`feature/{specSlug}`); dirty trees are allowed and never block execution. If the spec is human-friendly, derive an agentic spec; if already formatted, skip derivation. Resolve the advisory model hints once into `state.models`; `models.detection.enabled` defaults to `false`, so hints resolve statically without probing the host.
    - Run: `node skills/sdw-orch/scripts/sdw_orch.cjs run <specPath> [options]`
    - Done when: Run state exists on disk, branch is active, and derivation status recorded.
 
@@ -94,7 +94,7 @@ Orchestrates spec execution from input requirement to delivery commit, automated
    - Done when: Report shows 0 blocking findings (`critical`/`warning`) or fix ceiling reached with residual recorded.
 
 8. **PR Preparation, Delivery & Review Convergence**
-   Delegate pull request preparation, pre-PR verification gates, remote publishing, SCM submission, and post-PR review convergence to `sdw-ship-pr`. Pass active run ID, specification slug, and CLI options (`--push`, `--poll-pr`, `--dry-run`).
+   Delegate pull request preparation, pre-PR verification gates, remote publishing, SCM submission, and post-PR review convergence to `sdw-ship-pr`. Pass active run ID, specification slug, and CLI options (`--push`, `--poll-pr`, `--dry-run`). Apply the ship hint (`models.ship`, falling back to `models.fixer`) and record it on run state.
    - Run: `node skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs --run-id <runId> --spec <specSlug> [options]`
    - Done when: `sdw-ship-pr` completes with exit code 0, delivery outcome is recorded in `.sdw/state/{runId}.state.json`, and specification is marked completed in index.
 
@@ -109,7 +109,7 @@ Orchestrates spec execution from input requirement to delivery commit, automated
 
 - After Step 7 resolves and before Step 8 delegates, write `.sdw/reports/{specFileNameWithoutExtension}-report.md` (the directory is created when absent) with: metadata (run id, slug, branch, base/delivery commit, ship status, score/`scoreMin`, timings per step), tasks, commits, files changed per task, verification, code review, conformance judgment (score, minimum, verified/failed counts, one row per criterion), advisory judge analysis (summary, risks, follow-ups), learnings, retrospective, breaking-change candidates, quality, spec observations, notes, and outcome; a section whose contributions are absent renders `Not available`.
 - Every step appends one entry to `state.reportContributions` (`step`, `stepName`, `at`, `kind`, `title`, `body`, `evidence`) before the next step begins, and both report paths re-render from the whole list at that boundary; entries are ordered by step then time, malformed entries are skipped with a recorded warning, the write is atomic, and `--dry-run` prints the contribution summary instead of writing.
-- Every `sdw-memory record --run <runId>` becomes a `learning` contribution and an append-only `.sdw/state/{slug}/{runId}/learnings.json` entry; before a step acts it receives the matching learnings digest, and `sdw-memory apply` names the step that applied each one. When the retrospective completes, its `retro` contribution is appended and the report re-renders; `report re-render` refreshes the companion from run state without amending a pushed commit.
+- Every `sdw-memory record --run <runId>` becomes a `learning` contribution and an append-only `.sdw/state/{slug}/{runId}/learnings.json` entry; before a step acts it receives the matching learnings digest, and `sdw-memory apply` names the step that applied each one. When the retrospective completes, its `retro` contribution is appended and the report re-renders; `report re-render` refreshes the companion from run state without amending a pushed commit. Retro analysis applies the `models.retro` hint, falling back to `models.default`.
 - Commit it with `docs({specSlug}): record delivery report`, staging only that file, whenever it is written; record its path in `state.deliveryReport`. A write or commit failure records a warning in run state and delivery continues. A resumed run rewrites the same path from current state instead of appending. `--skip-pr` and second-pass runs commit the report too, after their own delivery or `refine` commit.
 - Step 2 records advisory observations as `kind` (`overlap` when a delivered spec names the same target file, `superseded` when another spec names this slug/id in a supersession context, `conflict` when both declare the same configuration key differently), `otherSpec`, `evidence`, and `severity`. They never block, rewrite, or alter a run; `--dry-run` prints them without writing a report or artifact.
 

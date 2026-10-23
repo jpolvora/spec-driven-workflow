@@ -15,6 +15,7 @@ const implementationRunner = require('./implementation_runner.cjs');
 const evidenceValidator = require('./evidence_validator.cjs');
 const sandbox = require('./sandbox.cjs');
 const deliveryReport = require('./delivery_report.cjs');
+const modelCapabilities = require('./model_capabilities.cjs');
 const memory = require('../../sdw-memory/scripts/sdw_memory.cjs');
 
 // Spec 00043: short, consistent step-number progress headers. Additive only:
@@ -145,7 +146,9 @@ function parseArgs(args) {
     skillsRoot: null,
     implementationMode: null,
     refineMode: false,
-    newRun: false
+    newRun: false,
+    noModelDetect: false,
+    refreshModels: false
   };
 
   const positional = [];
@@ -170,6 +173,8 @@ function parseArgs(args) {
     else if (arg === '--allow-archived') result.allowArchived = true;
     else if (arg === '--second-pass' || arg === '--refine') result.refineMode = true;
     else if (arg === '--new-run') result.newRun = true;
+    else if (arg === '--no-model-detect') result.noModelDetect = true;
+    else if (arg === '--refresh-models') result.refreshModels = true;
     else if (arg === '--latest') result.latest = true;
     else if (arg === '--dry-run') result.dryRun = true;
     else if (arg === '--sandbox') result.sandbox = true;
@@ -838,6 +843,270 @@ function loadProjectConfig(targetRoot, options = {}) {
   return config;
 }
 
+// Spec 00056 AC1-AC6: advisory per-role model hints. Hints stay opaque strings;
+// no helper invokes a model or contacts a provider. Resolution is role entry,
+// then models.default, then null (the current session model). The judge adds the
+// legacy scoring.judge* keys between the role entry and the default (AC6).
+const MODEL_HINT_KEYS = ['model', 'provider', 'effort', 'apiEndpoint'];
+
+function normalizeModelHint(entry) {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null;
+  const hint = {};
+  for (const key of MODEL_HINT_KEYS) {
+    hint[key] = typeof entry[key] === 'string' && entry[key].trim() ? entry[key].trim() : null;
+  }
+  return MODEL_HINT_KEYS.some(key => hint[key] !== null) ? hint : null;
+}
+
+function resolveModelHint(models, role) {
+  if (!models || typeof models !== 'object' || Array.isArray(models)) return null;
+  return normalizeModelHint(models[role]) || normalizeModelHint(models.default);
+}
+
+// Spec 00056 AC7: Step 8 convergence applies the ship hint, falling back to the
+// fixer hint, then models.default, then the session model.
+function resolveShipModelHint(models) {
+  if (!models || typeof models !== 'object' || Array.isArray(models)) return null;
+  return normalizeModelHint(models.ship)
+    || normalizeModelHint(models.fixer)
+    || normalizeModelHint(models.default);
+}
+
+// Spec 00056 AC6: the judge hint resolves per field from models.judge, then the
+// legacy scoring.judge* keys, then models.default, then the session model.
+function resolveJudgeModelHint(models, scoring) {
+  const judge = normalizeModelHint(models && models.judge);
+  const legacy = normalizeModelHint({
+    model: scoring && scoring.judgeModel,
+    provider: scoring && scoring.judgeProvider,
+    effort: scoring && scoring.judgeEffort,
+    apiEndpoint: scoring && scoring.judgeApiEndpoint
+  });
+  const fallback = normalizeModelHint(models && models.default);
+  const hint = {};
+  let resolvedAny = false;
+  for (const key of MODEL_HINT_KEYS) {
+    hint[key] = (judge && judge[key]) || (legacy && legacy[key]) || (fallback && fallback[key]) || null;
+    if (hint[key]) resolvedAny = true;
+  }
+  return resolvedAny ? hint : null;
+}
+
+function resolveModelHints(config, scoring) {
+  const models = config && config.models;
+  return {
+    default: normalizeModelHint(models && models.default),
+    orchestrator: resolveModelHint(models, 'orchestrator'),
+    worker: resolveModelHint(models, 'worker'),
+    reviewer: resolveModelHint(models, 'reviewer'),
+    fixer: resolveModelHint(models, 'fixer'),
+    judge: resolveJudgeModelHint(models, scoring || (config && config.scoring)),
+    // AC7: ship falls back to the fixer hint; AC8: retro falls back to default.
+    ship: resolveShipModelHint(models),
+    retro: resolveModelHint(models, 'retro')
+  };
+}
+
+// Spec 00056 AC11: the adaptation chain mirrors each role's static resolution
+// order, including the legacy scoring.judge* fields for the judge.
+function buildModelChains(config, scoring) {
+  const models = config && config.models;
+  const legacyJudge = normalizeModelHint({
+    model: scoring && scoring.judgeModel,
+    provider: scoring && scoring.judgeProvider,
+    effort: scoring && scoring.judgeEffort,
+    apiEndpoint: scoring && scoring.judgeApiEndpoint
+  });
+  return {
+    orchestrator: [normalizeModelHint(models && models.orchestrator), normalizeModelHint(models && models.default)],
+    worker: [normalizeModelHint(models && models.worker), normalizeModelHint(models && models.default)],
+    reviewer: [normalizeModelHint(models && models.reviewer), normalizeModelHint(models && models.default)],
+    fixer: [normalizeModelHint(models && models.fixer), normalizeModelHint(models && models.default)],
+    judge: [normalizeModelHint(models && models.judge), legacyJudge, normalizeModelHint(models && models.default)],
+    ship: [normalizeModelHint(models && models.ship), normalizeModelHint(models && models.fixer), normalizeModelHint(models && models.default)],
+    retro: [normalizeModelHint(models && models.retro), normalizeModelHint(models && models.default)]
+  };
+}
+
+// Spec 00056 AC10: the bound snapshot records static resolution, captured
+// capabilities, adapted resolution, and the reason for every adaptation. The
+// flat *Hint fields stay the values the steps consume.
+function buildEnabledModelSnapshot(binding, staticHints, adapted) {
+  return {
+    detection: binding.detection,
+    static: staticHints,
+    capabilities: binding.capabilities,
+    supportedModels: binding.supportedModels,
+    resolved: adapted.resolved,
+    adaptations: adapted.adaptations,
+    orchestratorHint: adapted.resolved.orchestrator,
+    workerHint: adapted.resolved.worker,
+    reviewerHint: adapted.resolved.reviewer,
+    fixerHint: adapted.resolved.fixer,
+    judgeHint: adapted.resolved.judge,
+    shipHint: adapted.resolved.ship,
+    retroHint: adapted.resolved.retro
+  };
+}
+
+// Spec 00056 AC10: later steps read the bound entry instead of re-resolving or
+// re-probing. Older states without a bound snapshot keep static resolution.
+function resolveBoundRoleHint(stateOrModels, role) {
+  const models = stateOrModels && stateOrModels.models ? stateOrModels.models : stateOrModels;
+  if (!models || typeof models !== 'object') return undefined;
+  const resolved = models.resolved && typeof models.resolved === 'object' ? models.resolved : null;
+  if (resolved && Object.prototype.hasOwnProperty.call(resolved, role)) return resolved[role];
+  const flatKey = `${role}Hint`;
+  if (Object.prototype.hasOwnProperty.call(models, flatKey)) return models[flatKey];
+  return undefined;
+}
+
+function readConfiguredModel(hint) {
+  return hint && typeof hint.configuredModel === 'string' && hint.configuredModel.trim()
+    ? hint.configuredModel.trim()
+    : null;
+}
+
+// Spec 00056 AC11: Step 5 and the score-submit path consume the bound or
+// adapted judge hint instead of re-resolving it statically.
+function applyJudgeModelHint(judgeConfig, hint) {
+  if (hint === undefined) return judgeConfig;
+  return {
+    ...judgeConfig,
+    model: hint ? hint.model : null,
+    provider: hint ? hint.provider : null,
+    effort: hint ? hint.effort : null,
+    apiEndpoint: hint ? hint.apiEndpoint : null
+  };
+}
+
+// Spec 00056 AC6: Step 5 keeps the legacy judge command, criticity, and env
+// fallbacks; only the model hint fields prefer models.judge over scoring.judge*.
+function resolveJudgeConfigWithModels(config, scoring) {
+  const resolved = scoreEvaluator.resolveJudgeConfig({ scoring });
+  const hint = resolveJudgeModelHint(config && config.models, scoring);
+  if (!hint) return resolved;
+  return {
+    ...resolved,
+    model: hint.model,
+    provider: hint.provider,
+    effort: hint.effort,
+    apiEndpoint: hint.apiEndpoint
+  };
+}
+
+function formatModelHint(hint) {
+  if (!hint) return 'session model';
+  const parts = [];
+  if (hint.model) parts.push(hint.model);
+  if (hint.provider) parts.push(`provider ${hint.provider}`);
+  if (hint.effort) parts.push(`effort ${hint.effort}`);
+  if (hint.apiEndpoint) parts.push(`endpoint ${hint.apiEndpoint}`);
+  return parts.join(', ');
+}
+
+// Spec 00056 AC13: the plan previews model routing without executing a step. It
+// reads the capability cache, never probes or writes it, and reports the same
+// detection status the real run would record (skipped, hit, probe).
+function buildDryRunModelPlan(options = {}) {
+  const { targetRoot, config } = options;
+  const runtime = options.options || {};
+  const detection = modelCapabilities.resolveDetection(config && config.models);
+  const enabled = detection.enabled === true && runtime.noModelDetect !== true;
+  const key = modelCapabilities.resolveSessionKey(runtime);
+  const scoring = runtime.scoring || (config && config.scoring);
+  let status = 'skipped';
+  let source = 'skipped';
+  let transport = 'none';
+  let resolved = resolveModelHints(config, scoring);
+  let adaptations = [];
+  if (enabled) {
+    const cacheFile = typeof runtime.capabilitiesCacheFile === 'string' && runtime.capabilitiesCacheFile.trim()
+      ? path.resolve(runtime.capabilitiesCacheFile)
+      : path.join(targetRoot, modelCapabilities.CACHE_FILE_REL);
+    const cache = modelCapabilities.readCapabilitiesCache(cacheFile);
+    const entry = cache && cache[key];
+    const validation = entry && entry.capabilities
+      ? modelCapabilities.validateCapabilities(entry.capabilities)
+      : { valid: false };
+    if (validation.valid) {
+      status = 'hit';
+      source = 'hit';
+      transport = 'cache';
+      const adapted = modelCapabilities.adaptModelHints({
+        staticHints: resolved,
+        chains: buildModelChains(config, scoring),
+        capabilities: validation.capabilities,
+        supportedModels: Array.isArray(entry.supportedModels) ? entry.supportedModels : validation.supportedModels
+      });
+      resolved = adapted.resolved;
+      adaptations = adapted.adaptations;
+    } else {
+      status = 'probe';
+      source = 'probe';
+      transport = detection.command ? 'command' : 'host';
+    }
+  }
+  return {
+    detection: { enabled, status, source, transport, key, command: detection.command },
+    resolved,
+    adaptations
+  };
+}
+
+// Spec 00056 AC13/AC14: the hint line shows the resolved role hint, which already
+// fell back to models.default, plus the requested id when a cached hit adapted it.
+function formatDryRunModelHint(hint) {
+  const formatted = formatModelHint(hint);
+  return hint && hint.configuredModel ? `${formatted} (requested ${hint.configuredModel})` : formatted;
+}
+
+function printDryRunModelPlan(plan) {
+  const { detection } = plan;
+  console.log(`[sdw-orch dry-run] Models detection: enabled=${detection.enabled ? 'yes' : 'no'} status=${detection.status} source=${detection.source} transport=${detection.transport} key=${detection.key} command=${detection.command || 'none'}`);
+  if (detection.status === 'probe') {
+    console.log('[sdw-orch dry-run] Models detection: probe not executed (--dry-run); hints below stay static.');
+  }
+  for (const role of modelCapabilities.MODEL_ROLES) {
+    console.log(`[sdw-orch dry-run] Model hint ${role}: ${formatDryRunModelHint(plan.resolved[role])}`);
+  }
+}
+
+function attachWorkerModelHint(promptFileAbs, workerHint) {
+  if (!workerHint) return;
+  fs.appendFileSync(promptFileAbs, `\n## Worker Model Hint\n\nModel: ${formatModelHint(workerHint)}\n`, 'utf8');
+}
+
+// Spec 00056 AC4: the fresh reviewer brief (spec 00052 allowlist) carries the
+// advisory reviewer hint so the host can route the context-fresh session.
+function buildReviewerBrief(options) {
+  const { reviewerHint, targetRoot, base, reportPath, scopeFence } = options;
+  const parts = [
+    'Spawn one context-fresh reviewer subagent session for sdw-code-review only.',
+    `Target root: ${targetRoot}.`,
+    `Base reference: ${base || 'auto'}.`,
+    `Report path: ${reportPath}.`,
+    `Scope fence: ${scopeFence || 'review only the delivered diff; never the implementation transcript, prior worker reasoning, DAG prompts, or judge verdicts'}.`
+  ];
+  if (reviewerHint) parts.push(`Model hint: ${formatModelHint(reviewerHint)}.`);
+  return parts.join(' ');
+}
+
+// Spec 00056 AC5: the fixer brief carries the advisory fixer hint when a review
+// iteration must hand its findings batch to a fresh fixer session.
+function buildFixerBrief(options) {
+  const { fixerHint, findingsPath, targetRoot, reportPath } = options;
+  const parts = [
+    'Spawn one fresh sdw-fixer subagent session, distinct from the reviewer session.',
+    `Findings: ${findingsPath}.`,
+    `Target root: ${targetRoot}.`,
+    `Report: ${reportPath}.`,
+    'Scope fence: fix only the listed findings; never approve your own output.'
+  ];
+  if (fixerHint) parts.push(`Model hint: ${formatModelHint(fixerHint)}.`);
+  return parts.join(' ');
+}
+
 function resolveSpecPath(specInput, targetRoot, config) {
   if (!specInput) return null;
   const root = targetRoot ? path.resolve(targetRoot) : process.cwd();
@@ -1471,6 +1740,10 @@ function printRunDryRunPlan(context) {
     specObservations = [];
   }
 
+  // Spec 00056 AC13: the plan names the detection source, status, and key plus
+  // every resolved role hint, read from the cache without probing or writing.
+  const modelPlan = buildDryRunModelPlan({ targetRoot, config, options });
+
   if (options.json) {
     console.log(JSON.stringify({
       mode: 'dry-run',
@@ -1482,6 +1755,7 @@ function printRunDryRunPlan(context) {
       settings,
       branchPlan,
       steps,
+      models: modelPlan,
       specObservations,
       reportContributions: {
         total: 0,
@@ -1505,6 +1779,7 @@ function printRunDryRunPlan(context) {
   console.log(`[sdw-orch dry-run] Specification: ${normalizePath(path.relative(targetRoot, resolvedSpec))} (${specSlug})`);
   console.log(`[sdw-orch dry-run] Target root: ${normalizePath(targetRoot)}`);
   console.log(`[sdw-orch dry-run] Settings: scoreMin=${settings.scoreMin}, pushDelivery=${settings.pushDelivery}, scmProvider=${settings.scmProvider}, useFeatureBranches=${settings.useFeatureBranches}, useWorktrees=${settings.useWorktrees}, branching=${settings.branching}`);
+  printDryRunModelPlan(modelPlan);
   console.log(`[sdw-orch dry-run] Strategy: ${branchPlan.strategy}`);
   console.log(`[sdw-orch dry-run] Start lane: ${branchPlan.startLane} (update: ${branchPlan.update ? 'yes' : 'no'})`);
   console.log(`[sdw-orch dry-run] Feature branch: ${branchPlan.featureBranch}`);
@@ -1542,6 +1817,19 @@ function cmdRun(options) {
     sdwConfig = sdwConfigScript ? require(sdwConfigScript) : require('../../sdw-config/scripts/sdw_config.cjs');
   } catch (e) {}
   let config = loadProjectConfig(targetRoot, options);
+
+  // Spec 00056 AC12: malformed model hints are a configuration shape error, not
+  // a detection failure. Refuse the run before any probe, branch, or state write.
+  if (sdwConfig && typeof sdwConfig.validateModelsShape === 'function' && config && config.models !== undefined) {
+    const modelShapeErrors = sdwConfig.validateModelsShape(config.models);
+    if (modelShapeErrors.length > 0) {
+      const message = `Invalid models configuration: ${modelShapeErrors.join(' ')}`;
+      console.error(`[sdw-orch] ${message}`);
+      options._runResult = { error: message };
+      return 1;
+    }
+  }
+
   // AC9/AC10: fail closed, but resolve configuration first so a configured
   // skillsRoot (or {skillsRoot} token) is honored instead of only CLI options.
   const detectedSkillsRoot = config && config.skillsMode && config.skillsMode !== 'unknown'
@@ -1997,10 +2285,77 @@ function cmdRun(options) {
     state = stateManager.saveRunState(targetRoot, state);
   }
 
+  // Spec 00056 AC10/AC11: bind host capabilities once at run start, before any
+  // task dispatch, then reuse the recorded entry across steps. Detection stays
+  // opt-in; a disabled toggle keeps static resolution and records the skipped
+  // status (AC9). A resumed run reuses its bound entry unless the session key
+  // changed or --refresh-models was passed.
+  const modelScoring = options.scoring || config.scoring;
+  const staticHints = resolveModelHints(config, modelScoring);
+  const sessionKey = modelCapabilities.resolveSessionKey(options);
+  const boundEntry = state.models && state.models.resolved && state.models.detection;
+  const reuseBound = !options.noModelDetect
+    && !options.refreshModels
+    && boundEntry
+    && boundEntry.key === sessionKey
+    && boundEntry.status !== 'skipped';
+  let modelHints;
+  if (reuseBound) {
+    modelHints = {};
+    for (const role of modelCapabilities.MODEL_ROLES) {
+      modelHints[role] = resolveBoundRoleHint(state.models, role);
+    }
+    console.log(`[Step 1: Model Capabilities] Reusing bound entry key=${boundEntry.key} source=${boundEntry.source || 'hit'} transport=${boundEntry.transport || 'cache'}.`);
+  } else {
+    const binding = modelCapabilities.bindModelCapabilities({
+      targetRoot,
+      config,
+      runId: state.runId,
+      slug: specSlug,
+      options
+    });
+    const adapted = modelCapabilities.adaptModelHints({
+      staticHints,
+      chains: buildModelChains(config, modelScoring),
+      capabilities: binding.capabilities,
+      supportedModels: binding.supportedModels
+    });
+    modelHints = adapted.resolved;
+    state.models = binding.detection.status === 'skipped'
+      ? {
+        detection: { status: 'skipped' },
+        orchestratorHint: staticHints.orchestrator,
+        workerHint: staticHints.worker,
+        reviewerHint: staticHints.reviewer,
+        fixerHint: staticHints.fixer,
+        judgeHint: staticHints.judge,
+        shipHint: staticHints.ship,
+        retroHint: staticHints.retro
+      }
+      : buildEnabledModelSnapshot(binding, staticHints, adapted);
+    state = stateManager.saveRunState(targetRoot, state);
+    if (binding.warning) {
+      console.warn(`[Step 1: Model Capabilities] ${binding.warning}`);
+      state = stateManager.recordWarning(targetRoot, state.runId, 1, binding.warning);
+    }
+    if (binding.detection.status === 'probe' || binding.detection.status === 'hit') {
+      const modelCount = binding.capabilities && Array.isArray(binding.capabilities.models)
+        ? binding.capabilities.models.length
+        : 0;
+      console.log(`[Step 1: Model Capabilities] status=${binding.detection.status} source=${binding.detection.source} transport=${binding.detection.transport || 'none'} key=${binding.detection.key} models=${modelCount} adaptation(s)=${adapted.adaptations.length}.`);
+    }
+  }
+
   console.log(`[sdw-orch] Run "${state.runId}" active at step ${startStep}/8.`);
   console.log(`[sdw-orch] State file: ${stateManager.getStateFilePath(targetRoot, state.runId)}`);
   if (resumedExistingRun && !options._resumedLogged) logRunResumed(state.runId, specSlug, startStep);
   else if (!resumedExistingRun) logRunStarted(state.runId, specSlug, startStep);
+
+  // Spec 00056 AC2: the orchestrator hint governs derivation, refinement, and
+  // DAG generation; each planning step records it in its output.
+  if (modelHints.orchestrator) {
+    console.log(`[Step 1-3: Planning] Orchestrator model hint: ${formatModelHint(modelHints.orchestrator)}.`);
+  }
 
   let effectiveSpecContent = rawSpecContent;
 
@@ -2008,14 +2363,14 @@ function cmdRun(options) {
   if (startStep <= 1 && state.steps[1].status !== 'completed' && state.steps[1].status !== 'skipped') {
     state = stateManager.updateStepState(targetRoot, state.runId, 1, 'in_progress');
     logStepEnter(1);
-    const derivationResult = specDerivation.deriveAgentSpec(rawSpecContent, { slug: specSlug });
+    const derivationResult = specDerivation.deriveAgentSpec(rawSpecContent, { slug: specSlug, orchestratorHint: modelHints.orchestrator });
     if (derivationResult.derivationNeeded) {
       console.log(`[Step 1: Derivation] Spec reformulated for agentic execution.`);
       effectiveSpecContent = derivationResult.specContent;
-      state = stateManager.updateStepState(targetRoot, state.runId, 1, 'completed', { derivationNeeded: true });
+      state = stateManager.updateStepState(targetRoot, state.runId, 1, 'completed', { derivationNeeded: true, orchestratorHint: modelHints.orchestrator });
     } else {
       console.log(`[Step 1: Derivation] Skipped: input spec is already agent-ready.`);
-      state = stateManager.updateStepState(targetRoot, state.runId, 1, 'skipped', { derivationNeeded: false });
+      state = stateManager.updateStepState(targetRoot, state.runId, 1, 'skipped', { derivationNeeded: false, orchestratorHint: modelHints.orchestrator });
     }
     logStepDone(1);
     const step1Status = state.steps[1].status;
@@ -2034,7 +2389,7 @@ function cmdRun(options) {
   if (refineMode && startStep <= 2 && state.steps[2].status !== 'completed' && state.steps[2].status !== 'skipped') {
     logStepEnter(2);
     console.log('[Step 2: Refinement] Second pass: skipping decision-gap grilling; the implementation already exists.');
-    state = stateManager.updateStepState(targetRoot, state.runId, 2, 'skipped', { mode: 'refine', reason: 'second pass reviews the delivered implementation' });
+    state = stateManager.updateStepState(targetRoot, state.runId, 2, 'skipped', { mode: 'refine', reason: 'second pass reviews the delivered implementation', orchestratorHint: modelHints.orchestrator });
     logStepDone(2);
     state = recordStepContributions(targetRoot, state, 2, [{
       kind: 'refinement',
@@ -2045,7 +2400,7 @@ function cmdRun(options) {
   } else if (startStep <= 2 && state.steps[2].status !== 'completed' && state.steps[2].status !== 'skipped') {
     state = stateManager.updateStepState(targetRoot, state.runId, 2, 'in_progress');
     logStepEnter(2);
-    const grillingResult = specGrilling.analyzeSpecificationGaps(effectiveSpecContent, { slug: specSlug });
+    const grillingResult = specGrilling.analyzeSpecificationGaps(effectiveSpecContent, { slug: specSlug, orchestratorHint: modelHints.orchestrator });
 
     if (grillingResult.hasGaps) {
       console.log(`[Step 2: Refinement] Detected ${grillingResult.gapsCount} specification decision gaps.`);
@@ -2098,7 +2453,8 @@ function cmdRun(options) {
       gaps: grillingResult.gaps,
       gapsResolved: resolvedGaps,
       blueprint: grillingResult.blueprint,
-      specObservations
+      specObservations,
+      orchestratorHint: modelHints.orchestrator
     };
 
     console.log(`[Step 2: Refinement] Refinement complete. Blueprint generated for ${grillingResult.blueprint.targetFiles.length} target file(s).`);
@@ -2151,6 +2507,7 @@ function cmdRun(options) {
         parallelizable: false
       }]
     };
+    dagPlan.orchestratorHint = modelHints.orchestrator;
     state.dagTasks = dagPlan.tasks;
     state = stateManager.saveRunState(targetRoot, state);
     console.log('[Step 3: DAG Generation] Second pass: one refinement task.');
@@ -2161,7 +2518,7 @@ function cmdRun(options) {
   } else if (startStep <= 3 && state.steps[3].status !== 'completed') {
     state = stateManager.updateStepState(targetRoot, state.runId, 3, 'in_progress');
     logStepEnter(3);
-    dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint, maxTasksPerSpec: config.maxTasksPerSpec });
+    dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint, maxTasksPerSpec: config.maxTasksPerSpec, orchestratorHint: modelHints.orchestrator });
     if (dagPlan.refused) {
       // Spec 00030 AC13/AC14: a decomposition beyond the cap is refused with a
       // split proposal, never merged into coarse tasks and never planned.
@@ -2172,6 +2529,7 @@ function cmdRun(options) {
       options._runResult = { runId: state.runId, status: 'failed', error: refusal };
       return 1;
     }
+    dagPlan.orchestratorHint = modelHints.orchestrator;
     console.log(`[Step 3: DAG Generation] Complexity: ${dagPlan.complexity.level}. Generated ${dagPlan.taskCount} task(s).`);
     logDagPlan(dagPlan);
     state.dagTasks = dagPlan.tasks;
@@ -2188,7 +2546,7 @@ function cmdRun(options) {
   } else if (state.steps[3].output) {
     dagPlan = state.steps[3].output;
   } else {
-    dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint, maxTasksPerSpec: config.maxTasksPerSpec });
+    dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint, maxTasksPerSpec: config.maxTasksPerSpec, orchestratorHint: modelHints.orchestrator });
     if (dagPlan.refused) {
       const refusal = `split-required tasks-needed=${dagPlan.tasksNeeded} cap=${dagPlan.cap}${dagPlan.detail === 'criteria-undersupplied' ? ` criteria=${dagPlan.acs}` : ''}`;
       console.error(`[Step 3: DAG] ${refusal}`);
@@ -2197,6 +2555,7 @@ function cmdRun(options) {
       options._runResult = { runId: state.runId, status: 'failed', error: refusal };
       return 1;
     }
+    dagPlan.orchestratorHint = modelHints.orchestrator;
   }
 
   if (state.steps[3] && state.steps[3].status === 'completed') {
@@ -2261,6 +2620,7 @@ function cmdRun(options) {
         specAcs,
         specSlug,
         specPath: state.specPath,
+        workerHint: modelHints.worker,
         options
       });
       state = dispatch.state;
@@ -2512,7 +2872,15 @@ function cmdRun(options) {
     logStepEnter(5);
 
     const specAcs = dagPlanner.parseAcceptanceCriteria(effectiveSpecContent);
-    const judgeConfig = scoreEvaluator.resolveJudgeConfig({ scoring: options.scoring || config.scoring });
+    // Spec 00056 AC6: the judge hint prefers models.judge over scoring.judge*,
+    // then models.default, then the current session model.
+    const judgeConfig = applyJudgeModelHint(
+      resolveJudgeConfigWithModels(config, modelScoring),
+      modelHints.judge
+    );
+    if (judgeConfig.model || judgeConfig.provider || judgeConfig.effort || judgeConfig.apiEndpoint) {
+      console.log(`[Step 5: Conformance Scoring] Judge model hint: ${formatModelHint(judgeConfig)}.`);
+    }
     const judgePaths = scoreEvaluator.resolveJudgePaths({
       targetRoot,
       stateDir: stateManager.resolveStateDir(targetRoot),
@@ -2954,6 +3322,17 @@ function cmdRun(options) {
       ? path.join(artifactsDirAbs, `${specSlug}-step-7.md`)
       : path.join(targetRoot, '.sdw', 'state', 'code-review.report.md');
 
+    // Spec 00056 AC4: the fresh reviewer brief carries the advisory reviewer
+    // hint for the context-fresh session; AC5 builds the fixer brief below.
+    const step7Briefs = { reviewer: null, fixer: null };
+    step7Briefs.reviewer = buildReviewerBrief({
+      reviewerHint: modelHints.reviewer,
+      targetRoot,
+      base: state.baseCommit,
+      reportPath: reportAbsPath
+    });
+    console.log(`[Step 7: Delegated Review] Fresh reviewer brief: ${step7Briefs.reviewer}`);
+
     function parseReviewJson(stdout) {
       try {
         const t = String(stdout || '').trim();
@@ -3022,6 +3401,15 @@ function cmdRun(options) {
       const fixable = (reviewReport.findings || []).filter(f => f.fixable && f.status === 'open');
       if (fixable.length === 0) break;
       reviewLoop++;
+      // Spec 00056 AC5: fixer remediation carries the advisory fixer hint in the
+      // fresh fixer session brief, distinct from the reviewer session.
+      step7Briefs.fixer = buildFixerBrief({
+        fixerHint: modelHints.fixer,
+        findingsPath: reportAbsPath,
+        targetRoot,
+        reportPath: reportAbsPath
+      });
+      console.log(`[Step 7: Delegated Review] Fixer brief: ${step7Briefs.fixer}`);
       console.log(`[Step 7: Delegated Review] Applying auto-fixes for iteration ${reviewLoop}...`);
       const fixRes = invokeReview(true);
       if (!fixRes || !fixRes.report) break;
@@ -3059,7 +3447,7 @@ function cmdRun(options) {
     } catch (e) { artifactRel = null; }
     if (!reviewReport.passed) {
       console.error(`[Step 7: Delegated Review] Review loop halted with unresolved errors.`);
-      state = stateManager.updateStepState(targetRoot, state.runId, 7, 'review_failed', reviewReport, null, artifactRel ? { artifact: artifactRel } : undefined);
+      state = stateManager.updateStepState(targetRoot, state.runId, 7, 'review_failed', { ...reviewReport, briefs: step7Briefs }, null, artifactRel ? { artifact: artifactRel } : undefined);
       state.status = 'failed';
       stateManager.saveRunState(targetRoot, state);
       state = recordStepContributions(targetRoot, state, 7, buildStep7Contributions(reviewIterations, artifactRel), { allowDuplicates: true });
@@ -3068,7 +3456,7 @@ function cmdRun(options) {
     }
 
     state.reviewCommit = getBaseCommit(targetRoot);
-    state = stateManager.updateStepState(targetRoot, state.runId, 7, 'completed', reviewReport, null, artifactRel ? { artifact: artifactRel } : undefined);
+    state = stateManager.updateStepState(targetRoot, state.runId, 7, 'completed', { ...reviewReport, briefs: step7Briefs }, null, artifactRel ? { artifact: artifactRel } : undefined);
     logStepDone(7);
     state = recordStepContributions(targetRoot, state, 7, buildStep7Contributions(reviewIterations, artifactRel), { allowDuplicates: true });
   } else if (options.skipReview && startStep <= 7 && state.steps[7].status !== 'completed') {
@@ -3174,6 +3562,13 @@ function cmdRun(options) {
     logStepEnter(8);
     const step8GateAttempts = [];
     let step8ShipResult = null;
+
+    // Spec 00056 AC7: Step 8 convergence applies the ship hint, falling back to
+    // the fixer hint (then models.default), so the host routes the delivery and
+    // review-convergence dialogue without changing the ship-pr contract.
+    if (modelHints.ship) {
+      console.log(`[Step 8: PR Preparation] Ship model hint: ${formatModelHint(modelHints.ship)}.`);
+    }
 
     // If sdw-ship-pr is available and no unit-test fixer hooks are passed, delegate pre-PR gates to sdw-ship-pr as single owner
     if (!hasShipPr || options.testFixer || options.buildFixer || options.prePrHook) {
@@ -3339,6 +3734,7 @@ function cmdRun(options) {
       baseCommit: state.baseCommit,
       deliveryCommit: state.deliveryCommit,
       score: state.score,
+      shipHint: modelHints.ship || null,
       completedAt: new Date().toISOString()
     };
     console.log(`[Step 8: PR Preparation] Assembled PR payload: "${prPayload.title}".`);
@@ -3578,6 +3974,11 @@ function cmdRun(options) {
   // record its outcome on state.retro, and keep the completed delivery even
   // when it fails. Otherwise keep the advisory print unchanged.
   if (config && config.retro && config.retro.enabled === true) {
+    // Spec 00056 AC8: retro analysis applies the retro hint, falling back to
+    // models.default, and records the resolution on the run's model snapshot.
+    if (modelHints.retro) {
+      console.log(`[sdw-retro] Retro model hint: ${formatModelHint(modelHints.retro)}.`);
+    }
     state.retro = runRetroForCompletedRun(targetRoot, state);
     state = stateManager.saveRunState(targetRoot, state);
     if (state.retro.status === 'passed') {
@@ -3739,6 +4140,10 @@ function readSpecAcsForState(targetRoot, state) {
  */
 function dispatchNextTask(context) {
   const { targetRoot, state, dagPlan, specAcs, specSlug, specPath, options } = context;
+  const workerHint = context.workerHint ? normalizeModelHint(context.workerHint) : null;
+  // Spec 00056 AC11: keep the requested id beside the adapted hint so telemetry
+  // stays auditable when detection resolved a different model.
+  const workerConfiguredModel = readConfiguredModel(context.workerHint);
   const step4 = state.steps[4];
   step4.tasks = step4.tasks || {};
   const tasks = step4.tasks;
@@ -3809,6 +4214,14 @@ function dispatchNextTask(context) {
   ].filter(Boolean));
   const digestText = formatLearningDigest(digest);
   if (digestText) attachLearningDigest(rendered.promptFileAbs, digestText);
+  // Spec 00056 AC3: the worker hint rides inside the prompt brief as well as
+  // the envelope so the spawned subagent sees the advisory routing.
+  attachWorkerModelHint(rendered.promptFileAbs, workerHint);
+  if (digestText || workerHint) {
+    try {
+      rendered.promptBytes = fs.statSync(rendered.promptFileAbs).size;
+    } catch (e) {}
+  }
   const digestEnvelope = digest.map(entry => ({
     slug: entry.body.slug,
     kind: entry.body.kind,
@@ -3853,7 +4266,9 @@ function dispatchNextTask(context) {
     acIds: ready.coveredAcs || [],
     dependencies: ready.dependencies || [],
     learnings: digestEnvelope,
-    subagentBrief: `Spawn one subagent for this task only. Give it: read ${sandboxed ? `"${displayPrompt}"` : displayPrompt} and execute it exactly as written, then report back per its report contract.${digestEnvelope.length > 0 ? ` The prompt carries ${digestEnvelope.length} run learning(s) recorded earlier in this run; require the worker to apply them and record each application with \`sdw-memory apply --run ${state.runId} --slug <slug> --step <n> --evidence <locator>\`.` : ''}${sandboxed ? ` Run every command with cwd "${displayWorkingDir}".` : ''}`,
+    workerHint: workerHint || null,
+    configuredModel: workerConfiguredModel,
+    subagentBrief: `Spawn one subagent for this task only. Give it: read ${sandboxed ? `"${displayPrompt}"` : displayPrompt} and execute it exactly as written, then report back per its report contract.${workerHint ? ` Model hint: ${formatModelHint(workerHint)}.` : ''}${digestEnvelope.length > 0 ? ` The prompt carries ${digestEnvelope.length} run learning(s) recorded earlier in this run; require the worker to apply them and record each application with \`sdw-memory apply --run ${state.runId} --slug <slug> --step <n> --evidence <locator>\`.` : ''}${sandboxed ? ` Run every command with cwd "${displayWorkingDir}".` : ''}`,
     finishCommand: `node "${orchCommandPath()}" task finish --run-id ${state.runId} --task ${ready.id} --evidence ${evidenceArg}${rootFlag}`
   };
 
@@ -3961,6 +4376,9 @@ function cmdTaskNext(options) {
     return 1;
   }
 
+  // Spec 00056 AC10: reuse the entry bound in Step 1 instead of re-resolving or
+  // re-probing; only a state without a bound snapshot falls back to statics.
+  const boundWorkerHint = resolveBoundRoleHint(state, 'worker');
   const result = dispatchNextTask({
     targetRoot,
     state,
@@ -3968,6 +4386,7 @@ function cmdTaskNext(options) {
     specAcs,
     specSlug: state.specSlug,
     specPath: state.specPath,
+    workerHint: boundWorkerHint === undefined ? resolveModelHints(dispatchConfig).worker : boundWorkerHint,
     options
   });
 
@@ -4415,6 +4834,9 @@ function cmdResume(options) {
           // AC31: re-emit the in-flight envelope so a lost dispatch is recoverable.
           const activeRecord = (state.steps[4].tasks || {})[dispatch.activeTaskId] || {};
           const activeTask = dagTasks.find(t => t.id === dispatch.activeTaskId) || {};
+          // Spec 00056 AC10: the re-emitted envelope reuses the Step 1 binding.
+          const boundResumeHint = resolveBoundRoleHint(state, 'worker');
+          const resumeHint = boundResumeHint === undefined ? resolveModelHints(resumeConfig).worker : boundResumeHint;
           const envelope = {
             runId: state.runId,
             specSlug: state.specSlug,
@@ -4429,7 +4851,9 @@ function cmdResume(options) {
             workingDir: activeRecord.workingDir || '.',
             acIds: activeRecord.coveredAcs || activeTask.coveredAcs || [],
             dependencies: activeRecord.dependencies || activeTask.dependencies || [],
-            subagentBrief: `Spawn one subagent for this task only. Give it: read ${activeRecord.promptPath} and execute it exactly as written, then report back per its report contract.`,
+            workerHint: resumeHint ? normalizeModelHint(resumeHint) : null,
+            configuredModel: readConfiguredModel(resumeHint),
+            subagentBrief: `Spawn one subagent for this task only. Give it: read ${activeRecord.promptPath} and execute it exactly as written, then report back per its report contract.${resumeHint ? ` Model hint: ${formatModelHint(resumeHint)}.` : ''}`,
             finishCommand: `node "${orchCommandPath()}" task finish --run-id ${state.runId} --task ${dispatch.activeTaskId} --evidence ${sandbox.readMarker(targetRoot) ? `"${activeRecord.evidencePath}"` : activeRecord.evidencePath}${sandbox.readMarker(targetRoot) ? ` --root "${normalizePath(targetRoot)}"` : ''}`
           };
           printDispatchEnvelope(envelope, state, options);
@@ -4647,7 +5071,11 @@ function cmdScoreSubmit(options) {
   const minScore = options.minScore !== undefined
     ? options.minScore
     : (config.scoreMin !== undefined ? config.scoreMin : 8);
-  const judgeConfig = scoreEvaluator.resolveJudgeConfig({ scoring: options.scoring || config.scoring });
+  const boundJudgeHint = resolveBoundRoleHint(state, 'judge');
+  const judgeConfig = applyJudgeModelHint(
+    resolveJudgeConfigWithModels(config, options.scoring || config.scoring),
+    boundJudgeHint
+  );
   const report = scoreEvaluator.applyVerdict(validation.data, {
     acs: judgeCriteria,
     minScore,
@@ -4862,6 +5290,8 @@ Options:
   --second-pass          Refine an already implemented spec (alias: --refine):
                          review what was delivered, simplify, report, commit only
                          on a real change, and ship only when a commit was created
+  --no-model-detect      Skip host capability detection for this invocation
+  --refresh-models       Force a fresh capability probe instead of a cache hit
   --json                 Output response in JSON format
   -h, --help             Show help message
 `);
@@ -4948,6 +5378,12 @@ module.exports = {
   printRunDryRunPlan,
   showHelp,
   loadProjectConfig,
+  resolveModelHints,
+  resolveJudgeModelHint,
+  resolveJudgeConfigWithModels,
+  formatModelHint,
+  buildReviewerBrief,
+  buildFixerBrief,
   resolveSpecPath,
   collectDeliveryFiles,
   stageAndCommitOnly,

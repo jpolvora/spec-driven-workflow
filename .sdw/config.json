@@ -10,6 +10,21 @@
     "judgeApiEndpoint": null,
     "judgeCriticity": "strict"
   },
+  "models": {
+    "default": null,
+    "orchestrator": null,
+    "worker": null,
+    "reviewer": null,
+    "fixer": null,
+    "judge": null,
+    "ship": null,
+    "retro": null,
+    "detection": {
+      "enabled": false,
+      "command": null,
+      "timeoutMs": 30000
+    }
+  },
   "scmCodeReviewEnabled": true,
   "pushDelivery": true,
   "changelogEnabled": true,

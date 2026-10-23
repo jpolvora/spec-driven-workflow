@@ -29,6 +29,10 @@ The delegated invocation carries `--new-run` when the operator passes it, so the
 
 The host agent owns the paused single run: `task next`, `task finish`, `score submit`, then `sdw-batch resume`.
 
+### Model hints across items (Spec 00056)
+
+`sdw-batch` defines no model keys and carries no capability cache across items. Every item inherits the same consumer-local `.sdw/config.json`, and each delegated `sdw-orch` run resolves its advisory hints once at Step 1 and records the snapshot in that item's own `state.models`. A hint resolved for one item is never reused by the next, and the batch manifest records no hint fields.
+
 ## 2. Manifest
 
 Path: `.sdw/state/batch-{batchId}.json` (gitignored run state).

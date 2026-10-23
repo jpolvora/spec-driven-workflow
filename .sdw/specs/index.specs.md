@@ -66,7 +66,7 @@ Central repository index tracking specification lifecycle states, metadata, and 
 | 00053 | 00053-batch-auto-merge-sdw-batch-merges-each-d | batch auto-merge: sdw-batch merges each delivered pull request before advancing to the next specification | completed | local | 2026-10-22 | PASS | - |
 | 00054 | 00054-sdw-orch-delivery-report-companion-file- | sdw-orch delivery report companion file and spec-conflict observations at ingestion | completed | local | 2026-10-22 | PASS | - |
 | 00055 | 00055-sdw-spec-list-by-priority | SDW Spec Priority Ranking — Declared Priority Fields and the list-by-priority Subcommand | completed | local | 2026-10-22 | PASS | - |
-| 00056 | 00056-sdw-per-role-agent-models | SDW Per-Role Agent Model Configuration | pending | local | 2026-10-22 | PASS | - |
+| 00056 | 00056-sdw-per-role-agent-models | SDW Per-Role Agent Model Configuration | completed | local | 2026-10-22 | PASS | - |
 | 00057 | 00057-sdw-orch-delivery-report-step-contributions | SDW Delivery Report — Incremental Step Contributions, Learnings, and Retro Closure | completed | local | 2026-10-22 | PASS | - |
 | 00058 | 00058-sdw-batch-delivery-integrity | SDW Batch Delivery Integrity — Merge, Pre-Flight, Base Freshness, and Registry Truth | completed | local | 2026-10-22 | PASS | - |
 | 00059 | 00059-sdw-ship-pr-review-thread-fidelity | SDW Review Thread Fidelity — Full Thread Content in list-threads and the Fixer Input | completed | local | 2026-10-22 | PASS | - |

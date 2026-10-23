@@ -14,6 +14,7 @@ const dagPlanner = require('../skills/sdw-orch/scripts/dag_planner.cjs');
 const scoreEvaluator = require('../skills/sdw-orch/scripts/score_evaluator.cjs');
 const reviewRunner = require('../skills/sdw-orch/scripts/review_runner.cjs');
 const deliveryReport = require('../skills/sdw-orch/scripts/delivery_report.cjs');
+const modelCapabilities = require('../skills/sdw-orch/scripts/model_capabilities.cjs');
 const sdwOrch = require('../skills/sdw-orch/scripts/sdw_orch.cjs');
 
 // Spec 027: wire the deterministic judge stub for unattended runs past Step 4.
@@ -2211,4 +2212,776 @@ test('00057 AC25 & AC28: the retrospective contribution renders and a re-render 
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
+});
+
+// Spec 00056 AC4-AC6: reviewer, fixer, and judge hints. Resolution stays
+// declarative; no helper invokes a model or contacts a provider.
+test('00056 AC4-AC6: reviewer, fixer, and judge hints resolve before their fallbacks', () => {
+  const models = {
+    default: { model: 'default-model', provider: 'default-provider' },
+    reviewer: { model: 'reviewer-model', effort: 'high' },
+    fixer: null,
+    judge: { model: 'judge-model' }
+  };
+  const hints = sdwOrch.resolveModelHints({ models, scoring: { judgeModel: 'legacy-judge', judgeEffort: 'low' } });
+  assert.deepEqual(hints.reviewer, { model: 'reviewer-model', provider: null, effort: 'high', apiEndpoint: null }, 'AC4: the reviewer entry wins');
+  assert.deepEqual(hints.fixer, { model: 'default-model', provider: 'default-provider', effort: null, apiEndpoint: null }, 'AC5: an absent fixer entry falls back to models.default');
+  assert.deepEqual(hints.judge, { model: 'judge-model', provider: 'default-provider', effort: 'low', apiEndpoint: null }, 'AC6: models.judge wins over scoring, which fills the fields it leaves null');
+
+  const legacy = sdwOrch.resolveModelHints({ models: { default: { model: 'default-model' } }, scoring: { judgeModel: 'legacy-judge' } });
+  assert.equal(legacy.judge.model, 'legacy-judge', 'AC6: the scoring fallback still applies when models.judge is absent');
+
+  const none = sdwOrch.resolveModelHints({ models: {}, scoring: {} });
+  assert.equal(none.reviewer, null, 'AC4: no reviewer hint resolves to the session model');
+  assert.equal(none.fixer, null, 'AC5: no fixer hint resolves to the session model');
+  assert.equal(none.judge, null, 'AC6: no judge hint resolves to the session model');
+
+  const judgeConfig = sdwOrch.resolveJudgeConfigWithModels(
+    { models: { judge: { model: 'judge-model', provider: 'judge-provider' } } },
+    { judgeCommand: 'node judge.cjs', judgeCriticity: 'permissive', judgeModel: 'legacy-judge', judgeEffort: 'low' }
+  );
+  assert.equal(judgeConfig.mode, 'command', 'AC6: the legacy judge command is untouched');
+  assert.equal(judgeConfig.criticity, 'permissive', 'AC6: the legacy criticity is untouched');
+  assert.equal(judgeConfig.model, 'judge-model', 'AC6: models.judge.model precedes scoring.judgeModel');
+  assert.equal(judgeConfig.provider, 'judge-provider', 'AC6: models.judge fields carry through');
+  assert.equal(judgeConfig.effort, 'low', 'AC6: scoring fills a field models.judge leaves null');
+
+  const legacyConfig = sdwOrch.resolveJudgeConfigWithModels(
+    { models: { default: { model: 'default-model' } } },
+    { judgeModel: 'legacy-judge', judgeEffort: 'low' }
+  );
+  assert.equal(legacyConfig.model, 'legacy-judge', 'AC6: scoring precedes models.default for the judge');
+  assert.equal(legacyConfig.effort, 'low');
+});
+
+// Spec 00056 AC4/AC5: the briefs the orchestrator emits for the fresh reviewer
+// and fixer sessions carry the resolved advisory hints.
+test('00056 AC4 & AC5: the reviewer and fixer briefs carry their role hints', () => {
+  const reviewerBrief = sdwOrch.buildReviewerBrief({
+    reviewerHint: { model: 'reviewer-model', provider: 'reviewer-provider', effort: 'high', apiEndpoint: null },
+    targetRoot: 'C:/repo',
+    base: 'abc1234',
+    reportPath: '.sdw/state/review.md'
+  });
+  assert.match(reviewerBrief, /context-fresh reviewer subagent session/, 'AC4: the brief names the fresh reviewer session');
+  assert.match(reviewerBrief, /Target root: C:\/repo/);
+  assert.match(reviewerBrief, /Base reference: abc1234/);
+  assert.match(reviewerBrief, /Report path: \.sdw\/state\/review\.md/);
+  assert.match(reviewerBrief, /Scope fence: review only the delivered diff/, 'AC4: the spec 00052 allowlist fence stays in the brief');
+  assert.match(reviewerBrief, /Model hint: reviewer-model, provider reviewer-provider, effort high/, 'AC4: the reviewer hint rides in the brief');
+
+  const fixerBrief = sdwOrch.buildFixerBrief({
+    fixerHint: { model: 'fixer-model', provider: null, effort: 'low', apiEndpoint: null },
+    findingsPath: '.sdw/state/review.md',
+    targetRoot: 'C:/repo',
+    reportPath: '.sdw/state/fix.md'
+  });
+  assert.match(fixerBrief, /fresh sdw-fixer subagent session, distinct from the reviewer session/, 'AC5: the brief keeps fixer separation');
+  assert.match(fixerBrief, /Findings: \.sdw\/state\/review\.md/);
+  assert.match(fixerBrief, /Model hint: fixer-model, effort low/, 'AC5: the fixer hint rides in the brief');
+
+  assert.doesNotMatch(sdwOrch.buildReviewerBrief({ reviewerHint: null, targetRoot: 'r', base: 'b', reportPath: 'p' }), /Model hint/, 'AC4: a null hint adds no model line');
+  assert.doesNotMatch(sdwOrch.buildFixerBrief({ fixerHint: null, findingsPath: 'f', targetRoot: 'r', reportPath: 'f' }), /Model hint/, 'AC5: a null hint adds no model line');
+});
+
+// Spec 00056 AC4-AC6 end to end: Step 7 dispatches the reviewer brief, triggers
+// fixer remediation for a fixable critical finding, and Step 5 resolves the
+// judge hint from models.judge. The sdw-code-review CLI runs locally only.
+test('00056 AC4-AC6: Step 7 briefs carry reviewer and fixer hints and Step 5 uses the judge hint', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-model-hints-'));
+  try {
+    execSync('git init', { cwd: tmpDir, stdio: 'ignore' });
+    execSync('git config user.name "SDW Tester"', { cwd: tmpDir, stdio: 'ignore' });
+    execSync('git config user.email "tester@sdw.org"', { cwd: tmpDir, stdio: 'ignore' });
+    fs.mkdirSync(path.join(tmpDir, '.sdw', 'specs'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'README.md'), '# model hint fixture\n', 'utf8');
+    fs.writeFileSync(path.join(tmpDir, '.sdw', 'config.json'), JSON.stringify({
+      scoreMin: 8,
+      scmProvider: 'none',
+      useFeatureBranches: false,
+      useWorktrees: false,
+      pushDelivery: false,
+      models: {
+        reviewer: { model: 'review-model', effort: 'high' },
+        fixer: { model: 'fixer-model' },
+        judge: { model: 'judge-model' }
+      }
+    }, null, 2), 'utf8');
+    const slug = 'model-hints';
+    fs.writeFileSync(path.join(tmpDir, '.sdw', 'specs', `${slug}.md`), `---
+slug: ${slug}
+title: Model Hint Fixture
+---
+# Model Hint Fixture
+## Acceptance Criteria
+- AC1: The orchestrator shall route each orchestration role with its advisory model hint.
+`, 'utf8');
+    execSync('git add -A && git commit -m "baseline"', { cwd: tmpDir, stdio: 'ignore' });
+
+    const runId = `run-${Date.now()}-${slug}`;
+    let output = '';
+    const origLog = console.log;
+    console.log = (msg) => { output += String(msg) + '\n'; };
+    let code;
+    try {
+      code = sdwOrch.cmdRun({
+        root: tmpDir,
+        specPath: `.sdw/specs/${slug}.md`,
+        runId,
+        minScore: 8,
+        implementation: {
+          mode: 'command',
+          command: 'node -e "const fs=require(\'fs\');fs.writeFileSync(\'buggy.js\',\'function test() {\\n  debugger;\\n  return true;\\n}\\n\');fs.appendFileSync(\'README.md\',\'\\n# review hint update\');fs.writeFileSync(process.env.SDW_EVIDENCE_FILE,JSON.stringify({taskId:process.env.SDW_TASK_ID,acIds:[\'AC1\'],filesChanged:[\'README.md\',\'buggy.js\'],tests:[{name:\'fixture\',status:\'passed\'}],summary:\'review hint fixture\'}));"'
+        },
+        scoring: judgeScoring()
+      });
+    } finally {
+      console.log = origLog;
+    }
+
+    assert.equal(code, 0, 'the run completes through Step 8');
+    assert.match(output, /\[Step 7: Delegated Review\] Fresh reviewer brief: .*Model hint: review-model, effort high/, 'AC4: Step 7 emits the reviewer brief with the reviewer hint');
+    assert.match(output, /\[Step 7: Delegated Review\] Fixer brief: .*Model hint: fixer-model/, 'AC5: Step 7 emits the fixer brief with the fixer hint');
+    assert.match(output, /\[Step 5: Conformance Scoring\] Judge model hint: judge-model/, 'AC6: Step 5 resolves the judge hint from models.judge');
+
+    const state = stateManager.loadRunState(tmpDir, runId);
+    assert.deepEqual(state.models.reviewerHint, { model: 'review-model', provider: null, effort: 'high', apiEndpoint: null }, 'AC4: the run state records the reviewer hint');
+    assert.deepEqual(state.models.fixerHint, { model: 'fixer-model', provider: null, effort: null, apiEndpoint: null }, 'AC5: the run state records the fixer hint');
+    assert.deepEqual(state.models.judgeHint, { model: 'judge-model', provider: null, effort: null, apiEndpoint: null }, 'AC6: the run state records the judge hint');
+    assert.match(state.steps[7].output.briefs.reviewer, /Model hint: review-model, effort high/, 'AC4: the completed Step 7 output keeps the reviewer brief');
+    assert.match(state.steps[7].output.briefs.fixer, /Model hint: fixer-model/, 'AC5: the completed Step 7 output keeps the fixer brief');
+    assert.equal(state.steps[5].output.judge.model, 'judge-model', 'AC6: the scoring artifact records the resolved judge model');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// Spec 00056 AC7 & AC8: the ship and retro roles resolve before their
+// documented fallbacks; no hint invokes a model or contacts a provider.
+test('00056 AC7 & AC8: ship falls back to the fixer hint and retro falls back to models.default', () => {
+  const fallback = sdwOrch.resolveModelHints({
+    models: {
+      default: { model: 'default-model' },
+      fixer: { model: 'fixer-model', effort: 'low' }
+    }
+  });
+  assert.deepEqual(fallback.ship, { model: 'fixer-model', provider: null, effort: 'low', apiEndpoint: null }, 'AC7: an absent ship entry falls back to the fixer hint');
+  assert.deepEqual(fallback.retro, { model: 'default-model', provider: null, effort: null, apiEndpoint: null }, 'AC8: an absent retro entry falls back to models.default');
+
+  const explicit = sdwOrch.resolveModelHints({
+    models: {
+      default: { model: 'default-model' },
+      fixer: { model: 'fixer-model' },
+      ship: { model: 'ship-model' },
+      retro: { model: 'retro-model', effort: 'high' }
+    }
+  });
+  assert.equal(explicit.ship.model, 'ship-model', 'AC7: models.ship wins over the fixer hint');
+  assert.equal(explicit.retro.model, 'retro-model', 'AC8: models.retro wins over models.default');
+  assert.equal(explicit.retro.effort, 'high');
+
+  const none = sdwOrch.resolveModelHints({ models: {} });
+  assert.equal(none.ship, null, 'AC7: no ship, fixer, or default hint resolves to the session model');
+  assert.equal(none.retro, null, 'AC8: no retro or default hint resolves to the session model');
+});
+
+// Spec 00056 AC7-AC9 end to end: Step 8 applies the ship hint with the fixer
+// fallback, retro analysis applies its own hint, and detection stays disabled,
+// so resolution remains static. The executor and the judge are stubs.
+test('00056 AC7-AC9: Step 8 applies the ship hint, retro applies its hint, and detection stays static', () => {
+  const slug = 'model-ship-retro';
+  const tmpDir = setupDeliveryReportRepo(slug);
+  try {
+    const configPath = path.join(tmpDir, '.sdw', 'config.json');
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    fs.writeFileSync(configPath, JSON.stringify({
+      ...config,
+      models: {
+        fixer: { model: 'fixer-model', effort: 'low' },
+        retro: { model: 'retro-model', effort: 'high' }
+      },
+      retro: { enabled: true, followUp: 'none' }
+    }, null, 2), 'utf8');
+    execSync('git add -A && git commit -qm "configure model hints"', { cwd: tmpDir, stdio: 'ignore' });
+
+    const runId = `run-${Date.now()}-${slug}`;
+    let output = '';
+    const originalLog = console.log;
+    console.log = (message) => { output += `${String(message)}\n`; };
+    let code;
+    try {
+      code = sdwOrch.cmdRun({
+        root: tmpDir,
+        specPath: `.sdw/specs/${slug}.md`,
+        runId,
+        minScore: 8,
+        skipReview: true,
+        implementation: deliveryImplementation(),
+        scoring: judgeScoring()
+      });
+    } finally {
+      console.log = originalLog;
+    }
+
+    assert.equal(code, 0, 'the run completes through Step 8 and the retrospective');
+    assert.match(output, /\[Step 8: PR Preparation\] Ship model hint: fixer-model, effort low/, 'AC7: Step 8 applies the ship hint, falling back to the fixer hint');
+    assert.match(output, /\[sdw-retro\] Retro model hint: retro-model, effort high/, 'AC8: retro analysis applies the retro hint');
+
+    const state = stateManager.loadRunState(tmpDir, runId);
+    assert.deepEqual(state.models.shipHint, { model: 'fixer-model', provider: null, effort: 'low', apiEndpoint: null }, 'AC7: run state records the ship hint');
+    assert.deepEqual(state.models.retroHint, { model: 'retro-model', provider: null, effort: 'high', apiEndpoint: null }, 'AC8: run state records the retro hint');
+    assert.equal(state.steps[8].output.shipHint.model, 'fixer-model', 'AC7: Step 8 output records the ship hint');
+    assert.equal(state.models.detection.status, 'skipped', 'AC9: disabled detection records the skipped static path');
+
+    const sdwConfig = require('../skills/sdw-config/scripts/sdw_config.cjs');
+    assert.equal(sdwConfig.DEFAULT_CONFIG.models.detection.enabled, false, 'AC9: the detection toggle defaults to disabled');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// Spec 00056 AC10-AC12 fixtures: a local detection command writes the
+// capabilities contract and appends one line per probe. No network, no provider.
+function writeModelDetectionFixture(tmpDir, capabilities, mode = 'valid') {
+  const scriptPath = path.join(tmpDir, 'detect-models.cjs');
+  const counterPath = path.join(tmpDir, 'model-probes.log');
+  const writeLine = mode === 'malformed'
+    ? `fs.writeFileSync(out, '{ not valid json');`
+    : `fs.writeFileSync(out, ${JSON.stringify(JSON.stringify(capabilities))});`;
+  fs.writeFileSync(scriptPath, [
+    "'use strict';",
+    "const fs = require('fs');",
+    'const out = process.argv[2];',
+    'const counter = process.argv[3];',
+    writeLine,
+    "fs.appendFileSync(counter, 'probe\\n');",
+    ''
+  ].join('\n'), 'utf8');
+  const slash = value => String(value).replace(/\\/g, '/');
+  return {
+    scriptPath,
+    counterPath,
+    command: `node "${slash(scriptPath)}" {capabilitiesFile} "${slash(counterPath)}"`,
+    probeCount: () => fs.existsSync(counterPath)
+      ? fs.readFileSync(counterPath, 'utf8').split('\n').filter(Boolean).length
+      : 0
+  };
+}
+
+const detectedCapabilities = {
+  harness: 'test-host',
+  models: [
+    { model: 'slow-model', provider: null, effort: 'high', available: false },
+    { model: 'fast-model', provider: null, effort: 'low', available: true },
+    { model: 'review-model', provider: null, effort: 'high', available: true }
+  ]
+};
+
+// Spec 00056 AC11: adaptation walks the role fallback chain, records the three
+// fields, and stops at the session model when nothing is available.
+test('00056 AC11: adaptation records requested, resolved, and reason per role', () => {
+  const capabilities = {
+    harness: 'unit-host',
+    models: [
+      { model: 'slow-model', provider: null, effort: 'high', available: false },
+      { model: 'fast-model', provider: null, effort: 'low', available: true },
+      { model: 'review-model', provider: null, effort: 'high', available: true }
+    ]
+  };
+  const fast = { model: 'fast-model', provider: null, effort: 'low', apiEndpoint: null };
+  const slow = { model: 'slow-model', provider: null, effort: 'high', apiEndpoint: null };
+  const staticHints = {
+    worker: slow,
+    reviewer: { model: 'review-model', provider: null, effort: 'high', apiEndpoint: null },
+    ship: slow
+  };
+  const chains = {
+    worker: [slow, fast],
+    reviewer: [staticHints.reviewer, fast],
+    ship: [null, slow, fast]
+  };
+
+  const result = modelCapabilities.adaptModelHints({
+    staticHints,
+    chains,
+    capabilities,
+    supportedModels: ['fast-model', 'review-model']
+  });
+  assert.equal(result.resolved.worker.model, 'fast-model', 'AC11: the worker hint adapts to models.default');
+  assert.equal(result.resolved.worker.configuredModel, 'slow-model', 'AC11: the requested id is preserved as configuredModel');
+  assert.equal(result.resolved.ship.model, 'fast-model', 'AC11: the ship hint walks ship -> fixer -> default');
+  assert.equal(result.resolved.reviewer.model, 'review-model', 'AC11: an available hint is not adapted');
+  assert.equal(result.resolved.reviewer.configuredModel, undefined, 'AC11: no configuredModel is added without adaptation');
+  assert.equal(result.adaptations.length, 2, 'AC11: one adaptation record per adapted role');
+  const workerAdaptation = result.adaptations.find(entry => entry.role === 'worker');
+  assert.equal(workerAdaptation.requested, 'slow-model');
+  assert.equal(workerAdaptation.resolved, 'fast-model');
+  assert.match(workerAdaptation.reason, /slow-model/, 'AC11: the reason names the requested model');
+  assert.match(workerAdaptation.reason, /fast-model/, 'AC11: the reason names the resolved model');
+
+  const exhausted = modelCapabilities.adaptModelHints({
+    staticHints: { worker: slow },
+    chains: { worker: [slow, null] },
+    capabilities,
+    supportedModels: ['fast-model']
+  });
+  assert.equal(exhausted.resolved.worker, null, 'AC11: an exhausted chain resolves to the session model');
+  assert.equal(exhausted.adaptations[0].resolved, null);
+});
+
+// Spec 00056 AC10: the cache is keyed per session model, a hit reuses the entry,
+// and --refresh-models or a different key forces a fresh probe.
+test('00056 AC10: a cache hit reuses the bound entry and forces a probe only on refresh', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-56-cache-'));
+  try {
+    const detection = writeModelDetectionFixture(tmpDir, detectedCapabilities);
+    const config = {
+      stateDir: path.join(tmpDir, '.sdw', 'state'),
+      models: {
+        default: { model: 'fast-model' },
+        detection: { enabled: true, command: detection.command, timeoutMs: 10000 }
+      }
+    };
+    const cacheFile = path.join(tmpDir, '.sdw', 'host-capabilities.json');
+    fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
+    fs.writeFileSync(cacheFile, JSON.stringify({
+      'other::model': {
+        capabilities: { harness: 'other-host', models: [] },
+        supportedModels: [],
+        probedAt: '2026-10-22T00:00:00.000Z',
+        source: 'command'
+      }
+    }, null, 2), 'utf8');
+
+    const options = { modelsSessionKey: 'host::model-1', now: () => '2026-10-23T00:00:00.000Z' };
+    const first = modelCapabilities.bindModelCapabilities({ targetRoot: tmpDir, config, runId: 'run-a', slug: 'demo', options });
+    assert.equal(first.detection.status, 'probe', 'AC10: a cache miss probes');
+    assert.equal(first.detection.source, 'probe');
+    assert.equal(first.detection.transport, 'command');
+    assert.equal(first.detection.key, 'host::model-1');
+    assert.equal(first.detection.probedAt, '2026-10-23T00:00:00.000Z');
+    assert.equal(detection.probeCount(), 1);
+
+    const cache = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+    assert.ok(cache['other::model'], 'AC10: the upsert preserves other session keys');
+    assert.equal(cache['host::model-1'].capabilities.harness, 'test-host');
+    assert.equal(cache['host::model-1'].probedAt, '2026-10-23T00:00:00.000Z');
+
+    const hit = modelCapabilities.bindModelCapabilities({ targetRoot: tmpDir, config, runId: 'run-b', slug: 'demo', options });
+    assert.equal(hit.detection.status, 'hit', 'AC10: an unchanged key reuses the cached entry');
+    assert.equal(hit.detection.source, 'hit');
+    assert.equal(hit.detection.transport, 'cache');
+    assert.equal(hit.capabilities.harness, 'test-host');
+    assert.equal(detection.probeCount(), 1, 'AC10: a hit performs no probe');
+
+    const refreshed = modelCapabilities.bindModelCapabilities({ targetRoot: tmpDir, config, runId: 'run-c', slug: 'demo', options: { ...options, refreshModels: true } });
+    assert.equal(refreshed.detection.status, 'probe', 'AC10: --refresh-models forces a fresh probe');
+    assert.equal(detection.probeCount(), 2);
+
+    const otherKey = modelCapabilities.bindModelCapabilities({ targetRoot: tmpDir, config, runId: 'run-d', slug: 'demo', options: { ...options, modelsSessionKey: 'host::model-2' } });
+    assert.equal(otherKey.detection.status, 'probe', 'AC10: a different session key probes');
+    assert.equal(detection.probeCount(), 3);
+
+    const skipped = modelCapabilities.bindModelCapabilities({ targetRoot: tmpDir, config, runId: 'run-e', slug: 'demo', options: { ...options, noModelDetect: true } });
+    assert.deepEqual(skipped.detection, { status: 'skipped' }, 'AC10: --no-model-detect skips detection');
+    assert.equal(detection.probeCount(), 3, 'AC10: a skipped detection never probes');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// Spec 00056 AC10 & AC11 end to end: Step 1 binds once before dispatch, the
+// worker hint adapts to the captured capabilities, and task next reuses the
+// bound entry without probing again.
+test('00056 AC10 & AC11: Step 1 binds once, adapts the worker hint, and later steps reuse it', () => {
+  const slug = 'model-detection-bind';
+  const tmpDir = setupDeliveryReportRepo(slug);
+  try {
+    const detection = writeModelDetectionFixture(tmpDir, detectedCapabilities);
+    const configPath = path.join(tmpDir, '.sdw', 'config.json');
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    fs.writeFileSync(configPath, JSON.stringify({
+      ...config,
+      models: {
+        default: { model: 'fast-model', effort: 'low' },
+        worker: { model: 'slow-model', effort: 'high' },
+        detection: { enabled: true, command: detection.command, timeoutMs: 10000 }
+      }
+    }, null, 2), 'utf8');
+    execSync('git add -A && git commit -qm "configure model detection"', { cwd: tmpDir, stdio: 'ignore' });
+
+    const runId = 'run-00056-ac10-bind';
+    let output = '';
+    const originalLog = console.log;
+    console.log = (message) => { output += `${String(message)}\n`; };
+    let code;
+    try {
+      code = sdwOrch.cmdRun({
+        root: tmpDir,
+        specPath: `.sdw/specs/${slug}.md`,
+        runId,
+        implementation: { mode: 'subagent' },
+        modelsSessionKey: 'test-host::session-a'
+      });
+    } finally {
+      console.log = originalLog;
+    }
+
+    assert.equal(code, 4, 'the run pauses at the Step 4 dispatch');
+    assert.equal(detection.probeCount(), 1, 'AC10: Step 1 probes once before task dispatch');
+    assert.match(output, /\[Step 1: Model Capabilities\] status=probe source=probe transport=command key=test-host::session-a/, 'AC10: one bind telemetry line is emitted');
+
+    let state = stateManager.loadRunState(tmpDir, runId);
+    assert.equal(state.models.detection.status, 'probe');
+    assert.equal(state.models.detection.key, 'test-host::session-a');
+    assert.equal(state.models.detection.source, 'probe');
+    assert.equal(state.models.detection.transport, 'command');
+    assert.equal(state.models.capabilities.harness, 'test-host');
+    assert.ok(state.models.supportedModels.includes('fast-model'), 'AC10: the captured supportedModels are recorded');
+    assert.equal(state.models.static.worker.model, 'slow-model', 'AC11: the static view keeps the configured hint');
+    assert.equal(state.models.resolved.worker.model, 'fast-model', 'AC11: the resolved view adapts to the default');
+    assert.equal(state.models.resolved.worker.configuredModel, 'slow-model', 'AC11: the resolved hint preserves the requested id');
+    assert.deepEqual(
+      state.models.adaptations.map(entry => ({ role: entry.role, requested: entry.requested, resolved: entry.resolved })),
+      [{ role: 'worker', requested: 'slow-model', resolved: 'fast-model' }],
+      'AC11: the snapshot records one adaptation for the unavailable worker hint'
+    );
+    assert.match(state.models.adaptations[0].reason, /slow-model[\s\S]*fast-model/, 'AC11: the reason names requested and resolved');
+
+    const task = Object.values(state.steps[4].tasks)[0];
+    const prompt = fs.readFileSync(path.resolve(tmpDir, task.promptPath), 'utf8');
+    assert.match(prompt, /## Worker Model Hint\n\nModel: fast-model, effort low/, 'AC11: the worker brief carries the adapted hint');
+
+    let nextOutput = '';
+    const originalNextLog = console.log;
+    console.log = (message) => { nextOutput += `${String(message)}\n`; };
+    let nextCode;
+    try {
+      nextCode = sdwOrch.cmdResume({ root: tmpDir, runId, json: true, modelsSessionKey: 'test-host::session-a' });
+    } finally {
+      console.log = originalNextLog;
+    }
+    assert.equal(nextCode, 4, 'AC10: resume re-emits the paused dispatch from the bound entry');
+    const envelope = JSON.parse(nextOutput.slice(nextOutput.indexOf('{'), nextOutput.lastIndexOf('}') + 1));
+    assert.equal(envelope.workerHint.model, 'fast-model', 'AC10: the later step reuses the bound worker hint');
+    assert.equal(envelope.configuredModel, 'slow-model', 'AC11: the envelope preserves the requested model');
+    assert.equal(detection.probeCount(), 1, 'AC10: no later step re-probes capabilities');
+
+    state = stateManager.loadRunState(tmpDir, runId);
+    assert.equal(state.models.detection.status, 'probe', 'AC10: the bound entry survives the later step');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// Spec 00056 AC10: detection errors fail open; the run proceeds on static hints.
+test('00056 AC10: malformed capabilities fail open with a warning and static hints', () => {
+  const slug = 'model-detection-failopen';
+  const tmpDir = setupDeliveryReportRepo(slug);
+  try {
+    const detection = writeModelDetectionFixture(tmpDir, null, 'malformed');
+    const configPath = path.join(tmpDir, '.sdw', 'config.json');
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    fs.writeFileSync(configPath, JSON.stringify({
+      ...config,
+      models: {
+        default: { model: 'fast-model' },
+        worker: { model: 'slow-model' },
+        detection: { enabled: true, command: detection.command, timeoutMs: 10000 }
+      }
+    }, null, 2), 'utf8');
+    execSync('git add -A && git commit -qm "configure failing detection"', { cwd: tmpDir, stdio: 'ignore' });
+
+    const runId = 'run-00056-ac10-failopen';
+    let output = '';
+    const originalLog = console.log;
+    console.log = (message) => { output += `${String(message)}\n`; };
+    let code;
+    try {
+      code = sdwOrch.cmdRun({
+        root: tmpDir,
+        specPath: `.sdw/specs/${slug}.md`,
+        runId,
+        implementation: { mode: 'subagent' },
+        modelsSessionKey: 'test-host::session-fail'
+      });
+    } finally {
+      console.log = originalLog;
+    }
+
+    assert.equal(code, 4, 'AC10: a detection error never blocks the dispatch');
+    const state = stateManager.loadRunState(tmpDir, runId);
+    assert.equal(state.models.detection.status, 'failed-open', 'AC10: the snapshot records the fail-open status');
+    assert.equal(state.models.detection.source, 'failed-open');
+    assert.equal(state.models.detection.transport, 'command');
+    assert.equal(state.models.resolved.worker.model, 'slow-model', 'AC10: fail-open keeps static resolution');
+    assert.ok(state.errors.some(entry => /Model detection failed open/.test(entry.error)), 'AC10: the warning is recorded in state.errors');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// Spec 00056 AC12: a malformed hint is a shape error. The run refuses before any
+// probe and before creating run state.
+test('00056 AC12: malformed model hints refuse the run before any probe', () => {
+  const slug = 'model-hint-malformed';
+  const tmpDir = setupDeliveryReportRepo(slug);
+  try {
+    const detection = writeModelDetectionFixture(tmpDir, detectedCapabilities);
+    const configPath = path.join(tmpDir, '.sdw', 'config.json');
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    fs.writeFileSync(configPath, JSON.stringify({
+      ...config,
+      models: {
+        worker: { model: 'slow-model', effort: 42 },
+        detection: { enabled: true, command: detection.command, timeoutMs: 10000 }
+      }
+    }, null, 2), 'utf8');
+    execSync('git add -A && git commit -qm "configure malformed hint"', { cwd: tmpDir, stdio: 'ignore' });
+
+    const runId = 'run-00056-ac12';
+    let errors = '';
+    const originalError = console.error;
+    console.error = (message) => { errors += `${String(message)}\n`; };
+    let code;
+    try {
+      code = sdwOrch.cmdRun({
+        root: tmpDir,
+        specPath: `.sdw/specs/${slug}.md`,
+        runId,
+        implementation: { mode: 'subagent' },
+        modelsSessionKey: 'test-host::session-bad'
+      });
+    } finally {
+      console.error = originalError;
+    }
+
+    assert.equal(code, 1, 'AC12: the run refuses the malformed hint');
+    assert.match(errors, /models\.worker\.effort/, 'AC12: the error names the malformed property');
+    assert.equal(detection.probeCount(), 0, 'AC12: no detection command runs for a malformed hint');
+    assert.equal(fs.existsSync(path.join(tmpDir, '.sdw', 'state', `${runId}.state.json`)), false, 'AC12: no run state is created');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// Spec 00056 AC13 & AC14: the plan prints the detection block plus one resolved
+// hint per role, an absent role falls back to models.default, and nothing runs.
+test('00056 AC13 & AC14: --dry-run prints the detection block and the resolved hint per role', () => {
+  const slug = 'model-dry-plan';
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-56-dry-plan-'));
+  try {
+    fs.mkdirSync(path.join(tmpDir, '.sdw', 'specs'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.sdw', 'config.json'), JSON.stringify({
+      scoreMin: 8,
+      scmProvider: 'none',
+      useFeatureBranches: false,
+      useWorktrees: false,
+      pushDelivery: false,
+      models: {
+        default: { model: 'default-model', effort: 'medium' },
+        worker: { model: 'fast-model', effort: 'low' }
+      }
+    }, null, 2), 'utf8');
+    fs.writeFileSync(
+      path.join(tmpDir, '.sdw', 'specs', `${slug}.md`),
+      validDryRunSpec(slug, 'Names `skills/sdw-orch/scripts/sdw_orch.cjs` as a target.')
+    );
+
+    let output = '';
+    const originalLog = console.log;
+    console.log = (message) => { output += `${String(message)}\n`; };
+    let code;
+    try {
+      code = sdwOrch.cmdRun({
+        root: tmpDir,
+        specPath: `.sdw/specs/${slug}.md`,
+        dryRun: true,
+        modelsSessionKey: 'test-host::dry-plan'
+      });
+    } finally {
+      console.log = originalLog;
+    }
+
+    assert.equal(code, 0, 'AC13: a valid specification plans cleanly');
+    assert.match(
+      output,
+      /Models detection: enabled=no status=skipped source=skipped transport=none key=test-host::dry-plan command=none/,
+      'AC13: disabled detection prints its source, status, and key'
+    );
+    assert.match(output, /Model hint orchestrator: default-model, effort medium/, 'AC14: an absent orchestrator entry falls back to models.default');
+    assert.match(output, /Model hint worker: fast-model, effort low/, 'AC13: the configured worker hint prints');
+    assert.match(output, /Model hint reviewer: default-model, effort medium/, 'AC14: an absent reviewer entry falls back to models.default');
+    assert.match(output, /Model hint fixer: default-model, effort medium/, 'AC14: an absent fixer entry falls back to models.default');
+    assert.match(output, /Model hint judge: default-model, effort medium/, 'AC14: the judge falls through scoring and models.default');
+    assert.match(output, /Model hint ship: default-model, effort medium/, 'AC14: an absent ship entry falls through the fixer chain to models.default');
+    assert.match(output, /Model hint retro: default-model, effort medium/, 'AC14: an absent retro entry falls back to models.default');
+    assert.match(output, /No steps executed \(--dry-run\)/, 'AC13: the plan executes no step');
+    assert.equal(fs.existsSync(path.join(tmpDir, '.sdw', 'host-capabilities.json')), false, 'AC13: the plan writes no capability cache');
+    assert.equal(fs.existsSync(path.join(tmpDir, '.sdw', 'state')), false, 'AC13: the plan writes no run state');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// Spec 00056 AC13: an enabled toggle previews the cached hit and its adaptation
+// from the cache only; --dry-run never probes and never rewrites the cache.
+test('00056 AC13: --dry-run previews a cached hit and its adaptation without probing', () => {
+  const slug = 'model-dry-hit';
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-56-dry-hit-'));
+  try {
+    const detection = writeModelDetectionFixture(tmpDir, detectedCapabilities);
+    fs.mkdirSync(path.join(tmpDir, '.sdw', 'specs'), { recursive: true });
+    const config = {
+      scoreMin: 8,
+      scmProvider: 'none',
+      useFeatureBranches: false,
+      useWorktrees: false,
+      pushDelivery: false,
+      models: {
+        default: { model: 'fast-model', effort: 'low' },
+        worker: { model: 'slow-model', effort: 'high' },
+        detection: { enabled: true, command: detection.command, timeoutMs: 10000 }
+      }
+    };
+    fs.writeFileSync(path.join(tmpDir, '.sdw', 'config.json'), JSON.stringify(config, null, 2), 'utf8');
+    const specPath = path.join(tmpDir, '.sdw', 'specs', `${slug}.md`);
+    fs.writeFileSync(specPath, validDryRunSpec(slug, 'Names `skills/sdw-orch/scripts/sdw_orch.cjs` as a target.'));
+
+    const cacheFile = path.join(tmpDir, '.sdw', 'host-capabilities.json');
+    const cacheBefore = `${JSON.stringify({
+      'test-host::dry-hit': {
+        capabilities: detectedCapabilities,
+        supportedModels: ['fast-model', 'review-model'],
+        probedAt: '2026-10-22T00:00:00.000Z',
+        source: 'command'
+      }
+    }, null, 2)}\n`;
+    fs.writeFileSync(cacheFile, cacheBefore, 'utf8');
+
+    let output = '';
+    const originalLog = console.log;
+    console.log = (message) => { output += `${String(message)}\n`; };
+    let code;
+    try {
+      code = sdwOrch.cmdRun({
+        root: tmpDir,
+        specPath: `.sdw/specs/${slug}.md`,
+        dryRun: true,
+        modelsSessionKey: 'test-host::dry-hit'
+      });
+    } finally {
+      console.log = originalLog;
+    }
+
+    assert.equal(code, 0, 'AC13: the plan exits 0');
+    assert.match(
+      output,
+      /Models detection: enabled=yes status=hit source=hit transport=cache key=test-host::dry-hit command=node/,
+      'AC13: the cached hit prints its source, status, and key'
+    );
+    assert.match(
+      output,
+      /Model hint worker: fast-model, effort low \(requested slow-model\)/,
+      'AC13: the unavailable worker hint previews its adaptation and requested id'
+    );
+    assert.match(output, /Model hint reviewer: fast-model, effort low/, 'AC13: an available default hint is not adapted');
+    assert.equal(detection.probeCount(), 0, 'AC13: --dry-run never executes the detection command');
+    assert.equal(fs.readFileSync(cacheFile, 'utf8'), cacheBefore, 'AC13: --dry-run never rewrites the capability cache');
+    assert.equal(fs.existsSync(path.join(tmpDir, '.sdw', 'state')), false, 'AC13: the plan writes no run state');
+
+    let jsonOut = '';
+    console.log = (message) => { jsonOut += `${String(message)}\n`; };
+    let jsonCode;
+    try {
+      jsonCode = sdwOrch.printRunDryRunPlan({
+        targetRoot: tmpDir,
+        resolvedSpec: specPath,
+        specSlug: slug,
+        config,
+        options: { json: true, modelsSessionKey: 'test-host::dry-hit' }
+      });
+    } finally {
+      console.log = originalLog;
+    }
+    assert.equal(jsonCode, 0, 'AC13: the JSON plan exits 0');
+    const payload = JSON.parse(jsonOut);
+    assert.equal(payload.executed, false, 'AC13: the JSON plan states that nothing executed');
+    assert.equal(payload.models.detection.status, 'hit', 'AC13: the JSON plan carries the detection status');
+    assert.equal(payload.models.detection.source, 'hit');
+    assert.equal(payload.models.detection.key, 'test-host::dry-hit', 'AC13: the JSON plan carries the detection key');
+    assert.equal(payload.models.resolved.worker.model, 'fast-model', 'AC13: the JSON plan carries the resolved worker hint');
+    assert.equal(payload.models.resolved.worker.configuredModel, 'slow-model', 'AC13: the JSON plan keeps the requested id');
+    assert.equal(payload.models.resolved.retro.model, 'fast-model', 'AC14: an absent retro entry resolves through models.default');
+    assert.equal(payload.models.adaptations.length, 1, 'AC13: the JSON plan records the previewed adaptation');
+    assert.equal(detection.probeCount(), 0, 'AC13: the JSON plan never executes the detection command');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// Spec 00056 AC14: role resolution is role entry, then models.default, then null,
+// which keeps the current agent model instance as the zero-config behavior.
+test('00056 AC14: an absent role hint resolves to models.default before the session model', () => {
+  const roleNames = ['orchestrator', 'worker', 'reviewer', 'fixer', 'judge', 'ship', 'retro'];
+  const onlyDefault = sdwOrch.resolveModelHints({
+    models: { default: { model: 'fallback-model', effort: 'medium' } }
+  });
+  for (const role of roleNames) {
+    assert.deepEqual(
+      onlyDefault[role],
+      { model: 'fallback-model', provider: null, effort: 'medium', apiEndpoint: null },
+      `AC14: absent ${role} falls back to models.default`
+    );
+  }
+
+  const explicit = sdwOrch.resolveModelHints({
+    models: { default: { model: 'fallback-model' }, worker: { model: 'worker-model' } }
+  });
+  assert.equal(explicit.worker.model, 'worker-model', 'AC14: a present role entry wins over models.default');
+  assert.equal(explicit.orchestrator.model, 'fallback-model', 'AC14: the other roles keep the default fallback');
+
+  const none = sdwOrch.resolveModelHints({});
+  for (const role of roleNames) {
+    assert.equal(none[role], null, `AC14: unconfigured ${role} resolves to the session model`);
+  }
+});
+
+// Spec 00056 AC15: the touched skill definitions stay inside the Tier-1 budget.
+test('00056 AC15: the modified skill definitions stay within the Tier-1 line budget', () => {
+  const repoRoot = path.resolve(__dirname, '..');
+  const doctorPath = path.join(repoRoot, 'skills', 'sdw-rules', 'scripts', 'sdw_rules.cjs');
+  const doctor = JSON.parse(execSync(`node "${doctorPath}" doctor --json`, { encoding: 'utf8' }));
+  assert.equal(doctor.passed, true, 'AC15: doctor passes');
+  assert.equal(doctor.violationsCount, 0, 'AC15: doctor reports zero violations');
+  assert.ok(doctor.checkedSkillsCount > 0, 'AC15: doctor checked every skill definition');
+  for (const skill of doctor.checkedSkills) {
+    assert.ok(skill.lineCount <= 120, `AC15: ${skill.name}/SKILL.md stays within 120 lines (${skill.lineCount})`);
+  }
+  const orchSkill = fs.readFileSync(path.join(repoRoot, 'skills', 'sdw-orch', 'SKILL.md'), 'utf8');
+  assert.ok(orchSkill.split(/\r?\n/).length <= 120, 'AC15: sdw-orch/SKILL.md stays within 120 lines');
+});
+
+test('00056 AC2: the DAG planner records the orchestrator model hint it received', () => {
+  const content = [
+    '---',
+    'slug: 099-demo-hint',
+    'title: "Demo Hint"',
+    '---',
+    '# Specification',
+    '## Acceptance Criteria',
+    '- AC1: The system shall work.'
+  ].join('\n');
+  const plan = dagPlanner.generateDagPlan(content, { slug: '099-demo-hint', targetFiles: ['a.cjs'], orchestratorHint: 'opus' });
+  assert.equal(plan.orchestratorHint, 'opus', 'the planner that produced the plan carries the hint it consumed');
+  const withoutHint = dagPlanner.generateDagPlan(content, { slug: '099-demo-hint', targetFiles: ['a.cjs'] });
+  assert.equal(withoutHint.orchestratorHint, undefined, 'no hint means no plan metadata');
+});
+
+test('00056 AC11: detection command tokens are shell-quoted', () => {
+  const { substituteCommand } = require('../skills/sdw-orch/scripts/model_capabilities.cjs');
+  const slugToken = substituteCommand('{slug}', { slug: 'a;b' });
+  assert.match(slugToken, /^['"]a;b['"]$/, 'the slug token is quoted, so a semicolon never reaches the shell');
+  const runToken = substituteCommand('{runId}', { runId: 'run-$HOME' });
+  assert.match(runToken, /^['"]run-\$HOME['"]$/, 'a $ sequence stays literal inside the quoted token');
 });
