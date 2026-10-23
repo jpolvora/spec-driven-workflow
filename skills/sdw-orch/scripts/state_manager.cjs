@@ -44,6 +44,35 @@ function getStateFilePath(targetRoot, runId) {
   return path.join(stateDir, `${runId}.state.json`);
 }
 
+// AC6: a state write becomes visible only after the temporary file is complete.
+// The rename replaces the previous file atomically, so a crash can leave a
+// temporary file behind but never a partial state file. fsync is best-effort:
+// Windows cannot fsync a directory, and durability must never fail the write.
+function fsyncBestEffort(targetPath, flags) {
+  let fd;
+  try {
+    fd = fs.openSync(targetPath, flags);
+    fs.fsyncSync(fd);
+  } catch (e) {
+    // Best-effort durability only.
+  } finally {
+    if (fd !== undefined) {
+      try {
+        fs.closeSync(fd);
+      } catch (e) {}
+    }
+  }
+}
+
+function writeStateFileAtomic(stateFilePath, state) {
+  const tempFile = `${stateFilePath}.tmp-${process.pid}`;
+  fs.writeFileSync(tempFile, JSON.stringify(state, null, 2) + '\n', 'utf8');
+  fsyncBestEffort(tempFile, 'r+');
+  fs.renameSync(tempFile, stateFilePath);
+  fsyncBestEffort(path.dirname(stateFilePath), 'r');
+  return stateFilePath;
+}
+
 function resolveArtifactsDir(targetRoot, specSlug, runId) {
   const root = targetRoot ? path.resolve(targetRoot) : process.cwd();
   const stateDir = resolveStateDir(root);
@@ -131,7 +160,7 @@ function createRunState(options) {
     stepCheckpoints: {},
     turnPause: null
   };
-  fs.writeFileSync(stateFilePath, JSON.stringify(state, null, 2) + '\n', 'utf8');
+  writeStateFileAtomic(stateFilePath, state);
   return state;
 }
 
@@ -144,7 +173,7 @@ function loadRunState(targetRoot, runId) {
     const raw = fs.readFileSync(stateFilePath, 'utf8');
     return JSON.parse(raw);
   } catch (err) {
-    throw new Error(`Corrupted state file for runId "${runId}": ${err.message}`);
+    throw new Error(`Corrupted state file for runId "${runId}" at ${normalizePath(stateFilePath)}: ${err.message}`);
   }
 }
 
@@ -160,7 +189,11 @@ function findLatestRunState(targetRoot) {
   });
 
   const latestFile = path.join(stateDir, files[0]);
-  return JSON.parse(fs.readFileSync(latestFile, 'utf8'));
+  try {
+    return JSON.parse(fs.readFileSync(latestFile, 'utf8'));
+  } catch (err) {
+    throw new Error(`Corrupted state file at ${normalizePath(latestFile)}: ${err.message}`);
+  }
 }
 
 // Every persisted mutation advances the revision by one. A missing or invalid
@@ -187,7 +220,7 @@ function saveRunState(targetRoot, state) {
   const stateFilePath = getStateFilePath(targetRoot, state.runId);
   state.revision = nextRevision(state);
   state.updatedAt = new Date().toISOString();
-  fs.writeFileSync(stateFilePath, JSON.stringify(state, null, 2) + '\n', 'utf8');
+  writeStateFileAtomic(stateFilePath, state);
   return state;
 }
 
@@ -199,6 +232,22 @@ function getResumptionStep(state) {
     }
   }
   return state.totalSteps;
+}
+
+// AC8: resume continues only from a complete state file whose revision is a
+// non-negative integer. A partial write or a foreign revision is not recoverable
+// here, so the caller refuses and reports the file plus the remediation.
+function validateResumableState(state) {
+  if (!state || typeof state !== 'object' || Array.isArray(state)) {
+    return { ok: false, error: 'the file does not contain a run-state object' };
+  }
+  if (!Number.isInteger(state.revision) || state.revision < 0) {
+    const found = Object.prototype.hasOwnProperty.call(state, 'revision')
+      ? JSON.stringify(state.revision)
+      : 'missing';
+    return { ok: false, error: `revision is ${found}; a non-negative integer is required` };
+  }
+  return { ok: true };
 }
 
 function recordError(targetRoot, runId, stepNum, errorMessage) {
@@ -306,6 +355,14 @@ function updateStepState(targetRoot, runId, stepNum, status, outputData, error, 
 
   state.currentStep = stepNum;
   writeStepCheckpoint(state, stepNum, status, now);
+  // AC5: a finished step consumes its checkpoint and any turn pause that targets
+  // it. Only this step's records are cleared; another step's pause still stands.
+  if (status === 'completed' || status === 'skipped') {
+    delete state.stepCheckpoints[String(stepNum)];
+    if (state.turnPause && Number(state.turnPause.step) === Number(stepNum)) {
+      state.turnPause = null;
+    }
+  }
   return saveRunState(targetRoot, state);
 }
 
@@ -341,6 +398,7 @@ module.exports = {
   findLatestRunState,
   saveRunState,
   getResumptionStep,
+  validateResumableState,
   recordError,
   recordWarning,
   recordStepArtifact,

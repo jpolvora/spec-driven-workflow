@@ -4898,21 +4898,33 @@ function cmdPauseTurn(options) {
 function cmdResume(options) {
   const targetRoot = options.root ? path.resolve(options.root) : process.cwd();
   let state = null;
-  if (options.runId) {
-    state = stateManager.loadRunState(targetRoot, options.runId);
-  } else if (options.latest) {
-    state = stateManager.findLatestRunState(targetRoot);
-    if (!state) {
-      console.error('Error: No existing run state files found to resume.');
-      return 1;
+  let stateFilePath = null;
+  try {
+    if (options.runId) {
+      stateFilePath = stateManager.getStateFilePath(targetRoot, options.runId);
+      state = stateManager.loadRunState(targetRoot, options.runId);
+    } else if (options.latest) {
+      state = stateManager.findLatestRunState(targetRoot);
+      if (!state) {
+        console.error('Error: No existing run state files found to resume.');
+        return 1;
+      }
+    } else {
+      state = stateManager.findLatestRunState(targetRoot);
+      if (!state) {
+        console.error('Error: specify --run-id <id> or --latest to resume.');
+        return 1;
+      }
     }
-  } else {
-    state = stateManager.findLatestRunState(targetRoot);
-    if (!state) {
-      console.error('Error: specify --run-id <id> or --latest to resume.');
-      return 1;
-    }
+  } catch (err) {
+    // AC8: an unparseable state file is a partial or foreign write; refuse and
+    // name the file together with the remediation instead of crashing.
+    console.error(`Error: Refusing to resume: ${err.message}`);
+    console.error(`Remediation: restore a complete state file, or discard it and start a new run with:`);
+    console.error(`  node "${orchCommandPath()}" run --spec <specPath> --new-run${followUpRootFlag(targetRoot)}`);
+    return 1;
   }
+  if (!stateFilePath) stateFilePath = stateManager.getStateFilePath(targetRoot, state.runId);
 
   // Reject obsolete run state files created before sdw-orch migration
   if (!state.orchestrator || state.orchestrator !== 'sdw-orch') {
@@ -4930,6 +4942,16 @@ function cmdResume(options) {
       console.error(`Error: Run state "${state.runId}" contains a legacy Step 4 execution with only { tasksPrepared } and no task evidence records. Resuming legacy run states is unsupported. Please start a new run.`);
       return 1;
     }
+  }
+
+  // AC8: a state file whose revision is missing or not a non-negative integer
+  // cannot be resumed; name the file and the remediation, never a stack trace.
+  const resumable = stateManager.validateResumableState(state);
+  if (!resumable.ok) {
+    console.error(`Error: Refusing to resume run "${state.runId || options.runId || 'unknown'}": state file "${normalizePath(stateFilePath)}" is not resumable (${resumable.error}).`);
+    console.error(`Remediation: restore a complete state file, or discard it and start a new run with:`);
+    console.error(`  node "${orchCommandPath()}" run --spec <specPath> --new-run${followUpRootFlag(targetRoot)}`);
+    return 1;
   }
 
   // AC4: a turn pause is a handoff, not a stall. Announce the recorded next
