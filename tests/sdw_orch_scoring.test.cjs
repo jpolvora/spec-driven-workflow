@@ -10,6 +10,7 @@ const { execSync } = require('child_process');
 const stateManager = require('../skills/sdw-orch/scripts/state_manager.cjs');
 const dagPlanner = require('../skills/sdw-orch/scripts/dag_planner.cjs');
 const scoreEvaluator = require('../skills/sdw-orch/scripts/score_evaluator.cjs');
+const deliveryReport = require('../skills/sdw-orch/scripts/delivery_report.cjs');
 const sdwOrch = require('../skills/sdw-orch/scripts/sdw_orch.cjs');
 const { JUDGE_STUB, installJudgeEnv, clearJudgeEnv } = require('./fixtures/judge_env.cjs');
 
@@ -369,4 +370,114 @@ test('Judge config validation rejects unknown criticity and non-string model fie
   const judge = scoreEvaluator.resolveJudgeConfig({ scoring: {} });
   assert.equal(judge.criticity, 'strict', 'Criticity defaults to strict');
   assert.equal(judge.mode, 'agent', 'Without a command the judge is the current agent model instance');
+});
+
+// ==== Spec 00057 AC15: optional judge analysis fields ====
+
+test('00057 AC15: the verdict schema accepts and normalizes the advisory analysis fields', () => {
+  const acs = dagPlanner.parseAcceptanceCriteria(SPEC_BODY);
+  const verdict = {
+    score: 10,
+    verdicts: acs.map(ac => ({ id: ac.id, verdict: 'verified', evidence: 'app.cjs:1' })),
+    summary: '  Both criteria implemented.  ',
+    risks: [{ severity: 'Medium', evidence: 'app.cjs:1', note: '  check edge case  ' }],
+    followUps: [' add edge-case test ']
+  };
+
+  const validated = scoreEvaluator.validateVerdict(verdict, { acs });
+  assert.equal(validated.valid, true, 'AC15: a verdict with summary, risks, and followUps is accepted');
+  assert.equal(validated.data.summary, 'Both criteria implemented.');
+  assert.deepEqual(validated.data.risks, [{ severity: 'medium', evidence: 'app.cjs:1', note: 'check edge case' }]);
+  assert.deepEqual(validated.data.followUps, ['add edge-case test']);
+
+  const report = scoreEvaluator.applyVerdict(validated.data, { acs, minScore: 8 });
+  assert.equal(report.score, 10, 'AC15: the analysis never changes the score');
+  assert.equal(report.analysis.summary, 'Both criteria implemented.');
+  assert.equal(report.analysis.risks.length, 1);
+
+  const malformed = scoreEvaluator.validateVerdict(
+    { ...verdict, summary: 42, risks: 'none', followUps: [1] },
+    { acs }
+  );
+  assert.equal(malformed.valid, false, 'AC15: malformed analysis fields fail closed');
+  assert.ok(malformed.errors.some(error => error.includes('summary')));
+  assert.ok(malformed.errors.some(error => error.includes('risks')));
+  assert.ok(malformed.errors.some(error => error.includes('followUps')));
+
+  const legacy = scoreEvaluator.validateVerdict({ score: 10, verdicts: verdict.verdicts }, { acs });
+  assert.equal(legacy.valid, true, 'AC15: verdicts without the analysis fields stay valid');
+  assert.equal(legacy.data.summary, null);
+  assert.deepEqual(legacy.data.risks, []);
+  assert.deepEqual(legacy.data.followUps, []);
+});
+
+test('00057 AC15: score submit persists the analysis as the Step 5 contribution', () => {
+  const previous = process.env.SDW_JUDGE_COMMAND;
+  const tmpDir = setupRepo();
+  try {
+    clearJudgeEnv();
+    const runCode = sdwOrch.cmdRun({
+      root: tmpDir,
+      specPath: '.sdw/specs/score-spec.md',
+      skipReview: true,
+      skipPr: true,
+      ...implementationOptions()
+    });
+    assert.equal(runCode, 5, 'the run pauses awaiting a submitted verdict');
+
+    const state = stateManager.findLatestRunState(tmpDir);
+    const promptText = fs.readFileSync(path.resolve(tmpDir, state.steps[5].output.judgePromptPath), 'utf8');
+    const acIds = [...new Set([...promptText.matchAll(/^- (AC[1-9][0-9]*):/gm)].map(match => match[1]))];
+    assert.ok(acIds.length > 0, 'the judge prompt declares the criteria to cover');
+
+    const verdictFile = path.join(tmpDir, 'verdict-analysis.json');
+    fs.writeFileSync(verdictFile, JSON.stringify({
+      score: 10,
+      verdicts: acIds.map(id => ({ id, verdict: 'verified', evidence: 'app.cjs:1' })),
+      summary: 'Delivery implements both criteria.',
+      risks: [{ severity: 'low', evidence: 'app.cjs:1', note: 'single file change' }],
+      followUps: ['cover the resume failure path']
+    }));
+
+    const submit = sdwOrch.cmdScoreSubmit({ root: tmpDir, runId: state.runId, verdictPath: verdictFile });
+    assert.equal(submit, 0, 'AC15: the analysis-bearing verdict is accepted');
+
+    const submitted = stateManager.loadRunState(tmpDir, state.runId);
+    assert.equal(submitted.steps[5].output.verdict.summary, 'Delivery implements both criteria.');
+    assert.deepEqual(submitted.steps[5].output.verdict.followUps, ['cover the resume failure path']);
+
+    const judgment = submitted.reportContributions.find(entry => entry.step === 5 && entry.kind === 'judgment');
+    assert.ok(judgment, 'AC15: score submit appends the judgment contribution');
+    assert.equal(judgment.body.summary, 'Delivery implements both criteria.');
+    assert.equal(judgment.body.risks[0].severity, 'low');
+    assert.deepEqual(judgment.body.followUps, ['cover the resume failure path']);
+
+    const verdictEntry = submitted.reportContributions.find(entry => entry.step === 5 && entry.kind === 'verdict');
+    assert.ok(verdictEntry, 'AC15: score submit appends the verdict contribution');
+    assert.equal(verdictEntry.body.score, 10);
+    assert.equal(verdictEntry.body.minScore, 8);
+
+    const reportPath = path.join(tmpDir, submitted.artifactsDir, 'report.md');
+    assert.ok(fs.existsSync(reportPath), 'AC15: the in-progress report is refreshed on submit');
+    const markdown = fs.readFileSync(reportPath, 'utf8');
+    assert.match(markdown, /Judge analysis/, 'AC15: the analysis renders in the report');
+    assert.match(markdown, /cover the resume failure path/);
+
+    // Spec 00057 AC16, AC17: the persisted verdict and judgment render as their
+    // own report sections, with the per-criterion rows and the advisory fence.
+    const judgmentSection = markdown.slice(markdown.indexOf('## Conformance Judgment'), markdown.indexOf('## Judge Analysis'));
+    assert.match(judgmentSection, /- Score: 10\/10 \(required minimum 8\/10\)/, 'AC16: the persisted score renders');
+    assert.match(judgmentSection, /- Criteria: \d+ verified, 0 failed/, 'AC16: the persisted counts render');
+    for (const id of acIds) {
+      assert.match(judgmentSection, new RegExp(`\\| ${id} \\| verified \\| app\\.cjs:1 \\|`), `AC16: criterion ${id} renders with its verdict and evidence`);
+    }
+    const analysisSection = markdown.slice(markdown.indexOf('## Judge Analysis'), markdown.indexOf('## Learnings'));
+    assert.match(analysisSection, /Source: Step 5 judge .*advisory/, 'AC17: the analysis is attributed and marked advisory');
+    assert.match(analysisSection, /Summary: Delivery implements both criteria\./, 'AC17: the persisted summary renders');
+    assert.match(analysisSection, /\| low \| app\.cjs:1 \| single file change \|/, 'AC17: the persisted risk renders');
+    assert.match(analysisSection, /- cover the resume failure path/, 'AC17: the persisted follow-up renders');
+  } finally {
+    withJudgeEnv(previous);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });

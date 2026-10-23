@@ -5,6 +5,34 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const REPORT_SUFFIX = '-report.md';
+const IN_PROGRESS_REPORT_NAME = 'report.md';
+const REPORT_CONTRIBUTIONS_KEY = 'reportContributions';
+
+const STEP_NAMES = {
+  1: 'derivation',
+  2: 'refinement',
+  3: 'dag_generation',
+  4: 'implementation',
+  5: 'scoring',
+  6: 'delivery_commit',
+  7: 'code_review',
+  8: 'pr_preparation',
+  9: 'retrospective'
+};
+const CONTRIBUTION_STEP_COUNT = 9;
+
+/**
+ * Spec 00057 AC1, AC8: every step renders a section, even when it contributed
+ * nothing. The planned kinds are the contract the dry-run summary advertises.
+ */
+const PLANNED_CONTRIBUTION_KINDS = {
+  3: ['plan'],
+  4: ['task'],
+  5: ['verdict', 'judgment'],
+  6: ['delivery'],
+  7: ['review'],
+  8: ['gates', 'ship', 'convergence']
+};
 
 function normalizePath(p) {
   return String(p == null ? '' : p).replace(/\\/g, '/');
@@ -42,6 +70,221 @@ function resolveNowIso(now) {
     if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
   }
   return new Date().toISOString();
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * Spec 00057 AC1: a contribution names the step, the step name, the timestamp,
+ * the kind, a title, a body, and the evidence paths. Anything else is malformed
+ * and is skipped by the renderer (AC12) instead of poisoning the report.
+ */
+function normalizeContribution(entry) {
+  if (!isPlainObject(entry)) return null;
+  const step = Number(entry.step);
+  if (!Number.isInteger(step) || step < 1) return null;
+  const stepName = typeof entry.stepName === 'string' ? entry.stepName.trim() : '';
+  if (!stepName) return null;
+  const at = typeof entry.at === 'string' ? entry.at.trim() : '';
+  if (!at || Number.isNaN(Date.parse(at))) return null;
+  const kind = typeof entry.kind === 'string' ? entry.kind.trim() : '';
+  if (!kind) return null;
+  const title = typeof entry.title === 'string' ? entry.title.trim() : '';
+  if (!title) return null;
+  if (entry.body === undefined || entry.body === null) return null;
+  if (!Array.isArray(entry.evidence) || entry.evidence.some((item) => typeof item !== 'string')) return null;
+  return {
+    step,
+    stepName,
+    at,
+    kind,
+    title,
+    body: entry.body,
+    evidence: entry.evidence.map(normalizePath)
+  };
+}
+
+/**
+ * Builds one contribution entry. `at` is injectable so tests stay deterministic.
+ */
+function buildContribution(options) {
+  const settings = options || {};
+  const step = Number(settings.step);
+  return {
+    step,
+    stepName: settings.stepName || STEP_NAMES[step] || `step_${step}`,
+    at: resolveNowIso(settings.at),
+    kind: String(settings.kind || ''),
+    title: String(settings.title || ''),
+    body: settings.body === undefined ? null : settings.body,
+    evidence: Array.isArray(settings.evidence) ? settings.evidence.map(normalizePath) : []
+  };
+}
+
+function hasContribution(state, step, kind) {
+  const list = state && Array.isArray(state[REPORT_CONTRIBUTIONS_KEY]) ? state[REPORT_CONTRIBUTIONS_KEY] : [];
+  return list.some((entry) => {
+    const normalized = normalizeContribution(entry);
+    return Boolean(normalized) && normalized.step === Number(step) && normalized.kind === kind;
+  });
+}
+
+/**
+ * Spec 00057 AC1: appends to the run-state list and never rewrites an earlier
+ * entry. The caller owns the state write so a malformed entry cannot persist.
+ */
+function appendContribution(state, entry) {
+  if (!state || typeof state !== 'object') {
+    return { added: false, warning: 'Run state is not an object.' };
+  }
+  const normalized = normalizeContribution(entry);
+  if (!normalized) {
+    return { added: false, warning: 'Contribution is malformed and was not appended.' };
+  }
+  if (!Array.isArray(state[REPORT_CONTRIBUTIONS_KEY])) state[REPORT_CONTRIBUTIONS_KEY] = [];
+  state[REPORT_CONTRIBUTIONS_KEY].push(normalized);
+  return { added: true, entry: normalized, warning: null };
+}
+
+/**
+ * Spec 00057 AC8, AC12: selects the renderable contributions in step order
+ * (step, then timestamp, then insertion) and reports the malformed entries it
+ * skipped so the caller can record one warning in run state.
+ */
+function selectContributions(state) {
+  const list = state && Array.isArray(state[REPORT_CONTRIBUTIONS_KEY]) ? state[REPORT_CONTRIBUTIONS_KEY] : [];
+  const contributions = [];
+  const warnings = [];
+  list.forEach((entry, index) => {
+    const normalized = normalizeContribution(entry);
+    if (!normalized) {
+      const rawStep = Number(entry && entry.step);
+      warnings.push({
+        index,
+        step: Number.isInteger(rawStep) ? rawStep : null,
+        message: `Contribution[${index}] is malformed and was skipped.`
+      });
+      return;
+    }
+    contributions.push({ ...normalized, index });
+  });
+  contributions.sort((a, b) => (
+    a.step - b.step
+    || Date.parse(a.at) - Date.parse(b.at)
+    || a.index - b.index
+  ));
+  return {
+    contributions: contributions.map(({ index, ...entry }) => entry),
+    warnings
+  };
+}
+
+function renderContributionEntry(entry) {
+  const lines = [`- **${entry.kind}** ${entry.at} - ${entry.title}`];
+  if (entry.body !== null && entry.body !== undefined) {
+    const body = typeof entry.body === 'string' ? entry.body : JSON.stringify(entry.body);
+    lines.push(`  - Body: \`${String(body).replace(/\r?\n/g, ' ').replace(/`/g, "'")}\``);
+  }
+  if (entry.evidence.length > 0) {
+    lines.push(`  - Evidence: ${entry.evidence.map((item) => `\`${item}\``).join(', ')}`);
+  }
+  return lines.join('\n');
+}
+
+/**
+ * Spec 00057 AC8: renders one subsection per step in ascending order; a step
+ * without contributions renders `Not available` instead of disappearing.
+ */
+function renderContributionsSection(context) {
+  const selection = (context && context.contributionSelection) || { contributions: [], warnings: [] };
+  let markdown = '## Step Contributions\n\n';
+  markdown += `- Recorded: ${selection.contributions.length} contribution(s)\n`;
+  if (selection.warnings.length > 0) {
+    markdown += `- Skipped malformed: ${selection.warnings.length} entry(ies)\n`;
+  }
+  markdown += '\n';
+  for (let stepNumber = 1; stepNumber <= CONTRIBUTION_STEP_COUNT; stepNumber++) {
+    markdown += `### Step ${stepNumber}: ${STEP_NAMES[stepNumber]}\n\n`;
+    const entries = selection.contributions.filter((entry) => entry.step === stepNumber);
+    if (entries.length === 0) {
+      markdown += 'Not available\n\n';
+      continue;
+    }
+    markdown += `${entries.map(renderContributionEntry).join('\n')}\n\n`;
+  }
+  return markdown.trimEnd();
+}
+
+/**
+ * Spec 00057 AC14: the compact summary the dry run prints instead of a report.
+ */
+function summarizeContributions(state) {
+  const selection = selectContributions(state);
+  const byStep = {};
+  for (const entry of selection.contributions) {
+    byStep[entry.step] = (byStep[entry.step] || 0) + 1;
+  }
+  const parts = Object.keys(byStep)
+    .map(Number)
+    .sort((a, b) => a - b)
+    .map((step) => `step ${step}: ${byStep[step]}`);
+  let text = selection.contributions.length === 0
+    ? '0 contributions recorded'
+    : `${selection.contributions.length} contribution(s) recorded (${parts.join(', ')})`;
+  if (selection.warnings.length > 0) text += `; ${selection.warnings.length} malformed skipped`;
+  return { total: selection.contributions.length, byStep, warnings: selection.warnings, text };
+}
+
+function summarizePlannedContributions() {
+  return Object.keys(PLANNED_CONTRIBUTION_KINDS)
+    .map(Number)
+    .sort((a, b) => a - b)
+    .map((step) => `${step} ${PLANNED_CONTRIBUTION_KINDS[step].join('+')}`)
+    .join(', ');
+}
+
+function resolveInProgressReportPath(targetRoot, state) {
+  const root = path.resolve(targetRoot || process.cwd());
+  const runState = state || {};
+  const artifactsRel = runState.artifactsDir
+    || path.join('.sdw', 'state', runState.specSlug || 'spec', runState.runId || 'run');
+  const artifactsAbs = path.isAbsolute(artifactsRel) ? artifactsRel : path.resolve(root, artifactsRel);
+  return path.join(artifactsAbs, IN_PROGRESS_REPORT_NAME);
+}
+
+/**
+ * Spec 00057 AC10: renders to a sibling temporary file and renames it over the
+ * destination, so a failed write leaves the previous report byte-identical.
+ */
+function writeReportAtomic(reportPath, content) {
+  const dir = path.dirname(reportPath);
+  const tempPath = path.join(
+    dir,
+    `.${path.basename(reportPath)}.${process.pid}.${Date.now()}.tmp`
+  );
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(tempPath, content, 'utf8');
+    fs.renameSync(tempPath, reportPath);
+    return { ok: true, reportPath };
+  } catch (err) {
+    try {
+      if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+    } catch (cleanupErr) {
+      // The report path is already intact; a leftover temp file is not fatal.
+    }
+    return { ok: false, error: err.message, reportPath };
+  }
+}
+
+function readReportFile(reportPath) {
+  try {
+    return fs.readFileSync(reportPath, 'utf8');
+  } catch (e) {
+    return null;
+  }
 }
 
 function formatDuration(durationMs) {
@@ -646,6 +889,160 @@ function renderCodeReviewSection(context) {
   return markdown.trimEnd();
 }
 
+function contributionsOfKind(state, kind) {
+  return selectContributions(state).contributions.filter((entry) => entry.kind === kind);
+}
+
+/**
+ * Spec 00057 AC16: the score, the required minimum, the verified and failed
+ * counts, and one row per criterion with its verdict and evidence. The numbers
+ * come from the Step 5 verdict contribution; an absent contribution degrades to
+ * `Not available` instead of recomputing anything.
+ */
+function renderConformanceJudgmentSection(context) {
+  const { state } = context;
+  const entries = contributionsOfKind(state, 'verdict');
+  let markdown = '## Conformance Judgment\n\n';
+  if (entries.length === 0) return `${markdown}Not available`;
+  const body = (entries[entries.length - 1].body && typeof entries[entries.length - 1].body === 'object')
+    ? entries[entries.length - 1].body
+    : {};
+  const verdicts = Array.isArray(body.verdicts) ? body.verdicts : [];
+  const verified = body.verifiedCount !== undefined && body.verifiedCount !== null
+    ? Number(body.verifiedCount)
+    : verdicts.filter((entry) => entry && entry.verdict === 'verified').length;
+  const failed = body.failingCount !== undefined && body.failingCount !== null
+    ? Number(body.failingCount)
+    : verdicts.filter((entry) => entry && entry.verdict && entry.verdict !== 'verified').length;
+  const score = body.score === undefined || body.score === null ? '(not scored)' : `${body.score}/10`;
+  const minimum = body.minScore === undefined || body.minScore === null ? '(not recorded)' : `${body.minScore}/10`;
+  markdown += `- Score: ${score} (required minimum ${minimum})\n`;
+  markdown += `- Criteria: ${verified} verified, ${failed} failed (${verdicts.length} judged)\n`;
+  markdown += `- Result: ${body.passed === true ? 'passed' : 'below the required minimum'}\n`;
+  markdown += `- Source: Step 5 verdict contribution\n\n`;
+  if (verdicts.length === 0) {
+    return `${markdown}No criterion verdicts recorded.`;
+  }
+  markdown += '| Criterion | Verdict | Evidence |\n|---|---|---|\n';
+  for (const entry of verdicts) {
+    markdown += `| ${escapeCell(entry && entry.id)} | ${escapeCell(entry && entry.verdict)} | ${escapeCell(entry && entry.evidence)} |\n`;
+  }
+  return markdown.trimEnd();
+}
+
+/**
+ * Spec 00057 AC17: the judge summary, risks, and follow-ups, attributed to the
+ * Step 5 judge and marked advisory. The section is read-only prose: it never
+ * feeds the score, a gate, the review, or a halt decision.
+ */
+function renderJudgeAnalysisSection(context) {
+  const { state } = context;
+  const entries = contributionsOfKind(state, 'judgment');
+  let markdown = '## Judge Analysis\n\n';
+  if (entries.length === 0) return `${markdown}Not available`;
+  const body = (entries[entries.length - 1].body && typeof entries[entries.length - 1].body === 'object')
+    ? entries[entries.length - 1].body
+    : {};
+  const risks = Array.isArray(body.risks) ? body.risks : [];
+  const followUps = Array.isArray(body.followUps) ? body.followUps : [];
+  markdown += '- Source: Step 5 judge (advisory; it never changes the score, a gate, the review, or a halt decision)\n';
+  markdown += `- Summary: ${body.summary ? escapeCell(body.summary) : '(not recorded)'}\n`;
+  if (risks.length === 0) {
+    markdown += '- Risks: none recorded\n';
+  } else {
+    markdown += '\n| Severity | Evidence | Risk |\n|---|---|---|\n';
+    for (const risk of risks) {
+      markdown += `| ${escapeCell(risk && risk.severity)} | ${escapeCell(risk && risk.evidence)} | ${escapeCell(risk && risk.note)} |\n`;
+    }
+  }
+  if (followUps.length === 0) {
+    markdown += '- Follow-ups: none recorded\n';
+  } else {
+    markdown += '\nFollow-ups:\n';
+    for (const followUp of followUps) markdown += `- ${escapeCell(followUp)}\n`;
+  }
+  return markdown.trimEnd();
+}
+
+/**
+ * Spec 00057 AC23: every learning contribution with its kind, slug, severity,
+ * recording step, and the step that applied it.
+ */
+function renderLearningsSection(context) {
+  const { state } = context;
+  const entries = contributionsOfKind(state, 'learning');
+  let markdown = '## Learnings\n\n';
+  if (entries.length === 0) return `${markdown}Not available`;
+  markdown += '| Kind | Slug | Severity | Recorded at step | Applied by | Evidence |\n|---|---|---|---|---|---|\n';
+  for (const entry of entries) {
+    const body = (entry.body && typeof entry.body === 'object') ? entry.body : {};
+    const appliedBy = body.appliedBy && body.appliedBy.step
+      ? `step ${body.appliedBy.step} (${escapeCell(body.appliedBy.evidence)})`
+      : 'not applied';
+    markdown += `| ${escapeCell(body.kind)} | ${escapeCell(body.slug)} | ${escapeCell(body.severity)} | step ${entry.step} (${escapeCell(entry.stepName)}) | ${appliedBy} | ${escapeCell((body.pathPatterns || []).join(', '))} |\n`;
+  }
+  return markdown.trimEnd();
+}
+
+/**
+ * Spec 00057 AC25: the retrospective signals, candidates, and the fixes it
+ * applied, plus the candidates it routed and the specifications it queued.
+ */
+function renderRetrospectiveSection(context) {
+  const { state } = context;
+  const entries = contributionsOfKind(state, 'retro');
+  let markdown = '## Retrospective\n\n';
+  if (entries.length === 0) return `${markdown}Not available`;
+  const body = (entries[entries.length - 1].body && typeof entries[entries.length - 1].body === 'object')
+    ? entries[entries.length - 1].body
+    : {};
+  const candidates = Array.isArray(body.candidates) ? body.candidates : [];
+  const fixes = (body.fixes && typeof body.fixes === 'object') ? body.fixes : {};
+  const signals = (body.signals && typeof body.signals === 'object') ? body.signals : {};
+  markdown += `- Status: \`${escapeCell(body.status || 'unknown')}\`\n`;
+  if (body.reportMd) markdown += `- Report: \`${escapeCell(body.reportMd)}\`\n`;
+  if (body.reportJson) markdown += `- Data: \`${escapeCell(body.reportJson)}\`\n`;
+  const signalParts = [];
+  if (signals.retries) signalParts.push(`retries ${signals.retries.total} (score ${signals.retries.scoreIterations}, review ${signals.retries.reviewIterations}, rounds ${signals.retries.reviewRounds}, abandonments ${signals.retries.dispatchAbandonments})`);
+  if (signals.leftoverRuns !== undefined) signalParts.push(`leftover runs ${signals.leftoverRuns}`);
+  if (signals.missingArtifacts !== undefined) signalParts.push(`missing artifacts ${signals.missingArtifacts}`);
+  if (signals.reviewFindings) signalParts.push(`review findings ${signals.reviewFindings.total} (${signals.reviewFindings.open} open)`);
+  markdown += `- Signals: ${signalParts.length > 0 ? signalParts.join('; ') : 'none recorded'}\n`;
+  markdown += `- Candidates: ${candidates.length}\n`;
+  for (const candidate of candidates) {
+    const route = candidate.route ? ` -> route \`${escapeCell(candidate.route)}\`` : '';
+    const status = candidate.status ? ` (${escapeCell(candidate.status)})` : '';
+    markdown += `  - ${escapeCell(candidate.id)} [${escapeCell(candidate.severity)}] ${escapeCell(candidate.title)}${route}${status}\n`;
+  }
+  const recorded = Array.isArray(fixes.recorded) ? fixes.recorded : [];
+  const queued = Array.isArray(fixes.queuedSpecifications) ? fixes.queuedSpecifications : [];
+  const failures = Array.isArray(fixes.failures) ? fixes.failures : [];
+  markdown += '- Applied fixes:\n';
+  if (recorded.length === 0 && queued.length === 0 && !fixes.consolidated && failures.length === 0) {
+    markdown += '  - none\n';
+  }
+  for (const fix of recorded) {
+    markdown += `  - memory record \`${escapeCell(fix.slug)}\` via \`${escapeCell(fix.backend)}\`${fix.candidateId ? ` (candidate ${escapeCell(fix.candidateId)})` : ''}\n`;
+  }
+  if (fixes.consolidated) {
+    markdown += `  - consolidate: removed ${fixes.consolidated.removed}, kept ${fixes.consolidated.kept}\n`;
+  }
+  for (const fix of queued) {
+    markdown += `  - queued specification \`${escapeCell(fix.spec)}\`${fix.candidateId ? ` (candidate ${escapeCell(fix.candidateId)})` : ''}\n`;
+  }
+  for (const failure of failures) {
+    markdown += `  - failed route \`${escapeCell(failure.route)}\`${failure.candidateId ? ` (candidate ${escapeCell(failure.candidateId)})` : ''}: ${escapeCell(failure.error)}\n`;
+  }
+  const routed = Array.isArray(body.routedCandidates) ? body.routedCandidates : [];
+  if (routed.length > 0) {
+    markdown += '- Routed candidates:\n';
+    for (const candidate of routed) {
+      markdown += `  - ${escapeCell(candidate.id)} -> \`${escapeCell(candidate.route)}\` (${escapeCell(candidate.status)})${candidate.spec ? `: \`${escapeCell(candidate.spec)}\`` : ''}\n`;
+    }
+  }
+  return markdown.trimEnd();
+}
+
 function renderBreakingChangesSection(breaking) {
   let markdown = '## Breaking Changes\n\n';
   if (!breaking.available) {
@@ -807,6 +1204,7 @@ function buildDeliveryReport(options) {
   const deliveryCommitSubject = state.deliveryCommit
     ? resolveCommitSubject(root, state.deliveryCommit)
     : '';
+  const contributionSelection = selectContributions(state);
 
   const context = {
     root,
@@ -821,7 +1219,8 @@ function buildDeliveryReport(options) {
     timeline,
     stepWindows,
     testTotals,
-    deliveryCommitSubject
+    deliveryCommitSubject,
+    contributionSelection
   };
 
   const sections = [
@@ -832,19 +1231,25 @@ function buildDeliveryReport(options) {
     renderFilesChangedSection(context),
     renderVerificationSection(context),
     renderCodeReviewSection(context),
+    renderConformanceJudgmentSection(context),
+    renderJudgeAnalysisSection(context),
+    renderLearningsSection(context),
+    renderRetrospectiveSection(context),
     renderBreakingChangesSection(breaking),
     renderQualitySection(context),
     renderSpecObservationsSection(context),
     renderNotesSection(context),
-    renderOutcomeSection(context)
+    renderOutcomeSection(context),
+    renderContributionsSection(context)
   ];
   return `${sections.join('\n\n')}\n`;
 }
 
 /**
- * Writes the report to its companion path, overwriting any previous copy so a
- * resumed run never appends. Returns null when the file cannot be written; the
- * caller records the warning and continues the delivery (AC16).
+ * Writes the committed companion from the complete contribution set. The render
+ * happens before the atomic write, so a render failure never truncates the
+ * previous report. Returns null when the file cannot be written; the caller
+ * records the warning and continues the delivery (AC16).
  */
 function writeDeliveryReport(options) {
   const root = path.resolve(options.targetRoot || process.cwd());
@@ -854,21 +1259,80 @@ function writeDeliveryReport(options) {
     console.warn('[sdw-orch] Warning: Could not write the delivery report: run state has no specification path.');
     return null;
   }
+  let content;
   try {
-    fs.mkdirSync(path.dirname(reportPath), { recursive: true });
-    fs.writeFileSync(reportPath, buildDeliveryReport({ ...options, targetRoot: root, state }), 'utf8');
-    return { reportPath, relPath: toProjectRelative(root, reportPath) };
+    content = buildDeliveryReport({ ...options, targetRoot: root, state });
   } catch (err) {
-    console.warn(`[sdw-orch] Warning: Could not write the delivery report at "${toProjectRelative(root, reportPath)}": ${err.message}`);
+    console.warn(`[sdw-orch] Warning: Could not render the delivery report at "${toProjectRelative(root, reportPath)}": ${err.message}`);
     return null;
   }
+  const previous = readReportFile(reportPath);
+  const writeResult = writeReportAtomic(reportPath, content);
+  if (!writeResult.ok) {
+    console.warn(`[sdw-orch] Warning: Could not write the delivery report at "${toProjectRelative(root, reportPath)}": ${writeResult.error}`);
+    return null;
+  }
+  return {
+    reportPath,
+    relPath: toProjectRelative(root, reportPath),
+    changed: previous !== content,
+    warnings: selectContributions(state).warnings
+  };
+}
+
+/**
+ * Spec 00057 AC9, AC11: re-renders the in-progress report under the run
+ * artifact directory at every step boundary. It never commits and never throws:
+ * a failure returns `{ ok: false, error }` for the caller to record as a warning.
+ */
+function writeInProgressReport(options) {
+  const root = path.resolve(options.targetRoot || process.cwd());
+  const state = options.state || {};
+  const reportPath = resolveInProgressReportPath(root, state);
+  let content;
+  try {
+    content = buildDeliveryReport({ ...options, targetRoot: root, state });
+  } catch (err) {
+    return { ok: false, error: err.message, reportPath, warnings: [] };
+  }
+  const writeResult = writeReportAtomic(reportPath, content);
+  if (!writeResult.ok) {
+    return { ok: false, error: writeResult.error, reportPath, warnings: [] };
+  }
+  return {
+    ok: true,
+    reportPath,
+    relPath: toProjectRelative(root, reportPath),
+    warnings: selectContributions(state).warnings
+  };
 }
 
 module.exports = {
   REPORT_SUFFIX,
+  IN_PROGRESS_REPORT_NAME,
+  REPORT_CONTRIBUTIONS_KEY,
+  STEP_NAMES,
+  CONTRIBUTION_STEP_COUNT,
+  PLANNED_CONTRIBUTION_KINDS,
   resolveReportPath,
+  resolveInProgressReportPath,
   formatDuration,
   detectBreakingChanges,
+  normalizeContribution,
+  buildContribution,
+  appendContribution,
+  hasContribution,
+  selectContributions,
+  contributionsOfKind,
+  summarizeContributions,
+  summarizePlannedContributions,
+  renderContributionsSection,
+  renderConformanceJudgmentSection,
+  renderJudgeAnalysisSection,
+  renderLearningsSection,
+  renderRetrospectiveSection,
+  writeReportAtomic,
   buildDeliveryReport,
-  writeDeliveryReport
+  writeDeliveryReport,
+  writeInProgressReport
 };

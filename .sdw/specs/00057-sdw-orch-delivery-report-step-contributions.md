@@ -3,7 +3,7 @@ id: null
 slug: 00057-sdw-orch-delivery-report-step-contributions
 title: "SDW Delivery Report — Incremental Step Contributions, Learnings, and Retro Closure"
 source: local
-status: ready-to-implement
+status: implemented
 specDate: 2026-10-22
 priority: medium
 value: "Turns the delivery report into a living record fed by every step, carries each recorded learning into the steps that follow, and closes the run with a retrospective that fixes what it can"
@@ -111,6 +111,7 @@ Keep the deterministic core and let the steps feed it. Contributions are data, n
   - `skills/sdw-orch/scripts/sdw_orch.cjs`: append the step contributions and re-render at every step boundary and convergence iteration; capture every `sdw-memory record` as a learning; build the per-step digest; record the applying step; append the retro contribution; expose the companion re-render; `score submit` persists the analysis; `--dry-run` prints the contribution summary.
   - `skills/sdw-orch/scripts/delivery_report.cjs`: render every section from `reportContributions`, with ordering, degradation, and the atomic write.
   - `skills/sdw-orch/scripts/score_evaluator.cjs`: verdict validation accepts and normalizes the optional analysis fields, and `buildJudgePrompt` requires them while stating that they never change the score.
+  - `skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs`: the convergence loop records one `history` entry per iteration carrying the failing checks, the open threads, the resolved threads, and the fix commit, so the orchestrator renders one contribution per round.
   - `skills/sdw-memory/scripts/sdw_memory.cjs`: `record` reports the entry it persisted, and `query` accepts `--run <runId>` to merge the run-scoped index with the enabled backends.
   - `skills/sdw-retro/scripts/retro.cjs`: record the applied fixes and the routed candidates on its report, and hand them to `sdw-orch` as the retro contribution.
   - `skills/sdw-orch/references/orchestrator_protocol.md`: the contribution contract, the learning contract, the verdict schema, and the report sections.
@@ -155,7 +156,7 @@ Keep the deterministic core and let the steps feed it. Contributions are data, n
 
 | Readiness Item | Requirement | Verification Method |
 |----------------|--------------|---------------------|
-| EARS syntax | All 29 acceptance criteria conform to EARS patterns | Run `node skills/sdw-spec/scripts/validate_spec.cjs --mode=authoring .sdw/specs/00057-sdw-orch-delivery-report-judge-analysis.md` |
+| EARS syntax | All 29 acceptance criteria conform to EARS patterns | Run `node skills/sdw-spec/scripts/validate_spec.cjs --mode=authoring .sdw/specs/00057-sdw-orch-delivery-report-step-contributions.md` |
 | Scope enclosure | The contribution contract, the learning contract, the two judge sections, and the retro closure | Inspect `## Description` plus `## Out of Scope` |
 | Target inventory | Orchestrator, report writer, score evaluator, memory, retro, protocol and skill references, and tests | Inspect `## Notes` target list |
 | Dependency | Spec 00054 is delivered, so the report writer and its sections exist | Check the registry row for 00054 |

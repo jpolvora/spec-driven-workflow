@@ -175,7 +175,11 @@ function buildJudgePrompt(options) {
   lines.push('  "verdicts": [');
   lines.push('    { "id": "AC1", "verdict": "verified", "evidence": "path/to/file:line" }');
   lines.push('  ],');
-  lines.push('  "notes": "optional short justification"');
+  lines.push('  "summary": "one paragraph on what the delivery did and how well it honours the specification",');
+  lines.push('  "risks": [');
+  lines.push('    { "severity": "medium", "evidence": "path/to/file:line", "note": "what a reviewer should scrutinize" }');
+  lines.push('  ],');
+  lines.push('  "followUps": ["candidate next step"]');
   lines.push('}');
   lines.push('```');
   lines.push('');
@@ -183,8 +187,9 @@ function buildJudgePrompt(options) {
   lines.push('- `score` is an integer from 0 to 10 and must equal round(verified criteria / total criteria * 10).');
   lines.push('- Every criterion above appears exactly once in `verdicts`, with `verdict` set to `verified` or `failed`.');
   lines.push('- `evidence` cites a file path from the diff; when failing, state the missing behaviour instead.');
+  lines.push('- `summary`, `risks`, and `followUps` are required. They are advisory: they never change `score`, a gate, a review outcome, or a halt decision.');
   lines.push('- Judge the criteria and the diff only. Never assume work that is not visible in the diff.');
-  lines.push('- When the diff is truncated, judge only what is visible and say so in `notes`.');
+  lines.push('- When the diff is truncated, judge only what is visible and say so in `summary`.');
   lines.push('');
 
   const judgeMeta = [];
@@ -267,6 +272,61 @@ function validateVerdict(raw, options) {
     errors.push('Verdict "notes" must be a string when present.');
   }
 
+  // Spec 00057 AC15: the judge analysis is optional in the schema (older verdicts
+  // stay valid) and advisory in every decision. It is normalized here so
+  // `score submit` can persist it as the Step 5 contribution.
+  let summary = null;
+  if (raw.summary !== undefined && raw.summary !== null) {
+    if (typeof raw.summary !== 'string') {
+      errors.push('Verdict "summary" must be a string when present.');
+    } else {
+      summary = raw.summary.trim() || null;
+    }
+  }
+
+  const risks = [];
+  if (raw.risks !== undefined && raw.risks !== null) {
+    if (!Array.isArray(raw.risks)) {
+      errors.push('Verdict "risks" must be an array when present.');
+    } else {
+      raw.risks.forEach((risk, index) => {
+        const label = `risks[${index}]`;
+        if (!risk || typeof risk !== 'object' || Array.isArray(risk)) {
+          errors.push(`${label} must be an object.`);
+          return;
+        }
+        const severity = typeof risk.severity === 'string' ? risk.severity.trim().toLowerCase() : '';
+        if (!severity) errors.push(`${label}.severity must be a non-empty string.`);
+        const note = typeof risk.note === 'string' ? risk.note.trim() : '';
+        if (!note) errors.push(`${label}.note must be a non-empty string.`);
+        let evidence = '';
+        if (risk.evidence !== undefined && risk.evidence !== null) {
+          if (typeof risk.evidence !== 'string') {
+            errors.push(`${label}.evidence must be a string when present.`);
+          } else {
+            evidence = risk.evidence.trim();
+          }
+        }
+        if (severity && note) risks.push({ severity, evidence, note });
+      });
+    }
+  }
+
+  const followUps = [];
+  if (raw.followUps !== undefined && raw.followUps !== null) {
+    if (!Array.isArray(raw.followUps)) {
+      errors.push('Verdict "followUps" must be an array when present.');
+    } else {
+      raw.followUps.forEach((item, index) => {
+        if (typeof item !== 'string' || !item.trim()) {
+          errors.push(`followUps[${index}] must be a non-empty string.`);
+        } else {
+          followUps.push(item.trim());
+        }
+      });
+    }
+  }
+
   return {
     valid: errors.length === 0,
     errors,
@@ -277,7 +337,10 @@ function validateVerdict(raw, options) {
         verdict: String(entry.verdict).trim().toLowerCase(),
         evidence: entry.evidence.trim()
       })),
-      notes: typeof raw.notes === 'string' ? raw.notes : null
+      notes: typeof raw.notes === 'string' ? raw.notes : null,
+      summary,
+      risks,
+      followUps
     } : null
   };
 }
@@ -353,6 +416,13 @@ function applyVerdict(verdict, options) {
       notes: verdict.notes || null,
       diffBytes: judgeMeta.diffBytes !== undefined ? judgeMeta.diffBytes : null,
       diffTruncated: Boolean(judgeMeta.diffTruncated)
+    },
+    // Spec 00057 AC15: the analysis travels with the score report but is never
+    // an input to it; the score above derives from the verdicts alone.
+    analysis: {
+      summary: typeof verdict.summary === 'string' ? verdict.summary : null,
+      risks: Array.isArray(verdict.risks) ? verdict.risks : [],
+      followUps: Array.isArray(verdict.followUps) ? verdict.followUps : []
     },
     feedback
   };

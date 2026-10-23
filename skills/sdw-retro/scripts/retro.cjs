@@ -22,9 +22,10 @@ const fs = require('fs');
 const path = require('path');
 const util = require('util');
 const zlib = require('zlib');
+const { spawnSync } = require('child_process');
 
 const STATE_DIR = '.sdw/state';
-const USAGE = 'Usage: retro.cjs run [--run-id <id>] [--root <path>] [--transcript <path>]... [--transcript-mode <host|captured>] [--json]';
+const USAGE = 'Usage: retro.cjs run [--run-id <id>] [--root <path>] [--candidates <file>] [--transcript <path>]... [--transcript-mode <host|captured>] [--json]';
 
 // A named transcript can be a host session file: a zstd frame sequence where
 // one zstdDecompressSync call returns only the first frame.
@@ -41,6 +42,15 @@ const CATEGORIES = Object.freeze([
   'navigation-pointer',
   'no-op-deletion'
 ]);
+
+// Spec 00057 AC26, AC27: the retro applies every fix its routes allow. A code
+// change under skills/ or tests/ is routed to a follow-up specification and
+// named; the file itself is never edited.
+const MEMORY_ROUTE = 'memory';
+const SPECIFICATION_ROUTE = 'specification';
+const OPERATOR_ROUTE = 'operator';
+const CODE_CHANGE_PREFIXES = Object.freeze(['skills/', 'tests/']);
+const SPECIFICATION_TARGET_PATTERN = /^\.sdw\/specs\/.+\.md$/;
 
 // Host-owned inputs that retro must never read (AC3).
 const HOST_LOG_PATTERNS = Object.freeze([
@@ -645,6 +655,166 @@ function validateCandidate(candidate) {
   return { valid: errors.length === 0, errors };
 }
 
+function emptyFixes() {
+  return { recorded: [], consolidated: null, queuedSpecifications: [], failures: [] };
+}
+
+// Spec 00057 AC26, AC27: one route per candidate. A memory candidate records;
+// a candidate that needs a change under skills/ or tests/ is routed to a
+// follow-up specification and never applied to the file; anything else stays
+// an open operator decision.
+function routeCandidate(candidate) {
+  const target = normalizePath(String((candidate.proposedChange && candidate.proposedChange.target) || '').trim());
+  if (candidate.category === 'memory' || target === 'sdw-memory') {
+    return { route: MEMORY_ROUTE, applied: true, codeChange: false, spec: null };
+  }
+  const needsCodeChange = CODE_CHANGE_PREFIXES.some((prefix) => target.startsWith(prefix))
+    || CODE_CHANGE_PREFIXES.some((prefix) => target.includes(`/${prefix}`));
+  if (needsCodeChange) {
+    return { route: SPECIFICATION_ROUTE, applied: true, codeChange: true, spec: null };
+  }
+  if (SPECIFICATION_TARGET_PATTERN.test(target)) {
+    return { route: SPECIFICATION_ROUTE, applied: true, codeChange: false, spec: target };
+  }
+  return { route: OPERATOR_ROUTE, applied: false, codeChange: false, spec: null };
+}
+
+function candidateSpecText(candidate) {
+  const heading = candidate.id
+    ? `Retro follow-up ${candidate.id}: ${candidate.title || 'untitled candidate'}`
+    : `Retro follow-up: ${candidate.title || 'untitled candidate'}`;
+  return [
+    heading,
+    '',
+    `Proposed change: ${JSON.stringify(candidate.proposedChange)}`,
+    `Evidence: ${JSON.stringify(candidate.evidence)}`
+  ].join('\n');
+}
+
+function specScript() {
+  return path.resolve(__dirname, '..', '..', 'sdw-spec', 'scripts', 'sdw_spec.cjs');
+}
+
+// Default seam: sdw-spec owns drafting, numbering, and registry registration,
+// so the retro queues a backlog specification instead of writing one.
+function createSpecWithCli({ root, candidate }) {
+  const result = spawnSync(process.execPath, [
+    specScript(),
+    'new',
+    candidateSpecText(candidate),
+    '--title', String(candidate.title || candidate.id || 'Retro follow-up').trim(),
+    '--root', root,
+    '--json'
+  ], { cwd: root, encoding: 'utf8' });
+  if (result.error) throw result.error;
+  let payload = null;
+  try {
+    payload = String(result.stdout || '').trim() ? JSON.parse(String(result.stdout).trim()) : null;
+  } catch (error) {
+    payload = null;
+  }
+  if (result.status !== 0 || !payload || payload.status === 'error') {
+    throw new Error((payload && payload.error) || String(result.stderr || '').trim() || `sdw-spec new exited with code ${result.status}`);
+  }
+  if (typeof payload.filePath !== 'string' || !payload.filePath.trim()) {
+    throw new Error('sdw-spec new did not return the created specification path');
+  }
+  return payload;
+}
+
+function memoryModule() {
+  return require('../../sdw-memory/scripts/sdw_memory.cjs');
+}
+
+/**
+ * Spec 00057 AC26, AC27: applies every fix the routes allow and reports each
+ * applied fix and each routed candidate. It never throws and never edits a file
+ * under skills/ or tests/.
+ */
+function applyCandidateRoutes(options = {}) {
+  const root = path.resolve(options.root || process.cwd());
+  const deps = options.deps || {};
+  const candidates = Array.isArray(options.candidates) ? options.candidates : [];
+  const fixes = emptyFixes();
+  const routedCandidates = [];
+  let memoryCandidates = 0;
+
+  for (const candidate of candidates) {
+    const decision = routeCandidate(candidate);
+    const candidateId = candidate.id || null;
+    if (decision.route === MEMORY_ROUTE) {
+      memoryCandidates += 1;
+      const draft = (candidate.proposedChange && candidate.proposedChange.memoryRecord) || null;
+      if (!draft) {
+        fixes.failures.push({ candidateId, route: MEMORY_ROUTE, error: 'memory candidate has no record draft' });
+        routedCandidates.push({ id: candidateId, title: candidate.title || null, severity: candidate.severity || null, route: MEMORY_ROUTE, status: 'failed' });
+        continue;
+      }
+      const record = deps.recordMemory
+        ? deps.recordMemory(draft, { root, candidate })
+        : memoryModule().recordMemory(root, draft, { backend: 'auto' });
+      if (record && record.exit === 0) {
+        const backends = (record.report.recorded || []).map((item) => item.backend).join('+') || 'unavailable';
+        fixes.recorded.push({ candidateId, slug: record.report.slug || draft.slug || null, backend: backends });
+        routedCandidates.push({ id: candidateId, title: candidate.title || null, severity: candidate.severity || null, route: MEMORY_ROUTE, status: 'applied' });
+      } else {
+        fixes.failures.push({ candidateId, route: MEMORY_ROUTE, error: (record && record.error) || 'the memory record was not applied' });
+        routedCandidates.push({ id: candidateId, title: candidate.title || null, severity: candidate.severity || null, route: MEMORY_ROUTE, status: 'failed' });
+      }
+      continue;
+    }
+
+    if (decision.route === SPECIFICATION_ROUTE) {
+      let queued = decision.spec ? { filePath: decision.spec, slug: null } : null;
+      if (!queued) {
+        try {
+          queued = deps.createSpec
+            ? deps.createSpec({ root, candidate })
+            : createSpecWithCli({ root, candidate });
+        } catch (error) {
+          fixes.failures.push({ candidateId, route: SPECIFICATION_ROUTE, error: error && error.message ? error.message : String(error) });
+          routedCandidates.push({ id: candidateId, title: candidate.title || null, severity: candidate.severity || null, route: SPECIFICATION_ROUTE, status: 'failed' });
+          continue;
+        }
+      }
+      const absolute = path.isAbsolute(queued.filePath) ? queued.filePath : path.resolve(root, queued.filePath);
+      const spec = normalizePath(path.relative(root, absolute));
+      const slug = queued.slug || path.basename(absolute, path.extname(absolute));
+      fixes.queuedSpecifications.push({ candidateId, spec, slug });
+      routedCandidates.push({ id: candidateId, title: candidate.title || null, severity: candidate.severity || null, route: SPECIFICATION_ROUTE, status: 'queued', spec });
+      continue;
+    }
+
+    routedCandidates.push({ id: candidateId, title: candidate.title || null, severity: candidate.severity || null, route: OPERATOR_ROUTE, status: 'open' });
+  }
+
+  // Consolidation follows the records: a duplicate candidate is a duplicate
+  // entry, and the retro merges it instead of reporting it as a failure.
+  if (memoryCandidates > 0) {
+    try {
+      const consolidated = deps.consolidate
+        ? deps.consolidate({ root })
+        : memoryModule().consolidateMemory(root, { backend: 'traps' });
+      if (consolidated && consolidated.exit === 0) {
+        fixes.consolidated = { backend: consolidated.report.backend, removed: consolidated.report.removed, kept: consolidated.report.kept };
+      }
+    } catch (error) {
+      fixes.failures.push({ candidateId: null, route: 'consolidate', error: error && error.message ? error.message : String(error) });
+    }
+  }
+
+  return { fixes, routedCandidates };
+}
+
+function readCandidatesFile(root, declared) {
+  const absolute = path.isAbsolute(declared) ? declared : path.resolve(root, declared);
+  const raw = fs.readFileSync(absolute, 'utf8');
+  const parsed = JSON.parse(raw);
+  const list = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.candidates) ? parsed.candidates : null);
+  if (!list) throw new Error(`candidates file has no candidates array: ${normalizePath(declared)}`);
+  return list;
+}
+
 function buildReport(options) {
   const candidates = [];
   for (const candidate of toArray(options.candidates)) {
@@ -668,6 +838,9 @@ function buildReport(options) {
     artifacts: [...options.inspection.artifacts],
     signals: options.signals,
     candidates,
+    fixes: options.fixes || emptyFixes(),
+    routedCandidates: toArray(options.routedCandidates),
+    rejectedCandidates: toArray(options.rejectedCandidates),
     candidateContract: candidateContract()
   };
 }
@@ -807,6 +980,40 @@ function renderMarkdown(report) {
   lines.push(`Candidate contract: fields ${contract.fields.map((field) => `\`${field}\``).join(', ')}; severity ${contract.severity.join('|')}; category ${contract.category.join('|')}.`);
   lines.push('');
 
+  lines.push('## Applied Fixes & Routed Candidates', '');
+  const fixes = report.fixes || emptyFixes();
+  const routed = toArray(report.routedCandidates);
+  if (fixes.recorded.length === 0 && !fixes.consolidated && fixes.queuedSpecifications.length === 0 && fixes.failures.length === 0) {
+    lines.push('No fix was applied and no candidate was routed.');
+  } else {
+    for (const fix of fixes.recorded) {
+      lines.push(`- Memory record applied: \`${fix.slug}\` via \`${fix.backend}\`${fix.candidateId ? ` (candidate ${fix.candidateId})` : ''}.`);
+    }
+    if (fixes.consolidated) {
+      lines.push(`- Duplicate entries consolidated (${fixes.consolidated.backend}): removed ${fixes.consolidated.removed}, kept ${fixes.consolidated.kept}.`);
+    }
+    for (const fix of fixes.queuedSpecifications) {
+      lines.push(`- Follow-up specification queued: \`${fix.spec}\`${fix.candidateId ? ` (candidate ${fix.candidateId})` : ''}.`);
+    }
+    for (const failure of fixes.failures) {
+      lines.push(`- Route \`${failure.route}\` failed${failure.candidateId ? ` for candidate ${failure.candidateId}` : ''}: ${failure.error}`);
+    }
+  }
+  lines.push('');
+  lines.push('Routed candidates:');
+  if (routed.length === 0) {
+    lines.push('- None.');
+  } else {
+    for (const item of routed) {
+      lines.push(`- \`${item.id}\` -> \`${item.route}\` (${item.status})${item.spec ? `: \`${item.spec}\`` : ''}`);
+    }
+  }
+  if (toArray(report.rejectedCandidates).length > 0) {
+    lines.push('');
+    lines.push(`Rejected candidates (not applied): ${report.rejectedCandidates.map((item) => `\`${item.id || 'unknown'}\``).join(', ')}.`);
+  }
+  lines.push('');
+
   lines.push('## Excluded Inputs', '');
   if (report.excludedInputs.length === 0) {
     lines.push('None.');
@@ -862,6 +1069,22 @@ function runRetro(options = {}) {
     if (!inspection.inputs.includes(transcript.path)) inspection.inputs.push(transcript.path);
   }
   const signals = collectSignals(state, inspection, collectLeftoverRuns(entries, selected), transcripts);
+
+  // Spec 00057 AC26, AC27: candidates handed in with --candidates are validated,
+  // then every fix the routes allow is applied before the report is written.
+  const supplied = toArray(options.candidates);
+  if (options.candidatesPath) supplied.push(...readCandidatesFile(root, options.candidatesPath));
+  const candidates = [];
+  const rejectedCandidates = [];
+  for (const candidate of supplied) {
+    const result = validateCandidate(candidate);
+    if (result.valid) candidates.push(candidate);
+    else rejectedCandidates.push({ id: candidate && candidate.id ? candidate.id : null, errors: result.errors });
+  }
+  const routed = options.applyFixes === false
+    ? { fixes: emptyFixes(), routedCandidates: [] }
+    : applyCandidateRoutes({ root, candidates, deps: options.deps });
+
   const report = buildReport({
     state,
     runIdFallback: selected.name.replace(/\.state\.json$/i, ''),
@@ -871,7 +1094,10 @@ function runRetro(options = {}) {
     inspection,
     signals,
     transcripts: transcripts.inputs,
-    candidates: options.candidates
+    candidates,
+    fixes: routed.fixes,
+    routedCandidates: routed.routedCandidates,
+    rejectedCandidates
   });
   const outputs = writeReports(root, artifactsDirectoryPath, report);
   return { root, artifactsDir, outputs, report };
@@ -882,6 +1108,10 @@ function parseArgs(argv) {
     subcommand: null,
     runId: null,
     root: null,
+    candidates: [],
+    candidatesPath: null,
+    applyFixes: true,
+    deps: null,
     transcripts: [],
     transcriptMode: 'host',
     json: false,
@@ -896,6 +1126,10 @@ function parseArgs(argv) {
       options.runId = argv[++index];
       if (options.runId === undefined) throw new Error('missing value for --run-id');
     } else if (arg.startsWith('--run-id=')) options.runId = arg.slice('--run-id='.length);
+    else if (arg === '--candidates') {
+      options.candidatesPath = argv[++index];
+      if (options.candidatesPath === undefined) throw new Error('missing value for --candidates');
+    } else if (arg.startsWith('--candidates=')) options.candidatesPath = arg.slice('--candidates='.length);
     else if (arg === '--root') {
       options.root = argv[++index];
       if (options.root === undefined) throw new Error('missing value for --root');
@@ -916,6 +1150,7 @@ function parseArgs(argv) {
   options.subcommand = positional[0] || null;
   if (positional.length > 1) throw new Error(`unexpected argument: ${positional[1]}`);
   if (options.runId !== null && String(options.runId).trim() === '') throw new Error('missing value for --run-id');
+  if (options.candidatesPath !== null && String(options.candidatesPath).trim() === '') throw new Error('missing value for --candidates');
   if (options.root !== null && String(options.root).trim() === '') throw new Error('missing value for --root');
   if (options.transcripts.some((value) => String(value).trim() === '')) throw new Error('missing value for --transcript');
   if (!TRANSCRIPT_MODES.includes(options.transcriptMode)) {
@@ -965,15 +1200,23 @@ module.exports = {
   CANDIDATE_FIELDS,
   CATEGORIES,
   SEVERITIES,
+  MEMORY_ROUTE,
+  SPECIFICATION_ROUTE,
+  OPERATOR_ROUTE,
+  applyCandidateRoutes,
   buildReport,
   candidateContract,
   collectExpectedArtifacts,
   collectSignals,
+  createSpecWithCli,
+  emptyFixes,
   inspectArtifacts,
   isHostLogPath,
   main,
   parseArgs,
+  readCandidatesFile,
   renderMarkdown,
+  routeCandidate,
   runRetro,
   selectRun,
   validateCandidate

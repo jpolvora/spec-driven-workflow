@@ -70,5 +70,5 @@ Central repository index tracking specification lifecycle states, metadata, and 
 | 00055 | 00055-sdw-spec-list-by-priority | SDW Spec Priority Ranking — Declared Priority Fields and the list-by-priority Subcommand | completed | local | 2026-10-22 | PASS | - |
 | 00055 | 00055-sdw-spec-list-by-priority-report | Delivery Report — SDW Spec Priority Ranking — Declared Priority Fields and the list-by-priority Subcommand | pending | local | 2026-10-22 | FAIL | - |
 | 00056 | 00056-sdw-per-role-agent-models | SDW Per-Role Agent Model Configuration | pending | local | 2026-10-22 | PASS | - |
-| 00057 | 00057-sdw-orch-delivery-report-step-contributions | SDW Delivery Report — Incremental Step Contributions, Learnings, and Retro Closure | pending | local | 2026-10-22 | PASS | - |
+| 00057 | 00057-sdw-orch-delivery-report-step-contributions | SDW Delivery Report — Incremental Step Contributions, Learnings, and Retro Closure | completed | local | 2026-10-22 | PASS | - |
 | 00058 | 00058-sdw-batch-delivery-integrity | SDW Batch Delivery Integrity — Merge, Pre-Flight, Base Freshness, and Registry Truth | completed | local | 2026-10-22 | PASS | - |

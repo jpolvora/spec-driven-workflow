@@ -1134,3 +1134,129 @@ test('AC14 & AC15: a successful sdw-orch run records the exact retro command wit
   assert.equal(fs.existsSync(markdownPath), false, 'delivery never starts a retro (AC14)');
   assert.equal(fs.existsSync(jsonPath), false, 'delivery never starts a retro (AC14)');
 });
+
+// ---------------------------------------------------------------------------
+// Spec 00057 AC26, AC27, AC29: the retro applies its routes and never edits
+// skills/; the report records each applied fix and each routed candidate.
+// ---------------------------------------------------------------------------
+
+function retroCandidate(overrides) {
+  return {
+    id: 'RETRO-001',
+    title: 'Automated check for the retry guard',
+    severity: 'high',
+    category: 'automated-check',
+    evidence: { artifact: '.sdw/state/run-6000-routes.state.json', ref: '#steps.8.output' },
+    proposedChange: { target: 'skills/sdw-retro/scripts/retro.cjs' },
+    ...overrides
+  };
+}
+
+test('00057 AC26 & AC27 & AC29: the retro records, consolidates, queues a specification, and never edits skills/', (t) => {
+  const root = makeProject(t);
+  const state = makeState({ runId: 'run-6000-routes', slug: '00600-routes' });
+  writeState(root, state);
+  writeDefaultArtifacts(root, state);
+
+  // The candidate that needs a code change names an existing file: the retro
+  // must queue a specification and leave this file byte-identical.
+  const skillFile = path.join(root, 'skills', 'sdw-retro', 'scripts', 'retro.cjs');
+  fs.mkdirSync(path.dirname(skillFile), { recursive: true });
+  fs.writeFileSync(skillFile, "'use strict';\n// delivered code, never edited by the retro\n", 'utf8');
+  const before = fs.readFileSync(skillFile, 'utf8');
+
+  // A duplicate pair proves consolidation runs after the records.
+  fs.mkdirSync(path.join(root, '.sdw', 'memory'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.sdw', 'memory', 'traps.md'),
+    '# Anti-Regression Traps Log\n\n| Slug | Title | Layer | Avoid | Action | Date |\n|---|---|---|---|---|---|\n'
+    + '| duplicate-row | Duplicate row | general | A | B | 2026-01-01 |\n'
+    + '| duplicate-row | Duplicate row | general | A2 | B2 | 2026-01-02 |\n', 'utf8');
+
+  const candidates = [
+    retroCandidate({}),
+    retroCandidate({
+      id: 'RETRO-002',
+      title: 'Record the retry trap',
+      severity: 'medium',
+      category: 'memory',
+      proposedChange: {
+        target: 'sdw-memory',
+        memoryRecord: {
+          kind: 'trap',
+          slug: 'retro-memory-record',
+          title: 'Retro memory record',
+          avoid: 'Recording the same trap twice.',
+          action: 'Query before recording.',
+          paths: ['skills/sdw-retro/scripts/retro.cjs']
+        }
+      }
+    }),
+    retroCandidate({
+      id: 'RETRO-003',
+      title: 'Rename the operator note',
+      severity: 'low',
+      category: 'navigation-pointer',
+      proposedChange: { target: 'AGENTS.md' }
+    })
+  ];
+
+  const previous = process.env.SDW_MEMORY_NO_MEMO;
+  process.env.SDW_MEMORY_NO_MEMO = '1';
+  let report;
+  try {
+    report = retro.runRetro({ root, runId: state.runId, candidates }).report;
+  } finally {
+    if (previous === undefined) delete process.env.SDW_MEMORY_NO_MEMO;
+    else process.env.SDW_MEMORY_NO_MEMO = previous;
+  }
+
+  // AC26: the memory entry the candidate called for was recorded, with its backend.
+  assert.equal(report.fixes.recorded.length, 1, 'AC26: one memory record was applied');
+  assert.equal(report.fixes.recorded[0].candidateId, 'RETRO-002');
+  assert.equal(report.fixes.recorded[0].slug, 'retro-memory-record');
+  assert.equal(report.fixes.recorded[0].backend, 'traps');
+  assert.match(fs.readFileSync(path.join(root, '.sdw', 'memory', 'traps.md'), 'utf8'), /\| retro-memory-record \|/);
+
+  // AC26: duplicate entries were consolidated and the counts are reported.
+  assert.ok(report.fixes.consolidated, 'AC26: consolidation ran');
+  assert.ok(report.fixes.consolidated.removed >= 1, 'AC26: the duplicate row was removed');
+  assert.ok(report.fixes.consolidated.kept >= 1, 'AC26: one row was kept');
+
+  // AC26, AC27: the skills/ candidate is queued as a named specification.
+  assert.equal(report.fixes.queuedSpecifications.length, 1, 'AC27: one follow-up specification was queued');
+  const queued = report.fixes.queuedSpecifications[0];
+  assert.equal(queued.candidateId, 'RETRO-001');
+  assert.match(queued.spec, /^\.sdw\/specs\/\d{5}-/, 'AC27: the queued specification is named project-relatively');
+  assert.ok(fs.existsSync(path.join(root, queued.spec)), 'AC27: the queued specification exists in the backlog');
+  assert.equal(fs.readFileSync(skillFile, 'utf8'), before, 'AC27: the skills/ file is never edited');
+  assert.equal(report.fixes.failures.length, 0, 'every route applied');
+
+  // AC26: each candidate is routed and its outcome reported.
+  assert.deepEqual(
+    report.routedCandidates.map(entry => [entry.id, entry.route, entry.status]),
+    [
+      ['RETRO-001', 'specification', 'queued'],
+      ['RETRO-002', 'memory', 'applied'],
+      ['RETRO-003', 'operator', 'open']
+    ],
+    'AC26: every routed candidate is reported with its route and status'
+  );
+
+  const markdown = fs.readFileSync(path.join(root, report.outputs.markdown), 'utf8');
+  assert.match(markdown, /## Applied Fixes & Routed Candidates/, 'AC29: the report carries the applied fixes section');
+  assert.match(markdown, /Follow-up specification queued: `\.sdw\/specs\/\d{5}-/, 'AC29: the report names the queued specification');
+  assert.match(markdown, /Memory record applied: `retro-memory-record` via `traps`/, 'AC29: the report names the recorded memory entry');
+  assert.match(markdown, /`RETRO-003` -> `operator` \(open\)/, 'AC29: the open operator route is reported');
+});
+
+test('00057 AC29: a retro run with no candidates applies no fix and queues no specification', (t) => {
+  const root = makeProject(t);
+  const state = makeState({ runId: 'run-6100-empty', slug: '00610-empty' });
+  writeState(root, state);
+  writeDefaultArtifacts(root, state);
+
+  const report = retro.runRetro({ root, runId: state.runId }).report;
+  assert.deepEqual(report.fixes, { recorded: [], consolidated: null, queuedSpecifications: [], failures: [] }, 'AC29: no fix is invented without a candidate');
+  assert.deepEqual(report.routedCandidates, [], 'AC29: no candidate is routed without an input');
+  assert.equal(fs.existsSync(path.join(root, '.sdw', 'specs')), false, 'AC29: no specification is queued');
+});
