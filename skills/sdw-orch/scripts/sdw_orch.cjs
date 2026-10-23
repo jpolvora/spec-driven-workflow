@@ -263,7 +263,9 @@ function parseArgs(args) {
     // `dag preview` keeps its --spec path; the other combined commands have none.
     if (combinedMatch !== 'dag-preview') result.specPath = null;
     if (combinedMatch === 'ledger') {
-      result.ledgerAction = ['link', 'report', 'audit'].includes(positional[1]) ? positional[1] : 'link';
+      // Keep the parsed action verbatim: cmdLedger refuses anything it does not
+      // know, so a mistyped action can never mutate the ledger.
+      result.ledgerAction = positional[1] || null;
     } else if (!result.taskId && rest[0]) {
       result.taskId = rest[0];
     }

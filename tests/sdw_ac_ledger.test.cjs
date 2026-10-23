@@ -1384,3 +1384,25 @@ test('AC14: file evidence refuses the project root, directories, and missing fil
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+// Spec 00017 AC3: a mistyped ledger action is refused instead of becoming `link`.
+test('AC3: an unknown ledger action is refused and never links evidence', () => {
+  const root = setupProject();
+  try {
+    const { ledgerPath } = seedRun(root);
+    const evidenceFile = ensureEvidenceFile(root, 'skills/real.cjs');
+    const snapshot = fs.readFileSync(ledgerPath, 'utf8');
+
+    const refused = spawnSync(
+      process.execPath,
+      [ORCH, 'ledger', 'reprot', '--root', root, '--run-id', 'run-ac-ledger-test', '--ac', 'AC1', '--type', 'file', '--path', evidenceFile],
+      { encoding: 'utf8' }
+    );
+    assert.equal(refused.status, 1, `a mistyped action is refused: ${refused.stderr}`);
+    assert.match(refused.stderr, /Unknown ledger action "reprot"/, 'the refusal names the action');
+    assert.equal(fs.readFileSync(ledgerPath, 'utf8'), snapshot, 'the ledger is unchanged');
+    assert.equal(readLedgerFile(ledgerPath).criteria[0].status, 'unverified');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
