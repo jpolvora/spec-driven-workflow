@@ -22,6 +22,7 @@ const diagnostics = require('./diagnostics.cjs');
 const telemetry = require('./telemetry.cjs');
 const monitor = require('./monitor.cjs');
 const reporting = require('./reporting.cjs');
+const freshVerify = require('./fresh_verify.cjs');
 const memory = require('../../sdw-memory/scripts/sdw_memory.cjs');
 
 // Spec 00043: short, consistent step-number progress headers. Additive only:
@@ -2479,6 +2480,332 @@ function applyLedgerScore({ targetRoot, state, report, verdict, judgeResolution 
   };
 }
 
+// Spec 00018 AC1: fresh verification is opt-in between Step 4 evidence
+// acceptance and Step 5 scoring. The default is false, so existing runs keep
+// their current behaviour until an operator enables the stage.
+function freshVerifyEnabled(config) {
+  return Boolean(config && config.verification && config.verification.freshVerifyEnabled === true);
+}
+
+function parseFreshVerifyCriteria(targetRoot, state) {
+  if (!state || !state.specPath) return [];
+  try {
+    return dagPlanner.parseAcceptanceCriteria(fs.readFileSync(path.resolve(targetRoot, state.specPath), 'utf8'));
+  } catch (err) {
+    return [];
+  }
+}
+
+// Spec 00018 AC4: a completed record is reusable only when it holds exactly one
+// accepted verdict for every current acceptance criterion.
+function verdictsCoverCriteria(verdicts, criteria) {
+  const expected = new Set((criteria || []).map(ac => ac.id));
+  const seen = new Set();
+  for (const entry of Array.isArray(verdicts) ? verdicts : []) {
+    if (!entry || !expected.has(entry.id) || seen.has(entry.id)) return false;
+    if (!freshVerify.VERDICT_VALUES.includes(entry.verdict)) return false;
+    seen.add(entry.id);
+  }
+  return expected.size > 0 && seen.size === expected.size;
+}
+
+function freshVerifyArtifactsDir(targetRoot, state) {
+  return state.artifactsDir || stateManager.getArtifactsRelDir(targetRoot, state.specSlug, state.runId);
+}
+
+function updateFreshVerifyRecord(targetRoot, runId, patch) {
+  const state = stateManager.loadRunState(targetRoot, runId);
+  state.freshVerify = { ...(state.freshVerify || {}), ...patch };
+  return stateManager.saveRunState(targetRoot, state);
+}
+
+function printFreshVerifyHandoff(targetRoot, state, record) {
+  const promptPath = record && record.promptPath ? path.resolve(targetRoot, record.promptPath) : '';
+  const verdictPath = record && record.verdictPath ? path.resolve(targetRoot, record.verdictPath) : '';
+  console.log(`\n[Fresh Verify] Status: awaiting_verdict (round ${(record && record.round) || 1}). Step 5 scoring is blocked until a verdict is accepted.`);
+  console.log(`[Fresh Verify] Scratch worktree: ${(record && record.scratch && record.scratch.path) || '(none)'}`);
+  console.log(`[Fresh Verify] Prompt (acceptance criteria and diff only): ${normalizePath(promptPath)}`);
+  console.log(`[Fresh Verify] Verdict file: ${normalizePath(verdictPath)}`);
+  console.log(`\nWrite exactly one verdict per acceptance criterion, then submit it with:`);
+  console.log(`  node "${orchCommandPath()}" fresh-verify --run-id ${state.runId} --verdict "${normalizePath(verdictPath)}"${followUpRootFlag(targetRoot)}`);
+  console.log(`After the verdict is accepted, continue with:`);
+  console.log(`  node "${orchCommandPath()}" resume --run-id ${state.runId}${followUpRootFlag(targetRoot)}`);
+}
+
+// Spec 00018 AC2/AC3: creates the scratch worktree from the delivery diff,
+// writes the fenced verifier prompt, and records the scratch path on the run
+// state. A failure records a failed verification and never continues silently.
+function beginFreshVerification(targetRoot, state, criteria) {
+  let started;
+  try {
+    started = freshVerify.startVerification({
+      projectRoot: targetRoot,
+      runId: state.runId,
+      criteria,
+      baseCommit: state.baseCommit,
+      artifactsDir: freshVerifyArtifactsDir(targetRoot, state),
+      scratchDir: freshVerify.resolveScratchDir(targetRoot, state.runId)
+    });
+  } catch (err) {
+    const failed = updateFreshVerifyRecord(targetRoot, state.runId, {
+      status: 'failed',
+      error: err.message,
+      errorCode: err.code || 'fresh_verify_failed',
+      updatedAt: new Date().toISOString()
+    });
+    return { ok: false, state: failed, error: err };
+  }
+
+  const now = new Date().toISOString();
+  const priorRound = state.freshVerify && Number.isInteger(state.freshVerify.round) ? state.freshVerify.round : 0;
+  const record = {
+    status: 'awaiting_verdict',
+    round: priorRound + 1,
+    baseCommit: String(state.baseCommit),
+    acIds: criteria.map(ac => ac.id),
+    scratch: {
+      path: started.scratch.rel,
+      createdAt: now,
+      diffBytes: started.diff.bytes,
+      diffApplied: started.scratch.diffApplied,
+      removedAt: null
+    },
+    promptPath: started.promptFileRel,
+    verdictPath: started.verdictFileRel,
+    verdicts: [],
+    residualDefects: [],
+    startedAt: now,
+    updatedAt: now,
+    error: null
+  };
+  const saved = updateFreshVerifyRecord(targetRoot, state.runId, record);
+  return { ok: true, state: saved, record: saved.freshVerify };
+}
+
+// Spec 00018 AC4/AC10: validates the verdict and removes the scratch worktree
+// on success and on failure. A rejection names every defect in the verdict file.
+function finishFreshVerification(targetRoot, state, criteria, verdictPath) {
+  const verdictFileAbs = path.isAbsolute(verdictPath) ? verdictPath : path.resolve(targetRoot, verdictPath);
+  const read = freshVerify.readVerdictFile(verdictFileAbs);
+  const validation = read.ok
+    ? freshVerify.validateVerdict(read.verdict, criteria)
+    : { valid: false, errors: [read.error], verdicts: [], residualDefects: [] };
+
+  const prior = state.freshVerify || {};
+  const scratchAbs = prior.scratch && prior.scratch.path ? path.resolve(targetRoot, prior.scratch.path) : null;
+  const cleanup = scratchAbs
+    ? freshVerify.removeScratchWorktree({ projectRoot: targetRoot, worktreePath: scratchAbs })
+    : { ok: true, removed: false, reason: 'no_worktree' };
+
+  const ok = validation.valid && cleanup.ok;
+  const now = new Date().toISOString();
+  const patch = {
+    status: ok ? 'completed' : 'failed',
+    verdicts: validation.verdicts,
+    residualDefects: validation.residualDefects,
+    verificationErrors: validation.errors,
+    cleanup: cleanup.ok
+      ? { removed: cleanup.removed, completedAt: now }
+      : { removed: false, error: cleanup.error, completedAt: now },
+    completedAt: now,
+    updatedAt: now,
+    error: validation.valid
+      ? (cleanup.ok ? null : `Scratch worktree cleanup failed: ${cleanup.error}`)
+      : `Verdict rejected: ${validation.errors.join(' ')}`
+  };
+  if (prior.scratch) {
+    patch.scratch = { ...prior.scratch, removedAt: cleanup.ok ? now : null };
+  }
+  const saved = updateFreshVerifyRecord(targetRoot, state.runId, patch);
+  return { ok, state: saved, validation, cleanup, record: saved.freshVerify, verdictFileAbs };
+}
+
+// Spec 00018 AC1/AC17: the Step 4 -> 5 integration point. Returns exit code 0
+// when verification is disabled, complete, or absent from the path; 4 while a
+// fresh-context verdict is pending; 1 when verification fails closed and Step 5
+// must not score.
+function runFreshVerifyTransition(targetRoot, state, config, options = {}) {
+  if (!freshVerifyEnabled(config)) {
+    return { code: 0, state, skipped: true, reason: 'disabled' };
+  }
+  const step4 = state.steps && state.steps[4];
+  if (!step4 || step4.status !== 'completed') {
+    return { code: 0, state, skipped: true, reason: 'step4_incomplete' };
+  }
+
+  const criteria = parseFreshVerifyCriteria(targetRoot, state);
+  if (criteria.length === 0) {
+    console.log('[Fresh Verify] Specification declares no acceptance criteria; skipping fresh verification (Step 5 fails closed for such a specification).');
+    return { code: 0, state, skipped: true, reason: 'no_criteria' };
+  }
+
+  const prior = state.freshVerify || null;
+  if (prior && prior.status === 'completed' && verdictsCoverCriteria(prior.verdicts, criteria)) {
+    const scratchAbs = prior.scratch && prior.scratch.path ? path.resolve(targetRoot, prior.scratch.path) : null;
+    if (scratchAbs && fs.existsSync(scratchAbs)) {
+      const cleanup = freshVerify.removeScratchWorktree({ projectRoot: targetRoot, worktreePath: scratchAbs });
+      if (!cleanup.ok) {
+        const reason = `Scratch worktree cleanup failed: ${cleanup.error}`;
+        const failed = updateFreshVerifyRecord(targetRoot, state.runId, {
+          status: 'failed',
+          error: reason,
+          updatedAt: new Date().toISOString()
+        });
+        console.error(`[Fresh Verify] Fails closed: ${reason}`);
+        return { code: 1, state: failed, result: { runId: state.runId, status: 'failed', error: reason } };
+      }
+      state = updateFreshVerifyRecord(targetRoot, state.runId, {
+        scratch: { ...prior.scratch, removedAt: new Date().toISOString() },
+        updatedAt: new Date().toISOString()
+      });
+    }
+    console.log(`[Fresh Verify] Reusing accepted verdicts for ${criteria.map(ac => ac.id).join(', ')}.`);
+    return { code: 0, state, skipped: false, reused: true };
+  }
+
+  if (prior && prior.status === 'awaiting_verdict' && prior.scratch && fs.existsSync(path.resolve(targetRoot, prior.scratch.path))) {
+    const verdictAbs = prior.verdictPath ? path.resolve(targetRoot, prior.verdictPath) : null;
+    if (verdictAbs && fs.existsSync(verdictAbs)) {
+      const finished = finishFreshVerification(targetRoot, state, criteria, verdictAbs);
+      if (!finished.ok) {
+        const reason = finished.validation.errors.length > 0
+          ? finished.validation.errors.join(' ')
+          : finished.cleanup.error;
+        console.error(`[Fresh Verify] Verdict rejected; Step 5 scoring is blocked: ${reason}`);
+        return {
+          code: 1,
+          state: finished.state,
+          result: { runId: state.runId, status: 'failed', error: `Fresh verification failed: ${reason}` }
+        };
+      }
+      const verifiedCount = finished.validation.verdicts.filter(item => item.verdict === 'verified').length;
+      console.log(`[Fresh Verify] Verdict accepted: ${verifiedCount}/${criteria.length} AC(s) verified.`);
+      return { code: 0, state: finished.state, skipped: false };
+    }
+    state.status = 'paused';
+    state = stateManager.saveRunState(targetRoot, state);
+    printFreshVerifyHandoff(targetRoot, state, prior);
+    return { code: 4, state, skipped: false, awaiting: true, record: prior };
+  }
+
+  const started = beginFreshVerification(targetRoot, state, criteria);
+  if (!started.ok) {
+    const reason = `Fresh verification failed closed: ${started.error.message}`;
+    state = stateManager.loadRunState(targetRoot, state.runId);
+    state.status = 'failed';
+    state.errors = state.errors || [];
+    state.errors.push({ step: 4, timestamp: new Date().toISOString(), error: reason });
+    state = stateManager.saveRunState(targetRoot, state);
+    console.error(`[Fresh Verify] Scratch worktree creation failed; Step 5 scoring is blocked: ${started.error.message}`);
+    return { code: 1, state, result: { runId: state.runId, status: 'failed', error: reason } };
+  }
+
+  state = started.state;
+  state.status = 'paused';
+  state = stateManager.saveRunState(targetRoot, state);
+  printFreshVerifyHandoff(targetRoot, state, started.record);
+  return { code: 4, state, skipped: false, awaiting: true, record: started.record };
+}
+
+// Spec 00018 AC1-AC4: the explicit `fresh-verify` command. Without --verdict it
+// starts the stage and pauses at the handoff (exit 4); with --verdict it
+// validates the verdict file, records it, and cleans up the scratch worktree.
+function cmdFreshVerify(options) {
+  const targetRoot = options.root ? path.resolve(options.root) : process.cwd();
+  let state;
+  try {
+    state = options.runId
+      ? stateManager.loadRunState(targetRoot, options.runId)
+      : stateManager.findLatestRunState(targetRoot);
+  } catch (err) {
+    console.error(`[sdw-orch fresh-verify] ${err.message}`);
+    return 1;
+  }
+  if (!state) {
+    console.error('[sdw-orch fresh-verify] No run state found. Pass --run-id <id>.');
+    return 1;
+  }
+
+  const step4 = state.steps && state.steps[4];
+  if (!step4 || step4.status !== 'completed') {
+    console.error(`[sdw-orch fresh-verify] Run "${state.runId}" is not at the Step 4 -> 5 transition (Step 4 status: "${step4 ? step4.status : 'missing'}").`);
+    return 1;
+  }
+
+  const criteria = parseFreshVerifyCriteria(targetRoot, state);
+  if (criteria.length === 0) {
+    console.error(`[sdw-orch fresh-verify] Specification "${state.specPath}" is unreadable or declares no acceptance criteria.`);
+    return 1;
+  }
+
+  if (options.verdictPath) {
+    const finished = finishFreshVerification(targetRoot, state, criteria, options.verdictPath);
+    if (!finished.ok) {
+      console.error('[sdw-orch fresh-verify] Verdict rejected. Step 5 scoring remains blocked:');
+      finished.validation.errors.forEach(item => console.error(`  - ${item}`));
+      if (!finished.cleanup.ok) {
+        console.error(`  - Scratch worktree cleanup failed: ${finished.cleanup.error}`);
+      }
+      if (options.json) {
+        console.log(JSON.stringify({
+          runId: state.runId,
+          status: 'failed',
+          errors: finished.validation.errors,
+          cleanup: finished.cleanup
+        }, null, 2));
+      }
+      return 1;
+    }
+    const verifiedCount = finished.validation.verdicts.filter(item => item.verdict === 'verified').length;
+    console.log(`[sdw-orch fresh-verify] Verdict accepted for run "${state.runId}": ${verifiedCount}/${criteria.length} AC(s) verified.`);
+    if (finished.cleanup.removed) {
+      console.log('[sdw-orch fresh-verify] Scratch worktree removed.');
+    }
+    if (options.json) {
+      console.log(JSON.stringify({
+        runId: state.runId,
+        status: 'completed',
+        verdicts: finished.validation.verdicts,
+        residualDefects: finished.validation.residualDefects,
+        cleanup: finished.cleanup
+      }, null, 2));
+    }
+    return 0;
+  }
+
+  const prior = state.freshVerify || null;
+  if (prior && prior.status === 'completed' && verdictsCoverCriteria(prior.verdicts, criteria)) {
+    console.log(`[sdw-orch fresh-verify] Run "${state.runId}" already has accepted verdicts for ${criteria.map(ac => ac.id).join(', ')}.`);
+    return 0;
+  }
+  if (prior && prior.status === 'awaiting_verdict' && prior.scratch && fs.existsSync(path.resolve(targetRoot, prior.scratch.path))) {
+    printFreshVerifyHandoff(targetRoot, state, prior);
+    return 4;
+  }
+
+  const started = beginFreshVerification(targetRoot, state, criteria);
+  if (!started.ok) {
+    console.error(`[sdw-orch fresh-verify] Scratch worktree creation failed; scoring is blocked: ${started.error.message}`);
+    return 1;
+  }
+  state = started.state;
+  state.status = 'paused';
+  state = stateManager.saveRunState(targetRoot, state);
+  printFreshVerifyHandoff(targetRoot, state, started.record);
+  if (options.json) {
+    console.log(JSON.stringify({
+      runId: state.runId,
+      status: 'awaiting_verdict',
+      round: started.record.round,
+      scratch: started.record.scratch.path,
+      promptPath: started.record.promptPath,
+      verdictPath: started.record.verdictPath,
+      acIds: started.record.acIds
+    }, null, 2));
+  }
+  return 4;
+}
+
 // Spec 00033 AC8: the exported command is a thin wrapper around the workflow so
 // every terminal exit (Step 8 or a failure) finalizes the diagnostics report.
 function cmdRun(options) {
@@ -3616,6 +3943,27 @@ function executeRun(options) {
       console.log(`[sdw-orch] Second pass finished with no code change. Report: ${refineReport || '(not written)'}`);
       options._runResult = { runId: state.runId, status: 'completed', refineOutcome: 'no-change', report: refineReport };
       return 0;
+    }
+  }
+
+  // Spec 00018 AC1: fresh-context verification runs after Step 4 evidence
+  // acceptance and before Step 5 scoring. The stage is opt-in through
+  // verification.freshVerifyEnabled (default false), so existing runs are
+  // unchanged. A pending or failed verification blocks scoring.
+  if (startStep <= 5 && state.steps[4] && state.steps[4].status === 'completed' && state.steps[5].status !== 'completed') {
+    const fresh = runFreshVerifyTransition(targetRoot, state, config, options);
+    state = fresh.state;
+    if (fresh.code !== 0) {
+      options._runResult = fresh.awaiting
+        ? {
+            runId: state.runId,
+            status: 'awaiting_fresh_verification',
+            currentStep: 5,
+            freshVerifyPromptPath: fresh.record ? fresh.record.promptPath : null,
+            freshVerifyVerdictPath: fresh.record ? fresh.record.verdictPath : null
+          }
+        : (fresh.result || options._runResult);
+      return fresh.code;
     }
   }
 
@@ -6594,6 +6942,7 @@ Subcommands:
   task next              Dispatch the next ready DAG task to one worker (subagent mode)
   task finish            Submit accepted evidence for the dispatched DAG task
   task abandon           Return the dispatched DAG task to the queue
+  fresh-verify           Start or finish fresh-context verification between Step 4 and Step 5 (--run-id, --verdict; exit 4 while awaiting a verdict)
   score submit           Submit a judge verdict for Step 5 conformance scoring (per-criterion verdicts: ${scoreEvaluator.VERDICT_VALUES.join(' | ')})
   report re-render       Refresh the delivery report and the in-progress report from run state (never commits)
   report activity        Timesheet entries for a delivery day (--date YYYY-MM-DD, --json)
@@ -6621,7 +6970,7 @@ Options:
   --progress <json>      Progress payload JSON for checkpoint
   --progress-file <path> File containing the checkpoint progress JSON
   --next-action <text>   Action the next turn must take after pause-turn
-  --verdict <path>       Path to judge verdict JSON file for score submit (per-criterion verdicts: ${scoreEvaluator.VERDICT_VALUES.join(' | ')})
+  --verdict <path>       Path to a verdict JSON file for score submit (per-criterion verdicts: ${scoreEvaluator.VERDICT_VALUES.join(' | ')}) or fresh-verify (verified | unverified)
   --ac <id...>           Acceptance criterion ids for ledger link (one or more, until the next flag)
   --type <type>          Evidence type for ledger link: file | test | commit | review | sabotage
   --path <path>          Evidence path for --type file (stored project-relative with forward slashes; outside-root paths are refused)
@@ -6715,6 +7064,9 @@ function main() {
       case 'task-abandon':
         code = cmdTaskAbandon(options);
         break;
+      case 'fresh-verify':
+        code = cmdFreshVerify(options);
+        break;
       case 'score-submit':
         code = cmdScoreSubmit(options);
         break;
@@ -6802,6 +7154,9 @@ module.exports = {
   cmdTaskNext,
   cmdTaskAbandon,
   cmdTaskFinish,
+  cmdFreshVerify,
+  runFreshVerifyTransition,
+  freshVerifyEnabled,
   cmdScoreSubmit,
   cmdReportReRender,
   cmdSandbox,

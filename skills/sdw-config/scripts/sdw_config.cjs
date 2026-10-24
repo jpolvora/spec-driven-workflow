@@ -347,7 +347,8 @@ const DEFAULT_CONFIG = {
   verification: {
     buildCommand: null,
     testCommand: null,
-    timeoutMs: 600000
+    timeoutMs: 600000,
+    freshVerifyEnabled: false
   },
   requiredBuild: false,
   buildCommand: 'npm run build',
@@ -686,6 +687,11 @@ const DEFAULT_SCHEMA = {
           "type": "integer",
           "default": 600000,
           "description": "Execution timeout in milliseconds."
+        },
+        "freshVerifyEnabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Run fresh-context verification between Step 4 evidence acceptance and Step 5 scoring. Disabled by default; when enabled, scoring is blocked until one verdict per acceptance criterion is accepted."
         }
       },
       "additionalProperties": false
@@ -1118,6 +1124,9 @@ function validateConfigSchema(config) {
         if (typeof config.verification.timeoutMs !== 'number' || config.verification.timeoutMs <= 0) {
           errors.push('Property "verification.timeoutMs" must be a positive integer.');
         }
+      }
+      if ('freshVerifyEnabled' in config.verification && typeof config.verification.freshVerifyEnabled !== 'boolean') {
+        errors.push('Property "verification.freshVerifyEnabled" must be a boolean.');
       }
     }
   }
