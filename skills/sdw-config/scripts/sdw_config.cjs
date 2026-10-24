@@ -327,6 +327,10 @@ const DEFAULT_CONFIG = {
   changelogEnabled: true,
   changelogFile: '{projectRoot}/CHANGELOG.md',
   stateDir: '{projectRoot}/.sdw/state',
+  monitor: {
+    stallWindowSeconds: 900,
+    intervalSeconds: 60
+  },
   lockStaleMs: 300000,
   sandboxDir: '{projectRoot}/.sdw/sandbox',
   autoResolveGaps: true,
@@ -531,6 +535,25 @@ const DEFAULT_SCHEMA = {
       "type": "string",
       "description": "Path to the directory storing run session state files. Supports tokens {projectRoot} and {skillsRoot}.",
       "default": "{projectRoot}/.sdw/state"
+    },
+    "monitor": {
+      "type": "object",
+      "description": "Live run monitor (spec 00021). Every value is a positive integer count of seconds.",
+      "properties": {
+        "stallWindowSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 900,
+          "description": "Age in seconds after which a non-terminal run whose newest state and telemetry clock stopped advancing is classified 'stalled'."
+        },
+        "intervalSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 60,
+          "description": "Refresh interval in seconds for 'monitor --watch'."
+        }
+      },
+      "additionalProperties": false
     },
     "lockStaleMs": {
       "type": "integer",
@@ -927,6 +950,27 @@ function validateConfigSchema(config) {
   if ('stateDir' in config) {
     if (typeof config.stateDir !== 'string' || config.stateDir.trim().length === 0) {
       errors.push('Property "stateDir" must be a string.');
+    }
+  }
+
+  // monitor (spec 00021): the live monitor's stall window and watch interval.
+  if ('monitor' in config) {
+    if (!config.monitor || typeof config.monitor !== 'object' || Array.isArray(config.monitor)) {
+      errors.push('Property "monitor" must be an object.');
+    } else {
+      const allowedMonitorKeys = ['stallWindowSeconds', 'intervalSeconds'];
+      for (const key of Object.keys(config.monitor)) {
+        if (!allowedMonitorKeys.includes(key)) {
+          errors.push(`Property "monitor.${key}" is not a recognized key. Expected one of: ${allowedMonitorKeys.join(', ')}.`);
+        }
+      }
+      for (const key of allowedMonitorKeys) {
+        if (!(key in config.monitor)) continue;
+        const value = config.monitor[key];
+        if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
+          errors.push(`Property "monitor.${key}" must be a positive integer number of seconds.`);
+        }
+      }
     }
   }
 

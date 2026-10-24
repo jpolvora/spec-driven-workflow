@@ -30,6 +30,10 @@
   "changelogEnabled": true,
   "changelogFile": "{projectRoot}/CHANGELOG.md",
   "stateDir": "{projectRoot}/.sdw/state",
+  "monitor": {
+    "stallWindowSeconds": 900,
+    "intervalSeconds": 60
+  },
   "lockStaleMs": 300000,
   "sandboxDir": "{projectRoot}/.sdw/sandbox",
   "skillsRoot": "{projectRoot}/skills",
