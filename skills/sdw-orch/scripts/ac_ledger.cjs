@@ -19,6 +19,9 @@ const dagPlanner = require('./dag_planner.cjs');
 const LEDGER_FILENAME = 'ac-ledger.json';
 // AC4: the only evidence types a ledger record accepts.
 const EVIDENCE_TYPES = Object.freeze(['file', 'test', 'commit', 'review', 'sabotage']);
+// Spec 00067 AC2: the only statuses a test result can carry. A test entry with
+// any other status is not a test result and is skipped instead of recorded.
+const TEST_STATUSES = Object.freeze(['passed', 'failed', 'skipped']);
 const STATUS_UNVERIFIED = 'unverified';
 const STATUS_VERIFIED = 'verified';
 // AC7: a judge can fail a criterion after other evidence once verified it. The
@@ -158,7 +161,16 @@ function buildEvidenceEntry(payload = {}, projectRoot) {
     entry.name = trimmed(payload.name);
     entry.status = trimmed(payload.status);
     if (!entry.name) return { error: 'Evidence type "test" requires a test name (--name <name>).' };
-    if (!entry.status) return { error: 'Evidence type "test" requires a test status (--status <passed|failed>).' };
+    if (!entry.status) {
+      return { error: `Evidence type "test" requires a test status (--status <${TEST_STATUSES.join('|')}>).` };
+    }
+    // Spec 00067 AC2: an unrecognized status is not an observed test result, so
+    // it can never be stored as typed evidence.
+    if (!TEST_STATUSES.includes(entry.status)) {
+      return {
+        error: `Evidence type "test" requires a status of ${TEST_STATUSES.join(', ')} (got "${entry.status}").`
+      };
+    }
   } else if (type === 'commit') {
     entry.sha = trimmed(payload.sha);
     if (!entry.sha) return { error: 'Evidence type "commit" requires a commit SHA (--sha <sha>).' };
@@ -179,14 +191,19 @@ function buildEvidenceEntry(payload = {}, projectRoot) {
 function evidenceIdentity(entry) {
   if (entry.type === 'file') return entry.path;
   if (entry.type === 'commit') return entry.sha;
-  // A test result, review finding, or sabotage outcome is identified by its
-  // stable name or id: replaying the same fact never duplicates it, while a
-  // re-run that now passes updates the stored outcome to the new proof.
-  return entry.type === 'test' ? entry.name : entry.id;
+  // Spec 00067 AC3: a test result is located by its name, and its status is the
+  // second identity field compared when linking. A review finding or sabotage
+  // outcome is identified by its stable id.
+  if (entry.type === 'test') return entry.name;
+  return entry.id;
 }
 
 // Evidence is de-duplicated by type plus its stable identity, so re-linking the
-// same fact never manufactures a second proof.
+// same fact never manufactures a second proof. Spec 00067 AC3: for a test, the
+// identity is the name plus the status. Replaying an accepted test (same name,
+// same status) finds the identical entry and adds nothing, while a re-run that
+// reports another status updates the stored result instead of appending a
+// contradictory second outcome.
 function evidenceKey(entry) {
   return `${entry.type}|${evidenceIdentity(entry)}`;
 }
@@ -559,6 +576,7 @@ function renderLedgerAudit(ledger, format) {
 module.exports = {
   LEDGER_FILENAME,
   EVIDENCE_TYPES,
+  TEST_STATUSES,
   STATUS_UNVERIFIED,
   STATUS_VERIFIED,
   STATUS_FAILED,

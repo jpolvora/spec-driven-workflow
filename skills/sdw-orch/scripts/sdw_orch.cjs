@@ -2355,7 +2355,11 @@ function verifyRunLedger(targetRoot, state) {
 // Spec 00017 AC6: an accepted task links its changed files and its checkpoint
 // commit to every acceptance criterion the evidence claims. Files keep their
 // project-relative forward-slash form and every entry names the task.
-function linkAcceptedTaskEvidence({ targetRoot, state, taskId, acIds, files, commitSha }) {
+// Spec 00067 AC1-AC3: the tests the accepted evidence files recorded are linked
+// too, as `test` evidence carrying the test name and its status. An entry without
+// a name or with a status outside passed/failed/skipped is skipped with a
+// warning and never changes the acceptance.
+function linkAcceptedTaskEvidence({ targetRoot, state, taskId, acIds, files, tests, commitSha }) {
   const ledgerPath = resolveRunLedgerPath(targetRoot, state);
   if (!ledgerPath || !fs.existsSync(ledgerPath)) {
     return 0;
@@ -2364,9 +2368,23 @@ function linkAcceptedTaskEvidence({ targetRoot, state, taskId, acIds, files, com
   for (const file of Array.isArray(files) ? files : []) {
     payloads.push({ type: 'file', path: file, taskId });
   }
+  for (const test of Array.isArray(tests) ? tests : []) {
+    const name = test && typeof test.name === 'string' ? test.name.trim() : '';
+    const status = test && typeof test.status === 'string' ? test.status.trim() : '';
+    if (!name || !acLedger.TEST_STATUSES.includes(status)) {
+      const label = name ? `test "${name}"` : 'an unnamed test entry';
+      const reason = name
+        ? `status "${status}" is not one of ${acLedger.TEST_STATUSES.join(', ')}`
+        : 'a test entry requires a name';
+      console.warn(`[Ledger] Skipped ${label} from the accepted evidence of "${taskId}": ${reason}.`);
+      continue;
+    }
+    payloads.push({ type: 'test', name, status, taskId });
+  }
   if (commitSha) payloads.push({ type: 'commit', sha: commitSha, taskId });
 
   let linked = 0;
+  let testLinks = 0;
   for (const evidence of payloads) {
     const result = acLedger.linkEvidence({ root: targetRoot, ledgerPath, acIds, evidence });
     if (!result.ok) {
@@ -2374,12 +2392,16 @@ function linkAcceptedTaskEvidence({ targetRoot, state, taskId, acIds, files, com
       continue;
     }
     linked += result.linked.length;
+    if (evidence.type === 'test') testLinks += result.linked.length;
   }
   // Spec 00017 AC9/AC15: only a link that added an entry is an accepted update,
   // so re-running the same acceptance re-anchors nothing and writes no duplicate.
   if (linked > 0) {
     recordLedgerAnchor(targetRoot, state, ledgerPath);
     console.log(`[Ledger] ${taskId} linked ${linked} evidence record(s) to ${acIds.join(', ')}.`);
+    if (testLinks > 0) {
+      console.log(`[Ledger] ${taskId} linked ${testLinks} test evidence record(s) to ${acIds.join(', ')}.`);
+    }
   }
   return linked;
 }
@@ -6567,14 +6589,16 @@ function cmdTaskFinish(options) {
     commitSha = getBaseCommit(targetRoot);
   }
 
-  // Spec 00017 AC6: accepted evidence links its files and checkpoint commit to
-  // every criterion the task claims, so Step 5 can derive and trace the score.
+  // Spec 00017 AC6 / Spec 00067 AC1: accepted evidence links its files, the tests
+  // it recorded, and its checkpoint commit to every criterion the task claims, so
+  // Step 5 can derive and trace the score.
   linkAcceptedTaskEvidence({
     targetRoot,
     state,
     taskId,
     acIds: evidenceData.acIds,
     files: evidenceData.filesChanged,
+    tests: evidenceData.tests,
     commitSha
   });
 
@@ -7785,6 +7809,7 @@ module.exports = {
   cmdTaskNext,
   cmdTaskAbandon,
   cmdTaskFinish,
+  linkAcceptedTaskEvidence,
   cmdFreshVerify,
   cmdAudit,
   evaluateAuditShipGate,
