@@ -7,7 +7,7 @@
 | Specification file | `.sdw/specs/00018-sdw-fresh-verify-adversarial-audit.md` |
 | Specification slug | 00018-sdw-fresh-verify-adversarial-audit |
 | Run ID | run-1792812235963-00018-sdw-fresh-verify-adversa |
-| Run status | paused |
+| Run status | completed |
 | Branch | `feature/00018-sdw-fresh-verify-adversarial-audit` |
 | Base branch | `master` |
 | Base commit | `1e05c3575311630305eb5e420831d21bcfad5da9` |
@@ -17,7 +17,7 @@
 | Implementation start | 2026-10-24T03:23:58.141Z |
 | Implementation end | 2026-10-24T05:05:04.833Z |
 | Total wall-clock duration | 1h 41m 6s |
-| Generated at | 2026-10-24T05:14:14.479Z |
+| Generated at | 2026-10-24T05:21:16.471Z |
 | Step 1: derivation (skipped) | 4ms |
 | Step 2: refinement (completed) | 43ms |
 | Step 3: dag_generation (completed) | 19ms |
@@ -25,7 +25,7 @@
 | Step 5: scoring (completed) | 2m 27s |
 | Step 6: delivery_commit (completed) | 300ms |
 | Step 7: code_review (completed) | 1s |
-| Step 8: pr_preparation (pending) | n/a |
+| Step 8: pr_preparation (completed) | 6m 54s |
 
 
 ## Tasks
@@ -42,6 +42,8 @@
 
 | SHA | Subject | Range |
 |---|---|---|
+| `85f56e9` | chore(00018-sdw-fresh-verify-adversarial-audit): mark the specification completed in the registry | base..HEAD |
+| `5ae8a3d` | docs(00018-sdw-fresh-verify-adversarial-audit): record delivery report | base..HEAD |
 | `e921f90` | task(00018-sdw-fresh-verify-adversarial-audit): task-5 | base..HEAD |
 | `a59b466` | task(00018-sdw-fresh-verify-adversarial-audit): task-4 | base..HEAD |
 | `d43405b` | task(00018-sdw-fresh-verify-adversarial-audit): task-3 | base..HEAD |
@@ -111,9 +113,18 @@
 | `tests/sdw_config.test.cjs` | modified |
 | `tests/sdw_fresh_verify.test.cjs` | added |
 
+### Unattributed changes
+
+| File | Change |
+|---|---|
+| `.sdw/reports/00018-sdw-fresh-verify-adversarial-audit-report.md` | added |
+| `.sdw/specs/00018-sdw-fresh-verify-adversarial-audit.md` | modified |
+| `.sdw/specs/index.specs.md` | modified |
+
 ## Verification
 
 - test gate: status `passed`, exit code `0`, duration 4m 49s
+- Step 8 delivery: `completed`
 
 ## Fresh Verification & Audit
 
@@ -177,7 +188,13 @@ Not available
 
 ## Retrospective
 
-Not available
+- Status: `passed`
+- Report: `.sdw/state/00018-sdw-fresh-verify-adversarial-audit/run-1792812235963-00018-sdw-fresh-verify-adversa/run-1792812235963-00018-sdw-fresh-verify-adversa.retro.md`
+- Data: `.sdw/state/00018-sdw-fresh-verify-adversarial-audit/run-1792812235963-00018-sdw-fresh-verify-adversa/run-1792812235963-00018-sdw-fresh-verify-adversa.retro.json`
+- Signals: retries 4 (score 2, review 0, rounds 2, abandonments 0); leftover runs 0; missing artifacts 0; review findings 3 (3 open)
+- Candidates: 0
+- Applied fixes:
+  - none
 
 ## Breaking Changes
 
@@ -358,18 +375,18 @@ Not available
 - Task task-3 accepted after re-dispatch (sequence 3)
 - Task task-4 accepted after re-dispatch (sequence 4)
 - Task task-5 accepted after re-dispatch (sequence 5)
-- Environment: workspace: 13 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
+- Environment: workspace: 16 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
 
 ## Outcome
 
-- Result: `paused`
+- Result: `completed`
 - Delivery commit: `e921f9034a6eaab3b5f3af88db916b789fd4436a`
 - Ship status: `pending`
 - Duration: 1h 41m 6s
 
 ## Step Contributions
 
-- Recorded: 8 contribution(s)
+- Recorded: 13 contribution(s)
 
 ### Step 1: derivation
 
@@ -417,8 +434,18 @@ Not available
 
 ### Step 8: pr_preparation
 
-Not available
+- **convergence** 2026-10-24T05:21:06.484Z - Convergence iteration 1
+  - Body: `{"iteration":1,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":false}`
+- **convergence** 2026-10-24T05:21:08.350Z - Convergence iteration 2
+  - Body: `{"iteration":2,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":true}`
+- **gates** 2026-10-24T05:21:10.091Z - Pre-PR gates: 6 result(s)
+  - Body: `{"gates":[{"name":"prePrCommand","status":"skipped","detail":"prePrCommand is not configured"},{"name":"build","status":"skipped","detail":"requiredBuild is false"},{"name":"tests","status":"pass","detail":"npm test exited 0"},{"name":"security","status":"pass","detail":"sdw-security-checks found no blocking leak"},{"name":"runState","status":"pass","detail":"step 4, step 6 and step 7 completed; score 8 >= scoreMin 8"},{"name":"discovery","status":"pass","detail":"no prepare obligations discovered"}]}`
+- **ship** 2026-10-24T05:21:10.091Z - Pull request #68
+  - Body: `{"pushed":true,"branch":"feature/00018-sdw-fresh-verify-adversarial-audit","pullRequest":{"number":"68","url":"https://github.com/jpolvora/spec-driven-workflow/pull/68","title":null},"shipStatus":"delivered"}`
+  - Evidence: `https://github.com/jpolvora/spec-driven-workflow/pull/68`
 
 ### Step 9: retrospective
 
-Not available
+- **retro** 2026-10-24T05:21:14.552Z - Retrospective passed: 0 candidate(s)
+  - Body: `{"status":"passed","runStatus":"completed","signals":{"retries":{"scoreIterations":2,"reviewIterations":0,"reviewRounds":2,"dispatchAbandonments":0,"total":4},"leftoverRuns":0,"missingArtifacts":0,"reviewFindings":{"total":3,"open":3}},"candidates":[],"fixes":{"recorded":[],"consolidated":null,"queuedSpecifications":[],"failures":[]},"routedCandidates":[],"reportMd":".sdw/state/00018-sdw-fresh-verify-adversarial-audit/run-1792812235963-00018-sdw-fresh-verify-adversa/run-1792812235963-00018-sdw-fresh-verify-adversa.retro.md","reportJson":".sdw/state/00018-sdw-fresh-verify-adversarial-audit/run-1792812235963-00018-sdw-fresh-verify-adversa/run-1792812235963-00018-sdw-fresh-verify-adversa.retro.json"}`
+  - Evidence: `.sdw/state/00018-sdw-fresh-verify-adversarial-audit/run-1792812235963-00018-sdw-fresh-verify-adversa/run-1792812235963-00018-sdw-fresh-verify-adversa.retro.md`, `.sdw/state/00018-sdw-fresh-verify-adversarial-audit/run-1792812235963-00018-sdw-fresh-verify-adversa/run-1792812235963-00018-sdw-fresh-verify-adversa.retro.json`
