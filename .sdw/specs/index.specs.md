@@ -31,7 +31,7 @@ Central repository index tracking specification lifecycle states, metadata, and 
 | 00018 | 00018-sdw-fresh-verify-adversarial-audit | SDW Fresh-Context Verification and Adversarial Audit | completed | local | 2026-10-19 | PASS | - |
 | 00019 | 00019-sdw-orch-checkpoint-resume | SDW Orchestrator Checkpoint, Turn Pause, and Crash-Safe Resume | completed | local | 2026-10-19 | PASS | - |
 | 00020 | 00020-sdw-orch-branch-strategy | SDW Orchestrator Configurable Branch and Ship-Ref Strategy | archived | local | 2026-10-19 | PASS | 2026-10-22 |
-| 00021 | 00021-sdw-monitor-telemetry | SDW Live Run Monitor and Append-Only Telemetry | pending | local | 2026-10-19 | PASS | - |
+| 00021 | 00021-sdw-monitor-telemetry | SDW Live Run Monitor and Append-Only Telemetry | completed | local | 2026-10-19 | PASS | - |
 | 00022 | 00022-sdw-harness-diagnostics | SDW Harness Diagnostics, Workflow Simulation, and Context Budget Audit | pending | local | 2026-10-19 | PASS | - |
 | 00023 | 00023-sdw-reporting-suite | SDW Delivery Reporting — Activity, Standup, and Spec Explanation | pending | local | 2026-10-19 | PASS | - |
 | 00024 | 00024-sdw-ship-pr | SDW Ship PR Skill — Standalone Delivery, SCM Submission, and Review Convergence | completed | local | 2026-10-19 | PASS | - |

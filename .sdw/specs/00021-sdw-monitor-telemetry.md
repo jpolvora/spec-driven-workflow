@@ -3,7 +3,7 @@ id: null
 slug: 00021-sdw-monitor-telemetry
 title: "SDW Live Run Monitor and Append-Only Telemetry"
 source: local
-status: awaiting-approval
+status: implemented
 specDate: 2026-10-19
 priority: medium
 value: "Durable per-run event stream plus read-only live monitor, so slow steps are distinguishable from hung ones"

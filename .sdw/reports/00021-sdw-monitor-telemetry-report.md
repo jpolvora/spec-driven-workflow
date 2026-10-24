@@ -7,17 +7,17 @@
 | Specification file | `.sdw/specs/00021-sdw-monitor-telemetry.md` |
 | Specification slug | 00021-sdw-monitor-telemetry |
 | Run ID | run-1792797556037-00021-sdw-monitor-telemetry |
-| Run status | paused |
+| Run status | completed |
 | Branch | `feature/00021-sdw-monitor-telemetry` |
 | Base branch | `master` |
 | Base commit | `26b3bd4510779fb66ec24875f5281e89d1fbe64f` |
 | Delivery commit | `7c77b0222773bc99065aa7ddfdcec26bb9c7aadb` |
-| Ship status | pending |
+| Ship status | review_pending |
 | Score | 8/10 (scoreMin 8) |
 | Implementation start | 2026-10-23T23:19:18.158Z |
 | Implementation end | 2026-10-24T00:35:32.745Z |
 | Total wall-clock duration | 1h 16m 14s |
-| Generated at | 2026-10-24T00:42:35.486Z |
+| Generated at | 2026-10-24T01:16:58.712Z |
 | Step 1: derivation (skipped) | 7ms |
 | Step 2: refinement (completed) | 41ms |
 | Step 3: dag_generation (completed) | 12ms |
@@ -25,7 +25,7 @@
 | Step 5: scoring (completed) | 27s |
 | Step 6: delivery_commit (completed) | 415ms |
 | Step 7: code_review (completed) | 1s |
-| Step 8: pr_preparation (pending) | n/a |
+| Step 8: pr_preparation (completed) | 34m 16s |
 
 
 ## Tasks
@@ -41,6 +41,10 @@
 
 | SHA | Subject | Range |
 |---|---|---|
+| `c1d4f5c` | chore(00021-sdw-monitor-telemetry): mark the specification completed in the registry | base..HEAD |
+| `f51678e` | docs(00021-sdw-monitor-telemetry): record delivery report | base..HEAD |
+| `97d7c54` | fix(00021-sdw-monitor-telemetry): resolve the configured state directory as the writer does | base..HEAD |
+| `7598783` | docs(00021-sdw-monitor-telemetry): record delivery report | base..HEAD |
 | `7c77b02` | task(00021-sdw-monitor-telemetry): task-4 | base..HEAD |
 | `92c5703` | task(00021-sdw-monitor-telemetry): task-3 | base..HEAD |
 | `3f9777a` | task(00021-sdw-monitor-telemetry): task-2 | base..HEAD |
@@ -89,9 +93,18 @@
 | `skills/sdw-orch/references/orchestrator_protocol.md` | modified |
 | `tests/sdw_orch_telemetry.test.cjs` | added |
 
+### Unattributed changes
+
+| File | Change |
+|---|---|
+| `.sdw/reports/00021-sdw-monitor-telemetry-report.md` | added |
+| `.sdw/specs/00021-sdw-monitor-telemetry.md` | modified |
+| `.sdw/specs/index.specs.md` | modified |
+
 ## Verification
 
 - test gate: status `passed`, exit code `0`, duration 4m 30s
+- Step 8 delivery: `completed` (ship status `review_pending`)
 
 ## Code Review
 
@@ -143,7 +156,13 @@ Not available
 
 ## Retrospective
 
-Not available
+- Status: `passed`
+- Report: `.sdw/state/00021-sdw-monitor-telemetry/run-1792797556037-00021-sdw-monitor-telemetry/run-1792797556037-00021-sdw-monitor-telemetry.retro.md`
+- Data: `.sdw/state/00021-sdw-monitor-telemetry/run-1792797556037-00021-sdw-monitor-telemetry/run-1792797556037-00021-sdw-monitor-telemetry.retro.json`
+- Signals: retries 4 (score 2, review 0, rounds 2, abandonments 0); leftover runs 0; missing artifacts 0; review findings 3 (3 open)
+- Candidates: 0
+- Applied fixes:
+  - none
 
 ## Breaking Changes
 
@@ -325,18 +344,18 @@ Not available
 - Task task-2 accepted after re-dispatch (sequence 2)
 - Task task-3 accepted after re-dispatch (sequence 3)
 - Task task-4 accepted after re-dispatch (sequence 4)
-- Environment: workspace: 10 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
+- Environment: workspace: 13 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
 
 ## Outcome
 
-- Result: `paused`
+- Result: `completed`
 - Delivery commit: `7c77b0222773bc99065aa7ddfdcec26bb9c7aadb`
-- Ship status: `pending`
+- Ship status: `review_pending`
 - Duration: 1h 16m 14s
 
 ## Step Contributions
 
-- Recorded: 8 contribution(s)
+- Recorded: 13 contribution(s)
 
 ### Step 1: derivation
 
@@ -384,8 +403,18 @@ Not available
 
 ### Step 8: pr_preparation
 
-Not available
+- **convergence** 2026-10-24T01:16:51.012Z - Convergence iteration 1
+  - Body: `{"iteration":1,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":false}`
+- **convergence** 2026-10-24T01:16:52.038Z - Convergence iteration 2
+  - Body: `{"iteration":2,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":true}`
+- **gates** 2026-10-24T01:16:54.186Z - Pre-PR gates: 6 result(s)
+  - Body: `{"gates":[{"name":"prePrCommand","status":"skipped","detail":"prePrCommand is not configured"},{"name":"build","status":"skipped","detail":"requiredBuild is false"},{"name":"tests","status":"pass","detail":"npm test exited 0"},{"name":"security","status":"pass","detail":"sdw-security-checks found no blocking leak"},{"name":"runState","status":"pass","detail":"step 4, step 6 and step 7 completed; score 8 >= scoreMin 8"},{"name":"discovery","status":"pass","detail":"no prepare obligations discovered"}]}`
+- **ship** 2026-10-24T01:16:54.186Z - Pull request #64
+  - Body: `{"pushed":true,"branch":"feature/00021-sdw-monitor-telemetry","pullRequest":{"number":"64","url":"https://github.com/jpolvora/spec-driven-workflow/pull/64","title":null},"shipStatus":"delivered"}`
+  - Evidence: `https://github.com/jpolvora/spec-driven-workflow/pull/64`
 
 ### Step 9: retrospective
 
-Not available
+- **retro** 2026-10-24T01:16:57.986Z - Retrospective passed: 0 candidate(s)
+  - Body: `{"status":"passed","runStatus":"completed","signals":{"retries":{"scoreIterations":2,"reviewIterations":0,"reviewRounds":2,"dispatchAbandonments":0,"total":4},"leftoverRuns":0,"missingArtifacts":0,"reviewFindings":{"total":3,"open":3}},"candidates":[],"fixes":{"recorded":[],"consolidated":null,"queuedSpecifications":[],"failures":[]},"routedCandidates":[],"reportMd":".sdw/state/00021-sdw-monitor-telemetry/run-1792797556037-00021-sdw-monitor-telemetry/run-1792797556037-00021-sdw-monitor-telemetry.retro.md","reportJson":".sdw/state/00021-sdw-monitor-telemetry/run-1792797556037-00021-sdw-monitor-telemetry/run-1792797556037-00021-sdw-monitor-telemetry.retro.json"}`
+  - Evidence: `.sdw/state/00021-sdw-monitor-telemetry/run-1792797556037-00021-sdw-monitor-telemetry/run-1792797556037-00021-sdw-monitor-telemetry.retro.md`, `.sdw/state/00021-sdw-monitor-telemetry/run-1792797556037-00021-sdw-monitor-telemetry/run-1792797556037-00021-sdw-monitor-telemetry.retro.json`
