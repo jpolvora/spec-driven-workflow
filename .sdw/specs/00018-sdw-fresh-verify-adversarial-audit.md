@@ -3,7 +3,7 @@ id: null
 slug: 00018-sdw-fresh-verify-adversarial-audit
 title: "SDW Fresh-Context Verification and Adversarial Audit"
 source: local
-status: awaiting-approval
+status: implemented
 specDate: 2026-10-19
 priority: medium
 value: "Independent fresh-context verification with fault injection, so tests must prove they can fail"

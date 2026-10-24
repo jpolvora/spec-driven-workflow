@@ -115,5 +115,5 @@ Orchestrates spec execution from input requirement to delivery commit, automated
 
 ## References
 
-- Architecture, batch protocol, and step artifacts persistence: [`references/orchestrator_protocol.md`](references/orchestrator_protocol.md)
+- Architecture, batch protocol, step artifacts, and the fresh-verify/audit contract: [`references/orchestrator_protocol.md`](references/orchestrator_protocol.md), [`references/fresh_verify.md`](references/fresh_verify.md)
 - Reporting commands, data sources, fields, and `unknown` semantics: [`references/reporting.md`](references/reporting.md)

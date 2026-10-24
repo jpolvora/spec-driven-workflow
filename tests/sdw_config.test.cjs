@@ -578,3 +578,74 @@ test('00021: monitor.stallWindowSeconds and monitor.intervalSeconds are declared
   assert.match(reference, /"monitor": \{/);
 });
 
+// Spec 00018 AC14: the audit ship-block policy is a declared config key with
+// exactly two allowed values, defaulting to the refuted safety floor.
+test('00018 AC14: verification.auditVerdictsBlockShip defaults to refuted and validates refuted|caveats', () => {
+  assert.equal(sdwConfig.DEFAULT_CONFIG.verification.auditVerdictsBlockShip, 'refuted');
+  const schema = sdwConfig.DEFAULT_SCHEMA.properties.verification.properties.auditVerdictsBlockShip;
+  assert.equal(schema.type, 'string');
+  assert.deepEqual(schema.enum, ['refuted', 'caveats']);
+  assert.equal(schema.default, 'refuted');
+
+  for (const value of ['refuted', 'caveats']) {
+    const valid = sdwConfig.validateConfigSchema({ specsDir: '.sdw/specs', verification: { auditVerdictsBlockShip: value } });
+    assert.equal(valid.valid, true, `${value} is an allowed policy: ${valid.errors.join(' ')}`);
+  }
+  for (const value of ['none', 'block', '', true, 1, null]) {
+    const invalid = sdwConfig.validateConfigSchema({ specsDir: '.sdw/specs', verification: { auditVerdictsBlockShip: value } });
+    assert.equal(invalid.valid, false, `${JSON.stringify(value)} is rejected`);
+    assert.ok(
+      invalid.errors.some(err => err.includes('verification.auditVerdictsBlockShip')),
+      'the error names the key'
+    );
+  }
+
+  const repoRoot = path.resolve(__dirname, '..');
+  const repoConfig = JSON.parse(fs.readFileSync(path.join(repoRoot, '.sdw', 'config.json'), 'utf8'));
+  assert.equal(repoConfig.verification.auditVerdictsBlockShip, 'refuted', 'the repository template carries the default');
+  const repoSchema = JSON.parse(fs.readFileSync(path.join(repoRoot, '.sdw', 'config.schema.json'), 'utf8'));
+  assert.deepEqual(
+    repoSchema.properties.verification.properties.auditVerdictsBlockShip.enum,
+    ['refuted', 'caveats']
+  );
+  assert.equal(repoSchema.properties.verification.properties.auditVerdictsBlockShip.default, 'refuted');
+  const reference = fs.readFileSync(path.join(repoRoot, 'skills', 'sdw-config', 'references', 'config_spec.md'), 'utf8');
+  assert.match(reference, /\|\s*`verification\.auditVerdictsBlockShip`\s*\|/);
+  assert.match(reference, /"auditVerdictsBlockShip": "refuted"/);
+});
+
+// Spec 00018 AC18: command-mode verifier is a declared config key, empty by
+// default, accepting only a string or null.
+test('00018 AC18: verification.freshVerifyCommand defaults to null and accepts a string or null', () => {
+  assert.equal(sdwConfig.DEFAULT_CONFIG.verification.freshVerifyCommand, null);
+  const schema = sdwConfig.DEFAULT_SCHEMA.properties.verification.properties.freshVerifyCommand;
+  assert.deepEqual(schema.type, ['string', 'null']);
+  assert.equal(schema.default, null);
+
+  for (const value of [null, '', 'node verifier.cjs {promptFile} {evidenceFile} {cwd} {slug}']) {
+    const valid = sdwConfig.validateConfigSchema({ specsDir: '.sdw/specs', verification: { freshVerifyCommand: value } });
+    assert.equal(valid.valid, true, `${JSON.stringify(value)} is accepted: ${valid.errors.join(' ')}`);
+  }
+  for (const value of [true, 1, [], {}]) {
+    const invalid = sdwConfig.validateConfigSchema({ specsDir: '.sdw/specs', verification: { freshVerifyCommand: value } });
+    assert.equal(invalid.valid, false, `${JSON.stringify(value)} is rejected`);
+    assert.ok(
+      invalid.errors.some(err => err.includes('verification.freshVerifyCommand')),
+      'the error names the key'
+    );
+  }
+
+  const repoRoot = path.resolve(__dirname, '..');
+  const repoConfig = JSON.parse(fs.readFileSync(path.join(repoRoot, '.sdw', 'config.json'), 'utf8'));
+  assert.equal(repoConfig.verification.freshVerifyCommand, null, 'the repository template carries the default');
+  const repoSchema = JSON.parse(fs.readFileSync(path.join(repoRoot, '.sdw', 'config.schema.json'), 'utf8'));
+  assert.deepEqual(
+    repoSchema.properties.verification.properties.freshVerifyCommand.type,
+    ['string', 'null']
+  );
+  assert.equal(repoSchema.properties.verification.properties.freshVerifyCommand.default, null);
+  const reference = fs.readFileSync(path.join(repoRoot, 'skills', 'sdw-config', 'references', 'config_spec.md'), 'utf8');
+  assert.match(reference, /\|\s*`verification\.freshVerifyCommand`\s*\|/);
+  assert.match(reference, /"freshVerifyCommand": null/);
+});
+
