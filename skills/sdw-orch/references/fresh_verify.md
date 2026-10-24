@@ -15,6 +15,7 @@ disables both behaves exactly as before.
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `verification.freshVerifyEnabled` | `boolean` | `false` | Run the Step 4 -> 5 fresh-verification stage. When enabled, scoring is blocked until every criterion has an accepted verdict. |
+| `verification.freshVerifyCommand` | `string \| null` | `null` | Command-mode verifier. When set, the stage runs this command once inside the scratch worktree and reads the verdict from `{evidenceFile}` instead of pausing for a handoff. Empty or `null` keeps handoff mode. |
 | `verification.testCommand` | `string \| null` | `null` | Command run inside the scratch worktree. It falls back to the legacy `testCommand`. Without it no fault is interpretable and every criterion stays `unverified`. |
 | `verification.timeoutMs` | `integer` | `600000` | Test-command timeout in milliseconds. |
 | `verification.auditVerdictsBlockShip` | `string` | `"refuted"` | `refuted` blocks `refuted` audit verdicts only; `caveats` also blocks `caveats`. |
@@ -53,6 +54,47 @@ disables both behaves exactly as before.
    on every terminal path. Exit codes: `0` accepted, `1` failed closed (verdict
    rejected, fault injection failed, or cleanup failed), `4` awaiting a verdict
    or parked on residual defects.
+
+### Command mode
+
+`verification.freshVerifyCommand` replaces the handoff pause with a verifier
+process. When it is a non-empty string, `fresh-verify` runs it once inside the
+scratch worktree after fault injection and before cleanup:
+
+| Token | Substituted value | Quoting |
+| --- | --- | --- |
+| `{promptFile}` | Absolute path of the fenced verifier prompt | Shell-quoted |
+| `{evidenceFile}` | Absolute path where the command must write the verdict JSON | Shell-quoted |
+| `{cwd}` | Absolute path of the scratch worktree (the process working directory) | Shell-quoted |
+| `{slug}` | Specification slug of the run | Shell-quoted |
+
+- Every value is quoted for the host shell: `"value"` on Windows (a value
+  containing a double quote or a newline is refused), and POSIX single-quoting
+  with `'\''` escaping elsewhere. Spaces and metacharacters therefore reach the
+  command intact.
+- Unknown tokens are **left untouched**, not refused: `{taskId}` and any other
+  `{...}` text reaches the command literally. This matches
+  `implementation.command`.
+- The command receives the same paths the handoff would print and is expected to
+  write the verdict file itself. After exit `0` the file is read, validated, and
+  fault-gated exactly like a submitted verdict; a missing or invalid file fails
+  closed.
+- The exit status and a bounded output tail (1200 characters) are recorded on
+  `state.freshVerify.command`. A non-zero exit, timeout, or signal fails closed:
+  the run records `status: failed`, `errorCode: fresh_verify_command_failed`, the
+  observed exit code and output excerpt, removes the scratch worktree, and Step 5
+  never scores.
+- An empty string or `null` keeps handoff mode, so command mode is never inferred
+  from another key.
+
+### Scratch failure
+
+When the scratch worktree cannot be created, verification fails closed before
+scoring: the error names the attempted worktree path and the underlying git
+failure, the run records `state.freshVerify.status: failed` (with
+`errorCode: scratch_worktree_failed`), Step 5 stays `pending`, and the run exits
+non-zero. A partial worktree is removed before the error is reported, so a failed
+start never leaves isolation behind.
 
 ### Fault injection rules
 

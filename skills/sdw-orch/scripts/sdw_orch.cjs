@@ -2516,6 +2516,17 @@ function resolveFreshVerifyTestTimeout(config) {
     : undefined;
 }
 
+// Spec 00018 AC18: command mode is configured by a non-empty
+// verification.freshVerifyCommand. An empty string or null keeps the handoff
+// mode, so the stage stays harness-agnostic by default.
+function resolveFreshVerifyCommand(config) {
+  const verification = (config && config.verification) || {};
+  const explicit = typeof verification.freshVerifyCommand === 'string'
+    ? verification.freshVerifyCommand.trim()
+    : '';
+  return explicit || null;
+}
+
 function parseFreshVerifyCriteria(targetRoot, state) {
   if (!state || !state.specPath) return [];
   try {
@@ -2733,6 +2744,75 @@ function beginFreshVerification(targetRoot, state, criteria, options = {}) {
     return { ok: false, state: failed, error: new freshVerify.FreshVerifyError(message, { code: err.code }) };
   }
 
+  // Spec 00018 AC18: in command mode the configured verifier runs once inside
+  // the scratch worktree with {promptFile}, {evidenceFile}, {cwd}, and {slug}
+  // substituted. A non-zero exit fails closed with the captured output excerpt
+  // and removes the scratch worktree; Step 5 never scores it.
+  const verifierCommand = resolveFreshVerifyCommand(config);
+  let commandRun = null;
+  if (verifierCommand) {
+    try {
+      commandRun = freshVerify.runFreshVerifyCommand({
+        command: verifierCommand,
+        cwd: started.scratch.path,
+        promptFile: started.promptFileAbs,
+        evidenceFile: started.verdictFileAbs,
+        slug: state.specSlug,
+        timeoutMs: resolveFreshVerifyTestTimeout(config)
+      });
+    } catch (err) {
+      const cleanup = freshVerify.removeScratchWorktree({ projectRoot: targetRoot, worktreePath: started.scratch.path });
+      const message = cleanup.ok ? err.message : `${err.message}; scratch cleanup also failed: ${cleanup.error}`;
+      const failedAt = new Date().toISOString();
+      const failed = updateFreshVerifyRecord(targetRoot, state.runId, {
+        status: 'failed',
+        error: message,
+        errorCode: err.code || 'fresh_verify_command_failed',
+        scratch: {
+          path: started.scratch.rel,
+          createdAt: failedAt,
+          diffBytes: started.diff.bytes,
+          diffApplied: started.scratch.diffApplied,
+          removedAt: cleanup.ok ? failedAt : null
+        },
+        startedAt: failedAt,
+        updatedAt: failedAt
+      });
+      return { ok: false, state: failed, error: new freshVerify.FreshVerifyError(message, { code: err.code }) };
+    }
+    if (!commandRun.passed) {
+      const cleanup = freshVerify.removeScratchWorktree({ projectRoot: targetRoot, worktreePath: started.scratch.path });
+      const observed = freshVerify.describeCommandObservation(commandRun);
+      const message = cleanup.ok ? `${observed}.` : `${observed}; scratch cleanup also failed: ${cleanup.error}`;
+      const failedAt = new Date().toISOString();
+      const failed = updateFreshVerifyRecord(targetRoot, state.runId, {
+        status: 'failed',
+        error: message,
+        errorCode: 'fresh_verify_command_failed',
+        command: {
+          command: commandRun.command,
+          exitCode: commandRun.exitCode,
+          timedOut: commandRun.timedOut,
+          outputTail: commandRun.outputTail
+        },
+        scratch: {
+          path: started.scratch.rel,
+          createdAt: failedAt,
+          diffBytes: started.diff.bytes,
+          diffApplied: started.scratch.diffApplied,
+          removedAt: cleanup.ok ? failedAt : null
+        },
+        startedAt: failedAt,
+        updatedAt: failedAt
+      });
+      return {
+        ok: false,
+        state: failed,
+        error: new freshVerify.FreshVerifyError(message, { code: 'fresh_verify_command_failed' })
+      };
+    }
+  }
+
   const now = new Date().toISOString();
   const record = {
     status: 'awaiting_verdict',
@@ -2753,12 +2833,15 @@ function beginFreshVerification(targetRoot, state, criteria, options = {}) {
     residualDefects: [],
     faults: faultEvidence.faults,
     faultBaseline: faultEvidence.baseline,
+    command: commandRun
+      ? { command: commandRun.command, exitCode: commandRun.exitCode, outputTail: commandRun.outputTail }
+      : null,
     startedAt: now,
     updatedAt: now,
     error: null
   };
   const saved = updateFreshVerifyRecord(targetRoot, state.runId, record);
-  return { ok: true, state: saved, record: saved.freshVerify };
+  return { ok: true, state: saved, record: saved.freshVerify, commandMode: Boolean(commandRun) };
 }
 
 // Spec 00018 AC4/AC10: validates the verdict and removes the scratch worktree
@@ -2816,6 +2899,33 @@ function finishFreshVerification(targetRoot, state, criteria, verdictPath) {
     saved = stateManager.saveRunState(targetRoot, saved);
   }
   return { ok, paused, residualDefects, state: saved, validation, cleanup, record: saved.freshVerify, verdictFileAbs };
+}
+
+// Spec 00018 AC4/AC18: validate a submitted verdict, apply the fault gate, and
+// clean up. Shared by the handoff mode (verdict file submitted later) and the
+// command mode (the verifier wrote {evidenceFile} itself).
+function applyFreshVerifyVerdict(targetRoot, state, criteria, verdictPath) {
+  const finished = finishFreshVerification(targetRoot, state, criteria, verdictPath);
+  if (!finished.ok) {
+    const reason = finished.validation.errors.length > 0
+      ? finished.validation.errors.join(' ')
+      : finished.cleanup.error;
+    console.error(`[Fresh Verify] Verdict rejected; Step 5 scoring is blocked: ${reason}`);
+    return {
+      code: 1,
+      state: finished.state,
+      result: { runId: state.runId, status: 'failed', error: `Fresh verification failed: ${reason}` }
+    };
+  }
+  const verifiedCount = (finished.record.verdicts || []).filter(item => item.verdict === 'verified').length;
+  console.log(`[Fresh Verify] Verdict accepted: ${verifiedCount}/${criteria.length} AC(s) verified.`);
+  // Spec 00018 AC9: the third round ended with residual defects, so the run
+  // pauses on them rather than advancing to Step 5.
+  if (finished.paused) {
+    printResidualPause(finished.state, finished.record);
+    return { code: 4, state: finished.state, skipped: false, paused: true, record: finished.record };
+  }
+  return { code: 0, state: finished.state, skipped: false };
 }
 
 // Spec 00018 AC1/AC17: the Step 4 -> 5 integration point. Returns exit code 0
@@ -2878,27 +2988,7 @@ function runFreshVerifyTransition(targetRoot, state, config, options = {}) {
   if (prior && prior.status === 'awaiting_verdict' && prior.scratch && fs.existsSync(path.resolve(targetRoot, prior.scratch.path))) {
     const verdictAbs = prior.verdictPath ? path.resolve(targetRoot, prior.verdictPath) : null;
     if (verdictAbs && fs.existsSync(verdictAbs)) {
-      const finished = finishFreshVerification(targetRoot, state, criteria, verdictAbs);
-      if (!finished.ok) {
-        const reason = finished.validation.errors.length > 0
-          ? finished.validation.errors.join(' ')
-          : finished.cleanup.error;
-        console.error(`[Fresh Verify] Verdict rejected; Step 5 scoring is blocked: ${reason}`);
-        return {
-          code: 1,
-          state: finished.state,
-          result: { runId: state.runId, status: 'failed', error: `Fresh verification failed: ${reason}` }
-        };
-      }
-      const verifiedCount = (finished.record.verdicts || []).filter(item => item.verdict === 'verified').length;
-      console.log(`[Fresh Verify] Verdict accepted: ${verifiedCount}/${criteria.length} AC(s) verified.`);
-      // Spec 00018 AC9: the third round ended with residual defects, so the run
-      // pauses on them rather than advancing to Step 5.
-      if (finished.paused) {
-        printResidualPause(finished.state, finished.record);
-        return { code: 4, state: finished.state, skipped: false, paused: true, record: finished.record };
-      }
-      return { code: 0, state: finished.state, skipped: false };
+      return applyFreshVerifyVerdict(targetRoot, state, criteria, verdictAbs);
     }
     state.status = 'paused';
     state = stateManager.saveRunState(targetRoot, state);
@@ -2921,8 +3011,22 @@ function runFreshVerifyTransition(targetRoot, state, config, options = {}) {
     state.errors = state.errors || [];
     state.errors.push({ step: 4, timestamp: new Date().toISOString(), error: reason });
     state = stateManager.saveRunState(targetRoot, state);
-    console.error(`[Fresh Verify] Scratch worktree creation failed; Step 5 scoring is blocked: ${started.error.message}`);
+    const lead = started.error.code === 'fresh_verify_command_failed'
+      ? 'Command-mode verification failed closed; Step 5 scoring is blocked'
+      : 'Scratch worktree creation failed; Step 5 scoring is blocked';
+    console.error(`[Fresh Verify] ${lead}: ${started.error.message}`);
     return { code: 1, state, result: { runId: state.runId, status: 'failed', error: reason } };
+  }
+
+  // Spec 00018 AC18: the command already ran and wrote {evidenceFile}, so the
+  // verdict is validated and recorded without a separate handoff pause.
+  if (started.commandMode) {
+    return applyFreshVerifyVerdict(
+      targetRoot,
+      started.state,
+      criteria,
+      path.resolve(targetRoot, started.record.verdictPath)
+    );
   }
 
   state = started.state;
@@ -2964,8 +3068,9 @@ function cmdFreshVerify(options) {
     return 1;
   }
 
-  if (options.verdictPath) {
-    const finished = finishFreshVerification(targetRoot, state, criteria, options.verdictPath);
+  // Spec 00018 AC4/AC18: both the submitted verdict and the command-mode
+  // evidence file are reported identically, including the residual pause.
+  const reportFinished = finished => {
     if (!finished.ok) {
       console.error('[sdw-orch fresh-verify] Verdict rejected. Step 5 scoring remains blocked:');
       finished.validation.errors.forEach(item => console.error(`  - ${item}`));
@@ -3022,6 +3127,10 @@ function cmdFreshVerify(options) {
       }, null, 2));
     }
     return 0;
+  };
+
+  if (options.verdictPath) {
+    return reportFinished(finishFreshVerification(targetRoot, state, criteria, options.verdictPath));
   }
 
   const prior = state.freshVerify || null;
@@ -3054,8 +3163,20 @@ function cmdFreshVerify(options) {
     return 1;
   }
   if (!started.ok) {
-    console.error(`[sdw-orch fresh-verify] Scratch worktree creation failed; scoring is blocked: ${started.error.message}`);
+    const lead = started.error.code === 'fresh_verify_command_failed'
+      ? 'Command-mode verification failed closed; scoring is blocked'
+      : 'Scratch worktree creation failed; scoring is blocked';
+    console.error(`[sdw-orch fresh-verify] ${lead}: ${started.error.message}`);
     return 1;
+  }
+  // Spec 00018 AC18: command mode finishes immediately from {evidenceFile}.
+  if (started.commandMode) {
+    return reportFinished(finishFreshVerification(
+      targetRoot,
+      started.state,
+      criteria,
+      path.resolve(targetRoot, started.record.verdictPath)
+    ));
   }
   state = started.state;
   state.status = 'paused';

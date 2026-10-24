@@ -13,6 +13,7 @@ const os = require('os');
 const { execSync, spawnSync } = require('child_process');
 
 const freshVerify = require('../skills/sdw-orch/scripts/fresh_verify.cjs');
+const auditRunner = require('../skills/sdw-orch/scripts/audit_runner.cjs');
 const sdwOrch = require('../skills/sdw-orch/scripts/sdw_orch.cjs');
 const sdwConfig = require('../skills/sdw-config/scripts/sdw_config.cjs');
 const sdwRules = require('../skills/sdw-rules/scripts/sdw_rules.cjs');
@@ -77,6 +78,9 @@ function setupWorkspace(options = {}) {
   }
   if (options.testCommand) {
     config.verification = { ...(config.verification || {}), testCommand: options.testCommand };
+  }
+  if (options.freshVerifyCommand) {
+    config.verification = { ...(config.verification || {}), freshVerifyCommand: options.freshVerifyCommand };
   }
   if (options.implementation) {
     config.implementation = options.implementation;
@@ -199,6 +203,66 @@ test('AC2: an uncreatable scratch worktree fails closed and leaves nothing behin
     );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC17: an uncreatable scratch worktree fails closed without scoring', () => {
+  // Module boundary: `git worktree add` must fail with the attempted path and
+  // the git failure in the message, not an opaque status.
+  const { root } = setupRepo();
+  const scratchDir = freshVerify.resolveScratchDir(root, 'run-ac17-module');
+  try {
+    assert.throws(
+      () => freshVerify.createScratchWorktree({
+        projectRoot: root,
+        baseCommit: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+        diff: '',
+        scratchDir
+      }),
+      err => err.name === 'FreshVerifyError'
+        && err.code === 'scratch_worktree_failed'
+        && err.message.includes(freshVerify.normalizePath(scratchDir))
+        && /fatal:|error:/i.test(err.message)
+    );
+    assert.equal(fs.existsSync(scratchDir), false, 'the failed attempt leaves no scratch worktree');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+
+  // Run boundary: a tree-ish base commit passes `git diff` but cannot be
+  // checked out, so creation fails inside the Step 4 -> 5 transition. The run
+  // records the failure and Step 5 never scores.
+  const workspace = setupWorkspace({ createState: true });
+  try {
+    fs.appendFileSync(path.join(workspace.root, 'app.cjs'), '// implemented\n', 'utf8');
+    const runId = latestState(workspace.root).runId;
+    const treeSha = git(workspace.root, 'rev-parse "HEAD^{tree}"');
+    const state = latestState(workspace.root);
+    state.baseCommit = treeSha;
+    stateManager.saveRunState(workspace.root, state);
+
+    const result = sdwOrch.runFreshVerifyTransition(workspace.root, latestState(workspace.root), {
+      verification: { freshVerifyEnabled: true }
+    }, {});
+    assert.equal(result.code, 1, 'the run exits non-zero instead of scoring');
+
+    const failed = latestState(workspace.root);
+    const attempted = freshVerify.normalizePath(freshVerify.resolveScratchDir(workspace.root, runId));
+    assert.equal(failed.status, 'failed', 'the run state records the failure');
+    assert.equal(failed.freshVerify.status, 'failed');
+    assert.equal(failed.freshVerify.errorCode, 'scratch_worktree_failed');
+    assert.ok(failed.freshVerify.error.includes(attempted), 'the error names the attempted worktree path');
+    assert.match(failed.freshVerify.error, /is a tree, not a commit|invalid reference|fatal:/i, 'the error names the git failure');
+    assert.equal(failed.steps[5].status, 'pending', 'Step 5 scoring never enters');
+    assert.equal(fs.existsSync(attempted), false, 'no scratch worktree survives the failure');
+
+    const cli = runCli(workspace.root, ['fresh-verify', '--run-id', runId]);
+    assert.equal(cli.status, 1, 'the fresh-verify exit code reflects the failure');
+    assert.match(cli.stderr, /Scratch worktree creation failed/);
+    assert.ok(cli.stderr.includes(attempted), 'the CLI error names the attempted path');
+    assert.match(cli.stderr, /is a tree, not a commit|invalid reference|fatal:/i, 'the CLI error carries the git failure');
+  } finally {
+    fs.rmSync(workspace.root, { recursive: true, force: true });
   }
 });
 
@@ -504,6 +568,196 @@ test('AC1-AC4: the Step 4 -> 5 transition pauses on the verifier, then resumes s
     assert.equal(state.steps[5].status, 'completed');
     assert.equal(state.freshVerify.status, 'completed');
     assert.equal(fs.existsSync(path.resolve(root, state.freshVerify.scratch.path)), false, 'no scratch worktree survives');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC18: command mode substitutes and shell-quotes the four documented tokens', () => {
+  const tokens = {
+    promptFile: 'C:/tmp/fresh run/fresh-verify.prompt.md',
+    evidenceFile: 'C:/tmp/fresh run/fresh-verify.verdict.json',
+    cwd: 'C:/tmp/fresh run/fresh-verify',
+    slug: 'fresh-spec'
+  };
+  const rendered = freshVerify.renderFreshVerifyCommand(
+    'node verifier.cjs {promptFile} {evidenceFile} {cwd} {slug} {taskId}',
+    tokens
+  );
+  assert.equal(freshVerify.COMMAND_TOKENS.join(','), 'promptFile,evidenceFile,cwd,slug');
+  const quoted = value => (process.platform === 'win32' ? `"${value}"` : `'${value}'`);
+  for (const token of freshVerify.COMMAND_TOKENS) {
+    assert.ok(rendered.includes(quoted(tokens[token])), `${token} is substituted and shell-quoted`);
+  }
+  assert.ok(rendered.includes('{taskId}'), 'an unknown token is left untouched, never rewritten');
+  assert.equal(
+    freshVerify.renderFreshVerifyCommand('node verifier.cjs {slug}', {}),
+    'node verifier.cjs {slug}',
+    'a token without a value stays literal'
+  );
+
+  if (process.platform === 'win32') {
+    assert.throws(
+      () => freshVerify.quoteCommandValue('unsafe"value'),
+      err => err.name === 'FreshVerifyError' && err.code === 'fresh_verify_command_invalid'
+    );
+  } else {
+    assert.equal(freshVerify.quoteCommandValue("it's"), "'it'\\''s'", 'POSIX single quotes are escaped');
+  }
+});
+
+test('AC18: command execution captures the exit status and a bounded output excerpt', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-fv-command-'));
+  try {
+    const failed = freshVerify.runFreshVerifyCommand({
+      command: 'node -e "console.error(\'VERIFIER-BOOM\');process.exit(7)"',
+      cwd: dir,
+      promptFile: path.join(dir, 'fresh-verify.prompt.md'),
+      evidenceFile: path.join(dir, 'fresh-verify.verdict.json'),
+      slug: 'fresh-spec'
+    });
+    assert.equal(failed.passed, false);
+    assert.equal(failed.exitCode, 7);
+    assert.match(failed.outputTail, /VERIFIER-BOOM/);
+    assert.match(freshVerify.describeCommandObservation(failed), /exited 7: VERIFIER-BOOM/);
+
+    const passed = freshVerify.runFreshVerifyCommand({
+      command: 'node -e "process.exit(0)"',
+      cwd: dir,
+      promptFile: path.join(dir, 'fresh-verify.prompt.md'),
+      evidenceFile: path.join(dir, 'fresh-verify.verdict.json'),
+      slug: 'fresh-spec'
+    });
+    assert.equal(passed.passed, true);
+    assert.equal(passed.exitCode, 0);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('AC18: command mode runs the verifier inside the scratch worktree and consumes {evidenceFile}', () => {
+  const verifierFile = [
+    "'use strict';",
+    "const fs = require('fs');",
+    'const [promptFile, evidenceFile, commandCwd, slug, unknown] = process.argv.slice(2);',
+    "if (!fs.readFileSync(promptFile, 'utf8').includes('- AC1: The system shall write a run state file.')) {",
+    "  console.error('prompt is missing the acceptance criteria');",
+    '  process.exit(9);',
+    '}',
+    "if (commandCwd !== process.cwd()) {",
+    "  console.error('wrong cwd: ' + commandCwd);",
+    '  process.exit(9);',
+    '}',
+    "if (!process.cwd().replace(/\\\\/g, '/').endsWith('/fresh-verify')) {",
+    "  console.error('cwd is not the scratch worktree: ' + process.cwd());",
+    '  process.exit(9);',
+    '}',
+    "if (slug !== 'fresh-spec') {",
+    "  console.error('wrong slug: ' + slug);",
+    '  process.exit(9);',
+    '}',
+    "if (unknown !== '{unknownToken}') {",
+    "  console.error('unknown token was rewritten: ' + unknown);",
+    '  process.exit(9);',
+    '}',
+    'fs.writeFileSync(evidenceFile, JSON.stringify({',
+    '  criteria: [',
+    "    { id: 'AC1', verdict: 'verified' },",
+    "    { id: 'AC2', verdict: 'unverified' }",
+    '  ],',
+    '  residualDefects: []',
+    '}));',
+    ''
+  ].join('\n');
+  const command = 'node verifier.cjs {promptFile} {evidenceFile} {cwd} {slug} {unknownToken}';
+  const { root } = setupWorkspace({
+    createState: true,
+    testCommand: 'node -e "process.exit(0)"',
+    freshVerifyCommand: command,
+    baselineFiles: { 'verifier.cjs': verifierFile }
+  });
+  try {
+    fs.appendFileSync(path.join(root, 'app.cjs'), '// implemented\n', 'utf8');
+    const runId = latestState(root).runId;
+    const started = runCli(root, ['fresh-verify', '--run-id', runId]);
+    assert.equal(started.status, 0, `command mode finishes without a handoff pause; stderr: ${started.stderr}`);
+    assert.match(started.stdout, /1\/2 AC\(s\) verified|0\/2 AC\(s\) verified/);
+
+    const state = latestState(root);
+    assert.equal(state.freshVerify.status, 'completed');
+    assert.equal(state.freshVerify.command.exitCode, 0);
+    assert.match(state.freshVerify.command.command, /verifier\.cjs/);
+    assert.equal(state.freshVerify.verdicts.length, 2);
+    assert.match(state.freshVerify.verdicts[0].unverifiedReason, /no-op mutation/, 'the absent fault plan still gates verified');
+    assert.equal(state.steps[5].status, 'pending', 'the CLI stage alone never scores');
+    assert.equal(state.freshVerify.cleanup.removed, true);
+    assert.equal(fs.existsSync(path.resolve(root, state.freshVerify.scratch.path)), false, 'cleanup after command mode');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+
+  // The Step 4 -> 5 transition drives the same command mode and returns 0, so
+  // scoring may proceed after the verifier wrote the evidence file.
+  const transitioned = setupWorkspace({
+    createState: true,
+    testCommand: 'node -e "process.exit(0)"',
+    freshVerifyCommand: command,
+    baselineFiles: { 'verifier.cjs': verifierFile }
+  });
+  try {
+    fs.appendFileSync(path.join(transitioned.root, 'app.cjs'), '// implemented\n', 'utf8');
+    const result = sdwOrch.runFreshVerifyTransition(transitioned.root, latestState(transitioned.root), {
+      verification: {
+        freshVerifyEnabled: true,
+        testCommand: 'node -e "process.exit(0)"',
+        freshVerifyCommand: command
+      }
+    }, {});
+    assert.equal(result.code, 0, 'command mode clears the transition for Step 5');
+    const state = latestState(transitioned.root);
+    assert.equal(state.freshVerify.status, 'completed');
+    assert.equal(state.steps[5].status, 'pending');
+    assert.equal(fs.existsSync(freshVerify.resolveScratchDir(transitioned.root, state.runId)), false);
+  } finally {
+    fs.rmSync(transitioned.root, { recursive: true, force: true });
+  }
+});
+
+test('AC18: a non-zero verifier command fails closed with the output excerpt', () => {
+  const { root } = setupWorkspace({
+    createState: true,
+    testCommand: 'node -e "process.exit(0)"',
+    freshVerifyCommand: 'node -e "console.error(\'VERIFIER-BOOM\');process.exit(7)"'
+  });
+  try {
+    fs.appendFileSync(path.join(root, 'app.cjs'), '// implemented\n', 'utf8');
+    const runId = latestState(root).runId;
+    const result = runCli(root, ['fresh-verify', '--run-id', runId]);
+    assert.equal(result.status, 1, 'a non-zero verifier fails the stage');
+    assert.match(result.stderr, /Command-mode verification failed closed/);
+    assert.match(result.stderr, /exited 7/);
+    assert.match(result.stderr, /VERIFIER-BOOM/);
+
+    const state = latestState(root);
+    assert.equal(state.freshVerify.status, 'failed');
+    assert.equal(state.freshVerify.errorCode, 'fresh_verify_command_failed');
+    assert.match(state.freshVerify.error, /VERIFIER-BOOM/, 'the recorded error carries the output excerpt');
+    assert.equal(state.freshVerify.command.exitCode, 7);
+    assert.equal(state.steps[5].status, 'pending', 'Step 5 never scores a failed verifier');
+    assert.equal(fs.existsSync(freshVerify.resolveScratchDir(root, runId)), false, 'cleanup after command failure');
+
+    // The Step 4 -> 5 transition also refuses to score.
+    state.steps[4].status = 'completed';
+    stateManager.saveRunState(root, state);
+    const transition = sdwOrch.runFreshVerifyTransition(root, latestState(root), {
+      verification: {
+        freshVerifyEnabled: true,
+        testCommand: 'node -e "process.exit(0)"',
+        freshVerifyCommand: 'node -e "console.error(\'VERIFIER-BOOM\');process.exit(7)"'
+      }
+    }, {});
+    assert.equal(transition.code, 1);
+    assert.equal(latestState(root).steps[5].status, 'pending');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -900,6 +1154,89 @@ test('AC10: the scratch worktree is removed on accepted, rejected, and fault-fai
     assert.ok(!git(faultWorkspace.root, 'worktree list').includes('fresh-verify'), 'git no longer tracks the failed scratch worktree');
   } finally {
     fs.rmSync(faultWorkspace.root, { recursive: true, force: true });
+  }
+});
+
+// Spec 00018 AC19: the suite covers fresh verification, fault injection,
+// residual defects, audit verdicts, and scratch cleanup. Each concern names the
+// executed case that proves it, and the behavioral checks below keep this from
+// being satisfied by strings alone.
+test('AC19: the suite covers fresh verification, fault injection, residual defects, audit verdicts, and scratch cleanup', () => {
+  const freshSuite = fs.readFileSync(path.join(__dirname, 'sdw_fresh_verify.test.cjs'), 'utf8');
+  const auditSuite = fs.readFileSync(path.join(__dirname, 'sdw_audit.test.cjs'), 'utf8');
+  const coverage = [
+    { concern: 'fresh verification', source: freshSuite, title: "test('AC1-AC4: fresh-verify CLI creates a fenced scratch" },
+    { concern: 'fault injection', source: freshSuite, title: "test('AC5 & AC6: one fault per AC is isolated" },
+    { concern: 'residual defects', source: freshSuite, title: "test('AC9 & AC10: residual defects after the third round" },
+    { concern: 'audit verdicts', source: auditSuite, title: "test('AC12: audit refutes a claim whose file is absent" },
+    { concern: 'scratch cleanup', source: freshSuite, title: "test('AC10: the scratch worktree is removed on accepted" }
+  ];
+  for (const item of coverage) {
+    assert.ok(item.source.includes(item.title), `the suite has a case for ${item.concern}: ${item.title}`);
+  }
+
+  // Fresh verification: one verdict per acceptance criterion is enforced.
+  const missingVerdict = freshVerify.validateVerdict(
+    { criteria: [{ id: 'AC1', verdict: 'verified' }] },
+    [{ id: 'AC1', text: 'one' }, { id: 'AC2', text: 'two' }]
+  );
+  assert.equal(missingVerdict.valid, false);
+
+  // Fault injection: an undetected fault can never verify its criterion.
+  const gated = freshVerify.applyFaultEvidence([{ id: 'AC1', verdict: 'verified' }], {
+    baseline: { command: 'node verify.cjs', passed: true, exitCode: 0 },
+    faults: [{ id: 'AC1', faultInjected: 'app.cjs: replace x with y', faultObserved: false }]
+  });
+  assert.equal(gated.verdicts[0].verdict, 'unverified');
+
+  // Residual defects: a recorded pause keeps the run paused and Step 5 pending.
+  const { root } = setupWorkspace({ createState: true });
+  try {
+    const state = latestState(root);
+    state.freshVerify = {
+      status: 'paused_residual_defects',
+      round: 3,
+      maxRounds: 3,
+      residualDefects: [{ acId: 'AC1', reason: 'still broken' }],
+      scratch: null
+    };
+    state.status = 'paused';
+    stateManager.saveRunState(root, state);
+    const transition = sdwOrch.runFreshVerifyTransition(root, latestState(root), {
+      verification: { freshVerifyEnabled: true }
+    }, {});
+    assert.equal(transition.code, 4, 'a residual pause blocks Step 5');
+    const paused = latestState(root);
+    assert.equal(paused.status, 'paused');
+    assert.equal(paused.steps[5].status, 'pending');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+
+  // Audit verdicts: `refuted` blocks ship under the default policy.
+  const blocking = auditRunner.resolveAuditBlocking({
+    verdicts: [{ acId: 'AC1', verdict: 'refuted', reasons: ['claimed file absent'] }],
+    policy: 'refuted'
+  });
+  assert.equal(blocking.blocked, true);
+  assert.deepEqual(blocking.acIds, ['AC1']);
+
+  // Scratch cleanup: a created worktree is removed and git no longer tracks it.
+  const repo = setupRepo();
+  try {
+    const scratch = freshVerify.createScratchWorktree({
+      projectRoot: repo.root,
+      baseCommit: repo.baseCommit,
+      diff: '',
+      scratchDir: freshVerify.resolveScratchDir(repo.root, 'run-ac19')
+    });
+    const cleanup = freshVerify.removeScratchWorktree({ projectRoot: repo.root, worktreePath: scratch.path });
+    assert.equal(cleanup.ok, true);
+    assert.equal(cleanup.removed, true);
+    assert.equal(fs.existsSync(scratch.path), false);
+    assert.ok(!git(repo.root, 'worktree list').includes('fresh-verify'));
+  } finally {
+    fs.rmSync(repo.root, { recursive: true, force: true });
   }
 });
 

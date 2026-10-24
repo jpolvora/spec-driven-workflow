@@ -70,6 +70,7 @@
     "testCommand": "npm test",
     "timeoutMs": 600000,
     "freshVerifyEnabled": false,
+    "freshVerifyCommand": null,
     "auditVerdictsBlockShip": "refuted"
   },
   "requiredBuild": false,

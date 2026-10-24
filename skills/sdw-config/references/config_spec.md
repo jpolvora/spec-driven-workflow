@@ -321,6 +321,11 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
           "default": false,
           "description": "Run fresh-context verification between Step 4 evidence acceptance and Step 5 scoring. Disabled by default; when enabled, scoring is blocked until one verdict per acceptance criterion is accepted."
         },
+        "freshVerifyCommand": {
+          "type": ["string", "null"],
+          "default": null,
+          "description": "Command-mode verifier for fresh-context verification. When set, it runs once inside the scratch worktree with {promptFile}, {evidenceFile}, {cwd}, and {slug} substituted and shell-quoted, and must write the verdict to {evidenceFile}; a non-zero exit fails closed."
+        },
         "auditVerdictsBlockShip": {
           "type": "string",
           "enum": ["refuted", "caveats"],
@@ -494,6 +499,7 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
 | `branching.pushSyncedWorkBranch` | `boolean` | `false` | Push the synchronized work branch to `origin` after the post-merge fast-forward |
 | `scmProvider` | `string` | `"none"` | Configured SCM provider for issues, work items, and pull requests (`none`, `ado`, `github`) |
 | `verification.freshVerifyEnabled` | `boolean` | `false` | Run fresh-context verification between Step 4 evidence acceptance and Step 5 scoring; when enabled, scoring is blocked until the verifier returns one `verified` or `unverified` verdict per acceptance criterion (spec 00018) |
+| `verification.freshVerifyCommand` | `string \| null` | `null` | Command-mode verifier; when set, `fresh-verify` runs it once inside the scratch worktree with `{promptFile}`, `{evidenceFile}`, `{cwd}`, and `{slug}` substituted and shell-quoted, and the command must write the verdict to `{evidenceFile}`. Empty or `null` keeps the handoff mode. Any other `{token}` is left untouched (spec 00018) |
 | `verification.auditVerdictsBlockShip` | `string` | `"refuted"` | Audit verdicts that block ship (spec 00018): `refuted` blocks any `refuted` verdict; `caveats` also blocks `caveats` verdicts |
 | `requiredBuild` | `boolean` | `false` | Enforce successful build verification in Step 8 before creating delivery commit or PR |
 | `buildCommand` | `string` | `"npm run build"` | Command to execute for build verification |
@@ -565,6 +571,7 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
     "testCommand": "npm test",
     "timeoutMs": 600000,
     "freshVerifyEnabled": false,
+    "freshVerifyCommand": null,
     "auditVerdictsBlockShip": "refuted"
   },
   "requiredBuild": false,

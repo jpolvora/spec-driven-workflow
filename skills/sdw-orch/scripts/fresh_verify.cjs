@@ -20,6 +20,10 @@ const VERDICT_FILE_NAME = 'fresh-verify.verdict.json';
 const DEFAULT_TEST_TIMEOUT_MS = 600000;
 // The recorded output is a bounded tail, never the whole test transcript.
 const TEST_OUTPUT_TAIL_CHARS = 1200;
+// Spec 00018 AC18: command mode substitutes exactly these four tokens. Any
+// other `{...}` token is left untouched and reaches the command literally.
+const COMMAND_TOKENS = Object.freeze(['promptFile', 'evidenceFile', 'cwd', 'slug']);
+const COMMAND_OUTPUT_TAIL_CHARS = 1200;
 
 // Spec 00018 AC3: the verifier context is fenced to these two inputs. Any other
 // key is refused instead of silently omitted, so a transcript, DAG prompt,
@@ -120,13 +124,20 @@ function createScratchWorktree(options = {}) {
       { code: 'scratch_path_exists' }
     );
   }
-  fs.mkdirSync(path.dirname(scratchDir), { recursive: true });
+  try {
+    fs.mkdirSync(path.dirname(scratchDir), { recursive: true });
+  } catch (err) {
+    throw new FreshVerifyError(
+      `Scratch worktree directory creation failed for "${normalizePath(scratchDir)}": ${err.message}`,
+      { code: 'scratch_worktree_failed' }
+    );
+  }
 
   const add = runGit(projectRoot, ['worktree', 'add', '--detach', scratchDir, String(options.baseCommit)]);
   if (add.error || add.status !== 0) {
     removeScratchWorktree({ projectRoot, worktreePath: scratchDir });
     throw new FreshVerifyError(
-      `Scratch worktree creation failed for base commit "${options.baseCommit}": ${gitFailure(add, 'git worktree add failed')}`,
+      `Scratch worktree creation failed for "${normalizePath(scratchDir)}" at base commit "${options.baseCommit}": ${gitFailure(add, 'git worktree add failed')}`,
       { code: 'scratch_worktree_failed' }
     );
   }
@@ -137,7 +148,7 @@ function createScratchWorktree(options = {}) {
     if (applied.error || applied.status !== 0) {
       removeScratchWorktree({ projectRoot, worktreePath: scratchDir });
       throw new FreshVerifyError(
-        `Applying the delivery diff in the scratch worktree failed: ${gitFailure(applied, 'git apply failed')}`,
+        `Applying the delivery diff in "${normalizePath(scratchDir)}" failed: ${gitFailure(applied, 'git apply failed')}`,
         { code: 'diff_apply_failed' }
       );
     }
@@ -305,6 +316,97 @@ function describeTestObservation(run) {
   if (run.signal) return `the test command was terminated by signal ${run.signal}`;
   if (run.error) return `the test command failed to run: ${run.error}`;
   return `the test command exited ${run.exitCode}${run.passed ? ' (passed)' : ''}`;
+}
+
+// Spec 00018 AC18: every substituted value is shell-quoted, so a path with
+// spaces or metacharacters cannot break the configured command. On Windows a
+// value carrying a double quote or newline cannot be quoted safely and is
+// refused; elsewhere single quotes are escaped POSIX-style.
+function quoteCommandValue(value) {
+  const text = String(value);
+  if (process.platform === 'win32') {
+    if (/["\r\n]/.test(text)) {
+      throw new FreshVerifyError(
+        `Unsafe value for the fresh-verify command substitution: ${text}`,
+        { code: 'fresh_verify_command_invalid' }
+      );
+    }
+    return `"${text}"`;
+  }
+  return `'${text.replace(/'/g, "'\\''")}'`;
+}
+
+// Spec 00018 AC18: replace exactly {promptFile}, {evidenceFile}, {cwd}, and
+// {slug}. An unknown token is left untouched and reaches the command literally
+// (documented in references/fresh_verify.md), never silently dropped.
+function renderFreshVerifyCommand(template, tokens = {}) {
+  const values = tokens && typeof tokens === 'object' ? tokens : {};
+  const pattern = new RegExp(`\\{(${COMMAND_TOKENS.join('|')})\\}`, 'g');
+  return String(template).replace(pattern, (match, name) => {
+    const value = values[name];
+    return value === undefined || value === null ? match : quoteCommandValue(value);
+  });
+}
+
+// Spec 00018 AC18: command mode runs the configured verifier once inside the
+// scratch worktree. The verifier is expected to write the verdict to
+// {evidenceFile}; its exit status and a bounded output tail are captured, and a
+// non-zero exit fails closed with that excerpt.
+function runFreshVerifyCommand(options = {}) {
+  const rawCommand = typeof options.command === 'string' ? options.command.trim() : '';
+  if (!rawCommand) {
+    throw new FreshVerifyError(
+      'Fresh-verify command mode requires a non-empty verification.freshVerifyCommand.',
+      { code: 'fresh_verify_command_missing' }
+    );
+  }
+  if (!options.cwd) {
+    throw new FreshVerifyError('Fresh-verify command mode requires the scratch worktree path.', { code: 'invalid_scratch_dir' });
+  }
+  if (!options.promptFile || !options.evidenceFile) {
+    throw new FreshVerifyError(
+      'Fresh-verify command mode requires the prompt file and the evidence file paths.',
+      { code: 'invalid_command_paths' }
+    );
+  }
+  const cwd = path.resolve(options.cwd);
+  const timeoutMs = Number.isInteger(options.timeoutMs) && options.timeoutMs > 0
+    ? options.timeoutMs
+    : DEFAULT_TEST_TIMEOUT_MS;
+  const command = renderFreshVerifyCommand(rawCommand, {
+    promptFile: path.resolve(options.promptFile),
+    evidenceFile: path.resolve(options.evidenceFile),
+    cwd,
+    slug: options.slug || ''
+  });
+  const result = spawnSync(command, {
+    cwd,
+    shell: true,
+    encoding: 'utf8',
+    timeout: timeoutMs,
+    maxBuffer: 32 * 1024 * 1024
+  });
+  const output = `${result.stdout || ''}${result.stderr || ''}`;
+  return {
+    command,
+    passed: !result.error && result.status === 0,
+    exitCode: result.status,
+    signal: result.signal || null,
+    timedOut: Boolean(result.error && result.error.code === 'ETIMEDOUT'),
+    error: result.error ? result.error.message : null,
+    outputTail: output.length > COMMAND_OUTPUT_TAIL_CHARS ? output.slice(-COMMAND_OUTPUT_TAIL_CHARS) : output
+  };
+}
+
+// Spec 00018 AC18: one actionable sentence naming the observed failure and the
+// captured excerpt, so a failed command is never a silent stop.
+function describeCommandObservation(run) {
+  if (!run) return 'the fresh-verify command never ran';
+  if (run.timedOut) return 'the fresh-verify command timed out';
+  if (run.signal) return `the fresh-verify command was terminated by signal ${run.signal}`;
+  if (run.error) return `the fresh-verify command failed to run: ${run.error}`;
+  const excerpt = String(run.outputTail || '').trim();
+  return `the fresh-verify command exited ${run.exitCode}${excerpt ? `: ${excerpt}` : ' with no output'}`;
 }
 
 function readFileStatus(scratchPath, relFile) {
@@ -702,6 +804,7 @@ module.exports = {
   PROMPT_FILE_NAME,
   VERDICT_FILE_NAME,
   FENCED_PROMPT_KEYS,
+  COMMAND_TOKENS,
   normalizePath,
   resolveScratchDir,
   resolveArtifactPaths,
@@ -712,6 +815,10 @@ module.exports = {
   planFaults,
   runTestCommand,
   describeTestObservation,
+  quoteCommandValue,
+  renderFreshVerifyCommand,
+  runFreshVerifyCommand,
+  describeCommandObservation,
   runFaultInjection,
   applyFaultEvidence,
   renderVerifierPrompt,

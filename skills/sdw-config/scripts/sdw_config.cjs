@@ -349,6 +349,7 @@ const DEFAULT_CONFIG = {
     testCommand: null,
     timeoutMs: 600000,
     freshVerifyEnabled: false,
+    freshVerifyCommand: null,
     auditVerdictsBlockShip: 'refuted'
   },
   requiredBuild: false,
@@ -693,6 +694,11 @@ const DEFAULT_SCHEMA = {
           "type": "boolean",
           "default": false,
           "description": "Run fresh-context verification between Step 4 evidence acceptance and Step 5 scoring. Disabled by default; when enabled, scoring is blocked until one verdict per acceptance criterion is accepted."
+        },
+        "freshVerifyCommand": {
+          "type": ["string", "null"],
+          "default": null,
+          "description": "Command-mode verifier for fresh-context verification. When set, it runs once inside the scratch worktree with {promptFile}, {evidenceFile}, {cwd}, and {slug} substituted and shell-quoted, and must write the verdict to {evidenceFile}; a non-zero exit fails closed."
         },
         "auditVerdictsBlockShip": {
           "type": "string",
@@ -1134,6 +1140,11 @@ function validateConfigSchema(config) {
       }
       if ('freshVerifyEnabled' in config.verification && typeof config.verification.freshVerifyEnabled !== 'boolean') {
         errors.push('Property "verification.freshVerifyEnabled" must be a boolean.');
+      }
+      if ('freshVerifyCommand' in config.verification && config.verification.freshVerifyCommand !== null) {
+        if (typeof config.verification.freshVerifyCommand !== 'string') {
+          errors.push('Property "verification.freshVerifyCommand" must be a string or null.');
+        }
       }
       if ('auditVerdictsBlockShip' in config.verification) {
         const allowedPolicies = ['refuted', 'caveats'];

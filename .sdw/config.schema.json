@@ -416,6 +416,14 @@
           "default": false,
           "description": "Run fresh-context verification between Step 4 evidence acceptance and Step 5 scoring. Disabled by default; when enabled, scoring is blocked until one verdict per acceptance criterion is accepted."
         },
+        "freshVerifyCommand": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "description": "Command-mode verifier for fresh-context verification. When set, it runs once inside the scratch worktree with {promptFile}, {evidenceFile}, {cwd}, and {slug} substituted and shell-quoted, and must write the verdict to {evidenceFile}; a non-zero exit fails closed."
+        },
         "auditVerdictsBlockShip": {
           "type": "string",
           "enum": [
