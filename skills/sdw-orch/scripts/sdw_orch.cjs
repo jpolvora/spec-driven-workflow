@@ -3295,15 +3295,41 @@ function evaluateAuditShipGate(state, config) {
     return { applies: false, blocked: false, policy, acIds: [], verdicts: [], message: null };
   }
   const blocking = auditRunner.resolveAuditBlocking({ verdicts, policy });
+  if (blocking.blocked) {
+    // A recorded refusal is the most actionable message, even when the record is
+    // also stale: it names the criteria that must be fixed.
+    return {
+      applies: true,
+      blocked: true,
+      policy: blocking.policy,
+      acIds: blocking.acIds,
+      verdicts: blocking.verdicts,
+      message: `Ship blocked by the adversarial audit under policy "${blocking.policy}": ${blocking.reasons.join('; ')}`
+    };
+  }
+  // Spec 00018 AC13: an audit only speaks for the delivery it examined. A record
+  // whose delivery commit no longer matches the run (a later fix or delivery)
+  // cannot confirm this delivery: re-running `audit` is the remedy.
+  const auditedDelivery = record.diff && record.diff.deliveryCommit ? String(record.diff.deliveryCommit) : null;
+  const currentDelivery = state && state.deliveryCommit ? String(state.deliveryCommit) : null;
+  if (auditedDelivery !== currentDelivery) {
+    return {
+      applies: true,
+      blocked: true,
+      stale: true,
+      policy,
+      acIds: [],
+      verdicts: [],
+      message: `Ship blocked: the recorded audit is stale (audited delivery ${auditedDelivery || 'none'}, current delivery ${currentDelivery || 'none'}). Re-run "audit --run-id ${state.runId}" for the current delivery commit.`
+    };
+  }
   return {
     applies: true,
-    blocked: blocking.blocked,
+    blocked: false,
     policy: blocking.policy,
-    acIds: blocking.acIds,
-    verdicts: blocking.verdicts,
-    message: blocking.blocked
-      ? `Ship blocked by the adversarial audit under policy "${blocking.policy}": ${blocking.reasons.join('; ')}`
-      : null
+    acIds: [],
+    verdicts: [],
+    message: null
   };
 }
 

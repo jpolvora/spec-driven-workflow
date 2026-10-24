@@ -155,12 +155,41 @@ function createScratchWorktree(options = {}) {
     diffApplied = true;
   }
 
+  // `git diff` never lists a file the worker created but did not stage or commit.
+  // Those untracked (non-ignored) files belong to the delivery, so the scratch
+  // tree gets a copy and the verifier sees exactly what the run produced.
+  let copiedUntracked = 0;
+  const scratchRel = toRelPosix(projectRoot, scratchDir);
+  const untracked = runGit(projectRoot, ['ls-files', '--others', '--exclude-standard']);
+  if (!untracked.error && untracked.status === 0) {
+    for (const rel of (untracked.stdout || '').split('\n').map(line => line.trim()).filter(Boolean)) {
+      // Runtime state and the scratch tree itself are never delivery files.
+      if (rel === scratchRel || rel.startsWith(`${scratchRel}/`) || rel.startsWith('.sdw/')) continue;
+      const source = path.resolve(projectRoot, rel);
+      const target = path.resolve(scratchDir, rel);
+      if (!target.startsWith(path.resolve(scratchDir) + path.sep)) continue;
+      try {
+        if (!fs.statSync(source).isFile()) continue;
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.copyFileSync(source, target);
+        copiedUntracked += 1;
+      } catch (err) {
+        removeScratchWorktree({ projectRoot, worktreePath: scratchDir });
+        throw new FreshVerifyError(
+          `Copying the untracked delivery file "${rel}" into "${normalizePath(scratchDir)}" failed: ${err.message}`,
+          { code: 'scratch_untracked_copy_failed' }
+        );
+      }
+    }
+  }
+
   return {
     path: scratchDir,
     rel: toRelPosix(projectRoot, scratchDir),
     baseCommit: String(options.baseCommit),
     diffBytes,
-    diffApplied
+    diffApplied,
+    untrackedFiles: copiedUntracked
   };
 }
 

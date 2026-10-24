@@ -441,8 +441,7 @@ test('AC12: audit reports caveats when the evidence is present but incomplete', 
   }
 });
 
-test('AC11 & AC12: a cited but unchanged file never refutes a claim', () => {
-  // The ledger only requires the cited path to exist. A file the delivery diff
+test('AC11 & AC12: a cited but unchanged file never refutes a claim', () => {  // The ledger only requires the cited path to exist. A file the delivery diff
   // does not change is a citation, not a claimed change, so it can never refute
   // the criterion and can never block the ship under the default policy.
   const workspace = setupAuditWorkspace({
@@ -506,6 +505,48 @@ test('AC11: audit fails closed when the run has no base commit to compare agains
       false,
       'a refused audit creates no scratch worktree'
     );
+  } finally {
+    fs.rmSync(workspace.root, { recursive: true, force: true });
+  }
+});
+
+// Spec 00018 AC11: a file the worker created but did not commit still belongs to
+// the delivery, so a claim on it is never refuted as missing.
+test('AC11: an uncommitted new claimed file counts as delivered', () => {
+  const workspace = setupAuditWorkspace({ claimedFiles: ['newfile.cjs'], noTestCommand: true });
+  try {
+    fs.writeFileSync(path.join(workspace.root, 'newfile.cjs'), '// new delivery file\n', 'utf8');
+    const result = runAuditCli(workspace.root, workspace.runId);
+    assert.equal(result.status, 0, result.stderr);
+
+    const state = stateManager.loadRunState(workspace.root, workspace.runId);
+    const verdict = state.audit.verdicts[0];
+    assert.notEqual(verdict.verdict, 'refuted', `the untracked claim is not missing: ${verdict.reasons.join(' ')}`);
+    assert.ok(verdict.presentFiles.includes('newfile.cjs'), 'the untracked file is part of the delivery diff');
+    assert.deepEqual(verdict.missingFiles, []);
+  } finally {
+    fs.rmSync(workspace.root, { recursive: true, force: true });
+  }
+});
+
+// Spec 00018 AC13: the ship gate only trusts an audit of the current delivery.
+test('AC13: an audit of an earlier delivery blocks ship as stale', () => {
+  const workspace = setupAuditWorkspace({ testCommand: 'node verify.cjs' });
+  try {
+    const audited = runAuditCli(workspace.root, workspace.runId);
+    assert.equal(audited.status, 0, audited.stderr);
+
+    const state = stateManager.loadRunState(workspace.root, workspace.runId);
+    const current = sdwOrch.evaluateAuditShipGate(state, { verification: {} });
+    assert.equal(current.blocked, false, 'the fresh audit speaks for the current delivery');
+
+    const stale = { ...state, deliveryCommit: 'stale-delivery-sha' };
+    const gate = sdwOrch.evaluateAuditShipGate(stale, { verification: {} });
+    assert.equal(gate.applies, true);
+    assert.equal(gate.stale, true, 'the stale record is flagged');
+    assert.equal(gate.blocked, true, 'a stale audit blocks ship');
+    assert.match(gate.message, /recorded audit is stale/);
+    assert.match(gate.message, /Re-run "audit --run-id/);
   } finally {
     fs.rmSync(workspace.root, { recursive: true, force: true });
   }

@@ -82,6 +82,16 @@ function collectDeliveryDiffFiles(options = {}) {
     .split('\n')
     .map(normalizeClaimFile)
     .filter(Boolean));
+  // A worker can create a file that is neither staged nor committed; `git diff`
+  // never lists it, so it is added from the untracked set (ignored files excepted)
+  // or a real claim would look missing and be refuted.
+  const untracked = runGit(projectRoot, ['ls-files', '--others', '--exclude-standard']);
+  if (!untracked.error && untracked.status === 0) {
+    for (const file of (untracked.stdout || '').split('\n').map(normalizeClaimFile).filter(Boolean)) {
+      if (!files.includes(file)) files.push(file);
+    }
+    files.sort();
+  }
   return { ok: true, files, baseCommit, deliveryCommit: deliveryCommit || null };
 }
 
