@@ -7,7 +7,7 @@
 | Specification file | `.sdw/specs/00067-task-acceptance-links-test-evidence.md` |
 | Specification slug | 00067-task-acceptance-links-test-evidence |
 | Run ID | run-1792826021773-00067-task-acceptance-links-te |
-| Run status | paused |
+| Run status | completed |
 | Branch | `feature/00067-task-acceptance-links-test-evidence` |
 | Base branch | `master` |
 | Base commit | `e3d11e2537463db0443c612f0f99a0c58f5d5330` |
@@ -17,7 +17,7 @@
 | Implementation start | 2026-10-24T07:13:44.351Z |
 | Implementation end | 2026-10-24T07:31:03.296Z |
 | Total wall-clock duration | 17m 18s |
-| Generated at | 2026-10-24T10:10:01.893Z |
+| Generated at | 2026-10-24T10:14:32.310Z |
 | Step 1: derivation (skipped) | 5ms |
 | Step 2: refinement (completed) | 44ms |
 | Step 3: dag_generation (completed) | 11ms |
@@ -25,7 +25,7 @@
 | Step 5: scoring (completed) | 37s |
 | Step 6: delivery_commit (completed) | 523ms |
 | Step 7: code_review (completed) | 1s |
-| Step 8: pr_preparation (blocked_convergence) | n/a |
+| Step 8: pr_preparation (completed) | 14m 27s |
 
 
 ## Tasks
@@ -39,6 +39,8 @@
 
 | SHA | Subject | Range |
 |---|---|---|
+| `385290e` | chore(00067-task-acceptance-links-test-evidence): mark the specification completed in the registry | base..HEAD |
+| `7e4e15c` | docs(00067-task-acceptance-links-test-evidence): record delivery report | base..HEAD |
 | `2b350d1` | docs(00067-task-acceptance-links-test-evidence): align AC3 test identity with the 00017 update-in-place rule | base..HEAD |
 | `eb07027` | docs(00067-task-acceptance-links-test-evidence): record delivery report | base..HEAD |
 | `9cb3b09` | task(00067-task-acceptance-links-test-evidence): task-2 | base..HEAD |
@@ -66,11 +68,12 @@
 |---|---|
 | `.sdw/reports/00067-task-acceptance-links-test-evidence-report.md` | added |
 | `.sdw/specs/00067-task-acceptance-links-test-evidence.md` | modified |
+| `.sdw/specs/index.specs.md` | modified |
 
 ## Verification
 
 - test gate: status `passed`, exit code `0`, duration 3m 19s
-- Step 8 delivery: `blocked_convergence` (ship status `review_pending`)
+- Step 8 delivery: `completed` (ship status `review_pending`)
 
 ## Fresh Verification & Audit
 
@@ -124,7 +127,13 @@ Not available
 
 ## Retrospective
 
-Not available
+- Status: `passed`
+- Report: `.sdw/state/00067-task-acceptance-links-test-evidence/run-1792826021773-00067-task-acceptance-links-te/run-1792826021773-00067-task-acceptance-links-te.retro.md`
+- Data: `.sdw/state/00067-task-acceptance-links-test-evidence/run-1792826021773-00067-task-acceptance-links-te/run-1792826021773-00067-task-acceptance-links-te.retro.json`
+- Signals: retries 4 (score 2, review 0, rounds 2, abandonments 0); leftover runs 0; missing artifacts 0; review findings 0 (0 open)
+- Candidates: 0
+- Applied fixes:
+  - none
 
 ## Breaking Changes
 
@@ -180,18 +189,18 @@ None detected.
 
 - Step 1 (derivation) skipped: not recorded
 - Task task-2 accepted after re-dispatch (sequence 2)
-- Environment: workspace: 5 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
+- Environment: workspace: 6 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
 
 ## Outcome
 
-- Result: `paused`
+- Result: `completed`
 - Delivery commit: `9cb3b09afcc95110308f9c34ad3e0719bd9cd19d`
 - Ship status: `review_pending`
 - Duration: 17m 18s
 
 ## Step Contributions
 
-- Recorded: 10 contribution(s)
+- Recorded: 13 contribution(s)
 
 ### Step 1: derivation
 
@@ -239,11 +248,18 @@ None detected.
 
 ### Step 8: pr_preparation
 
-- **convergence** 2026-10-24T10:07:36.826Z - Convergence iteration 1
+- **convergence** 2026-10-24T10:14:26.829Z - Convergence iteration 1
   - Body: `{"iteration":1,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":false}`
-- **convergence** 2026-10-24T10:07:37.353Z - Convergence iteration 2
-  - Body: `{"iteration":2,"rounds":2,"failingChecks":[{"name":"review","status":""}],"openThreads":1,"resolvedThreads":0,"fixCommit":null,"converged":false}`
+- **convergence** 2026-10-24T10:14:27.480Z - Convergence iteration 2
+  - Body: `{"iteration":2,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":true}`
+- **gates** 2026-10-24T10:14:28.108Z - Pre-PR gates: 6 result(s)
+  - Body: `{"gates":[{"name":"prePrCommand","status":"skipped","detail":"prePrCommand is not configured"},{"name":"build","status":"skipped","detail":"requiredBuild is false"},{"name":"tests","status":"pass","detail":"npm test exited 0"},{"name":"security","status":"pass","detail":"sdw-security-checks found no blocking leak"},{"name":"runState","status":"pass","detail":"step 4, step 6 and step 7 completed; score 10 >= scoreMin 8"},{"name":"discovery","status":"pass","detail":"no prepare obligations discovered"}]}`
+- **ship** 2026-10-24T10:14:28.108Z - Pull request #70
+  - Body: `{"pushed":true,"branch":"feature/00067-task-acceptance-links-test-evidence","pullRequest":{"number":"70","url":"https://github.com/jpolvora/spec-driven-workflow/pull/70","title":null},"shipStatus":"delivered"}`
+  - Evidence: `https://github.com/jpolvora/spec-driven-workflow/pull/70`
 
 ### Step 9: retrospective
 
-Not available
+- **retro** 2026-10-24T10:14:31.916Z - Retrospective passed: 0 candidate(s)
+  - Body: `{"status":"passed","runStatus":"completed","signals":{"retries":{"scoreIterations":2,"reviewIterations":0,"reviewRounds":2,"dispatchAbandonments":0,"total":4},"leftoverRuns":0,"missingArtifacts":0,"reviewFindings":{"total":0,"open":0}},"candidates":[],"fixes":{"recorded":[],"consolidated":null,"queuedSpecifications":[],"failures":[]},"routedCandidates":[],"reportMd":".sdw/state/00067-task-acceptance-links-test-evidence/run-1792826021773-00067-task-acceptance-links-te/run-1792826021773-00067-task-acceptance-links-te.retro.md","reportJson":".sdw/state/00067-task-acceptance-links-test-evidence/run-1792826021773-00067-task-acceptance-links-te/run-1792826021773-00067-task-acceptance-links-te.retro.json"}`
+  - Evidence: `.sdw/state/00067-task-acceptance-links-test-evidence/run-1792826021773-00067-task-acceptance-links-te/run-1792826021773-00067-task-acceptance-links-te.retro.md`, `.sdw/state/00067-task-acceptance-links-test-evidence/run-1792826021773-00067-task-acceptance-links-te/run-1792826021773-00067-task-acceptance-links-te.retro.json`
