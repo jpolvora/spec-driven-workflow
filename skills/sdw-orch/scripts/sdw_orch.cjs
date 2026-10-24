@@ -433,6 +433,10 @@ function parseArgs(args) {
     refreshModels: false,
     ledgerAction: null,
     reportFormat: null,
+    // Spec 00068 AC5: `review dispose --finding <id>` plus one disposition.
+    findingId: null,
+    fixedSha: null,
+    waivedReason: null,
     // Spec 00023 AC1/AC4/AC5: `report activity --date`, `report standup
     // --hours`, and `report explain <spec>`.
     reportDate: null,
@@ -491,6 +495,14 @@ function parseArgs(args) {
     // Spec 00017 AC11: `ledger report` renders Markdown or JSON.
     else if (arg === '--format') result.reportFormat = args[++i];
     else if (arg.startsWith('--format=')) result.reportFormat = arg.slice(9);
+    // Spec 00068 AC5: `review dispose` takes the finding id and exactly one
+    // disposition, either the fixing commit sha or a waiver rationale.
+    else if (arg === '--finding') result.findingId = args[++i];
+    else if (arg.startsWith('--finding=')) result.findingId = arg.slice(10);
+    else if (arg === '--fixed') result.fixedSha = args[++i];
+    else if (arg.startsWith('--fixed=')) result.fixedSha = arg.slice(8);
+    else if (arg === '--waived') result.waivedReason = args[++i];
+    else if (arg.startsWith('--waived=')) result.waivedReason = arg.slice(9);
     // Spec 00023 AC1/AC4: reporting window and delivery day.
     else if (arg === '--date') result.reportDate = args[++i];
     else if (arg.startsWith('--date=')) result.reportDate = arg.slice(7);
@@ -554,7 +566,9 @@ function parseArgs(args) {
     'ledger report': 'ledger',
     'ledger audit': 'ledger',
     // Spec 00021 AC13: `telemetry report` aggregates every run's event stream.
-    'telemetry report': 'telemetry-report'
+    'telemetry report': 'telemetry-report',
+    // Spec 00068 AC5: `review dispose` adjudicates one Step 7 finding on run state.
+    'review dispose': 'review-dispose'
   };
   const combinedMatch = COMBINED[positional.slice(0, 2).join(' ')];
   if (combinedMatch) {
@@ -3356,6 +3370,36 @@ function evaluateAuditShipGate(state, config) {
   };
 }
 
+// Spec 00068 AC4: the Step 8 review disposition gate. A finding the reviewer
+// raised but nobody adjudicated is the defect the specification removes, so any
+// Step 7 finding without a `fixed` or `waived` disposition blocks the ship and
+// the message names every one of them with its path. A run whose review never
+// produced a ledger (skipped, or no findings) has nothing to enforce.
+function evaluateReviewDispositionGate(state) {
+  const step7 = state && state.steps ? state.steps[reviewFindings.REVIEW_STEP] : null;
+  const output = step7 && step7.output && typeof step7.output === 'object' ? step7.output : null;
+  const findings = output && Array.isArray(output.findings) ? output.findings : [];
+  if (!step7 || findings.length === 0) {
+    return { applies: false, blocked: false, findings: [], message: null };
+  }
+  const undisposed = findings
+    .filter((finding) => !reviewFindings.isDisposed(finding))
+    .map((finding) => ({
+      id: finding && finding.id !== undefined && finding.id !== null ? String(finding.id) : 'unknown',
+      path: String((finding && (finding.path || finding.file)) || 'unknown path')
+    }));
+  if (undisposed.length === 0) {
+    return { applies: true, blocked: false, findings: [], message: null };
+  }
+  const named = undisposed.map((finding) => `${finding.id} (${finding.path})`).join(', ');
+  return {
+    applies: true,
+    blocked: true,
+    findings: undisposed,
+    message: `Ship blocked: ${undisposed.length} Step 7 review finding(s) have no disposition: ${named}. Adjudicate each with "review dispose --run-id ${state.runId} --finding <id> --fixed <sha>" or "--waived <reason>".`
+  };
+}
+
 // Spec 00018 AC11/AC12: the explicit `audit` command. It reads the run's claim
 // records (accepted Step 4 tasks and the acceptance criteria ledger), compares
 // the claimed files with the delivery diff, reruns verification in an
@@ -3421,6 +3465,37 @@ function cmdAudit(options) {
   }
   if (options.json) {
     console.log(JSON.stringify({ runId: state.runId, ...result.record }, null, 2));
+  }
+  return 0;
+}
+
+// Spec 00068 AC5: `review dispose --run-id <id> --finding <id> --fixed <sha>` or
+// `--waived <reason>` records the adjudication on run state. Every refusal (an
+// unknown finding id, a missing sha, an empty rationale, a missing run or
+// finding) exits non-zero before anything is written.
+function cmdReviewDispose(options) {
+  const targetRoot = options.root ? path.resolve(options.root) : process.cwd();
+  if (!options.runId) {
+    console.error('[sdw-orch review dispose] --run-id <id> is required.');
+    return 1;
+  }
+  if (!options.findingId) {
+    console.error('[sdw-orch review dispose] --finding <id> is required.');
+    return 1;
+  }
+  let result;
+  try {
+    result = reviewFindings.disposeInRunState(targetRoot, options.runId, options.findingId, {
+      fixed: options.fixedSha,
+      waived: options.waivedReason
+    });
+  } catch (err) {
+    console.error(`[sdw-orch review dispose] ${err.message}`);
+    return 1;
+  }
+  console.log(result.message);
+  if (options.json) {
+    console.log(JSON.stringify({ runId: options.runId, finding: result.finding }, null, 2));
   }
   return 0;
 }
@@ -5370,6 +5445,32 @@ function executeRun(options) {
   } else if (startStep <= 8 && state.steps[8].status !== 'completed' && !options.skipPr) {
     state = stateManager.updateStepState(targetRoot, state.runId, 8, 'in_progress');
     logStepEnter(8);
+
+    // Spec 00068 AC4: every Step 7 finding must be adjudicated before the
+    // delivery ships; an undisposed finding blocks the ship and the message
+    // names each one. This sits with the other ship gates, before any delivery
+    // work starts.
+    const reviewGate = evaluateReviewDispositionGate(state);
+    if (reviewGate.applies) {
+      state.reviewDispositionGate = {
+        blocked: reviewGate.blocked,
+        findings: reviewGate.findings,
+        evaluatedAt: new Date().toISOString()
+      };
+      state = stateManager.saveRunState(targetRoot, state);
+    }
+    if (reviewGate.blocked) {
+      console.error(`[Step 8: Review Gate] ${reviewGate.message}`);
+      state = stateManager.updateStepState(targetRoot, state.runId, 8, 'blocked_review', { reviewDispositionGate: state.reviewDispositionGate }, reviewGate.message);
+      stateManager.saveRunState(targetRoot, state);
+      options._runResult = {
+        runId: state.runId,
+        status: 'failed',
+        error: reviewGate.message,
+        reviewDispositionGate: state.reviewDispositionGate
+      };
+      return 1;
+    }
 
     // Spec 00018 AC13/AC14: audit verdicts block delivery before any ship or
     // pre-PR work starts. `refuted` always blocks; `caveats` blocks only under
@@ -7630,6 +7731,7 @@ Subcommands:
   task abandon           Return the dispatched DAG task to the queue
   fresh-verify           Start or finish fresh-context verification between Step 4 and Step 5 (--run-id, --verdict; exit 4 while awaiting a verdict or a residual fix)
   audit                  Compare claimed work with the delivery diff and rerun verification (--run-id, --json; records confirmed | refuted | caveats verdicts on run state)
+  review dispose         Record a Step 7 finding disposition: fixed with a commit sha, or waived with a rationale (--run-id, --finding, --fixed | --waived)
   score submit           Submit a judge verdict for Step 5 conformance scoring (per-criterion verdicts: ${scoreEvaluator.VERDICT_VALUES.join(' | ')})
   report re-render       Refresh the delivery report and the in-progress report from run state (never commits)
   report activity        Timesheet entries for a delivery day (--date YYYY-MM-DD, --json)
@@ -7666,6 +7768,9 @@ Options:
   --status <status>      Test status for --type test (for example passed)
   --sha <sha>            Commit SHA for --type commit
   --id <id>              Review or sabotage id for --type review | sabotage
+  --finding <id>         Step 7 finding id for review dispose (for example CR-001)
+  --fixed <sha>          Fixing commit sha for review dispose
+  --waived <reason>      Waiver rationale for review dispose (must be non-empty)
   --format <format>      Report format for ledger report and ledger audit: md | json (default: md)
   --date <YYYY-MM-DD>    Delivery day for report activity
   --hours <n>            Lookback window for report standup (default: 36)
@@ -7757,6 +7862,9 @@ function main() {
         break;
       case 'audit':
         code = cmdAudit(options);
+        break;
+      case 'review-dispose':
+        code = cmdReviewDispose(options);
         break;
       case 'score-submit':
         code = cmdScoreSubmit(options);
@@ -7850,7 +7958,9 @@ module.exports = {
   linkAcceptedTaskEvidence,
   cmdFreshVerify,
   cmdAudit,
+  cmdReviewDispose,
   evaluateAuditShipGate,
+  evaluateReviewDispositionGate,
   runFreshVerifyTransition,
   freshVerifyEnabled,
   cmdScoreSubmit,
