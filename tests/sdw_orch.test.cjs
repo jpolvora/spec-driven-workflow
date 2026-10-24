@@ -120,9 +120,12 @@ slug: multi-step
 - AC9: The orchestrator shall refuse oversized plans.
 - AC10: The orchestrator shall report remaining queue depth.
 - AC11: The orchestrator shall preview the dag without side effects.
+## Implementation Surfaces
+- \`skills/sdw-orch/scripts/dag_planner.cjs\`
 `;
 
-  const plan = dagPlanner.generateDagPlan(complexSpec, { slug: 'multi-step' });
+  const blueprint = specGrilling.generateRefinementBlueprint(complexSpec, { slug: 'multi-step' });
+  const plan = dagPlanner.generateDagPlan(complexSpec, { slug: 'multi-step', blueprint });
   assert.equal(plan.complexity.level, 'complex', 'Identifies complex spec (AC7)');
   assert.ok(plan.tasks.length >= 3 && plan.tasks.length <= 5, 'Fans out into three to five tasks (00030 AC9)');
 
@@ -269,6 +272,8 @@ slug: low-score
 ## Acceptance Criteria
 - AC1: The orchestrator shall satisfy nonexistent quantum encryption feature alpha beta.
 - AC2: The orchestrator shall satisfy nonexistent interplanetary telemetry gamma delta.
+## New files
+\`src/low_score.cjs\` — created by this work.
 `);
 
     // Running with minScore 8 against partial implementation (covering only 1 of 2 ACs = score 5) should exit with code 2 (loop trigger)
@@ -454,6 +459,8 @@ slug: push-feature
 # Push Feature
 ## Acceptance Criteria
 - AC1: The orchestrator shall test remote branch push execution.
+## New files
+\`src/push_feature.cjs\` — created by this work.
 `);
 
     // Execute run with --push when no remote is configured (handles local safely)
@@ -593,6 +600,8 @@ title: Branch State
 # Branch State
 ## Acceptance Criteria
 - AC1: The system shall record branch state.
+## New files
+\`src/branch_state.cjs\` — created by this work.
 `, 'utf8');
     execSync('git add -A && git commit -m "baseline"', { cwd: tmpDir, stdio: 'ignore' });
     const baseHead = execSync('git rev-parse HEAD', { cwd: tmpDir, encoding: 'utf8' }).trim();
@@ -668,6 +677,8 @@ title: Delivery Fixture
 # Delivery Fixture
 ## Acceptance Criteria
 - AC1: The orchestrator shall write the delivery report beside the specification.
+## New files
+\`src/delivery.cjs\` — created by this work.
 `, 'utf8');
     execSync('git add -A && git commit -m "baseline"', { cwd: tmpDir, stdio: 'ignore' });
 
@@ -1002,6 +1013,8 @@ title: Delivery Fixture
 # Delivery Fixture
 ## Acceptance Criteria
 - AC1: The orchestrator shall write the delivery report beside the specification.
+## New files
+\`src/${slug}.cjs\` — created by this work.
 `, 'utf8');
   execSync('git add -A && git commit -m "baseline"', { cwd: tmpDir, stdio: 'ignore' });
   return tmpDir;
@@ -2317,6 +2330,8 @@ title: Model Hint Fixture
 # Model Hint Fixture
 ## Acceptance Criteria
 - AC1: The orchestrator shall route each orchestration role with its advisory model hint.
+## New files
+\`src/model_hints.cjs\` — created by this work.
 `, 'utf8');
     execSync('git add -A && git commit -m "baseline"', { cwd: tmpDir, stdio: 'ignore' });
 

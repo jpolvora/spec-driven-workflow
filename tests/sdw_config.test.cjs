@@ -186,6 +186,8 @@ slug: feature
 # Feature
 ## Acceptance Criteria
 - AC1: The orchestrator shall test custom score.
+## New files
+\`src/feature.cjs\` — created by this work.
 `);
 
     // Verify sdw-orch detects the spec in specsDir even when passed as relative name

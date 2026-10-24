@@ -35,6 +35,8 @@ title: Fresh Verify Spec
 
 - AC1: The system shall write a run state file.
 - AC2: The system shall resume from that file.
+## New files
+\`src/fresh_spec.cjs\` — created by this work.
 `;
 
 function git(root, command) {

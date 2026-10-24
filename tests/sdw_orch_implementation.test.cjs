@@ -60,7 +60,7 @@ specDate: 2026-10-19
 
 ## Description
 Implementation test specification for ${slug}.
-Affects file: src/${slug}.cjs
+Affects file: \`src/${slug}.cjs\`
 
 ### Design Intent
 Architectural intent for ${slug}.
@@ -242,6 +242,8 @@ slug: multi-dep
 - AC4: The system shall run fourth task.
 - AC5: The system shall run fifth task.
 - AC6: The system shall run sixth task.
+## New files
+\`src/multi_dep.cjs\` — created by this work.
 `);
 
     sdwOrch.cmdRun({

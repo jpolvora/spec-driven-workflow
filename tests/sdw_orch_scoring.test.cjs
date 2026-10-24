@@ -23,6 +23,8 @@ slug: score-spec
 ## Acceptance Criteria
 - AC1: The system shall record a run state file.
 - AC2: The system shall resume from that file.
+## New files
+\`src/score_spec.cjs\` — created by this work.
 `;
 
 function judgeConfig(mode = 'all') {

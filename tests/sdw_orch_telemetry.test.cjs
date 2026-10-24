@@ -60,7 +60,7 @@ specDate: 2026-10-19
 
 ## Description
 Specification for telemetry verification.
-Affects file: skills/${slug}/scripts/worker.cjs
+Affects file: \`skills/${slug}/scripts/worker.cjs\`
 
 ### Design Intent
 Prove the append-only event stream and the read-only monitor.

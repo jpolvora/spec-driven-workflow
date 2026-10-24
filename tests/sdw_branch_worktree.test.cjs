@@ -59,6 +59,8 @@ title: Dummy ${slug} Spec
 Spec for testing branch and worktree workflows.
 ## Acceptance Criteria
 ${acs}
+## New files
+- \`src/${slug}.cjs\` — created by this work.
 ## Notes
 None
 ## Out of Scope

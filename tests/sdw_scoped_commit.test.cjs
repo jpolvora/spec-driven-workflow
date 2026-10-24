@@ -50,6 +50,8 @@ title: Dummy ${slug} Spec
 Scoped commit test spec.
 ## Acceptance Criteria
 - AC1: The system shall pass standard execution.
+## New files
+- \`src/${slug}.cjs\` — created by this work.
 ## Notes
 None
 ## Out of Scope

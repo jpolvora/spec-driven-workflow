@@ -2,8 +2,9 @@
 
 // Spec 00069 AC1-AC6: target-file resolution draws only from paths the
 // specification names, verifies a bucket fallback against the repository,
-// accepts a declared new file that does not exist yet, refuses a managed
-// specification that promises no file, and reports all of it in the preview.
+// accepts a declared new file that does not exist yet, refuses a specification
+// that promises no file regardless of registry status, and reports all of it in
+// the preview.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -53,8 +54,8 @@ function makeRepo(slug, content) {
   return root;
 }
 
-// Spec 00069 AC4: the refusal guards a registered backlog specification, so the
-// fixture needs a real registry row for the planner to treat it as managed.
+// Spec 00069 AC4-AC6: the refusal is unconditional, so the registry row only
+// proves the registered backlog path still refuses; it no longer gates it.
 function registerSpec(root, slug) {
   const indexPath = path.join(root, '.sdw', 'specs', 'index.specs.md');
   fs.writeFileSync(indexPath, [
@@ -315,17 +316,25 @@ test('AC4, AC5 & AC6: a registered specification with no path and no declared ne
   }
 });
 
-test('AC4: an unregistered pathless specification keeps the spec 00064 no-file plan', () => {
+test('AC4, AC5 & AC6: an unregistered pathless specification is refused, not planned', () => {
   const slug = 'ad-hoc-widget-demo';
   const content = buildSpec(slug);
   const root = makeRepo(slug, content);
   try {
+    // No registry row: the refusal never depends on registry status.
     const result = preview(root, slug);
-    assert.equal(result.status, 0, 'an ad-hoc specification is not a managed backlog item');
+    assert.equal(result.status, 1, 'an unregistered pathless specification is refused');
+    assert.match(result.stderr, /no-target-files/);
+    assert.ok(result.stderr.includes(`spec=${slug}`), 'the refusal names the specification');
+    assert.match(result.stderr, /New files/, 'the refusal names the declaration the author must add');
     const plan = JSON.parse(result.stdout);
-    assert.equal(plan.refused, undefined, 'the plan is emitted, not refused');
-    assert.deepEqual(plan.targetFiles, [], 'it still resolves no invented file');
-    assert.deepEqual(taskFiles(plan), []);
+    assert.equal(plan.refused, true, 'the plan is refused, not emitted');
+    assert.equal(plan.reason, 'no-target-files');
+    assert.equal(plan.specSlug, slug);
+    assert.deepEqual(plan.targetFiles, [], 'no target file is resolved');
+    assert.deepEqual(plan.declaredNewFiles, [], 'no new file is declared');
+    assert.deepEqual(taskFiles(plan), [], 'a refused plan carries no invented target file');
+    assert.equal(fs.existsSync(path.join(root, '.sdw', 'state')), false, 'preview writes no run state');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

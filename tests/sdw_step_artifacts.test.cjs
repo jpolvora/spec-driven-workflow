@@ -52,7 +52,7 @@ specDate: 2026-10-19
 
 ## Description
 Specification for step artifacts verification.
-Affects file: skills/${slug}/scripts/worker.cjs
+Affects file: \`skills/${slug}/scripts/worker.cjs\`
 
 ### Design Intent
 Auditable intermediate artifacts for steps 2, 3, and 5.

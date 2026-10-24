@@ -583,9 +583,10 @@ function generateDagPlan(specContent, options) {
   } else if (Array.isArray(opts.targetFiles) && opts.targetFiles.length > 0) {
     targetFiles = opts.targetFiles.slice();
   } else {
-    // Missing blueprint or pathless specification: the only fallback is a known
-    // real-file bucket, used only when every file it names exists (spec 00069
-    // AC1/AC2). A missing file refuses the plan instead of planning it.
+    // Missing blueprint or pathless specification: fall back to the paths the
+    // specification names, then to a known real-file bucket used only when every
+    // file it names exists (spec 00069 AC1/AC2). A missing bucket file refuses
+    // the plan instead of planning it.
     console.warn('[Step 3: DAG Generation] Warning: Step 2 refinement blueprint missing or has no targetFiles; falling back to heuristic file inference.');
     const fallback = inferFallbackTargetFiles(slug);
     const missingFiles = fallback ? findMissingFallbackFiles(fallback, targetRoot) : [];
@@ -603,14 +604,22 @@ function generateDagPlan(specContent, options) {
         tasks: []
       };
     }
-    targetFiles = fallback ? fallback.targetFiles.slice() : [];
+    if (fallback) {
+      targetFiles = fallback.targetFiles.slice();
+    } else {
+      // Spec 00069 AC4: with no blueprint and no bucket, the specification's own
+      // named paths (or the files it declares new) are still its promise, so a
+      // path-naming specification is planned instead of being refused as pathless.
+      const namedFiles = specGrilling.extractTargetFiles(content);
+      targetFiles = namedFiles.length > 0 ? namedFiles : declaredNewFiles.slice();
+    }
   }
 
-  // Spec 00069 AC4: a managed specification that names no path and declares no
-  // new file leaves the plan without a promise. Refusing names the specification
-  // and the declaration the author must add, instead of dispatching a slice that
-  // can touch no file. Ad-hoc specifications keep the spec 00064 no-file plan.
-  if (opts.requireTargetFiles && targetFiles.length === 0 && declaredNewFiles.length === 0) {
+  // Spec 00069 AC4: a specification that names no path and declares no new file
+  // leaves the plan without a promise. Refusing names the specification and the
+  // declaration the author must add, instead of dispatching a slice that can
+  // touch no file. Registry status and sandbox mode never soften the refusal.
+  if (targetFiles.length === 0 && declaredNewFiles.length === 0) {
     return {
       refused: true,
       reason: 'no-target-files',

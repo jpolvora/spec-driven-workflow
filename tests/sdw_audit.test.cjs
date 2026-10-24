@@ -31,6 +31,10 @@ title: Audit Spec
 ## Acceptance Criteria
 
 - AC1: The system shall append the implemented marker to app.cjs.
+
+## New files
+
+\`src/audit_spec.cjs\` — created by this work.
 `;
 
 const VERIFY_PASS = [

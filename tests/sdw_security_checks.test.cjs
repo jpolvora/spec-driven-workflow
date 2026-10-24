@@ -226,6 +226,8 @@ title: Dummy Sec Spec
 Spec for testing security checks gate.
 ## Acceptance Criteria
 - AC1: The system shall pass.
+## New files
+- \`src/dummy_sec.cjs\` — created by this work.
 ## Notes
 None
 ## Out of Scope

@@ -26,7 +26,7 @@ title: "AC Ledger Demo"
 
 ## Description
 
-Exercises the acceptance criteria ledger.
+Exercises the acceptance criteria ledger. Implementation surface: \`skills/demo.cjs\`.
 
 ## Acceptance Criteria
 

@@ -62,7 +62,7 @@ specDate: 2026-10-19
 
 ## Description
 This is a test feature specification for verification testing.
-Affects file: skills/${slug}/scripts/worker.cjs
+Affects file: \`skills/${slug}/scripts/worker.cjs\`
 
 ### Design Intent
 Architectural intent for test feature ${slug}.
@@ -147,6 +147,8 @@ slug: test-dag
 ---
 - AC1: The system shall perform task one.
 - AC2: The system shall perform task two.
+## New files
+- \`src/test_dag.cjs\` — created by this work.
 `;
 
   // Blueprint provided
