@@ -1960,6 +1960,113 @@ test('00058 AC13 & AC16 / 00071 AC1 & AC2: --new-run supersedes the stale run, r
   }
 });
 
+// Spec 00071 AC1 & AC2: the replacement ownership must reach the manifest before
+// the replaced run turns terminal. An interruption between the two writes then
+// leaves a manifest that names the replacement (whose state file does not exist
+// yet, so the next pass starts it fresh), never one that names a run this pass
+// made terminal.
+test('00071 AC1 & AC2: the queue persists the replacement owner before the replaced run turns terminal', () => {
+  const fixture = staleRunFixture();
+  const config = queue.loadConfig(fixture.root);
+  const stateManager = require('../skills/sdw-orch/scripts/state_manager.cjs');
+  const originalMark = stateManager.markRunSuperseded;
+  const snapshots = [];
+  stateManager.markRunSuperseded = (targetRoot, runId, supersededBy) => {
+    // Read the manifest exactly when the old state is about to turn terminal.
+    const persisted = queue.loadManifest(config);
+    snapshots.push({
+      runId: persisted.queue[0].runId,
+      supersededRunId: persisted.queue[0].supersededRunId,
+      oldRunStatus: (queue.readRunState(config, runId) || {}).status
+    });
+    return originalMark(targetRoot, runId, supersededBy);
+  };
+  try {
+    const invocations = [];
+    const { result } = captureLogs(() => queue.runBatch([fixture.alpha], {
+      root: fixture.root,
+      noSync: true,
+      newRun: true,
+      _invoke: ({ runId }) => {
+        invocations.push(runId);
+        writeState(fixture.root, runId, 'completed', { specSlug: '00001-alpha', deliveryCommit: 'fresh-delivery' });
+        return 0;
+      }
+    }));
+
+    assert.equal(result, 0, 'the queue advances on a fresh run');
+    assert.equal(snapshots.length, 1, 'the replaced run is marked terminal exactly once');
+    assert.equal(snapshots[0].supersededRunId, 'run-stale-alpha', 'the persisted manifest already records the replaced run id');
+    assert.equal(snapshots[0].runId, invocations[0], 'the persisted manifest already names the replacement');
+    assert.notEqual(snapshots[0].runId, 'run-stale-alpha', 'the persisted manifest never names the replaced run as its owner');
+    assert.equal(snapshots[0].oldRunStatus, 'paused', 'the manifest write landed before the old state turned terminal');
+
+    const manifest = queue.loadManifest(config);
+    const stateDir = path.join(fixture.root, '.sdw', 'state');
+    const supersededRuns = fs.readdirSync(stateDir)
+      .filter(name => name.endsWith('.state.json'))
+      .map(name => JSON.parse(fs.readFileSync(path.join(stateDir, name), 'utf8')))
+      .filter(state => state.status === 'superseded')
+      .map(state => state.runId);
+    assert.deepEqual(supersededRuns, ['run-stale-alpha'], 'only the replaced run is terminal');
+    for (const item of manifest.queue) {
+      assert.ok(
+        !supersededRuns.includes(item.runId),
+        `no persisted manifest item may own superseded run "${item.runId}"`
+      );
+    }
+  } finally {
+    stateManager.markRunSuperseded = originalMark;
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+    fs.rmSync(fixture.remote, { recursive: true, force: true });
+  }
+});
+
+// The interruption itself: the supersession write never happens, and the
+// manifest already hands the specification to the replacement.
+test('00071 AC1: an interruption before the replaced run is marked leaves the manifest owning the replacement', () => {
+  const fixture = staleRunFixture();
+  const config = queue.loadConfig(fixture.root);
+  const stateManager = require('../skills/sdw-orch/scripts/state_manager.cjs');
+  const originalMark = stateManager.markRunSuperseded;
+  stateManager.markRunSuperseded = () => {
+    throw new Error('simulated interruption before the supersession write');
+  };
+  let delegated = 0;
+  try {
+    assert.throws(
+      () => captureLogs(() => queue.runBatch([fixture.alpha], {
+        root: fixture.root,
+        noSync: true,
+        newRun: true,
+        _invoke: () => { delegated += 1; return 0; }
+      })),
+      /simulated interruption before the supersession write/,
+      'the interrupted supersession write surfaces instead of being swallowed'
+    );
+
+    assert.equal(delegated, 0, 'nothing is delegated after the interruption');
+    const manifest = queue.loadManifest(config);
+    assert.equal(manifest.queue[0].supersededRunId, 'run-stale-alpha', 'the persisted manifest records the replaced run id');
+    assert.ok(manifest.queue[0].runId, 'the persisted manifest owns a replacement run id');
+    assert.notEqual(manifest.queue[0].runId, 'run-stale-alpha', 'the persisted manifest never owns the replaced run');
+    assert.equal(
+      queue.readRunState(config, 'run-stale-alpha').status,
+      'paused',
+      'the interrupted write left the replaced run open, so no superseded run exists to delegate into'
+    );
+    assert.deepEqual(
+      queue.openRunsForSpec(config, '00001-alpha').map(run => run.runId),
+      ['run-stale-alpha'],
+      'the replaced run stays visible as an open run the next pass can still resolve'
+    );
+  } finally {
+    stateManager.markRunSuperseded = originalMark;
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+    fs.rmSync(fixture.remote, { recursive: true, force: true });
+  }
+});
+
 // Spec 00058 AC6: when no open pull request can deliver the missing commit, the
 // pre-flight halts naming the commit and the branch instead of delegating.
 test('00058 AC6: a missing delivery with no open pull request halts naming the commit and the branch', () => {

@@ -1581,14 +1581,20 @@ function executeQueue(manifest, config, options) {
         // queue pass all treat it as history instead of an open run.
         const replacementRunId = generateRunId(item.slug);
         const stateManager = require('../../sdw-orch/scripts/state_manager.cjs');
-        stateManager.markRunSuperseded(config.root, openRun.runId, replacementRunId);
+        // Spec 00071 AC1/AC2: persist the replacement ownership before the old
+        // state turns terminal. An interruption between the two writes then
+        // leaves a manifest that already names the replacement, whose state file
+        // does not exist yet, so the next pass starts it as a fresh run. The
+        // reverse order leaves the manifest naming a run this pass superseded,
+        // and the next pass delegates straight into it.
         item.supersededRunId = openRun.runId;
         item.runId = replacementRunId;
         if (stale) item.staleRun = { ...stale, superseded: true };
+        saveManifest(config, manifest);
+        stateManager.markRunSuperseded(config.root, openRun.runId, replacementRunId);
         say(options, stale
           ? `[sdw-batch] Open run "${stale.runId}" for ${item.slug} is ${stale.classification}: base ${stale.baseCommit} is not an ancestor of the refreshed lane commit ${stale.laneCommit}; superseded by --new-run.`
           : `[sdw-batch] Open run "${openRun.runId}" for ${item.slug} superseded by --new-run.`);
-        saveManifest(config, manifest);
       } else if (stale) {
         item.staleRun = stale;
         saveManifest(config, manifest);

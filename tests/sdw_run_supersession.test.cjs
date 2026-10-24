@@ -2,7 +2,8 @@
 
 // Spec 00071: a superseded run is terminal. These cases prove the recorded
 // supersession (AC1), the monitor's terminal classification (AC2), and the
-// resume refusal that names the replacing run (AC3).
+// refusal that names the replacing run in both paths that can continue a run:
+// `resume --run-id` (AC3) and `run --run-id` (AC2).
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -132,4 +133,59 @@ test('00071 AC3: resuming a superseded run is refused and names the replacing ru
   const after = readStateFile(root, 'run-00071-resume-replaced');
   assert.equal(after.status, 'superseded', 'the refusal does not resurrect the run');
   assert.equal(after.revision, before.revision, 'the refusal writes nothing');
+});
+
+// The run path restores an explicit --run-id instead of creating a run, so it
+// needs the same terminal check: without it the replaced run silently continues.
+test('00071 AC2: running a superseded run is refused before any work and names the replacing run', (t) => {
+  const root = makeProject(t);
+  stateManager.createRunState({ root, slug: '00071-fixture', runId: 'run-00071-run-replaced' });
+  stateManager.markRunSuperseded(root, 'run-00071-run-replaced', 'run-00071-run-replacement');
+  const before = readStateFile(root, 'run-00071-run-replaced');
+
+  const result = spawnSync(process.execPath, [ORCH, 'run', '--run-id', 'run-00071-run-replaced', '--root', root], {
+    cwd: root,
+    encoding: 'utf8'
+  });
+
+  assert.equal(result.status, 1, 'the run path never continues a superseded run');
+  const stderr = String(result.stderr || '');
+  assert.match(stderr, /Refusing to run "run-00071-run-replaced"/, 'the refusal names the superseded run');
+  assert.match(stderr, /superseded/, 'the refusal says the run was superseded');
+  assert.ok(stderr.includes('run-00071-run-replacement'), 'AC2: the refusal names the replacing run');
+  assert.match(stderr, /resume --run-id run-00071-run-replacement/, 'the remediation points at the replacing run');
+  assert.doesNotMatch(stderr, /Specification file not found/, 'the refusal precedes specification, configuration, and branch work');
+
+  const after = readStateFile(root, 'run-00071-run-replaced');
+  assert.equal(after.status, 'superseded', 'the refusal does not resurrect the run');
+  assert.equal(after.revision, before.revision, 'the refusal writes nothing');
+  assert.deepEqual(
+    fs.readdirSync(path.join(root, '.sdw', 'state')).filter((name) => name.endsWith('.state.json')),
+    ['run-00071-run-replaced.state.json'],
+    'no run state was created for the refused run'
+  );
+});
+
+test('00071 AC2: a superseded run without a recorded replacer is refused naming "unknown"', (t) => {
+  const root = makeProject(t);
+  writeState(root, {
+    runId: 'run-00071-run-orphan',
+    specSlug: '00071-fixture',
+    status: 'superseded',
+    currentStep: 2,
+    totalSteps: 8,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    artifactsDir: '.sdw/state/00071-fixture/run-00071-run-orphan'
+  });
+
+  const result = spawnSync(process.execPath, [ORCH, 'run', '--run-id', 'run-00071-run-orphan', '--root', root], {
+    cwd: root,
+    encoding: 'utf8'
+  });
+
+  assert.equal(result.status, 1, 'a superseded run is terminal even without a replacer');
+  const stderr = String(result.stderr || '');
+  assert.match(stderr, /Refusing to run "run-00071-run-orphan"/, 'the refusal names the superseded run');
+  assert.match(stderr, /by run "unknown"/, 'the refusal never invents a replacing run');
 });

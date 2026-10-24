@@ -3526,6 +3526,29 @@ function executeRun(options) {
     return 1;
   }
 
+  // Spec 00071 AC2: `superseded` is terminal for every path that can load a run
+  // state, `run --run-id` included. Reusing an explicit --run-id restores that
+  // state later in this function, so the refusal must happen before any
+  // configuration, branch, worktree, sandbox, or state write.
+  if (options.runId && fs.existsSync(stateManager.getStateFilePath(targetRoot, options.runId))) {
+    let existingState = null;
+    try {
+      existingState = stateManager.loadRunState(targetRoot, options.runId);
+    } catch (readErr) {
+      // An unreadable state file is reported by the restore path below.
+    }
+    if (existingState && existingState.status === 'superseded') {
+      const supersededRunId = existingState.runId || options.runId;
+      const replacingRunId = existingState.supersededBy ? String(existingState.supersededBy) : null;
+      const supersededAt = existingState.supersededAt ? ` at ${existingState.supersededAt}` : '';
+      console.error(`Error: Refusing to run "${supersededRunId}": it was superseded${supersededAt} by run "${replacingRunId || 'unknown'}".`);
+      console.error(`Remediation: continue the replacing run with:`);
+      console.error(`  node "${orchCommandPath()}" resume --run-id ${replacingRunId || '<replacing-run-id>'}${followUpRootFlag(targetRoot)}`);
+      options._runResult = { error: `Run "${supersededRunId}" was superseded by "${replacingRunId || 'unknown'}"` };
+      return 1;
+    }
+  }
+
   let sdwConfig = null;
   try {
     const sdwConfigScript = resolveSkillScript(targetRoot, 'sdw-config', path.join('scripts', 'sdw_config.cjs'), options);
