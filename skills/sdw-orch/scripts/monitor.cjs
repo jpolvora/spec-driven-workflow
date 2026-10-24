@@ -89,12 +89,24 @@ function resolveNowMs(now) {
 /**
  * Spec 00021 AC4: resolve the state directory without creating it.
  *
- * `state_manager.resolveStateDir` mkdirs as a side effect, so the monitor reads
- * the configured `stateDir` key itself and never initializes the layout.
+ * `state_manager.resolveStateDir` mkdirs as a side effect, so the monitor uses
+ * the same config loader for the path (so `{projectRoot}` and `{skillsRoot}` both
+ * expand exactly as the writer expands them) and never initializes the layout.
  */
 function resolveStateDirReadOnly(targetRoot) {
   const root = targetRoot ? path.resolve(targetRoot) : process.cwd();
   let stateDir = path.join(root, '.sdw', 'state');
+  try {
+    const sdwConfig = require('../../sdw-config/scripts/sdw_config.cjs');
+    const config = sdwConfig.loadConfig(root);
+    if (config && typeof config.stateDir === 'string' && config.stateDir.trim()) {
+      stateDir = path.resolve(config.stateDir);
+      return stateDir;
+    }
+  } catch (e) {
+    // Fall through to the raw key: an unreadable configuration never breaks the
+    // monitor, and the documented default layout stays the fallback.
+  }
   try {
     const raw = readConfigObject(root);
     if (raw && typeof raw.stateDir === 'string' && raw.stateDir.trim()) {

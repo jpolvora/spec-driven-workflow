@@ -1308,8 +1308,43 @@ test('AC13: `telemetry report` aggregates runs by event, step, and status in a t
   }
 });
 
-test('AC15: the suite covers emission, watch termination, stall detection, run-without-state, JSON output, append failures, and the report', () => {
-  const source = fs.readFileSync(__filename, 'utf8');
+// Spec 00021 AC4 & AC9: the monitor reads the same state directory the writer
+// uses, including a configured `stateDir` that carries a {skillsRoot} token.
+test('AC4: the monitor resolves the configured state directory exactly as the writer does', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-monitor-statedir-'));
+  try {
+    fs.mkdirSync(path.join(root, '.sdw'), { recursive: true });
+    fs.writeFileSync(path.join(root, '.sdw', 'config.json'), `${JSON.stringify({
+      specsDir: '{projectRoot}/.sdw/specs',
+      skillsRoot: '{projectRoot}/skills',
+      stateDir: '{skillsRoot}/state'
+    }, null, 2)}\n`, 'utf8');
+
+    const writerDir = stateManager.resolveStateDir(root);
+    const monitorDir = monitor.resolveStateDirReadOnly(root);
+    assert.equal(monitorDir, writerDir, 'the monitor reads where the writer writes');
+
+    fs.mkdirSync(writerDir, { recursive: true });
+    fs.writeFileSync(path.join(writerDir, 'run-custom.state.json'), `${JSON.stringify({
+      orchestrator: 'sdw-orch',
+      runId: 'run-custom',
+      specSlug: 'demo',
+      status: 'in_progress',
+      currentStep: 2,
+      totalSteps: 8,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      steps: {}
+    }, null, 2)}\n`, 'utf8');
+
+    const snapshot = monitor.listActiveRuns({ targetRoot: root });
+    assert.deepEqual(snapshot.runs.map(run => run.runId), ['run-custom'], 'the run in the configured directory is visible');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC15: the suite covers emission, watch termination, stall detection, run-without-state, JSON output, append failures, and the report', () => {  const source = fs.readFileSync(__filename, 'utf8');
   const titles = [...source.matchAll(/^test\('([^']+)'/gm)].map(match => match[1]);
   const required = [
     ['event emission', /every step transition appends one JSONL event/],
