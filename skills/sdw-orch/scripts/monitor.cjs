@@ -416,6 +416,101 @@ function renderMonitor(snapshot = {}) {
   return lines.join('\n');
 }
 
+// Spec 00021 AC13: aggregate every run's append-only stream by event, step, and
+// status. Discovery and reading reuse the monitor's read-only helpers, so a
+// report can never create or rewrite state, telemetry, or the acceptance ledger.
+function buildTelemetryReport(options = {}) {
+  const targetRoot = options.targetRoot ? path.resolve(options.targetRoot) : process.cwd();
+  const stateDir = resolveStateDirReadOnly(targetRoot);
+  const groups = new Map();
+  let runs = 0;
+  let events = 0;
+
+  const addRunDir = runDir => {
+    const artifactsRel = normalizePath(path.relative(targetRoot, runDir));
+    const stream = telemetry.readEvents(telemetry.telemetryPathFor(artifactsRel), targetRoot);
+    let counted = 0;
+    for (const event of stream) {
+      if (!Number.isInteger(event.step)) continue;
+      if (typeof event.status !== 'string' || event.status === '') continue;
+      const eventName = String(event.event || '');
+      const key = `${eventName}|${event.step}|${event.status}`;
+      const group = groups.get(key) || {
+        event: eventName,
+        step: event.step,
+        stepName: null,
+        status: event.status,
+        count: 0
+      };
+      if (!group.stepName && event.stepName) group.stepName = String(event.stepName);
+      group.count++;
+      groups.set(key, group);
+      counted++;
+    }
+    if (counted > 0) {
+      runs++;
+      events += counted;
+    }
+  };
+
+  let slugEntries = [];
+  try {
+    slugEntries = fs.readdirSync(stateDir, { withFileTypes: true });
+  } catch (e) {
+    slugEntries = [];
+  }
+  for (const slugEntry of slugEntries) {
+    if (!slugEntry.isDirectory()) continue;
+    const slugDir = path.join(stateDir, slugEntry.name);
+    let runEntries = [];
+    try {
+      runEntries = fs.readdirSync(slugDir, { withFileTypes: true });
+    } catch (e) {
+      continue;
+    }
+    for (const runEntry of runEntries) {
+      if (!runEntry.isDirectory()) continue;
+      if (options.runId && runEntry.name !== options.runId) continue;
+      const runDir = path.join(slugDir, runEntry.name);
+      if (!fs.existsSync(path.join(runDir, telemetry.TELEMETRY_FILENAME))) continue;
+      addRunDir(runDir);
+    }
+  }
+
+  const rows = [...groups.values()].sort((a, b) =>
+    (a.step - b.step) || a.event.localeCompare(b.event) || a.status.localeCompare(b.status));
+  return {
+    stateDir: normalizePath(path.relative(targetRoot, stateDir)) || '.',
+    runs,
+    events,
+    rows
+  };
+}
+
+/**
+ * Spec 00021 AC13/AC8: the report table. `--json` serializes the same aggregation
+ * object, so the table and the machine-readable output cannot drift.
+ */
+function renderTelemetryReport(report = {}) {
+  const rows = Array.isArray(report.rows) ? report.rows : [];
+  const lines = [
+    'SDW Orchestrator Telemetry Report',
+    '=================================',
+    `State: ${report.stateDir ? String(report.stateDir) : path.join('.sdw', 'state')}`,
+    `Runs: ${Number.isInteger(report.runs) ? report.runs : 0} | Events: ${Number.isInteger(report.events) ? report.events : 0}`
+  ];
+  if (rows.length === 0) {
+    lines.push('', 'No telemetry events.');
+    return lines.join('\n');
+  }
+  lines.push('', '| Step | Event | Status | Count |', '| --- | --- | --- | --- |');
+  for (const row of rows) {
+    const step = `${row.step}${row.stepName ? ` ${row.stepName}` : ''}`;
+    lines.push(`| ${cell(step)} | ${cell(row.event)} | ${cell(row.status)} | ${row.count} |`);
+  }
+  return lines.join('\n');
+}
+
 // Spec 00021 AC5: block between refreshes. `Atomics.wait` keeps the watch loop
 // synchronous for the CLI; tests inject a no-op or a state-advancing sleep.
 function defaultSleep(ms) {
@@ -476,6 +571,8 @@ module.exports = {
   buildSnapshot,
   discoverRuns,
   listActiveRuns,
+  buildTelemetryReport,
+  renderTelemetryReport,
   renderMonitor,
   watchMonitor
 };

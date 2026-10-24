@@ -138,6 +138,7 @@ function startTelemetrySession(targetRoot, state) {
       telemetryPath,
       stateFilePath: stateManager.getStateFilePath(targetRoot, state.runId),
       targetRoot,
+      runId: state.runId,
       pendingWarnings,
       writer: telemetry.createWriter({
         targetRoot,
@@ -196,6 +197,78 @@ function recordTelemetryStepTransition(step, transition) {
     // AC12 owns the warning; a telemetry failure never fails a step.
     return null;
   }
+}
+
+// Spec 00021 AC14: dispatch and gate events share the step-event base fields and
+// add one bounded payload. Recording is best-effort: an unbound session, a
+// session for another run, or a failed append never fails the caller.
+function recordTelemetryEvent(fields) {
+  if (!activeTelemetry || !fields || !fields.runId) return null;
+  // A stale in-process session (for example a gate unit test that runs after a
+  // completed run) must never append to another run's stream.
+  if (activeTelemetry.runId !== fields.runId) return null;
+  try {
+    return activeTelemetry.writer.record(fields);
+  } catch (e) {
+    return null;
+  }
+}
+
+function recordTelemetryDispatch(runId, envelope) {
+  if (!envelope) return null;
+  return recordTelemetryEvent({
+    runId,
+    event: telemetry.EVENT_NAMES.DISPATCH,
+    step: 4,
+    stepName: 'implementation',
+    status: 'dispatched',
+    payload: {
+      taskId: envelope.taskId,
+      title: envelope.title,
+      sequence: envelope.sequence,
+      acIds: envelope.acIds,
+      dependencies: envelope.dependencies,
+      promptFile: envelope.promptFile,
+      workerHint: envelope.workerHint
+    }
+  });
+}
+
+function recordTelemetryGate(fields) {
+  if (!fields || fields.step === undefined || fields.status === undefined) return null;
+  return recordTelemetryEvent({
+    runId: fields.runId,
+    event: telemetry.EVENT_NAMES.GATE,
+    step: fields.step,
+    stepName: fields.stepName,
+    status: fields.status,
+    payload: fields.payload
+  });
+}
+
+// Spec 00021 AC14: one gate event holds the Step 4 verification verdict and a
+// per-gate summary. A run with no configured gate has no result to record, so it
+// appends nothing and the AC1 event count stays exact.
+function recordVerificationGateTelemetry(runId, gateResults) {
+  if (!runId) return null;
+  const gates = gateResults && gateResults.gates ? gateResults.gates : {};
+  const names = Object.keys(gates);
+  if (names.length === 0) return null;
+  return recordTelemetryGate({
+    runId,
+    step: 4,
+    stepName: 'implementation',
+    status: gateResults.passed ? 'passed' : 'failed',
+    payload: {
+      gate: 'verification',
+      gates: names.map(name => ({
+        name,
+        status: gates[name].status,
+        exitCode: gates[name].exitCode,
+        durationMs: gates[name].durationMs
+      }))
+    }
+  });
 }
 
 /**
@@ -458,7 +531,9 @@ function parseArgs(args) {
     'dag preview': 'dag-preview',
     'ledger link': 'ledger',
     'ledger report': 'ledger',
-    'ledger audit': 'ledger'
+    'ledger audit': 'ledger',
+    // Spec 00021 AC13: `telemetry report` aggregates every run's event stream.
+    'telemetry report': 'telemetry-report'
   };
   const combinedMatch = COMBINED[positional.slice(0, 2).join(' ')];
   if (combinedMatch) {
@@ -471,6 +546,9 @@ function parseArgs(args) {
       // Keep the parsed action verbatim: cmdLedger refuses anything it does not
       // know, so a mistyped action can never mutate the ledger.
       result.ledgerAction = positional[1] || null;
+    } else if (combinedMatch === 'telemetry-report') {
+      // Spec 00021 AC13: `telemetry report` takes no positional path or task id.
+      result.specPaths = [];
     } else if (!result.taskId && rest[0]) {
       result.taskId = rest[0];
     }
@@ -1109,6 +1187,9 @@ function runVerificationGates(targetRoot, config, options = {}) {
       }
     }
   }
+
+  // Spec 00021 AC14: the Step 4 verification verdict is a gate result.
+  recordVerificationGateTelemetry(runId, { passed, gates });
 
   return { passed, gates };
 }
@@ -4146,6 +4227,19 @@ function executeRun(options) {
     try {
       artifactRel = path.relative(targetRoot, reportAbsPath).replace(/\\/g, '/');
     } catch (e) { artifactRel = null; }
+    // Spec 00021 AC14: the converged review verdict is a gate result.
+    recordTelemetryGate({
+      runId: state.runId,
+      step: 7,
+      stepName: 'code_review',
+      status: reviewReport.passed ? 'passed' : 'failed',
+      payload: {
+        gate: 'review',
+        iterations: reviewLoop,
+        blockingCount: Number(reviewReport.blockingCount) || 0,
+        report: artifactRel
+      }
+    });
     if (!reviewReport.passed) {
       recordDiagnosticFallback(
         activeDiagnosticRecorder,
@@ -5009,6 +5103,10 @@ function dispatchNextTask(context) {
     finishCommand: `node "${orchCommandPath()}" task finish --run-id ${state.runId} --task ${ready.id} --evidence ${evidenceArg}${rootFlag}`
   };
 
+  // Spec 00021 AC14: every successful dispatch (run Step 4 and `task next`) is
+  // one `dispatch` event; a failed append never blocks the dispatch itself.
+  recordTelemetryDispatch(state.runId, envelope);
+
   return { ok: true, state, envelope, sequence: dispatch.sequence };
 }
 
@@ -5113,6 +5211,10 @@ function cmdTaskNext(options) {
     return 1;
   }
 
+  // Spec 00021 AC14: `task next` runs in its own process, so it binds the run's
+  // writer here; the dispatch event then joins the same append-only stream.
+  startTelemetrySession(targetRoot, state);
+
   // Spec 00056 AC10: reuse the entry bound in Step 1 instead of re-resolving or
   // re-probing; only a state without a bound snapshot falls back to statics.
   const boundWorkerHint = resolveBoundRoleHint(state, 'worker');
@@ -5136,8 +5238,11 @@ function cmdTaskNext(options) {
     return 1;
   }
 
+  // Save the dispatch first, then let a buffered append warning join the same
+  // state write path every other warning uses (AC12); no warning means no reload.
   stateManager.saveRunState(targetRoot, result.state);
-  printDispatchEnvelope(result.envelope, result.state, options);
+  state = flushTelemetryWarnings(targetRoot, result.state);
+  printDispatchEnvelope(result.envelope, state, options);
   return 0;
 }
 
@@ -5875,6 +5980,24 @@ function cmdMonitor(options) {
   }
 }
 
+// Spec 00021 AC13: print the cross-run aggregation of the append-only streams by
+// event, step, and status. Read-only like the monitor: it initializes nothing,
+// and `--json` serializes the same object the table renders.
+function cmdTelemetryReport(options) {
+  const targetRoot = options.root ? path.resolve(options.root) : process.cwd();
+  try {
+    const report = monitor.buildTelemetryReport({
+      targetRoot,
+      runId: options.runId || null
+    });
+    console.log(options.json ? JSON.stringify(report, null, 2) : monitor.renderTelemetryReport(report));
+    return 0;
+  } catch (err) {
+    console.error(`[sdw-orch telemetry] Error: ${err.message}`);
+    return 1;
+  }
+}
+
 function cmdStatus(options) {
   const targetRoot = options.root ? path.resolve(options.root) : process.cwd();
   let state = null;
@@ -6391,6 +6514,7 @@ Subcommands:
   dag preview            Print the plan the classifier would generate, without side effects
   status                 Check status of current or specified run state
   monitor                List active runs with status, current step, and age (--run-id to scope, --watch to follow)
+  telemetry report       Aggregate runs by event, step, and status (--run-id to scope, --json)
   sandbox list           List isolated sandboxes created by --sandbox
   sandbox report         Regenerate and print the report for a sandbox (--run-id)
   sandbox clean          Delete a sandbox clone, keeping its report (--run-id)
@@ -6513,6 +6637,9 @@ function main() {
       case 'monitor':
         code = cmdMonitor(options);
         break;
+      case 'telemetry-report':
+        code = cmdTelemetryReport(options);
+        break;
       case 'dag-preview':
         code = cmdDagPreview(options);
         break;
@@ -6536,8 +6663,9 @@ function main() {
 
   try {
     // Spec 00030 AC19: `dag preview` is pure; it never refreshes a sandbox report.
-    // Spec 00021 AC4: `monitor` is read-only, so it never refreshes one either.
-    if (options.subcommand !== 'dag-preview' && options.subcommand !== 'monitor') {
+    // Spec 00021 AC4/AC13: `monitor` and `telemetry report` are read-only, so
+    // they never refresh one either.
+    if (options.subcommand !== 'dag-preview' && options.subcommand !== 'monitor' && options.subcommand !== 'telemetry-report') {
       const refreshRoot = options._effectiveRoot || (options.root ? path.resolve(options.root) : process.cwd());
       sandbox.refreshReportForRoot(refreshRoot);
     }
@@ -6558,6 +6686,7 @@ module.exports = {
   cmdPauseTurn,
   cmdStatus,
   cmdMonitor,
+  cmdTelemetryReport,
   cmdDagPreview,
   cmdTaskNext,
   cmdTaskAbandon,

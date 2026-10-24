@@ -544,6 +544,21 @@ Every run writes one append-only event stream beside its state and artifacts, an
   ```
 
 - **Event names:** `run_started`, `step`, `dispatch`, `gate`, `checkpoint`, `turn_paused`, `run_completed`, `run_failed`.
+- **Dispatch and gate events (AC14):** these events carry the same base fields as a step event plus one bounded `payload` object. A successful dispatch (`run` Step 4 or `task next`) appends `event: "dispatch"`, `step: 4`, `stepName: "implementation"`, `status: "dispatched"`, and a payload with `taskId`, `title`, `sequence`, `acIds`, `dependencies`, `promptFile`, and `workerHint`. A resolved gate appends `event: "gate"` with `step`, `stepName`, `status` (`passed` or `failed`), and a payload naming the gate: the Step 4 verification verdict carries `gate: "verification"` and one `{name, status, exitCode, durationMs}` entry per build/test gate that ran; the Step 7 review verdict carries `gate: "review"`, `iterations`, `blockingCount`, and the report path. A run with no configured gate records no gate event, and a failed append is still only a warning (AC12), never a dispatch or step failure.
+- **Payload bounds:** a payload keeps at most 12 keys per object, 12 items per array, 3 nesting levels, and 200 characters per string, so one dispatch or gate event stays small and inspectable.
+
+  ```json
+  {
+    "ts": "2026-10-19T12:00:00.000Z",
+    "runId": "run-1792400000000-00021-sdw-monitor-telemetry",
+    "specSlug": "00021-sdw-monitor-telemetry",
+    "event": "dispatch",
+    "step": 4,
+    "stepName": "implementation",
+    "status": "dispatched",
+    "payload": { "taskId": "task-4", "sequence": 1, "acIds": ["AC13", "AC14", "AC15"] }
+  }
+  ```
 - **Resume without duplication:** a resumed run appends only new events. Step events are de-duplicated by identity `(runId, step, status)`: every identity already present in the file is seeded before the next append, so replaying a resume appends nothing for a transition the stream already holds, while a genuinely new status (for example `completed` after `in_progress`) is still recorded.
 - **Append failure:** an unwritable telemetry file is a warning, never a step failure and never a status change. The console prints `[sdw-orch telemetry] ...`, the same message is recorded in `state.errors` with `warning: true`, and the step and run continue unchanged.
 
@@ -560,6 +575,10 @@ Every run writes one append-only event stream beside its state and artifacts, an
 | `run-without-state` | a plan directory holds step artifacts or telemetry but no `{runId}.state.json`; reported as `warning` while its newest artifact is inside the stall window and `info` once older |
 
 The activity clock is the newest of the state file mtime, `state.updatedAt`, and the newest telemetry `ts`, so either source advancing clears a stall. The comparison is strictly "older than", so a run exactly at the window is still `active`. The monitor reads `.sdw/config.json` without initializing the state layout: `monitor`, `monitor --json`, and `monitor --watch` never write state, telemetry, the acceptance ledger, or the configuration.
+
+### Telemetry Report
+
+`node skills/sdw-orch/scripts/sdw_orch.cjs telemetry report [--run-id <id>] [--json]` aggregates every run stream under the configured state directory by event, step, and status. Each row carries `event`, `step`, `stepName`, `status`, and `count`, and the header reports how many runs and events contributed. `--json` serializes the same aggregation object the table renders; `--run-id` scopes it to one run. The command is read-only: it creates no state, telemetry, ledger, or configuration and never rewrites an existing stream. A missing state directory or an unreadable stream reads as zero runs instead of failing.
 
 
 

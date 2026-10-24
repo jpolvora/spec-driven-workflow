@@ -1,9 +1,10 @@
 'use strict';
 
-// Spec 00021 (slice 2): watch termination, stall classification, artifact
-// directories without state, and machine-readable monitor snapshots.
-// AC5-AC8 are this slice; event emission, resume preservation, report
-// aggregation, and dispatch/gate events belong to the remaining slices.
+// Spec 00021: the append-only telemetry stream and the read-only monitor.
+// AC1-AC3 prove event emission; AC4-AC9 the monitor projection, watch loop,
+// stall classification, run-without-state, JSON output, and read-only guarantee;
+// AC10 resume de-duplication; AC11 the protocol reference; AC12 append failures;
+// AC13 `telemetry report`; AC14 dispatch and gate events; AC15 the coverage map.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -1086,4 +1087,250 @@ test('AC11: the orchestrator protocol documents the telemetry schema, classifica
   assert.match(protocol, /900/);
   assert.match(protocol, /older than/);
 });
+
+test('AC14: a dispatch records one bounded dispatch event with the step-event base fields', () => {
+  const repoRoot = setupTestRepo();
+  try {
+    const slug = '021-telemetry-dispatch';
+    const specPath = createDummySpec(repoRoot, slug);
+    const runId = `run-${Date.now()}-telemetry-dispatch`;
+
+    // Subagent mode pauses at Step 4 after dispatching its first DAG task.
+    const code = sdwOrch.cmdRun({
+      root: repoRoot,
+      specPath,
+      runId,
+      skipSecurity: true,
+      skipReview: true,
+      skipPr: true,
+      unattended: true
+    });
+    assert.equal(code, 4, 'subagent mode pauses with the dispatched task');
+
+    const state = stateManager.loadRunState(repoRoot, runId);
+    const dispatches = readTelemetry(repoRoot, state.artifactsDir).events
+      .filter(event => event.event === 'dispatch');
+    assert.equal(dispatches.length, 1, 'AC14: one successful dispatch appends one event');
+
+    const [dispatch] = dispatches;
+    assert.equal(dispatch.runId, runId);
+    assert.equal(dispatch.specSlug, slug);
+    assert.equal(dispatch.step, 4);
+    assert.equal(dispatch.stepName, 'implementation');
+    assert.equal(dispatch.status, 'dispatched');
+    assert.ok(Number.isFinite(Date.parse(dispatch.ts)), 'the dispatch carries an ISO timestamp');
+
+    const activeTaskId = state.steps[4].dispatch.activeTaskId;
+    assert.equal(dispatch.payload.taskId, activeTaskId, 'the payload names the dispatched task');
+    assert.equal(dispatch.payload.sequence, 1);
+    assert.deepEqual(dispatch.payload.acIds, state.steps[4].tasks[activeTaskId].coveredAcs);
+    assert.deepEqual(dispatch.payload.dependencies, state.steps[4].tasks[activeTaskId].dependencies);
+    assert.equal(dispatch.payload.promptFile, state.steps[4].tasks[activeTaskId].promptPath);
+    assert.ok(JSON.stringify(dispatch.payload).length <= 1200, 'AC14: the dispatch payload is bounded');
+
+    // `task next` runs in its own process; it rebinds the writer so its own
+    // dispatch lands in the same append-only stream.
+    const abandoned = spawnSync(process.execPath, [
+      ORCH, 'task', 'abandon', '--run-id', runId, '--task', activeTaskId,
+      '--reason', 'telemetry dispatch retest', '--root', repoRoot
+    ], { encoding: 'utf8' });
+    assert.equal(abandoned.status, 0, abandoned.stderr);
+    const next = spawnSync(process.execPath, [
+      ORCH, 'task', 'next', '--run-id', runId, '--root', repoRoot
+    ], { encoding: 'utf8' });
+    assert.equal(next.status, 0, next.stderr);
+
+    const after = readTelemetry(repoRoot, state.artifactsDir).events
+      .filter(event => event.event === 'dispatch');
+    assert.equal(after.length, 2, 'AC14: `task next` appends its dispatch event');
+    assert.equal(after[0].payload.taskId, activeTaskId, 'prior events keep their order and payload');
+    assert.equal(after[1].payload.taskId, activeTaskId);
+    assert.equal(after[1].payload.sequence, 2, 'the redispatch increments the sequence');
+  } finally {
+    fs.rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('AC14: the Step 4 verification verdict and the Step 7 review verdict record gate events', () => {
+  const repoRoot = setupTestRepo();
+  try {
+    const slug = '021-telemetry-gates';
+    const specPath = createDummySpec(repoRoot, slug);
+    const runId = `run-${Date.now()}-telemetry-gates`;
+
+    // A fast, real test gate makes Step 4 record a verification verdict.
+    const configPath = path.join(repoRoot, '.sdw', 'config.json');
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    config.runAllTests = true;
+    config.testCommand = 'node -e "process.exit(0)"';
+    fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+
+    // A fake review CLI keeps Step 7 deterministic: it returns a passing report.
+    const fakeSkillsRoot = path.join(repoRoot, 'fake-skills');
+    fs.mkdirSync(path.join(fakeSkillsRoot, 'sdw-code-review', 'scripts'), { recursive: true });
+    fs.writeFileSync(path.join(fakeSkillsRoot, 'sdw-code-review', 'SKILL.md'), '# fake sdw-code-review\n', 'utf8');
+    fs.writeFileSync(
+      path.join(fakeSkillsRoot, 'sdw-code-review', 'scripts', 'sdw_code_review.cjs'),
+      'process.stdout.write(JSON.stringify({ passed: true, blockingCount: 0, findings: [] }));\n',
+      'utf8'
+    );
+
+    const code = sdwOrch.cmdRun({
+      root: repoRoot,
+      specPath,
+      runId,
+      skipSecurity: true,
+      skipPr: true,
+      unattended: true,
+      skillsRoot: fakeSkillsRoot,
+      implementation: { mode: 'command', command: IMPLEMENTATION_COMMAND }
+    });
+    assert.equal(code, 0, 'the run completes through the passing review');
+
+    const state = stateManager.loadRunState(repoRoot, runId);
+    const gateEvents = readTelemetry(repoRoot, state.artifactsDir).events
+      .filter(event => event.event === 'gate');
+    assert.deepEqual(
+      gateEvents.map(event => `${event.step}:${event.status}`),
+      ['4:passed', '7:passed'],
+      'AC14: the verification and review verdicts each append one gate event'
+    );
+    for (const event of gateEvents) {
+      assert.equal(event.runId, runId);
+      assert.equal(event.specSlug, slug);
+      assert.ok(Number.isFinite(Date.parse(event.ts)), 'the gate event carries an ISO timestamp');
+      assert.ok(event.payload && typeof event.payload === 'object', 'the gate event carries its payload');
+      assert.ok(JSON.stringify(event.payload).length <= 1200, 'AC14: the gate payload is bounded');
+    }
+
+    const [verification, review] = gateEvents;
+    assert.equal(verification.stepName, 'implementation');
+    assert.equal(verification.payload.gate, 'verification');
+    assert.deepEqual(
+      verification.payload.gates.map(gate => [gate.name, gate.status]),
+      [['test', 'passed']],
+      'AC14: the payload names the gate that ran and its verdict'
+    );
+
+    assert.equal(review.stepName, 'code_review');
+    assert.equal(review.payload.gate, 'review');
+    assert.equal(review.payload.blockingCount, 0);
+    assert.equal(review.payload.iterations, 0, 'a first-pass review needs no fix iteration');
+    assert.match(review.payload.report, /021-telemetry-gates-step-7\.md$/, 'the payload names the review report');
+  } finally {
+    fs.rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('AC13: `telemetry report` aggregates runs by event, step, and status in a table and JSON, read-only', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-telemetry-report-'));
+  const emptyRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-telemetry-report-empty-'));
+  try {
+    const slug = '021-report-demo';
+    const writeStream = (runId, events) => {
+      const dir = path.join(root, '.sdw', 'state', slug, runId);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, telemetry.TELEMETRY_FILENAME),
+        `${events.map(event => JSON.stringify(event)).join('\n')}\n`,
+        'utf8'
+      );
+    };
+    const runEvent = (runId, fields) => ({ runId, specSlug: slug, ts: '2026-10-23T19:00:00.000Z', ...fields });
+
+    writeStream('run-report-a', [
+      runEvent('run-report-a', { event: 'step', step: 1, stepName: 'derivation', status: 'in_progress', durationMs: null }),
+      runEvent('run-report-a', { event: 'step', step: 1, stepName: 'derivation', status: 'completed', durationMs: 1000 }),
+      runEvent('run-report-a', { event: 'gate', step: 4, stepName: 'implementation', status: 'passed', payload: { gate: 'verification' } })
+    ]);
+    writeStream('run-report-b', [
+      runEvent('run-report-b', { event: 'step', step: 1, stepName: 'derivation', status: 'in_progress', durationMs: null }),
+      runEvent('run-report-b', { event: 'step', step: 1, stepName: 'derivation', status: 'completed', durationMs: 2000 }),
+      runEvent('run-report-b', { event: 'gate', step: 4, stepName: 'implementation', status: 'failed', payload: { gate: 'verification' } })
+    ]);
+    // A run directory with no telemetry contributes nothing.
+    fs.mkdirSync(path.join(root, '.sdw', 'state', slug, 'run-report-empty'), { recursive: true });
+
+    const before = snapshotTree(root);
+
+    const table = spawnSync(process.execPath, [ORCH, 'telemetry', 'report', '--root', root], { encoding: 'utf8' });
+    assert.equal(table.status, 0, table.stderr);
+    assert.match(table.stdout, /^SDW Orchestrator Telemetry Report$/m);
+    assert.match(table.stdout, /^State: \.sdw\/state$/m);
+    assert.match(table.stdout, /^Runs: 2 \| Events: 6$/m);
+    assert.match(table.stdout, /^\| Step \| Event \| Status \| Count \|$/m);
+    assert.match(table.stdout, /^\| 1 derivation \| step \| completed \| 2 \|$/m);
+    assert.match(table.stdout, /^\| 1 derivation \| step \| in_progress \| 2 \|$/m);
+    assert.match(table.stdout, /^\| 4 implementation \| gate \| failed \| 1 \|$/m);
+    assert.match(table.stdout, /^\| 4 implementation \| gate \| passed \| 1 \|$/m);
+    assert.equal(table.stdout.includes('run-report-empty'), false, 'a run without a stream is not reported');
+
+    const json = spawnSync(process.execPath, [
+      ORCH, 'telemetry', 'report', '--json', '--root', root
+    ], { encoding: 'utf8' });
+    assert.equal(json.status, 0, json.stderr);
+    const report = JSON.parse(json.stdout);
+    assert.equal(report.stateDir, '.sdw/state');
+    assert.equal(report.runs, 2);
+    assert.equal(report.events, 6);
+    assert.deepEqual(
+      report.rows.map(row => `${row.step}:${row.event}:${row.status}:${row.count}`),
+      [
+        '1:step:completed:2',
+        '1:step:in_progress:2',
+        '4:gate:failed:1',
+        '4:gate:passed:1'
+      ],
+      'AC13: JSON aggregates by event, step, and status'
+    );
+    for (const row of report.rows) {
+      for (const field of ['event', 'step', 'stepName', 'status', 'count']) {
+        assert.ok(Object.prototype.hasOwnProperty.call(row, field), `AC13: a row carries "${field}"`);
+      }
+    }
+
+    const scoped = spawnSync(process.execPath, [
+      ORCH, 'telemetry', 'report', '--json', '--run-id', 'run-report-b', '--root', root
+    ], { encoding: 'utf8' });
+    assert.equal(scoped.status, 0, scoped.stderr);
+    assert.equal(JSON.parse(scoped.stdout).runs, 1, '--run-id scopes the aggregation to one run');
+
+    // Read-only: no state, telemetry, ledger, or configuration byte changed.
+    assert.deepEqual(snapshotTree(root), before, 'AC13: the report leaves the workspace byte-identical');
+
+    const empty = spawnSync(process.execPath, [ORCH, 'telemetry', 'report', '--root', emptyRoot], { encoding: 'utf8' });
+    assert.equal(empty.status, 0, empty.stderr);
+    assert.match(empty.stdout, /No telemetry events\./);
+    assert.deepEqual(fs.readdirSync(emptyRoot), [], 'AC13: the report never initializes the state layout');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(emptyRoot, { recursive: true, force: true });
+  }
+});
+
+test('AC15: the suite covers emission, watch termination, stall detection, run-without-state, JSON output, append failures, and the report', () => {
+  const source = fs.readFileSync(__filename, 'utf8');
+  const titles = [...source.matchAll(/^test\('([^']+)'/gm)].map(match => match[1]);
+  const required = [
+    ['event emission', /every step transition appends one JSONL event/],
+    ['watch termination', /refreshes with an injected sleep until the scoped run is terminal/],
+    ['watch termination (CLI)', /follows a scoped run to its terminal snapshot/],
+    ['stall detection', /stalled beyond it/],
+    ['run-without-state', /no state file is reported as run-without-state/],
+    ['JSON output', /--json emits every snapshot field/],
+    ['append failures (writer)', /append failure stays non-fatal/],
+    ['append failures (run)', /unwritable telemetry file records a warning/],
+    ['report aggregation', /telemetry report.*aggregates runs by event, step, and status/],
+    ['dispatch events', /records one bounded dispatch event/],
+    ['gate events', /verdict and the Step 7 review verdict record gate events/]
+  ];
+  for (const [concern, pattern] of required) {
+    assert.ok(
+      titles.some(title => pattern.test(title)),
+      `AC15: the suite covers ${concern}`
+    );
+  }
+  assert.ok(titles.length >= 15, 'the suite keeps the pre-existing cases alongside the new ones');
+});
+
 

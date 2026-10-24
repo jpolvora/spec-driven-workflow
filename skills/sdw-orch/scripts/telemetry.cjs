@@ -23,6 +23,43 @@ const EVENT_NAMES = {
   RUN_FAILED: 'run_failed'
 };
 
+// Spec 00021 AC14: dispatch and gate events carry the same base fields as a
+// step event plus a small payload. The caps keep one line inspectable and stop a
+// caller from turning an observability event into an unbounded dump.
+const PAYLOAD_LIMITS = {
+  keys: 12,
+  arrayItems: 12,
+  stringLength: 200,
+  depth: 3
+};
+
+function boundValue(value, depth) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') return value.slice(0, PAYLOAD_LIMITS.stringLength);
+  if (Array.isArray(value)) {
+    if (depth >= PAYLOAD_LIMITS.depth) return [];
+    return value.slice(0, PAYLOAD_LIMITS.arrayItems).map(item => boundValue(item, depth + 1));
+  }
+  if (typeof value === 'object') {
+    if (depth >= PAYLOAD_LIMITS.depth) return null;
+    return boundObject(value, depth + 1);
+  }
+  return null;
+}
+
+function boundObject(value, depth) {
+  const bounded = {};
+  let keys = 0;
+  for (const key of Object.keys(value)) {
+    if (keys >= PAYLOAD_LIMITS.keys) break;
+    bounded[key] = boundValue(value[key], depth);
+    keys++;
+  }
+  return bounded;
+}
+
 function normalizePath(p) {
   return String(p || '').replace(/\\/g, '/');
 }
@@ -48,10 +85,10 @@ function normalizeTs(value, fallback) {
  * Spec 00021 AC3: one JSONL event.
  *
  * Field order mirrors the documented schema: `ts`, `runId`, `specSlug`,
- * `event`, then the optional `step`, `stepName`, `status`, and `durationMs`.
- * A step event always carries `durationMs`; it is null while the step is
- * running, which is exactly how a reader distinguishes an open step from a
- * finished one.
+ * `event`, then the optional `step`, `stepName`, `status`, `durationMs`, and
+ * `payload`. A step event always carries `durationMs`; it is null while the step
+ * is running, which is exactly how a reader distinguishes an open step from a
+ * finished one. Only dispatch and gate events add `payload` (AC14).
  */
 function buildEvent(fields = {}) {
   const event = {
@@ -71,6 +108,11 @@ function buildEvent(fields = {}) {
     event.durationMs = durationMs !== null && Number.isFinite(durationMs) && durationMs >= 0
       ? Math.round(durationMs)
       : null;
+  }
+  // Spec 00021 AC14: dispatch and gate events add one bounded payload; a
+  // non-object payload is dropped instead of blurring the base schema.
+  if (fields.payload && typeof fields.payload === 'object' && !Array.isArray(fields.payload)) {
+    event.payload = boundObject(fields.payload, 0);
   }
   return event;
 }
