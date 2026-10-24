@@ -2420,3 +2420,217 @@ test('00070 AC3: failing required checks on the follow-up halt the queue naming 
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+// Spec 00070 AC4: the delivery record is final once the provider reports the
+// delivery merged. A refused call for the delivery, or a refused follow-up, never
+// turns that record into `failed`.
+
+test('00070 AC4: a merged delivery whose follow-up pull request is refused still records merged for the delivery', () => {
+  const { root, specs } = setup();
+  try {
+    writeConfig(root, { scmProvider: 'github', batch: { autoMerge: true } });
+    const mergeCalls = [];
+    const { result, errors } = captureAll(() => queue.runBatch([specs[0]], {
+      root,
+      noSync: true,
+      _invoke: ({ runId }) => {
+        writeState(root, runId, 'completed', {
+          specSlug: '00001-alpha',
+          deliveryCommit: 'delivery-alpha',
+          branch: 'feature/00001-alpha',
+          prNumber: '58',
+          shipStatus: 'delivered'
+        });
+        return 0;
+      },
+      _isPrMerged: ({ prNumber }) => String(prNumber) === '58',
+      _listPrs: () => [{ number: 58, state: 'merged' }, { number: 59, state: 'open' }],
+      _checksStatus: () => ({ state: 'pass', failing: [] }),
+      _mergePr: ({ prNumber }) => {
+        mergeCalls.push(String(prNumber));
+        throw new Error('pull request requires an approving review');
+      }
+    }));
+
+    assert.equal(result, 1, 'the refused follow-up halts the queue');
+    assert.deepEqual(mergeCalls, ['59'], 'only the follow-up merge is requested');
+    const item = queue.loadManifest(queue.loadConfig(root)).queue[0];
+    assert.equal(item.merge.status, 'merged', 'the merged delivery is never recorded as failed');
+    assert.equal(item.merge.prNumber, '58');
+    assert.equal(item.merge.ok, true);
+    assert.equal(item.followUp.status, 'failed', 'the refusal belongs to the follow-up record');
+    assert.match(item.followUp.reason, /approving review/);
+    assert.match(errors.join('\n'), /Follow-up pull request merge halted the queue after "00001-alpha"/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('00070 AC4: a merge the provider refuses after the delivery merged is recorded merged, never failed', () => {
+  const { root, specs } = setup();
+  try {
+    writeConfig(root, { scmProvider: 'github', batch: { autoMerge: true } });
+    const probes = [];
+    const mergeCalls = [];
+    let merged = false;
+    const { result, logs } = captureLogs(() => queue.runBatch([specs[0]], {
+      root,
+      noSync: true,
+      _invoke: ({ runId }) => { writeDeliveredState(root, runId, '58'); return 0; },
+      _isPrMerged: ({ prNumber }) => { probes.push(String(prNumber)); return merged; },
+      _mergePr: ({ prNumber }) => {
+        mergeCalls.push(String(prNumber));
+        // The delivery reaches its merged state while the call is refused: the
+        // recorded outcome must still describe a merged delivery.
+        merged = true;
+        throw new Error('pull request is already merged');
+      }
+    }));
+
+    assert.equal(result, 0);
+    assert.deepEqual(mergeCalls, ['58']);
+    assert.deepEqual(probes, ['58', '58'], 'the merged state is probed again before a failure is recorded');
+    assert.ok(logs.join('\n').includes('is merged; the refused merge is not recorded as a failure'));
+    const item = queue.loadManifest(queue.loadConfig(root)).queue[0];
+    assert.equal(item.merge.status, 'merged');
+    assert.equal(item.merge.attempted, true, 'the refused call is still an attempt');
+    assert.equal(item.merge.ok, true);
+    assert.equal(item.merge.observed, 'merged');
+    assert.equal(item.merge.reason, null);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('00070 AC4: a pre-flight merge refused after the earlier delivery merged is recorded merged on that item', () => {
+  const { root, specs } = setup();
+  let remote = null;
+  try {
+    writeConfig(root, {
+      scmProvider: 'github',
+      batch: { autoMerge: true },
+      branching: { workBranch: 'develop', integrationBranch: 'develop' }
+    });
+    remote = initRepoWithRemote(root);
+    const delivery = stageEarlierDelivery(root);
+    const mergeCalls = [];
+    let probes = 0;
+    const { result } = captureAll(() => queue.runBatch(specs, {
+      root,
+      noSync: true,
+      _invoke: ({ runId, specPath }) => {
+        const alpha = path.basename(specPath).includes('alpha');
+        writeDeliveredCommit(root, runId, delivery, alpha ? '71' : '72');
+        return 0;
+      },
+      // The per-item merge and its post-refusal probe see the delivery unmerged, so
+      // the item records a failure; the pre-flight probe then observes it merged.
+      _isPrMerged: ({ prNumber }) => {
+        probes += 1;
+        return String(prNumber) === '71' && probes >= 3;
+      },
+      _checksStatus: () => ({ state: 'pass', failing: [] }),
+      _mergePr: ({ prNumber }) => {
+        mergeCalls.push(String(prNumber));
+        throw new Error('pull request is already merged');
+      }
+    }));
+
+    assert.equal(result, 1, 'the base still omits the delivery, so the queue halts');
+    assert.deepEqual(mergeCalls, ['71', '71'], 'the per-item attempt fails, then the pre-flight re-issues it');
+    const manifest = queue.loadManifest(queue.loadConfig(root));
+    const prior = manifest.queue[0];
+    assert.equal(prior.merge.status, 'merged', 'the earlier delivery is recorded merged, never failed');
+    assert.equal(prior.merge.attempted, true);
+    assert.equal(prior.merge.ok, true);
+    assert.equal(prior.merge.observed, 'merged');
+    assert.equal(prior.merge.reason, null);
+    assert.match(manifest.queue[1].preflight.reason, /refusing to delegate/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    if (remote) fs.rmSync(remote, { recursive: true, force: true });
+  }
+});
+
+// Spec 00070 AC5: the merge stage is covered for a follow-up that still has
+// pending checks, and for an item that recorded no delivery pull request.
+
+test('00070 AC5: a follow-up pull request with pending checks waits for them to pass, then merges', () => {
+  const { root, specs } = setup();
+  try {
+    writeConfig(root, { scmProvider: 'github', batch: { autoMerge: true } });
+    const states = ['pending', 'pass'];
+    const mergeCalls = [];
+    const { result, logs } = captureLogs(() => queue.runBatch([specs[0]], {
+      root,
+      noSync: true,
+      _invoke: ({ runId }) => {
+        writeState(root, runId, 'completed', {
+          specSlug: '00001-alpha',
+          deliveryCommit: 'delivery-alpha',
+          branch: 'feature/00001-alpha',
+          prNumber: '58',
+          shipStatus: 'delivered'
+        });
+        return 0;
+      },
+      _isPrMerged: ({ prNumber }) => String(prNumber) === '58',
+      _listPrs: () => [{ number: 58, state: 'merged' }, { number: 59, state: 'open' }],
+      _checksStatus: () => ({ state: states.length > 1 ? states.shift() : 'pass', failing: [] }),
+      _mergePr: ({ prNumber }) => { mergeCalls.push(String(prNumber)); return { merged: true }; }
+    }));
+
+    assert.equal(result, 0);
+    assert.ok(
+      logs.join('\n').includes('Waiting for required checks on pull request 59'),
+      'the gate waits while the follow-up checks are pending'
+    );
+    assert.deepEqual(mergeCalls, ['59'], 'the follow-up merges only after its checks pass');
+    const item = queue.loadManifest(queue.loadConfig(root)).queue[0];
+    assert.equal(item.merge.status, 'merged', 'the delivery stays merged');
+    assert.equal(item.followUp.status, 'merged');
+    assert.equal(item.followUp.attempted, true);
+    assert.deepEqual(item.followUp.checks, { state: 'pass', failing: [] });
+    assert.equal(item.followUp.retryOutcome, 'not-needed');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('00070 AC5: an item without a recorded pull request records skipped no-pr and invents no number', () => {
+  const { root, specs } = setup();
+  try {
+    writeConfig(root, { scmProvider: 'github', batch: { autoMerge: true } });
+    const listCalls = [];
+    const mergeCalls = [];
+    const { result } = captureLogs(() => queue.runBatch([specs[0]], {
+      root,
+      noSync: true,
+      _invoke: ({ runId }) => {
+        // The run recorded its delivery, but no pull request number: the provider
+        // lookup is the only remaining source and it finds nothing.
+        writeState(root, runId, 'completed', {
+          specSlug: '00001-alpha',
+          deliveryCommit: 'delivery-alpha',
+          branch: 'feature/00001-alpha',
+          shipStatus: 'delivered'
+        });
+        return 0;
+      },
+      _listPrs: ({ head }) => { listCalls.push(head); return []; },
+      _mergePr: ({ prNumber }) => { mergeCalls.push(String(prNumber)); return { merged: true }; }
+    }));
+
+    assert.equal(result, 0);
+    assert.deepEqual(listCalls, ['feature/00001-alpha'], 'only the head-branch fallback runs');
+    assert.deepEqual(mergeCalls, [], 'no merge is issued without a delivery pull request');
+    const item = queue.loadManifest(queue.loadConfig(root)).queue[0];
+    assert.equal(item.merge.status, 'skipped');
+    assert.equal(item.merge.reason, 'no-pr');
+    assert.equal(item.merge.prNumber, null, 'no pull request number is fabricated');
+    assert.equal(item.merge.attempted, false);
+    assert.equal(item.followUp, undefined);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

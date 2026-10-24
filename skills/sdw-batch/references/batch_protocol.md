@@ -83,7 +83,7 @@ Path: `.sdw/state/batch-{batchId}.json` (gitignored run state).
 
 Statuses: `pending`, `already_implemented`, `in_progress`, `awaiting_implementation`, `awaiting_judgment`, `awaiting_convergence`, `completed`, `failed`.
 Manifest statuses: `in_progress`, `paused`, `halted`, `completed`, `completed_with_errors`.
-Item fields: `retroFollowUp` records the follow-up outcome of a completed item; `followUpDepth: 1` and `origin` mark a queued follow-up item. `merge` records the pull request merge outcome of a completed item (§ 4); `preflight` records the base refresh and the start point that preceded its delegation (§ 4); `staleRun` records the stale classification (§ 5); `supersededRunId` records the stale run a `--new-run` replaced.
+Item fields: `retroFollowUp` records the follow-up outcome of a completed item; `followUpDepth: 1` and `origin` mark a queued follow-up item. `merge` records the pull request merge outcome of a completed item (§ 4); `followUp` records a post-merge pull request on the delivery branch and its own merge outcome (§ 4); `preflight` records the base refresh and the start point that preceded its delegation (§ 4); `staleRun` records the stale classification (§ 5); `supersededRunId` records the stale run a `--new-run` replaced.
 
 ### Already-implemented skip
 
@@ -134,18 +134,21 @@ A failed specification creation is recorded as `{ candidateId, error }` in `fail
 
 `batch.autoMerge` in `.sdw/config.json` decides whether the queue merges each delivered pull request. An absent key resolves to `true`; only an explicit `false` opts out. `--no-merge` on `sdw-batch run` or `sdw-batch resume` disables the merge for that invocation only and never rewrites the configuration.
 
-After an item completes and its follow-up stage finishes, the queue reads the delegated run's step 8 output (`pullRequest`, `shipStatus`). When the ship status is `delivered` and the pull request id is numeric, it issues one provider merge call through the configured `scmProvider`, reusing the `sdw-ship-pr --merge` contract: `gh pr merge <n> --merge` for GitHub, `az repos pr update --id <n> --status completed` for Azure DevOps. The queue never deletes the head branch and never invents provider flags.
+After an item completes and its follow-up stage finishes, the queue resolves the delivery pull request in this order: the delegated run's step 8 output (`pullRequest`, `shipStatus`), then the run state's `pullRequest`, then the run state's recorded `prNumber`. Only a run that recorded no number falls back to the SCM provider's newest pull request on the recorded head branch. When the resolved id is numeric, the queue issues one provider merge call through the configured `scmProvider`, reusing the `sdw-ship-pr --merge` contract: `gh pr merge <n> --merge` for GitHub, `az repos pr update --id <n> --status completed` for Azure DevOps. The queue never deletes the head branch and never invents provider flags.
+
+Before issuing a merge, the queue asks the provider whether the pull request is already merged. A merged delivery is final: the item records `merge.status: merged` with `attempted: false`, no second merge is issued, and the follow-up still runs. The provider is asked again when a merge call fails: a delivery it reports merged is recorded `merged` with `attempted: true`, so a merge record never says `failed` for a merged delivery.
 
 Every completed item records `merge`:
 
 | Field | Meaning |
 |---|---|
 | `requested` | The policy asked for a merge (`batch.autoMerge` true and `--no-merge` absent). |
-| `attempted` | A provider merge call was issued. |
+| `attempted` | A provider merge call was issued. `false` on an already merged delivery and on a skip; `true` when a call was issued, including one the provider refused after the delivery had merged. |
 | `ok` | `true` when the provider accepted the merge, `false` when it failed, `null` when no call was made. |
 | `status` | `merged`, `skipped`, `failed`, or `waiting` (the pre-flight gate is waiting for required checks). |
-| `reason` | The skip reason (`--no-merge`, `batch.autoMerge is false`, `no-pr`, `invalid-pr-number`, `no scm provider`) or the provider error. |
+| `reason` | The skip reason (`--no-merge`, `batch.autoMerge is false`, `no-pr`, `invalid-pr-number`, `no scm provider`) or the provider error. A merged record never carries one. |
 | `prNumber` | The targeted pull request id, when one existed. |
+| `observed` | `merged` when the provider reported the delivery merged: before the merge call (`attempted: false`) or after a refused one (`attempted: true`). Absent when no probe ran. |
 | `at` | ISO timestamp of the outcome. |
 | `checks` | Pre-flight gate only: the last observed required-check state as `{ state: "pending" | "pass" | "fail", failing: [names] }`, or `null` when the provider cannot report checks. |
 | `attempts` | Pre-flight gate only: one `{ at, ok, reason }` entry per provider merge call, so the attempt count and timestamps survive on the record. |
@@ -153,7 +156,7 @@ Every completed item records `merge`:
 
 The three check-gate fields are additive: a record written by the per-item merge path, or by a queue predating the gate, simply omits them and stays readable.
 
-A merge failure is an operator concern (permissions, pending approvals, branch rules): the failure is recorded, the item stays `completed`, and the queue advances.
+A merge failure is an operator concern (permissions, pending approvals, branch rules) only while the provider does not report the delivery merged: the failure is recorded, the item stays `completed`, and the queue advances.
 
 Two call sites read a recorded attempt, and they differ by design:
 
@@ -161,6 +164,24 @@ Two call sites read a recorded attempt, and they differ by design:
 |---|---|
 | Per-item merge (`applyMerge`) | Any recorded attempt is final: a resumed queue never re-issues a merge whose attempt is already on the manifest, whether it succeeded or failed. |
 | Pre-flight merge (`preflightMergeOpen`) | Only a record with status `merged` is final. While the earlier pull request is still open, the refreshed base cannot contain its delivery, so the pre-flight re-issues the merge, including a retry of a recorded `failed` attempt, which merged nothing. A record that already merged halts instead, naming the missing delivery commit. |
+
+### Follow-up pull request
+
+Once the delivery is merged, the queue lists the pull requests on the delivery's head branch and takes the first one that is neither the delivery itself nor closed or abandoned. That follow-up, typically the post-merge registry and report commits shipped on the same branch, merges under the same required-check gate as the delivery: no merge request is created while its checks are pending, a provider refusal while they are pending waits, polls, and retries once, and failing checks halt the queue naming the pull request and the checks.
+
+The follow-up keeps its own record on the item, so `merge` keeps describing the delivery:
+
+| Field | Meaning |
+|---|---|
+| `prNumber` | The follow-up pull request id. |
+| `status` | `merged`, `waiting`, or `failed`. |
+| `attempted` / `ok` | Whether the provider call was issued and whether the follow-up merged. |
+| `reason` | The provider error, the failing checks, or `required checks pending` while the gate waits. |
+| `checks` / `attempts` / `retryOutcome` | The same check-gate evidence a pre-flight merge records. |
+| `observed` | `merged` when the provider already reported the follow-up merged and no call was issued. |
+| `at` | ISO timestamp of the outcome. |
+
+A follow-up that cannot merge halts the queue with `[sdw-batch] Follow-up pull request merge halted the queue after "<slug>": ...`; the delivery record stays `merged`.
 
 ### Pre-flight
 

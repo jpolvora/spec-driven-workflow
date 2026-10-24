@@ -305,7 +305,7 @@ Step 8 delegates all final PR verification gates, remote publishing, SCM submiss
   - Post-merge synchronization when the pull request reaches `MERGED` and `branching.syncWorkBranchAfterMerge` is `true`: switch to the work lane, fast-forward it to the integration lane, then push it when `branching.pushSyncedWorkBranch` is `true`. A dirty tree or a non-fast-forward leaves every local branch untouched and records `branchingSync.status: "blocked"` with the reason; the delivery still succeeds.
 - **Orchestrator Lifecycle Finalization:**
   - Consumes structured JSON report from `sdw-ship-pr`.
-  - Records delivery outcome (`pullRequest`, `shipStatus`, `pushedBranch`, `reviewConvergence`, `branchingSync`) into `.sdw/state/{runId}.state.json`.
+  - Records delivery outcome (`pullRequest`, the delivery `prNumber` that `sdw-batch` resolves the merge target from, `shipStatus`, `pushedBranch`, `reviewConvergence`, `branchingSync`) into `.sdw/state/{runId}.state.json`.
   - Transitions specification status to `completed` in `.sdw/specs/index.specs.md` after the delivery stage reports the delivery (or `--skip-pr`), and sets the specification header status to `implemented` in the same transition.
 
 ### Ship Model Hint (Spec 00056 AC7)

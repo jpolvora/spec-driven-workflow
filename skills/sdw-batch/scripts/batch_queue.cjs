@@ -808,12 +808,13 @@ function applyMerge({ config, manifest, item, options = {} } = {}) {
   }
 
   const command = mergeCommandFor(config && config.scmProvider, prNumber);
-  // AC2: a delivery pull request the provider already reports merged is final,
-  // whatever ship status the run recorded; no second merge is issued.
-  if (deliveryMerged({ config, prNumber, options }) === true) {
+  // AC2/AC4: a delivery pull request the provider reports merged is final, whether
+  // the probe runs before the merge call or after the provider refuses it. The
+  // delivery record never says `failed` for a merged pull request.
+  const recordMerged = attempted => {
     item.merge = {
       requested,
-      attempted: false,
+      attempted,
       ok: true,
       status: 'merged',
       reason: null,
@@ -822,10 +823,15 @@ function applyMerge({ config, manifest, item, options = {} } = {}) {
       observed: 'merged',
       at
     };
-    say(options, `[sdw-batch] Pull request ${prNumber} for ${item.slug} is already merged.`);
     saveManifest(config, manifest);
     const posted = mergeFollowUp({ config, manifest, item, state, deliveryNumber: prNumber, options });
     return posted && posted.halt ? posted : item.merge;
+  };
+  // AC2: an already merged delivery is final whatever ship status the run
+  // recorded; no second merge is issued.
+  if (deliveryMerged({ config, prNumber, options }) === true) {
+    say(options, `[sdw-batch] Pull request ${prNumber} for ${item.slug} is already merged.`);
+    return recordMerged(false);
   }
 
   if (!command) {
@@ -839,7 +845,13 @@ function applyMerge({ config, manifest, item, options = {} } = {}) {
     item.merge = { requested: true, attempted: true, ok: true, status: 'merged', reason: null, prNumber, source: resolved.source, at };
     say(options, `[sdw-batch] Merged ${prNumber} for ${item.slug}.`);
   } catch (err) {
-    // AC4: record the failure, keep the item completed, let the queue advance.
+    // AC4: the delivery may have merged before the provider refused the call, so
+    // the merged state is probed again before a failure is recorded.
+    if (deliveryMerged({ config, prNumber, options }) === true) {
+      say(options, `[sdw-batch] Pull request ${prNumber} for ${item.slug} is merged; the refused merge is not recorded as a failure.`);
+      return recordMerged(true);
+    }
+    // AC4 of spec 00053: record the failure, keep the item completed, let the queue advance.
     const message = err && err.message ? err.message : String(err);
     item.merge = { requested: true, attempted: true, ok: false, status: 'failed', reason: message, prNumber, source: resolved.source, at };
     say(options, `[sdw-batch] Merge failed for ${item.slug}: ${message}`);
@@ -1170,6 +1182,14 @@ function gatedMerge({
       throw err;
     }
   };
+  // Spec 00070 AC4: the provider's merged state settles the gate. A call refused
+  // after the delivery merged is recorded `merged`, never `failed`, and no retry
+  // is issued for a pull request that needs none.
+  const recordReconciledMerged = () => {
+    say(options, `[sdw-batch] Pull request ${prNumber} is merged; the refused merge is not recorded as a failure.`);
+    record({ attempted: true, ok: true, status: 'merged', observed: 'merged' });
+    return { ok: true };
+  };
 
   // AC1: the merge request is created only after the required checks pass.
   const checks = checksStatus({ config, prNumber, provider, options });
@@ -1221,6 +1241,10 @@ function gatedMerge({
     return { ok: true };
   } catch (err) {
     const detail = err && err.message ? err.message : String(err);
+    if (deliveryMerged({ config, prNumber, options }) === true) {
+      retryOutcome = 'not-needed';
+      return recordReconciledMerged();
+    }
     // AC2: the refusal is only a check refusal when the checks are still pending;
     // anything else keeps the established single-attempt failure.
     const refusal = checksStatus({ config, prNumber, provider, options });
@@ -1258,6 +1282,7 @@ function gatedMerge({
       return { ok: true };
     } catch (retryErr) {
       retryOutcome = 'failed';
+      if (deliveryMerged({ config, prNumber, options }) === true) return recordReconciledMerged();
       const retryDetail = retryErr && retryErr.message ? retryErr.message : String(retryErr);
       const reason = `pull request #${prNumber} is not mergeable after its checks passed: ${retryDetail}`;
       record({ attempted: true, ok: false, status: 'failed', reason });
