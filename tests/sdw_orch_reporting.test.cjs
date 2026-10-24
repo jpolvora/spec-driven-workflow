@@ -6,8 +6,11 @@
 // comment and the delivery commit (with `unknown` when the PR cannot be
 // queried); AC4 the `report standup --hours` buckets; AC5 `report explain`
 // status, delivered files, verification, and manual test steps; AC6 the
-// read-only guarantee across every reporting command. Empty days, invalid
-// dates, and argument wiring are covered as boundary cases.
+// read-only guarantee across every reporting command; AC7 the stable `--json`
+// shape of every command; AC8 that each value is traceable to run state,
+// telemetry, the ledger, git, or the registry; AC9 that unavailable evidence is
+// the literal `unknown` with a reason. Empty days, invalid dates, and argument
+// wiring are covered as boundary cases.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -360,7 +363,8 @@ test('AC4: standup lists delivered, in-progress, and next items inside the windo
     assert.equal(deliveredItem.deliveredAt, '2026-10-23T10:00:00.000Z');
     assert.equal(deliveredItem.deliverySource, 'delivery-commit');
     assert.equal(deliveredItem.lastEventAt, '2026-10-23T10:05:00.000Z');
-    assert.equal(deliveredItem.blockingGate, null);
+    assert.equal(deliveredItem.blockingGate, 'unknown', 'AC9: a run with no gate evidence is unknown, not "none"');
+    assert.match(deliveredItem.blockingGateUnknownReason, /records no gate results/);
 
     assert.equal(report.inProgress.length, 1, 'only the in-window active run is in progress');
     const activeItem = report.inProgress[0];
@@ -725,6 +729,283 @@ test('AC6: reporting commands are read-only and leave the workspace byte-identic
   } finally {
     cleanup(root);
     cleanup(emptyRoot);
+    cleanup(explainRoot);
+  }
+});
+
+test('AC7: every reporting command emits a stable JSON shape and documents --json', () => {
+  const root = tempRoot('sdw-report-json-');
+  try {
+    writeSpecIndex(root, [
+      { prefix: '00024', slug: 'quiet-spec', title: 'Quiet Spec', status: 'pending' }
+    ]);
+    writeSpecFile(root, 'quiet-spec', '---\nslug: quiet-spec\ntitle: "Quiet Spec"\n---\n');
+
+    const runJson = args => {
+      const result = spawnSync(process.execPath, [ORCH, ...args, '--root', root], { encoding: 'utf8' });
+      assert.equal(result.status, 0, result.stderr);
+      return JSON.parse(result.stdout);
+    };
+    const activity = runJson(['report', 'activity', '--date', '2026-10-23', '--json']);
+    const standup = runJson(['report', 'standup', '--hours', '36', '--json']);
+    const explain = runJson(['report', 'explain', 'quiet-spec', '--json']);
+
+    // AC7: the envelope is pinned, so a field cannot be renamed or dropped
+    // without updating this contract.
+    assert.deepEqual(
+      Object.keys(activity).sort(),
+      ['command', 'date', 'entries', 'generatedAt', 'stateDir', 'warnings']
+    );
+    assert.deepEqual(
+      Object.keys(standup).sort(),
+      ['command', 'delivered', 'generatedAt', 'hours', 'inProgress', 'next', 'nextUnknownReason', 'stateDir', 'warnings', 'window']
+    );
+    assert.deepEqual(
+      Object.keys(explain).sort(),
+      [
+        'acceptanceCriteria', 'acceptanceCriteriaSource', 'command', 'deliveredFiles', 'deliveredFilesSource',
+        'deliveredFilesUnknownReason', 'generatedAt', 'lifecycle', 'manualTestSteps', 'manualTestStepsSource',
+        'manualTestStepsUnknownReason', 'specPath', 'specSlug', 'status', 'statusSource', 'statusUnknownReason',
+        'testsObserved', 'testsObservedSource', 'testsObservedUnknownReason', 'title', 'titleUnknownReason',
+        'unknowns', 'verification', 'warnings'
+      ]
+    );
+
+    // The same shape carries the values: an empty day is an empty list, and an
+    // unavailable fact is literal `unknown`, never an omitted key.
+    assert.deepEqual(activity.entries, []);
+    assert.equal(standup.command, 'standup');
+    assert.deepEqual(standup.next.map(item => item.specSlug), ['quiet-spec']);
+    assert.equal(standup.next[0].notStarted, true);
+    assert.equal(explain.deliveredFiles, 'unknown');
+    assert.equal(explain.verification.score, 'unknown');
+    assert.equal(explain.acceptanceCriteria.verified, 'unknown');
+
+    const help = spawnSync(process.execPath, [ORCH, '--help'], { encoding: 'utf8' });
+    assert.equal(help.status, 0, help.stderr);
+    for (const command of ['report activity', 'report standup', 'report explain']) {
+      assert.match(help.stdout, new RegExp(`${command}[^\\n]*--json`), `${command} documents --json`);
+    }
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('AC8: every reported value names a traceable source', () => {
+  const root = tempRoot('sdw-report-sources-');
+  try {
+    const now = '2026-10-23T20:00:00.000Z';
+    const state = baseState({
+      runId: 'run-sources',
+      artifactsDir: '.sdw/state/demo-spec/run-sources',
+      deliveryCommit: 'commit-sources',
+      score: 6,
+      updatedAt: '2026-10-23T17:00:00.000Z',
+      steps: {
+        4: {
+          name: 'implementation',
+          status: 'completed',
+          gates: { test: { status: 'passed' }, security: { status: 'skipped' } },
+          tasks: { 'task-1': { status: 'completed', filesChanged: ['skills/state.cjs'] } }
+        },
+        5: { name: 'scoring', status: 'completed', output: { score: 7, minScore: 8, passed: true } },
+        6: { name: 'delivery_commit', status: 'completed', completedAt: '2026-10-23T16:00:00.000Z' },
+        7: { name: 'code_review', status: 'completed', output: { passed: true, blockingCount: 0, findings: [] } },
+        8: { name: 'pr_preparation', status: 'completed', output: { pullRequest: null } }
+      }
+    });
+    writeRunState(root, state, { mtime: '2026-10-23T17:00:00.000Z' });
+    writeArtifact(root, state, 'step-1.md', '2026-10-23T09:00:00.000Z');
+    writeSpecIndex(root, [
+      { prefix: '00023', slug: 'demo-spec', title: 'Demo Spec', status: 'pending' },
+      { prefix: '00024', slug: 'next-spec', title: 'Next Spec', status: 'pending' }
+    ]);
+    writeSpecFile(root, 'demo-spec', '---\nslug: demo-spec\ntitle: "Demo Spec"\n---\n');
+    writeLedger(root, state, {
+      runId: 'run-sources',
+      specSlug: 'demo-spec',
+      generatedAt: '2026-10-23T16:00:00.000Z',
+      criteria: [
+        { id: 'AC1', text: 'ledger file criterion', status: 'verified', evidence: [{ type: 'file', path: 'skills/ledger.cjs' }] }
+      ]
+    });
+    writeTelemetry(root, state, [
+      {
+        ts: '2026-10-23T18:00:00.000Z',
+        runId: 'run-sources',
+        specSlug: 'demo-spec',
+        event: 'gate',
+        step: 4,
+        payload: { gates: [{ name: 'review', status: 'failed' }] }
+      }
+    ]);
+    const git = args => {
+      if (args.includes('--name-only')) return 'skills/git.cjs\n';
+      return '2026-10-23T16:00:00+00:00';
+    };
+
+    const activity = reporting.collectActivity({ targetRoot: root, date: '2026-10-23', now, git });
+    const entry = activity.entries[0];
+    assert.equal(entry.startSource, 'artifact:.sdw/state/demo-spec/run-sources/step-1.md', 'activity start is an artifact clock');
+    assert.equal(entry.endSource, 'delivery-commit', 'activity end is the git delivery commit');
+    assert.equal(entry.deliveryCommit, 'commit-sources');
+    assert.equal(entry.status, 'completed');
+    assert.equal(entry.statusSource, 'run-state', 'activity status is run state');
+
+    const standup = reporting.collectStandup({ targetRoot: root, hours: 36, now, git });
+    const delivered = standup.delivered[0];
+    assert.equal(delivered.deliverySource, 'delivery-commit');
+    assert.equal(delivered.lastEventSource, 'telemetry', 'standup last event is the newest telemetry event');
+    assert.equal(delivered.lastEventAt, '2026-10-23T18:00:00.000Z');
+    assert.deepEqual(
+      standup.next.map(item => item.specSlug),
+      ['demo-spec', 'next-spec'],
+      'standup next items are the pending registry rows'
+    );
+
+    const explain = reporting.collectExplain({ targetRoot: root, spec: 'demo-spec', now, git });
+    assert.equal(explain.status, 'pending', 'AC8: status is the registry row, not the completed run state');
+    assert.equal(explain.statusSource, 'registry');
+    assert.equal(explain.lifecycle.runStatus, 'completed');
+    assert.equal(explain.title, 'Demo Spec');
+    assert.equal(explain.verification.score, 6, 'AC8: a recorded score wins over the Step 5 output');
+    assert.equal(explain.verification.scoreSource, 'state.score');
+    assert.deepEqual(
+      explain.verification.gates,
+      [{ name: 'security', status: 'skipped' }, { name: 'test', status: 'passed' }],
+      'AC8: recorded gates win over telemetry'
+    );
+    assert.equal(explain.verification.gatesSource, 'run-state');
+    assert.deepEqual(
+      explain.deliveredFiles,
+      ['skills/git.cjs', 'skills/ledger.cjs', 'skills/state.cjs'],
+      'AC8: delivered files are the union of task state, ledger evidence, and git history'
+    );
+    assert.deepEqual(explain.deliveredFilesSource, ['run-state', 'ac-ledger', 'git']);
+    assert.deepEqual(explain.testsObserved, []);
+    assert.equal(explain.testsObservedSource, 'ac-ledger');
+    assert.equal(explain.acceptanceCriteriaSource, 'ac-ledger');
+    assert.equal(explain.manualTestStepsSource, 'ac-ledger');
+    assert.deepEqual(explain.unknowns, [], 'every value above is backed by a source');
+
+    // Remove the state-side values: each fallback keeps its own source marker.
+    const fallbackState = {
+      ...state,
+      score: undefined,
+      steps: { ...state.steps, 4: { name: 'implementation', status: 'completed' } }
+    };
+    writeRunState(root, fallbackState, { mtime: '2026-10-23T17:00:00.000Z' });
+    const fallback = reporting.collectExplain({ targetRoot: root, spec: 'demo-spec', now, git });
+    assert.equal(fallback.verification.score, 7);
+    assert.equal(fallback.verification.scoreSource, 'step-5-output');
+    assert.deepEqual(fallback.verification.gates, [{ name: 'review', status: 'failed' }]);
+    assert.equal(fallback.verification.gatesSource, 'telemetry');
+    assert.deepEqual(fallback.deliveredFilesSource, ['ac-ledger', 'git'], 'AC8: files fall back to ledger and git only');
+    assert.deepEqual(fallback.deliveredFiles, ['skills/git.cjs', 'skills/ledger.cjs']);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('AC9: missing evidence is literal unknown with a reason, never an inferred value', () => {
+  const root = tempRoot('sdw-report-unknown-');
+  const explainRoot = tempRoot('sdw-report-unknown-explain-');
+  try {
+    const now = '2026-10-23T20:00:00.000Z';
+    const active = baseState({
+      runId: 'run-active-unknown',
+      specSlug: 'active-spec',
+      status: 'in_progress',
+      currentStep: undefined,
+      deliveryCommit: null,
+      updatedAt: '2026-10-23T18:00:00.000Z',
+      artifactsDir: '.sdw/state/active-spec/run-active-unknown',
+      steps: { 4: { name: 'implementation', status: 'in_progress' } }
+    });
+    writeRunState(root, active, { mtime: '2026-10-23T18:00:00.000Z' });
+
+    const noStatus = baseState({
+      runId: 'run-no-status',
+      status: undefined,
+      deliveryCommit: null,
+      pullRequest: null,
+      artifactsDir: '.sdw/state/demo-spec/run-no-status'
+    });
+    writeRunState(root, noStatus, { mtime: '2026-10-23T17:00:00.000Z' });
+    writeArtifact(root, noStatus, 'step-1.md', '2026-10-23T09:00:00.000Z');
+
+    // AC9: an unreadable registry is `unknown` + reason, not a zero count.
+    fs.mkdirSync(path.join(root, '.sdw', 'specs', 'index.specs.md'), { recursive: true });
+    const standup = reporting.collectStandup({ targetRoot: root, hours: 36, now, git: () => '2026-10-23T16:00:00+00:00' });
+    assert.equal(standup.next, 'unknown');
+    assert.match(standup.nextUnknownReason, /specification index could not be read/);
+    assert.equal(standup.warnings.length, 1);
+    assert.equal(standup.inProgress.length, 1);
+    assert.equal(standup.inProgress[0].currentStep, null);
+    assert.match(standup.inProgress[0].stepUnknownReason, /records no current step/);
+    const standupRendered = reporting.renderStandup(standup);
+    assert.match(standupRendered, /Next \(unknown\)/);
+    assert.match(standupRendered, /unknown \(the specification index could not be read/);
+    assert.match(standupRendered, /unknown \(the run state records no current step\)/);
+    assert.doesNotMatch(standupRendered, /not started/, 'a run with no recorded step is unknown, not "not started"');
+
+    // AC9: activity reports a missing status and commit as literal unknown.
+    const activity = reporting.collectActivity({
+      targetRoot: root,
+      date: '2026-10-23',
+      now,
+      git: () => '2026-10-23T16:00:00+00:00'
+    });
+    assert.equal(activity.entries.length, 1);
+    const entry = activity.entries[0];
+    assert.equal(entry.status, 'unknown');
+    assert.equal(entry.statusSource, null);
+    assert.match(entry.statusUnknownReason, /records no status/);
+    assert.equal(entry.deliveryCommit, 'unknown');
+    assert.match(entry.deliveryCommitUnknownReason, /records no delivery commit/);
+    const activityRendered = reporting.renderActivity(activity);
+    assert.match(activityRendered, /unknown \(the run state records no status\)/);
+    assert.match(activityRendered, /unknown \(the run state records no delivery commit\)/);
+
+    // A readable registry restores the list, and a pending row still says
+    // "not started" because it genuinely has no run.
+    fs.rmSync(path.join(root, '.sdw', 'specs', 'index.specs.md'), { recursive: true, force: true });
+    writeSpecIndex(root, [{ prefix: '00030', slug: 'next-spec', title: 'Next Spec', status: 'pending' }]);
+    const readable = reporting.collectStandup({ targetRoot: root, hours: 36, now, git: () => '2026-10-23T16:00:00+00:00' });
+    assert.deepEqual(readable.next.map(item => item.specSlug), ['next-spec']);
+    assert.equal(readable.nextUnknownReason, null);
+    assert.equal(readable.next[0].notStarted, true);
+    assert.match(reporting.renderStandup(readable), /not started/);
+
+    // AC9: explain marks a title and update time that the evidence lacks.
+    writeSpecIndex(explainRoot, [{ prefix: '00031', slug: 'bare-spec', title: '', status: 'pending' }]);
+    writeSpecFile(explainRoot, 'bare-spec', '# Bare Spec\n');
+    const bareState = baseState({
+      runId: 'run-bare',
+      specSlug: 'bare-spec',
+      updatedAt: undefined,
+      artifactsDir: '.sdw/state/bare-spec/run-bare'
+    });
+    writeRunState(explainRoot, bareState, { mtime: '2026-10-23T17:00:00.000Z' });
+    const explain = reporting.collectExplain({
+      targetRoot: explainRoot,
+      spec: 'bare-spec',
+      now,
+      git: () => {
+        throw new Error('no git');
+      }
+    });
+    assert.equal(explain.title, 'unknown');
+    assert.match(explain.titleUnknownReason, /records a title/);
+    assert.equal(explain.lifecycle.updatedAt, 'unknown');
+    assert.match(explain.lifecycle.updatedAtUnknownReason, /records no update time/);
+    assert.ok(explain.unknowns.some(item => item.field === 'title'));
+    assert.ok(explain.unknowns.some(item => item.field === 'lifecycle.updatedAt'));
+    const explainRendered = reporting.renderExplain(explain);
+    assert.match(explainRendered, /Title: unknown \(neither the registry row/);
+    assert.match(explainRendered, /Updated: unknown \(the run state records no update time\)/);
+  } finally {
+    cleanup(root);
     cleanup(explainRoot);
   }
 });

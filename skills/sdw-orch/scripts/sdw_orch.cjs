@@ -6596,9 +6596,9 @@ Subcommands:
   task abandon           Return the dispatched DAG task to the queue
   score submit           Submit a judge verdict for Step 5 conformance scoring (per-criterion verdicts: ${scoreEvaluator.VERDICT_VALUES.join(' | ')})
   report re-render       Refresh the delivery report and the in-progress report from run state (never commits)
-  report activity        Timesheet entries for a delivery day (--date YYYY-MM-DD)
-  report standup         Delivered, in-progress, and next items (--hours, default: 36)
-  report explain <spec>  Status, delivered files, verification, and manual test steps
+  report activity        Timesheet entries for a delivery day (--date YYYY-MM-DD, --json)
+  report standup         Delivered, in-progress, and next items (--hours, default: 36, --json)
+  report explain <spec>  Status, delivered files, verification, and manual test steps (--json)
   ledger link            Link typed evidence to one or more acceptance criteria (--run-id, --ac, --type)
   ledger report          Print the AC status and evidence summary (--run-id, --format md|json)
   ledger audit           List acceptance criteria without evidence (--run-id, --format md|json; exit 1 when any remain)

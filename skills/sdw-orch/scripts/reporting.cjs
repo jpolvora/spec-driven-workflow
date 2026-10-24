@@ -6,6 +6,28 @@
 // written. The module never initializes the state directory, the acceptance
 // ledger, or a telemetry stream. `now`, `git`, and `provider` are injectable so
 // tests never depend on the wall clock, a real repository, or a network provider.
+//
+// Spec 00023 AC7: `--json` serializes the same object the Markdown renderer
+// reads, so the two cannot drift. The envelope is stable and pinned by
+// tests/sdw_orch_reporting.test.cjs:
+//   every report: command, generatedAt, warnings
+//   activity:     date, stateDir, entries[]
+//   standup:      hours, window, stateDir, delivered[], inProgress[],
+//                 next[] | "unknown", nextUnknownReason
+//   explain:      specSlug, title, status, specPath, lifecycle, deliveredFiles,
+//                 verification, acceptanceCriteria, testsObserved,
+//                 manualTestSteps, unknowns[]
+//
+// Spec 00023 AC8: a field that comes from evidence carries a `*Source` marker
+// (startSource, endSource, deliverySource, lastEventSource, scoreSource,
+// gatesSource, deliveredFilesSource, statusSource, acceptanceCriteriaSource,
+// testsObservedSource, manualTestStepsSource) so a consumer can trace it to run
+// state, telemetry, the AC ledger, git history, or the specification registry.
+//
+// Spec 00023 AC9: an unavailable fact is the literal string "unknown" plus a
+// `*UnknownReason` sibling, never a default timestamp, a zero count, or an
+// empty value that would read as evidence. A genuinely absent thing (for
+// example, a pending specification with no run) stays `null`.
 
 const fs = require('fs');
 const path = require('path');
@@ -334,6 +356,8 @@ function collectActivity(options = {}) {
       durationMs = end.ms - start.ms;
     }
 
+    const entryStatus = state.status ? String(state.status) : null;
+    const entryCommit = state.deliveryCommit ? String(state.deliveryCommit) : null;
     entries.push({
       date,
       specSlug: state.specSlug ? String(state.specSlug) : null,
@@ -347,9 +371,14 @@ function collectActivity(options = {}) {
       durationMs,
       duration: durationMs === null ? 'unknown' : formatDuration(durationMs),
       durationUnknownReason,
-      deliveryCommit: state.deliveryCommit ? String(state.deliveryCommit) : null,
+      // AC9: a missing delivery commit or status is literal `unknown` with its
+      // reason, never null or "none" that would read as a recorded fact.
+      deliveryCommit: entryCommit || 'unknown',
+      deliveryCommitUnknownReason: entryCommit ? null : 'the run state records no delivery commit',
       prUrl: pullRequest && pullRequest.url ? String(pullRequest.url) : null,
-      status: state.status ? String(state.status) : null
+      status: entryStatus || 'unknown',
+      statusSource: entryStatus ? 'run-state' : null,
+      statusUnknownReason: entryStatus ? null : 'the run state records no status'
     });
   }
 
@@ -403,19 +432,22 @@ function lastActivityClock(options) {
   return candidates[0];
 }
 
-// AC4: a gate that is neither passed nor skipped is the blocking gate the
-// standup item names. Names are sorted so the report is deterministic.
+// AC4/AC9: a gate that is neither passed nor skipped is the blocking gate the
+// standup item names. Names are sorted so the report is deterministic. A run
+// that records no gate map is unavailable evidence, never "none".
 function blockingGateOf(state) {
   const gates = state && state.steps && state.steps[4] ? state.steps[4].gates : null;
-  if (!gates || typeof gates !== 'object' || Array.isArray(gates)) return null;
+  if (!gates || typeof gates !== 'object' || Array.isArray(gates)) {
+    return { gate: null, reason: 'the run records no gate results' };
+  }
   for (const name of Object.keys(gates).sort()) {
     const gate = gates[name];
     const status = String(gate && gate.status ? gate.status : '').toLowerCase();
     if (status && status !== 'passed' && status !== 'skipped') {
-      return { name, status };
+      return { gate: { name, status }, reason: null };
     }
   }
-  return null;
+  return { gate: null, reason: null };
 }
 
 function stepFields(state) {
@@ -425,7 +457,9 @@ function stepFields(state) {
   return {
     currentStep,
     totalSteps,
-    stepName: step && step.name ? String(step.name) : null
+    stepName: step && step.name ? String(step.name) : null,
+    // AC9: a run with no recorded step is `unknown`, never "not started".
+    stepUnknownReason: currentStep === null ? 'the run state records no current step' : null
   };
 }
 
@@ -436,13 +470,15 @@ function buildStandupItem(fields) {
     runId: fields.state.runId ? String(fields.state.runId) : null,
     status: fields.state.status ? String(fields.state.status) : null,
     ...stepFields(fields.state),
+    notStarted: false,
     deliveredAt: fields.deliveredClock ? fields.deliveredClock.at : 'unknown',
     deliverySource: fields.deliveredClock ? fields.deliveredClock.source : null,
     deliveryCommit: fields.state.deliveryCommit ? String(fields.state.deliveryCommit) : null,
     lastEventAt: fields.lastClock ? fields.lastClock.at : 'unknown',
     lastEventSource: fields.lastClock ? fields.lastClock.source : null,
-    blockingGate: gate ? gate.name : null,
-    blockingGateStatus: gate ? gate.status : null
+    blockingGate: gate ? gate.name : (fields.gateUnknownReason ? 'unknown' : null),
+    blockingGateStatus: gate ? gate.status : null,
+    blockingGateUnknownReason: gate ? null : (fields.gateUnknownReason || null)
   };
 }
 
@@ -455,15 +491,28 @@ function normalizeHours(value) {
   return hours;
 }
 
+// AC9: an unreadable registry is unavailable evidence, not "zero pending
+// specifications". A missing registry file is a fact (nothing is registered).
 function readPendingSpecs(targetRoot, warnings) {
   try {
     const specIndex = require('../../sdw-spec/scripts/spec_index.cjs');
     const index = specIndex.readIndex({ root: targetRoot });
-    if (!index || !index.exists || !Array.isArray(index.entries)) return [];
-    return index.entries;
+    if (!index || !index.exists) return { available: true, entries: [] };
+    if (!Array.isArray(index.entries)) {
+      return {
+        available: false,
+        entries: [],
+        reason: 'the specification index records no readable row list'
+      };
+    }
+    return { available: true, entries: index.entries };
   } catch (err) {
     warnings.push({ file: '.sdw/specs/index.specs.md', error: err.message });
-    return [];
+    return {
+      available: false,
+      entries: [],
+      reason: `the specification index could not be read: ${err.message}`
+    };
   }
 }
 
@@ -504,32 +553,53 @@ function collectStandup(options = {}) {
       const commitClock = readCommitClock(git, state.deliveryCommit, targetRoot);
       const deliveredClock = deliveryClockFor(state, commitClock) || lastClock;
       if (!deliveredClock || deliveredClock.ms < windowStartMs || deliveredClock.ms > nowMs) continue;
-      delivered.push(buildStandupItem({ state, deliveredClock, lastClock, gate }));
+      delivered.push(buildStandupItem({
+        state,
+        deliveredClock,
+        lastClock,
+        gate: gate.gate,
+        gateUnknownReason: gate.reason
+      }));
     } else if (status === 'in_progress' || status === 'paused') {
       if (!lastClock || lastClock.ms < windowStartMs || lastClock.ms > nowMs) continue;
-      inProgress.push(buildStandupItem({ state, deliveredClock: null, lastClock, gate }));
+      inProgress.push(buildStandupItem({
+        state,
+        deliveredClock: null,
+        lastClock,
+        gate: gate.gate,
+        gateUnknownReason: gate.reason
+      }));
       if (state.specSlug) activeSlugs.add(String(state.specSlug));
     }
   }
 
-  const next = readPendingSpecs(targetRoot, warnings)
-    .filter(entry => String(entry.status ? entry.status : '').toLowerCase() === 'pending')
-    .filter(entry => entry.slug && !activeSlugs.has(String(entry.slug)))
-    .map(entry => ({
-      specSlug: String(entry.slug),
-      title: entry.title ? String(entry.title) : null,
-      status: 'pending',
-      currentStep: null,
-      totalSteps: null,
-      stepName: null,
-      deliveredAt: null,
-      deliverySource: null,
-      deliveryCommit: null,
-      lastEventAt: 'unknown',
-      lastEventSource: null,
-      blockingGate: null,
-      blockingGateStatus: null
-    }));
+  const pending = readPendingSpecs(targetRoot, warnings);
+  // AC9: when the registry cannot be read, the pending list is `unknown` with
+  // its reason; an empty array would claim there is nothing queued.
+  const next = pending.available
+    ? pending.entries
+      .filter(entry => String(entry.status ? entry.status : '').toLowerCase() === 'pending')
+      .filter(entry => entry.slug && !activeSlugs.has(String(entry.slug)))
+      .map(entry => ({
+        specSlug: String(entry.slug),
+        title: entry.title ? String(entry.title) : 'unknown',
+        runId: null,
+        status: 'pending',
+        currentStep: null,
+        totalSteps: null,
+        stepName: null,
+        stepUnknownReason: null,
+        notStarted: true,
+        deliveredAt: 'unknown',
+        deliverySource: null,
+        deliveryCommit: null,
+        lastEventAt: 'unknown',
+        lastEventSource: null,
+        blockingGate: null,
+        blockingGateStatus: null,
+        blockingGateUnknownReason: null
+      }))
+    : 'unknown';
 
   delivered.sort((a, b) => {
     const aMs = timestampMs(a.deliveredAt);
@@ -555,6 +625,7 @@ function collectStandup(options = {}) {
     delivered,
     inProgress,
     next,
+    nextUnknownReason: pending.available ? null : pending.reason,
     warnings
   };
 }
@@ -570,12 +641,18 @@ function timeCell(value, reason) {
 }
 
 function stepCell(item) {
-  if (item.currentStep === null || item.currentStep === undefined) return 'not started';
-  const total = item.totalSteps === null || item.totalSteps === undefined ? '?' : item.totalSteps;
-  return `${item.currentStep}/${total}${item.stepName ? ` ${item.stepName}` : ''}`;
+  if (Number.isInteger(item.currentStep)) {
+    const total = item.totalSteps === null || item.totalSteps === undefined ? '?' : item.totalSteps;
+    return `${item.currentStep}/${total}${item.stepName ? ` ${item.stepName}` : ''}`;
+  }
+  // AC9: only a specification that has not started can say "not started"; a
+  // run whose state lacks the step is `unknown` with its reason.
+  if (item.notStarted) return 'not started';
+  return timeCell('unknown', item.stepUnknownReason);
 }
 
 function gateCell(item) {
+  if (item.blockingGate === 'unknown') return timeCell('unknown', item.blockingGateUnknownReason);
   return item.blockingGate ? `${item.blockingGate} (${item.blockingGateStatus || 'unknown'})` : 'none';
 }
 
@@ -606,9 +683,11 @@ function renderActivity(report = {}) {
       cell(entry.duration === 'unknown'
         ? timeCell('unknown', entry.durationUnknownReason)
         : entry.duration),
-      cell(entry.deliveryCommit || 'none'),
+      cell(entry.deliveryCommit === 'unknown'
+        ? timeCell('unknown', entry.deliveryCommitUnknownReason)
+        : (entry.deliveryCommit || 'none')),
       cell(entry.prUrl || 'none'),
-      `${cell(entry.status)} |`
+      `${cell(timeCell(entry.status, entry.statusUnknownReason))} |`
     ].join(' | '));
   }
   lines.push('', `Entries: ${entries.length}`);
@@ -620,7 +699,8 @@ function renderActivity(report = {}) {
 function renderStandup(report = {}) {
   const delivered = Array.isArray(report.delivered) ? report.delivered : [];
   const inProgress = Array.isArray(report.inProgress) ? report.inProgress : [];
-  const next = Array.isArray(report.next) ? report.next : [];
+  // AC9: `unknown` next means the registry could not be read; it is not "none".
+  const next = Array.isArray(report.next) ? report.next : null;
   const window = report.window || {};
   const lines = [
     'SDW Standup Report',
@@ -649,14 +729,18 @@ function renderStandup(report = {}) {
       lines.push(`| ${cell(item.specSlug)} | ${cell(item.runId)} | ${cell(stepCell(item))} | ${cell(item.lastEventAt)} | ${cell(gateCell(item))} |`);
     }
   }
-  lines.push('', `Next (${next.length})`);
-  if (next.length === 0) {
-    lines.push('- none');
+  if (next === null) {
+    lines.push('', 'Next (unknown)', `- ${timeCell('unknown', report.nextUnknownReason)}`);
   } else {
-    lines.push('| Spec | Title | Status | Step | Last event |');
-    lines.push('| --- | --- | --- | --- | --- |');
-    for (const item of next) {
-      lines.push(`| ${cell(item.specSlug)} | ${cell(item.title)} | ${cell(item.status)} | ${cell(stepCell(item))} | ${cell(item.lastEventAt)} |`);
+    lines.push('', `Next (${next.length})`);
+    if (next.length === 0) {
+      lines.push('- none');
+    } else {
+      lines.push('| Spec | Title | Status | Step | Last event |');
+      lines.push('| --- | --- | --- | --- | --- |');
+      for (const item of next) {
+        lines.push(`| ${cell(item.specSlug)} | ${cell(item.title)} | ${cell(item.status)} | ${cell(stepCell(item))} | ${cell(item.lastEventAt)} |`);
+      }
     }
   }
   return lines.join('\n');
@@ -1028,7 +1112,14 @@ function collectExplain(options = {}) {
 
   const { entry, specFileAbs, content, specIndex } = resolveRegisteredSpec(targetRoot, specSlug, warnings);
   const frontmatter = content ? specIndex.parseFrontmatter(content.replace(/\r\n?/g, '\n')) : {};
-  const title = entry.title ? String(entry.title) : (frontmatter.title ? String(frontmatter.title) : null);
+  // AC8/AC9: the registry row is the status source; the specification file is
+  // the title fallback. A missing title is literal `unknown` with its reason.
+  const registryTitle = entry.title ? String(entry.title) : null;
+  const fileTitle = frontmatter.title ? String(frontmatter.title) : null;
+  const title = registryTitle || fileTitle;
+  const titleUnknownReason = title ? null : 'neither the registry row nor the specification file records a title';
+  const registryStatus = entry.status ? String(entry.status) : null;
+  const statusUnknownReason = registryStatus ? null : 'the registry row records no status';
 
   const newest = newestRunForSpec(readRunStates(targetRoot, stateDir, warnings), specSlug);
   const state = newest ? newest.state : null;
@@ -1070,12 +1161,19 @@ function collectExplain(options = {}) {
   const observed = collectTestsObserved(ledgerInfo);
   const manual = buildManualTestSteps(ledgerInfo, observed.tests === 'unknown' ? [] : observed.tests);
   const steps = lifecycleSteps(state);
+  // AC9: a run whose state records no update time is `unknown`; a pending
+  // specification with no run at all has no update time to report (null).
+  const updatedAt = state && state.updatedAt ? String(state.updatedAt) : null;
+  const updatedAtUnknownReason = state && !updatedAt ? 'the run state records no update time' : null;
 
   const unknowns = [];
   const noteUnknown = (field, reason) => {
     if (reason) unknowns.push({ field, reason });
   };
+  noteUnknown('title', titleUnknownReason);
+  noteUnknown('status', statusUnknownReason);
   noteUnknown('deliveredFiles', deliveredFilesUnknownReason);
+  noteUnknown('lifecycle.updatedAt', updatedAtUnknownReason);
   noteUnknown('verification.score', verification.scoreUnknownReason);
   noteUnknown('verification.gates', verification.gatesUnknownReason);
   noteUnknown('verification.review', verification.reviewUnknownReason);
@@ -1087,16 +1185,24 @@ function collectExplain(options = {}) {
     command: 'explain',
     specSlug,
     generatedAt: isoAt(nowMs),
-    title,
-    status: entry.status ? String(entry.status) : 'unknown',
+    title: title || 'unknown',
+    titleUnknownReason,
+    status: registryStatus || 'unknown',
+    // AC8: the lifecycle status is the registry row, never the run state.
+    statusSource: registryStatus ? 'registry' : null,
+    statusUnknownReason,
     specPath: specFileAbs ? normalizePath(path.relative(targetRoot, specFileAbs)) : null,
     lifecycle: {
-      registryStatus: entry.status ? String(entry.status) : 'unknown',
+      registryStatus: registryStatus || 'unknown',
       runId: state && state.runId ? String(state.runId) : null,
       runStatus: state && state.status ? String(state.status) : 'unknown',
       currentStep: state && Number.isInteger(state.currentStep) ? state.currentStep : null,
       totalSteps: state && Number.isInteger(state.totalSteps) ? state.totalSteps : null,
-      updatedAt: state && state.updatedAt ? String(state.updatedAt) : null,
+      stepUnknownReason: state
+        ? (Number.isInteger(state.currentStep) ? null : 'the run state records no current step')
+        : 'no run state',
+      updatedAt: updatedAt || (state ? 'unknown' : null),
+      updatedAtUnknownReason,
       steps,
       stepsUnknownReason: state ? (steps === 'unknown' ? 'the run state records no steps' : null) : 'no run state'
     },
@@ -1105,9 +1211,12 @@ function collectExplain(options = {}) {
     deliveredFilesUnknownReason,
     verification,
     acceptanceCriteria,
+    acceptanceCriteriaSource: ledgerInfo.available ? 'ac-ledger' : null,
     testsObserved: observed.tests,
+    testsObservedSource: ledgerInfo.available ? 'ac-ledger' : null,
     testsObservedUnknownReason: observed.reason,
     manualTestSteps: manual.steps,
+    manualTestStepsSource: ledgerInfo.available ? 'ac-ledger' : null,
     manualTestStepsUnknownReason: manual.reason,
     unknowns,
     warnings
@@ -1124,7 +1233,7 @@ function renderExplain(report = {}) {
     'SDW Explain Report',
     '==================',
     `Spec: ${report.specSlug || 'unknown'}`,
-    `Title: ${report.title || 'unknown'}`,
+    `Title: ${report.title === 'unknown' ? timeCell('unknown', report.titleUnknownReason) : (report.title || 'unknown')}`,
     `Status: ${report.status || 'unknown'}`,
     `Spec file: ${report.specPath || 'unknown'}`,
     `Generated: ${report.generatedAt || 'unknown'}`,
@@ -1133,7 +1242,7 @@ function renderExplain(report = {}) {
     '---------',
     `Run: ${lifecycle.runId || 'unknown'} (${lifecycle.runStatus || 'unknown'})`,
     `Step: ${stepCell(lifecycle)}`,
-    `Updated: ${lifecycle.updatedAt || 'unknown'}`
+    `Updated: ${lifecycle.updatedAt === 'unknown' ? timeCell('unknown', lifecycle.updatedAtUnknownReason) : (lifecycle.updatedAt || 'unknown')}`
   ];
   if (Array.isArray(lifecycle.steps)) {
     lines.push('', '| Step | Name | Status | Completed |', '| --- | --- | --- | --- |');
