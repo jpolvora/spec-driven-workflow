@@ -1,5 +1,8 @@
 'use strict';
 
+const fs = require('fs');
+const path = require('path');
+
 // Spec 00030 AC3-AC6: acceptance-count bands plus the touchpoint escalation.
 const LOW_MAX_ACS = 4;
 const STANDARD_MAX_ACS = 10;
@@ -326,9 +329,17 @@ function buildSplitProposal(slug, acs, targetFiles) {
   }));
 }
 
-function inferFallbackTargetFiles(slug) {
-  if (slug.includes('orch') || slug.includes('implement')) {
-    return [
+/**
+ * Spec 00069 AC2: the known real-file buckets are the only remaining fallback,
+ * and they are named by the skill they describe. A bucket file the repository
+ * does not contain refuses the plan instead of dispatching a slice that cannot
+ * exist. `implement` is sdw-orch's former name (spec 00004).
+ */
+const FALLBACK_RULES = [
+  {
+    rule: 'orch',
+    matches: (slug) => slug.includes('sdw-orch') || slug.includes('implement'),
+    files: [
       'skills/sdw-orch/scripts/sdw_orch.cjs',
       'skills/sdw-orch/scripts/state_manager.cjs',
       'skills/sdw-orch/scripts/spec_derivation.cjs',
@@ -336,21 +347,27 @@ function inferFallbackTargetFiles(slug) {
       'skills/sdw-orch/scripts/dag_planner.cjs',
       'skills/sdw-orch/scripts/score_evaluator.cjs',
       'skills/sdw-code-review/scripts/sdw_code_review.cjs'
-    ];
-  }
-  if (slug.includes('config')) {
-    return ['skills/sdw-config/scripts/sdw_config.cjs'];
-  }
-  if (slug.includes('router')) {
-    return [
+    ]
+  },
+  {
+    rule: 'config',
+    matches: (slug) => slug.includes('sdw-config'),
+    files: ['skills/sdw-config/scripts/sdw_config.cjs']
+  },
+  {
+    rule: 'router',
+    matches: (slug) => slug.includes('sdw-router'),
+    files: [
       'skills/sdw-router/SKILL.md',
       'skills/sdw-router/references/routing_table.md',
       'skills/sdw-router/references/consumer_agents_setup.md',
       'skills/sdw-router/scripts/sdw_router.cjs'
-    ];
-  }
-  if (slug.includes('spec')) {
-    return [
+    ]
+  },
+  {
+    rule: 'spec',
+    matches: (slug) => slug.includes('sdw-spec'),
+    files: [
       'skills/sdw-spec/SKILL.md',
       'skills/sdw-spec/scripts/sdw_spec.cjs',
       'skills/sdw-spec/scripts/validate_spec.cjs',
@@ -360,9 +377,21 @@ function inferFallbackTargetFiles(slug) {
       'skills/sdw-spec/scripts/spec_sync.cjs',
       'skills/sdw-spec/references/spec_standard.md',
       'skills/sdw-spec/references/scm_contract.md'
-    ];
+    ]
   }
-  return [];
+];
+
+/** Resolves the fallback bucket for a slug, or null when no bucket matches. */
+function inferFallbackTargetFiles(slug) {
+  const value = String(slug || '');
+  const bucket = FALLBACK_RULES.find(candidate => candidate.matches(value));
+  if (!bucket) return null;
+  return { rule: bucket.rule, targetFiles: bucket.files.slice() };
+}
+
+/** Files from the resolved fallback bucket that the target repository lacks. */
+function findMissingFallbackFiles(fallback, targetRoot) {
+  return fallback.targetFiles.filter(file => !fs.existsSync(path.join(targetRoot, file)));
 }
 
 /** Low complexity: exactly one task carrying every criterion (AC7). */
@@ -516,12 +545,14 @@ function buildComplexPlan(context) {
 function generateDagPlan(specContent, options) {
   const opts = options || {};
   const content = String(specContent || '');
+  const targetRoot = path.resolve(opts.targetRoot || '.');
   const acs = uniqueAcceptanceCriteria(parseAcceptanceCriteria(content));
   const slugMatch = content.match(/slug:\s*([^\r\n]+)/);
   const slug = opts.slug || (slugMatch ? slugMatch[1].trim() : 'task');
 
   // Ingest the technical blueprint from Step 2 (AC2).
   let targetFiles = [];
+  let declaredNewFiles = [];
   let architecturalApproach = null;
   let testPlan = null;
 
@@ -529,12 +560,33 @@ function generateDagPlan(specContent, options) {
     targetFiles = opts.blueprint.targetFiles.slice();
     architecturalApproach = opts.blueprint.architecturalApproach;
     testPlan = opts.blueprint.testPlan;
+    declaredNewFiles = Array.isArray(opts.blueprint.declaredNewFiles)
+      ? opts.blueprint.declaredNewFiles.slice()
+      : [];
   } else if (Array.isArray(opts.targetFiles) && opts.targetFiles.length > 0) {
     targetFiles = opts.targetFiles.slice();
   } else {
-    // Missing blueprint in Step 2: log observable warning and fall back to heuristic file inference.
+    // Missing blueprint or pathless specification: the only fallback is a known
+    // real-file bucket, used only when every file it names exists (spec 00069
+    // AC1/AC2). A missing file refuses the plan instead of planning it.
     console.warn('[Step 3: DAG Generation] Warning: Step 2 refinement blueprint missing or has no targetFiles; falling back to heuristic file inference.');
-    targetFiles = inferFallbackTargetFiles(slug);
+    const fallback = inferFallbackTargetFiles(slug);
+    const missingFiles = fallback ? findMissingFallbackFiles(fallback, targetRoot) : [];
+    if (missingFiles.length > 0) {
+      return {
+        refused: true,
+        reason: 'missing-target-file',
+        fallbackRule: fallback.rule,
+        missingFiles,
+        complexity: analyzeComplexity(content, { targetFiles: [] }),
+        taskCount: 0,
+        execMode: 'sequential',
+        levels: [],
+        fileDisjointness: [],
+        tasks: []
+      };
+    }
+    targetFiles = fallback ? fallback.targetFiles.slice() : [];
   }
 
   const complexity = analyzeComplexity(content, { targetFiles });
@@ -571,6 +623,9 @@ function generateDagPlan(specContent, options) {
     }
   }
 
+  // Spec 00069 AC3: the declared new files travel with the plan so reporting can
+  // distinguish a promise from a file the repository already contains.
+  if (declaredNewFiles.length > 0) plan.declaredNewFiles = declaredNewFiles;
   if (opts.orchestratorHint) plan.orchestratorHint = opts.orchestratorHint;
   return plan;
 }

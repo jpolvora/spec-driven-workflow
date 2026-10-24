@@ -4214,7 +4214,7 @@ function executeRun(options) {
   } else if (startStep <= 3 && state.steps[3].status !== 'completed') {
     state = stateManager.updateStepState(targetRoot, state.runId, 3, 'in_progress');
     logStepEnter(3);
-    dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint, maxTasksPerSpec: config.maxTasksPerSpec, orchestratorHint: modelHints.orchestrator });
+    dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint, targetRoot, maxTasksPerSpec: config.maxTasksPerSpec, orchestratorHint: modelHints.orchestrator });
     if (dagPlan.refused) {
       // Spec 00030 AC13/AC14: a decomposition beyond the cap is refused with a
       // split proposal, never merged into coarse tasks and never planned.
@@ -4244,7 +4244,7 @@ function executeRun(options) {
   } else if (state.steps[3].output) {
     dagPlan = state.steps[3].output;
   } else {
-    dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint, maxTasksPerSpec: config.maxTasksPerSpec, orchestratorHint: modelHints.orchestrator });
+    dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint, targetRoot, maxTasksPerSpec: config.maxTasksPerSpec, orchestratorHint: modelHints.orchestrator });
     if (dagPlan.refused) {
       const refusal = formatDagRefusal(dagPlan);
       console.error(`[Step 3: DAG] ${refusal}`);
@@ -5880,11 +5880,17 @@ function executeRun(options) {
 /**
  * Spec 00064 AC2: renders a refused plan's reason. A coverage refusal names
  * every uncovered criterion and the task that was assigned it.
+ * Spec 00069 AC2: a fallback whose files are missing names each missing path
+ * and the bucket rule that produced it.
  */
 function formatDagRefusal(plan) {
   if (plan.reason === 'criteria-uncovered') {
     const uncovered = (plan.uncovered || []).map(entry => `${entry.acId}/${entry.taskId}`).join(', ');
     return `criteria-uncovered ${uncovered}`;
+  }
+  if (plan.reason === 'missing-target-file') {
+    const missing = (plan.missingFiles || []).join(', ');
+    return `missing-target-file rule=${plan.fallbackRule} missing=${missing} (name the file in backticks in the specification)`;
   }
   return `split-required tasks-needed=${plan.tasksNeeded} cap=${plan.cap}${plan.detail === 'criteria-undersupplied' ? ` criteria=${plan.acs}` : ''}`;
 }
@@ -5951,6 +5957,10 @@ function buildPreviewPlan(plan) {
     if (plan.reason === 'criteria-uncovered') {
       preview.reason = plan.reason;
       preview.uncovered = plan.uncovered || [];
+    } else if (plan.reason === 'missing-target-file') {
+      preview.reason = plan.reason;
+      preview.fallbackRule = plan.fallbackRule;
+      preview.missingTargetFiles = plan.missingFiles || [];
     } else {
       preview.tasksNeeded = plan.tasksNeeded;
       preview.cap = plan.cap;
@@ -6178,7 +6188,7 @@ function cmdDagPreview(options) {
     ? slugMatch[1].trim()
     : path.basename(resolvedSpec, path.extname(resolvedSpec));
   const blueprint = specGrilling.generateRefinementBlueprint(specContent, { slug: specSlug });
-  const plan = dagPlanner.generateDagPlan(specContent, { slug: specSlug, blueprint, maxTasksPerSpec: config.maxTasksPerSpec });
+  const plan = dagPlanner.generateDagPlan(specContent, { slug: specSlug, blueprint, targetRoot, maxTasksPerSpec: config.maxTasksPerSpec });
 
   if (options.json) {
     console.log(JSON.stringify(buildPreviewPlan(plan), null, 2));

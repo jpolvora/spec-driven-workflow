@@ -104,20 +104,65 @@ function extractTestPlan(specContent) {
   return 'Execute native automated test suite verifying all acceptance criteria and negative failure scenarios.';
 }
 
-function generateRefinementBlueprint(specContent, options = {}) {
-  let targetFiles = options.targetFiles || extractTargetFiles(specContent);
-  if (!targetFiles || targetFiles.length === 0) {
-    const slugMatch = specContent ? specContent.match(/slug:\s*([^\r\n]+)/) : null;
-    const slug = options.slug || (slugMatch ? slugMatch[1].trim() : 'spec');
-    if (slug.includes('orch')) {
-      targetFiles = ['skills/sdw-orch/scripts/sdw_orch.cjs', 'skills/sdw-orch/scripts/dag_planner.cjs'];
-    } else {
-      targetFiles = [`skills/${slug}/scripts/${slug}.cjs`];
+/**
+ * Spec 00069 AC3: a `New files` note declares paths the author intends to
+ * create. The declaration is a promise, not a check: the path is carried into
+ * the plan even though it does not exist yet.
+ */
+function extractDeclaredNewFiles(specContent) {
+  const files = new Set();
+  const collect = (text) => {
+    for (const match of String(text || '').matchAll(/`([^`\n]+)`/g)) {
+      for (const token of match[1].trim().split(/\s+/)) {
+        const candidate = looksLikeProjectPath(token);
+        if (candidate) files.add(candidate);
+      }
+    }
+  };
+  let mode = null;
+  for (const line of String(specContent || '').split(/\r?\n/)) {
+    const heading = line.match(/^\s{0,3}#{1,6}\s+(.+)$/);
+    if (heading) {
+      mode = /^new files\b/i.test(heading[1].trim()) ? 'section' : null;
+      if (mode) collect(line);
+      continue;
+    }
+    if (/^\s*(?:[-*+]\s+)?New files\b/i.test(line)) {
+      mode = 'inline';
+      collect(line);
+      continue;
+    }
+    if (mode === 'section') {
+      collect(line);
+      continue;
+    }
+    if (mode === 'inline') {
+      if (!line.trim()) {
+        mode = null;
+      } else if (/^\s*(?:[-*+]\s+|\d+\.\s+)/.test(line) || /^\s+\S/.test(line)) {
+        collect(line);
+      } else {
+        mode = null;
+      }
     }
   }
+  return [...files];
+}
+
+/**
+ * Spec 00069 AC1/AC3: the blueprint carries only paths the specification names
+ * explicitly plus the new files it declares. A pathless specification resolves
+ * no target file here: the caller falls back to a verified bucket or refuses
+ * instead of synthesizing a path from the slug.
+ */
+function generateRefinementBlueprint(specContent, options = {}) {
+  const named = options.targetFiles || extractTargetFiles(specContent);
+  const declaredNewFiles = extractDeclaredNewFiles(specContent);
+  const targetFiles = [...new Set([...named, ...declaredNewFiles])];
 
   return {
     targetFiles,
+    declaredNewFiles,
     architecturalApproach: extractArchitecturalApproach(specContent),
     testPlan: extractTestPlan(specContent)
   };
@@ -399,5 +444,6 @@ module.exports = {
   applyDecision,
   generateRefinementBlueprint,
   extractTargetFiles,
+  extractDeclaredNewFiles,
   analyzeSpecObservations
 };
