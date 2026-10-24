@@ -9,8 +9,11 @@
 // read-only guarantee across every reporting command; AC7 the stable `--json`
 // shape of every command; AC8 that each value is traceable to run state,
 // telemetry, the ledger, git, or the registry; AC9 that unavailable evidence is
-// the literal `unknown` with a reason. Empty days, invalid dates, and argument
-// wiring are covered as boundary cases.
+// the literal `unknown` with a reason; AC10 pins the empty delivery day
+// (sections present, zero counts, exit 0); AC11 documents the commands, sources,
+// fields, and unknown semantics in `references/reporting.md`; AC12 proves each
+// table prints the values its JSON carries. Invalid dates and argument wiring
+// are covered as boundary cases.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -246,8 +249,9 @@ test('AC3: activity end is the later of the PR thread comment and the delivery c
   }
 });
 
-test('AC1: an empty delivery day returns an empty report with exit code 0', () => {
+test('AC1 & AC10: an empty delivery day returns an empty report with exit code 0', () => {
   const root = tempRoot('sdw-report-empty-');
+  const bareRoot = tempRoot('sdw-report-empty-bare-');
   try {
     const state = baseState();
     writeRunState(root, state, { mtime: '2026-10-23T17:00:00.000Z' });
@@ -255,8 +259,12 @@ test('AC1: an empty delivery day returns an empty report with exit code 0', () =
 
     const report = reporting.collectActivity({ targetRoot: root, date: '2026-10-22' });
     assert.deepEqual(report.entries, []);
-    assert.match(reporting.renderActivity(report), /Entries: 0/);
-    assert.match(reporting.renderActivity(report), /No delivery activity for 2026-10-22/);
+    const rendered = reporting.renderActivity(report);
+    assert.match(rendered, /SDW Activity Report/, 'AC10: the sections are present');
+    assert.match(rendered, /Date: 2026-10-22/);
+    assert.match(rendered, /State: /);
+    assert.match(rendered, /Entries: 0/, 'AC10: the count is zero');
+    assert.match(rendered, /No delivery activity for 2026-10-22/);
 
     const text = spawnSync(process.execPath, [ORCH, 'report', 'activity', '--date', '2026-10-22', '--root', root], { encoding: 'utf8' });
     assert.equal(text.status, 0, text.stderr);
@@ -267,9 +275,24 @@ test('AC1: an empty delivery day returns an empty report with exit code 0', () =
     const parsed = JSON.parse(json.stdout);
     assert.equal(parsed.command, 'activity');
     assert.equal(parsed.date, '2026-10-22');
-    assert.deepEqual(parsed.entries, []);
+    assert.deepEqual(parsed.entries, [], 'AC10: the empty list is present, not omitted');
+    assert.deepEqual(parsed.warnings, []);
+
+    // AC10: a workspace that never recorded a run is an empty report too, and
+    // reporting must not create the state directory just to answer.
+    const bareText = spawnSync(process.execPath, [ORCH, 'report', 'activity', '--date', '2026-10-22', '--root', bareRoot], { encoding: 'utf8' });
+    assert.equal(bareText.status, 0, bareText.stderr);
+    assert.match(bareText.stdout, /Entries: 0/);
+    assert.match(bareText.stdout, /No delivery activity for 2026-10-22/);
+    const bareJson = spawnSync(process.execPath, [ORCH, 'report', 'activity', '--date', '2026-10-22', '--json', '--root', bareRoot], { encoding: 'utf8' });
+    assert.equal(bareJson.status, 0, bareJson.stderr);
+    const bareParsed = JSON.parse(bareJson.stdout);
+    assert.deepEqual(bareParsed.entries, []);
+    assert.deepEqual(bareParsed.warnings, []);
+    assert.equal(fs.existsSync(path.join(bareRoot, '.sdw', 'state')), false, 'AC10: an empty day never initializes the state directory');
   } finally {
     cleanup(root);
+    cleanup(bareRoot);
   }
 });
 
@@ -1007,6 +1030,128 @@ test('AC9: missing evidence is literal unknown with a reason, never an inferred 
   } finally {
     cleanup(root);
     cleanup(explainRoot);
+  }
+});
+
+test('AC12: the activity, standup, and explain tables print the values their JSON carries', () => {
+  const runRoot = tempRoot('sdw-report-parity-run-');
+  const standupRoot = tempRoot('sdw-report-parity-standup-');
+  try {
+    const state = baseState({
+      runId: 'run-parity',
+      artifactsDir: '.sdw/state/demo-spec/run-parity',
+      deliveryCommit: 'abc123'
+    });
+    writeRunState(runRoot, state, { mtime: '2026-10-23T17:00:00.000Z' });
+    writeArtifact(runRoot, state, 'step-1.md', '2026-10-23T09:15:00.000Z');
+    writeLedger(runRoot, state, {
+      runId: 'run-parity',
+      specSlug: 'demo-spec',
+      generatedAt: '2026-10-23T16:00:00.000Z',
+      criteria: [
+        {
+          id: 'AC1',
+          text: 'first criterion',
+          status: 'verified',
+          evidence: [
+            { type: 'file', path: 'skills/demo.cjs' },
+            { type: 'test', name: 'node --test tests/demo.test.cjs', status: 'passed' }
+          ]
+        },
+        { id: 'AC2', text: 'second criterion', status: 'unverified', evidence: [] }
+      ]
+    });
+    writeSpecIndex(runRoot, [{ prefix: '00023', slug: 'demo-spec', title: 'Demo Spec', status: 'pending' }]);
+    writeSpecFile(runRoot, 'demo-spec', '---\nslug: demo-spec\ntitle: "Demo Spec"\n---\n');
+
+    const activityArgs = ['report', 'activity', '--date', '2026-10-23'];
+    const activityJson = spawnSync(process.execPath, [ORCH, ...activityArgs, '--json', '--root', runRoot], { encoding: 'utf8' });
+    assert.equal(activityJson.status, 0, activityJson.stderr);
+    const activity = JSON.parse(activityJson.stdout);
+    assert.equal(activity.entries.length, 1);
+    const entry = activity.entries[0];
+    assert.equal(entry.specSlug, 'demo-spec');
+    assert.equal(entry.runId, 'run-parity');
+    assert.equal(entry.start, '2026-10-23T09:15:00.000Z');
+    assert.equal(entry.startSource, 'artifact:.sdw/state/demo-spec/run-parity/step-1.md');
+    assert.equal(entry.status, 'completed');
+    assert.equal(entry.deliveryCommit, 'abc123');
+    assert.equal(entry.end, 'unknown', 'AC3: the CLI has no PR provider and cannot read the fake commit');
+    assert.match(entry.endUnknownReason, /no PR and no delivery commit timestamp/);
+    assert.equal(entry.duration, 'unknown');
+
+    const activityText = spawnSync(process.execPath, [ORCH, ...activityArgs, '--root', runRoot], { encoding: 'utf8' });
+    assert.equal(activityText.status, 0, activityText.stderr);
+    assert.match(activityText.stdout, /\| demo-spec \| run-parity \|/);
+    for (const value of [
+      entry.start,
+      entry.status,
+      entry.deliveryCommit,
+      'unknown (no PR and no delivery commit timestamp)'
+    ]) {
+      assert.ok(activityText.stdout.includes(value), `the activity table prints ${value}`);
+    }
+
+    // A registry-only workspace has no clock-sensitive rows, so the standup
+    // counts are deterministic: zero delivered, zero in progress, one pending.
+    writeSpecIndex(standupRoot, [{ prefix: '00024', slug: 'next-spec', title: 'Next Spec', status: 'pending' }]);
+    const standupText = spawnSync(process.execPath, [ORCH, 'report', 'standup', '--hours', '36', '--root', standupRoot], { encoding: 'utf8' });
+    assert.equal(standupText.status, 0, standupText.stderr);
+    assert.match(standupText.stdout, /Delivered \(0\)/);
+    assert.match(standupText.stdout, /In progress \(0\)/);
+    assert.match(standupText.stdout, /Next \(1\)/);
+    assert.match(standupText.stdout, /\| next-spec \| Next Spec \| pending \| not started \| unknown \|/);
+
+    const standupJson = spawnSync(process.execPath, [ORCH, 'report', 'standup', '--hours', '36', '--json', '--root', standupRoot], { encoding: 'utf8' });
+    assert.equal(standupJson.status, 0, standupJson.stderr);
+    const standup = JSON.parse(standupJson.stdout);
+    assert.equal(standup.hours, 36);
+    assert.deepEqual(standup.delivered, []);
+    assert.deepEqual(standup.inProgress, []);
+    assert.equal(standup.next.length, 1);
+    const next = standup.next[0];
+    assert.equal(next.specSlug, 'next-spec');
+    assert.equal(next.title, 'Next Spec');
+    assert.equal(next.status, 'pending');
+    assert.equal(next.notStarted, true);
+    assert.equal(next.currentStep, null);
+    assert.equal(next.lastEventAt, 'unknown');
+
+    const explainJson = spawnSync(process.execPath, [ORCH, 'report', 'explain', 'demo-spec', '--json', '--root', runRoot], { encoding: 'utf8' });
+    assert.equal(explainJson.status, 0, explainJson.stderr);
+    const explain = JSON.parse(explainJson.stdout);
+    assert.equal(explain.command, 'explain');
+    assert.equal(explain.status, 'pending');
+    assert.equal(explain.statusSource, 'registry');
+    assert.equal(explain.lifecycle.runId, 'run-parity');
+    assert.deepEqual(explain.deliveredFiles, ['skills/demo.cjs']);
+    assert.deepEqual(explain.deliveredFilesSource, ['ac-ledger']);
+    assert.deepEqual(explain.testsObserved, [{ name: 'node --test tests/demo.test.cjs', status: 'passed' }]);
+    assert.equal(explain.acceptanceCriteria.verified.length, 1);
+    assert.equal(explain.acceptanceCriteria.unverified.length, 1);
+    assert.deepEqual(explain.manualTestSteps, [
+      'Run recorded test: node --test tests/demo.test.cjs (observed: passed)',
+      'Manually verify AC2: second criterion'
+    ]);
+
+    const explainText = spawnSync(process.execPath, [ORCH, 'report', 'explain', 'demo-spec', '--root', runRoot], { encoding: 'utf8' });
+    assert.equal(explainText.status, 0, explainText.stderr);
+    for (const value of [
+      'Status: pending',
+      'Delivered files (1)',
+      '- skills/demo.cjs',
+      'Source: ac-ledger',
+      'Verified (1)',
+      'Unverified (1)',
+      '- node --test tests/demo.test.cjs (passed)',
+      '1. Run recorded test: node --test tests/demo.test.cjs (observed: passed)',
+      '2. Manually verify AC2: second criterion'
+    ]) {
+      assert.ok(explainText.stdout.includes(value), `the explain table prints ${value}`);
+    }
+  } finally {
+    cleanup(runRoot);
+    cleanup(standupRoot);
   }
 });
 
