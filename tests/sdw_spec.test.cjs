@@ -500,6 +500,8 @@ Desc.
 Intent.
 ## Acceptance Criteria
 - AC1: The system shall guard archived specs against orchestrator runs.
+## New files
+- \`src/archived_gate_test.cjs\` — created by this work.
 ## Notes
 None.
 ## Out of Scope

@@ -1,5 +1,13 @@
 'use strict';
 
+const fs = require('fs');
+const path = require('path');
+const specGrilling = require('./spec_grilling.cjs');
+
+// Spec 00069 AC4: a plan that resolves no target file promises nothing, so it is
+// refused and the author is told the declaration the specification must add.
+const NO_TARGET_FILES_DECLARATION = 'name the implementation files in backticks, or declare the files this work creates under a `New files` note';
+
 // Spec 00030 AC3-AC6: acceptance-count bands plus the touchpoint escalation.
 const LOW_MAX_ACS = 4;
 const STANDARD_MAX_ACS = 10;
@@ -326,9 +334,17 @@ function buildSplitProposal(slug, acs, targetFiles) {
   }));
 }
 
-function inferFallbackTargetFiles(slug) {
-  if (slug.includes('orch') || slug.includes('implement')) {
-    return [
+/**
+ * Spec 00069 AC2: the known real-file buckets are the only remaining fallback,
+ * and they are named by the skill they describe. A bucket file the repository
+ * does not contain refuses the plan instead of dispatching a slice that cannot
+ * exist. `implement` is sdw-orch's former name (spec 00004).
+ */
+const FALLBACK_RULES = [
+  {
+    rule: 'orch',
+    matches: (slug) => slug.includes('sdw-orch') || slug.includes('implement'),
+    files: [
       'skills/sdw-orch/scripts/sdw_orch.cjs',
       'skills/sdw-orch/scripts/state_manager.cjs',
       'skills/sdw-orch/scripts/spec_derivation.cjs',
@@ -336,21 +352,27 @@ function inferFallbackTargetFiles(slug) {
       'skills/sdw-orch/scripts/dag_planner.cjs',
       'skills/sdw-orch/scripts/score_evaluator.cjs',
       'skills/sdw-code-review/scripts/sdw_code_review.cjs'
-    ];
-  }
-  if (slug.includes('config')) {
-    return ['skills/sdw-config/scripts/sdw_config.cjs'];
-  }
-  if (slug.includes('router')) {
-    return [
+    ]
+  },
+  {
+    rule: 'config',
+    matches: (slug) => slug.includes('sdw-config'),
+    files: ['skills/sdw-config/scripts/sdw_config.cjs']
+  },
+  {
+    rule: 'router',
+    matches: (slug) => slug.includes('sdw-router'),
+    files: [
       'skills/sdw-router/SKILL.md',
       'skills/sdw-router/references/routing_table.md',
       'skills/sdw-router/references/consumer_agents_setup.md',
       'skills/sdw-router/scripts/sdw_router.cjs'
-    ];
-  }
-  if (slug.includes('spec')) {
-    return [
+    ]
+  },
+  {
+    rule: 'spec',
+    matches: (slug) => slug.includes('sdw-spec'),
+    files: [
       'skills/sdw-spec/SKILL.md',
       'skills/sdw-spec/scripts/sdw_spec.cjs',
       'skills/sdw-spec/scripts/validate_spec.cjs',
@@ -360,9 +382,34 @@ function inferFallbackTargetFiles(slug) {
       'skills/sdw-spec/scripts/spec_sync.cjs',
       'skills/sdw-spec/references/spec_standard.md',
       'skills/sdw-spec/references/scm_contract.md'
-    ];
+    ]
   }
-  return [];
+];
+
+/** Resolves the fallback bucket for a slug, or null when no bucket matches. */
+function inferFallbackTargetFiles(slug) {
+  const value = String(slug || '');
+  const bucket = FALLBACK_RULES.find(candidate => candidate.matches(value));
+  if (!bucket) return null;
+  return { rule: bucket.rule, targetFiles: bucket.files.slice() };
+}
+
+/** Files from the resolved fallback bucket that the target repository lacks. */
+function findMissingFallbackFiles(fallback, targetRoot) {
+  return fallback.targetFiles.filter(file => !fs.existsSync(path.join(targetRoot, file)));
+}
+
+/**
+ * Spec 00069 AC3/AC4: the declared new files reach the plan through the Step 2
+ * blueprint; a caller that already resolved them passes them directly, and a
+ * caller that passes neither gets the specification's own declaration.
+ */
+function readDeclaredNewFiles(opts, specContent) {
+  if (opts.blueprint && Array.isArray(opts.blueprint.declaredNewFiles)) {
+    return opts.blueprint.declaredNewFiles.slice();
+  }
+  if (Array.isArray(opts.declaredNewFiles)) return opts.declaredNewFiles.slice();
+  return specGrilling.extractDeclaredNewFiles(specContent);
 }
 
 /** Low complexity: exactly one task carrying every criterion (AC7). */
@@ -516,14 +563,18 @@ function buildComplexPlan(context) {
 function generateDagPlan(specContent, options) {
   const opts = options || {};
   const content = String(specContent || '');
+  const targetRoot = path.resolve(opts.targetRoot || '.');
   const acs = uniqueAcceptanceCriteria(parseAcceptanceCriteria(content));
   const slugMatch = content.match(/slug:\s*([^\r\n]+)/);
   const slug = opts.slug || (slugMatch ? slugMatch[1].trim() : 'task');
 
-  // Ingest the technical blueprint from Step 2 (AC2).
+  // Ingest the technical blueprint from Step 2 (AC2). The declared new files are
+  // read even when the blueprint resolved nothing, so AC4 can tell an author who
+  // promised a file from one who promised none.
   let targetFiles = [];
   let architecturalApproach = null;
   let testPlan = null;
+  const declaredNewFiles = readDeclaredNewFiles(opts, content);
 
   if (opts.blueprint && Array.isArray(opts.blueprint.targetFiles) && opts.blueprint.targetFiles.length > 0) {
     targetFiles = opts.blueprint.targetFiles.slice();
@@ -532,9 +583,57 @@ function generateDagPlan(specContent, options) {
   } else if (Array.isArray(opts.targetFiles) && opts.targetFiles.length > 0) {
     targetFiles = opts.targetFiles.slice();
   } else {
-    // Missing blueprint in Step 2: log observable warning and fall back to heuristic file inference.
+    // Missing blueprint or pathless specification: fall back to the paths the
+    // specification names, then to a known real-file bucket used only when every
+    // file it names exists (spec 00069 AC1/AC2). A missing bucket file refuses
+    // the plan instead of planning it.
     console.warn('[Step 3: DAG Generation] Warning: Step 2 refinement blueprint missing or has no targetFiles; falling back to heuristic file inference.');
-    targetFiles = inferFallbackTargetFiles(slug);
+    const fallback = inferFallbackTargetFiles(slug);
+    const missingFiles = fallback ? findMissingFallbackFiles(fallback, targetRoot) : [];
+    if (missingFiles.length > 0) {
+      return {
+        refused: true,
+        reason: 'missing-target-file',
+        fallbackRule: fallback.rule,
+        missingFiles,
+        complexity: analyzeComplexity(content, { targetFiles: [] }),
+        taskCount: 0,
+        execMode: 'sequential',
+        levels: [],
+        fileDisjointness: [],
+        tasks: []
+      };
+    }
+    if (fallback) {
+      targetFiles = fallback.targetFiles.slice();
+    } else {
+      // Spec 00069 AC4: with no blueprint and no bucket, the specification's own
+      // named paths (or the files it declares new) are still its promise, so a
+      // path-naming specification is planned instead of being refused as pathless.
+      const namedFiles = specGrilling.extractTargetFiles(content);
+      targetFiles = namedFiles.length > 0 ? namedFiles : declaredNewFiles.slice();
+    }
+  }
+
+  // Spec 00069 AC4: a specification that names no path and declares no new file
+  // leaves the plan without a promise. Refusing names the specification and the
+  // declaration the author must add, instead of dispatching a slice that can
+  // touch no file. Registry status and sandbox mode never soften the refusal.
+  if (targetFiles.length === 0 && declaredNewFiles.length === 0) {
+    return {
+      refused: true,
+      reason: 'no-target-files',
+      specSlug: slug,
+      targetFiles: [],
+      declaredNewFiles: [],
+      declaration: NO_TARGET_FILES_DECLARATION,
+      complexity: analyzeComplexity(content, { targetFiles: [] }),
+      taskCount: 0,
+      execMode: 'sequential',
+      levels: [],
+      fileDisjointness: [],
+      tasks: []
+    };
   }
 
   const complexity = analyzeComplexity(content, { targetFiles });
@@ -571,6 +670,10 @@ function generateDagPlan(specContent, options) {
     }
   }
 
+  // Spec 00069 AC3/AC5: the resolved slice and the declared new files travel with
+  // the plan so `dag preview --json` can report both without re-deriving them.
+  plan.targetFiles = targetFiles.slice();
+  plan.declaredNewFiles = declaredNewFiles.slice();
   if (opts.orchestratorHint) plan.orchestratorHint = opts.orchestratorHint;
   return plan;
 }

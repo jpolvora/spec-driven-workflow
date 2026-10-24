@@ -34,6 +34,10 @@ Exercises diagnostic run mode.
 - AC1: The system shall record step transitions.
 - AC2: The system shall record failed tool executions.
 - AC3: The system shall keep delivery behavior unchanged.
+
+## New files
+
+\`src/diag_demo.cjs\` — created by this work.
 `;
 
 function makeProject() {

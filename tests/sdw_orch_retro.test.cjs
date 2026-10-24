@@ -55,6 +55,9 @@ Verify the automatic retrospective and the start guard.
 ## Acceptance Criteria
 - AC1: The system shall satisfy acceptance condition 1 for ${slug}.
 
+## New files
+- \`src/${slug}.cjs\` — created by this work.
+
 ## Notes
 Fixture notes.
 

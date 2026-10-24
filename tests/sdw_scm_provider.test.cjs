@@ -285,6 +285,8 @@ title: SCM None Test
 # SCM None Test
 ## Acceptance Criteria
 - AC1: The system shall pass.
+## New files
+- \`src/scm_none_test.cjs\` — created by this work.
 ## Notes
 None
 ## Out of Scope

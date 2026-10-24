@@ -79,6 +79,6 @@ Central repository index tracking specification lifecycle states, metadata, and 
 | 00066 | 00066-batch-pre-flight-must-wait-for-required- | Batch pre-flight must wait for required checks before merging | completed | local | 2026-10-23 | PASS | - |
 | 00067 | 00067-task-acceptance-links-test-evidence | Task acceptance must link test evidence to the acceptance criteria ledger | completed | local | 2026-10-24 | PASS | - |
 | 00068 | 00068-review-findings-must-be-adjudicated | Review findings must be adjudicated before a run completes | pending | local | 2026-10-24 | PASS | - |
-| 00069 | 00069-dag-planning-must-not-invent-target-files | DAG planning must not invent target files | pending | local | 2026-10-24 | PASS | - |
+| 00069 | 00069-dag-planning-must-not-invent-target-files | DAG planning must not invent target files | completed | local | 2026-10-24 | PASS | - |
 | 00070 | 00070-batch-merge-must-reconcile-delivery-prs | Batch merge must reconcile delivery and follow-up pull requests | pending | local | 2026-10-24 | PASS | - |
 | 00071 | 00071-superseded-runs-must-be-terminal | A superseded run must be recorded as terminal | pending | local | 2026-10-24 | PASS | - |

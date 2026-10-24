@@ -4,7 +4,7 @@ localSpecId: "00069"
 slug: 00069-dag-planning-must-not-invent-target-files
 title: "DAG planning must not invent target files"
 source: local
-status: draft
+status: implemented
 specDate: 2026-10-24
 priority: high
 value: "Removes the invented skills/<slug>/scripts/<slug>.cjs fence that forced host intervention in four batch specs and recurred as a recorded trap"

@@ -30,6 +30,8 @@ Exercises the CLI, run state, and git integration.
 - AC4: The system shall report cli status.
 - AC5: The system shall resume from state.
 - AC6: The system shall finish the git workflow.
+## New files
+\`src/dispatch_demo.cjs\` — created by this work.
 `;
 
 function setupRepo() {

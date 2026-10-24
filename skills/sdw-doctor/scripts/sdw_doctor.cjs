@@ -585,6 +585,8 @@ Minimal specification used by sdw-doctor to exercise the full sdw-orch pipeline 
 Prove that the installed skills can plan, implement, score, deliver, review, and prepare a PR without external services.
 ## Acceptance Criteria
 - AC1: The system shall complete the doctor sandbox smoke pipeline.
+## New files
+- \`.sdw/smoke/result.txt\` — written by the smoke implementation.
 ## Notes
 Generated automatically by sdw-doctor test; safe to delete.
 ## Out of Scope
