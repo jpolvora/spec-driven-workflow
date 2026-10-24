@@ -542,6 +542,152 @@ test('00067 AC3: replaying the same acceptance adds no duplicate test evidence',
   }
 });
 
+// Spec 00067 AC4: the negative-scenario cap is bounded to the criterion that
+// declares the scenario, and only an observed passing test lifts it.
+test('00067 AC4: the cap fires only for a criterion that declares a negative scenario without a passing test', () => {
+  const ledger = acLedger.buildLedger({
+    runId: 'run-00067-cap',
+    specSlug: 'ac-ledger-negative',
+    specContent: NEGATIVE_SPEC,
+    generatedAt: '2026-10-19T12:00:00.000Z'
+  });
+  // Every criterion is verified by a file entry; only AC2 declares a negative
+  // scenario, and no criterion carries test evidence yet.
+  for (const record of ledger.criteria) {
+    record.status = 'verified';
+    record.evidence = [{ type: 'file', path: `skills/${record.id}.cjs` }];
+  }
+
+  const fileOnly = acLedger.deriveScore(ledger);
+  assert.equal(fileOnly.uncappedScore, 10, 'every criterion is verified');
+  assert.equal(fileOnly.score, 8, 'AC2 declares the negative scenario');
+  assert.equal(fileOnly.capLimit, 8);
+  assert.deepEqual(fileOnly.capReasons, ['AC2 declares a negative scenario without an observed passing test.'],
+    'only the declaring criterion is named as the cap source');
+
+  // A skipped or a failed test is audit evidence, never proof: neither lifts the cap.
+  ledger.criteria[1].evidence.push({ type: 'test', name: 'invalid input is rejected', status: 'skipped' });
+  assert.equal(acLedger.deriveScore(ledger).score, 8, 'a skipped test never lifts the cap');
+  ledger.criteria[1].evidence[1] = { type: 'test', name: 'invalid input is rejected', status: 'failed' };
+  assert.equal(acLedger.deriveScore(ledger).score, 8, 'a failed test never lifts the cap');
+
+  // A passing test lifts the cap for its own criterion.
+  ledger.criteria[1].evidence[1] = { type: 'test', name: 'invalid input is rejected', status: 'passed' };
+  const lifted = acLedger.deriveScore(ledger);
+  assert.equal(lifted.score, 10);
+  assert.equal(lifted.capLimit, null);
+  assert.equal(lifted.capped, false);
+  assert.deepEqual(lifted.capReasons, []);
+
+  // A passing test recorded for another criterion never lifts AC2's cap.
+  ledger.criteria[1].evidence.pop();
+  ledger.criteria[0].evidence.push({ type: 'test', name: 'first criterion', status: 'passed' });
+  const elsewhere = acLedger.deriveScore(ledger);
+  assert.equal(elsewhere.score, 8, 'the cap follows the declaring criterion only');
+  assert.deepEqual(elsewhere.capReasons, ['AC2 declares a negative scenario without an observed passing test.']);
+
+  // A criterion that declares no negative scenario is never a cap source, even
+  // when it carries no test evidence at all.
+  const neutral = acLedger.deriveScore({
+    criteria: [{
+      id: 'AC1',
+      text: 'The system shall record the first criterion.',
+      status: 'verified',
+      evidence: [{ type: 'file', path: 'skills/demo.cjs' }]
+    }]
+  });
+  assert.equal(neutral.capLimit, null, 'no declared negative scenario means no cap');
+  assert.equal(neutral.score, 10);
+});
+
+// Spec 00067 AC4 & AC5: the tests an accepted task recorded reach the ledger, so
+// a passing one lifts the cap Step 5 derives while a skipped one does not.
+test('00067 AC4 & AC5: an accepted passing test lifts the Step 5 negative-scenario cap', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-ac-ledger-00067-cap-'));
+  try {
+    fs.mkdirSync(path.join(root, '.sdw', 'specs'), { recursive: true });
+    fs.writeFileSync(path.join(root, NEGATIVE_SPEC_REL), NEGATIVE_SPEC, 'utf8');
+    const state = seedScoringRun(root, {
+      runId: 'run-00067-cap-lift',
+      specRel: NEGATIVE_SPEC_REL,
+      slug: 'ac-ledger-negative'
+    });
+    const init = acLedger.initLedger({
+      root,
+      artifactsDir: state.artifactsDir,
+      runId: state.runId,
+      specSlug: state.specSlug,
+      specContent: NEGATIVE_SPEC,
+      generatedAt: '2026-10-19T12:00:00.000Z'
+    });
+
+    for (const id of ['AC1', 'AC2', 'AC3']) {
+      assert.equal(link(root, state.runId, ['--ac', id, '--type', 'file', '--path', `skills/${id}.cjs`]).status, 0,
+        `${id} is verified by its file evidence`);
+    }
+    const verdictPath = path.join(root, 'verdict.json');
+    fs.writeFileSync(verdictPath, JSON.stringify({
+      score: 10,
+      verdicts: ['AC1', 'AC2', 'AC3'].map(id => ({ id, verdict: 'verified', evidence: `skills/${id}.cjs:1` }))
+    }), 'utf8');
+
+    assert.equal(sdwOrch.cmdScoreSubmit({ root, runId: state.runId, verdictPath }), 0,
+      'the capped score still meets the default threshold');
+    let submitted = stateManager.loadRunState(root, state.runId);
+    assert.equal(submitted.score, 8, 'AC4: AC2 declares a negative scenario without a passing test');
+    assert.deepEqual(submitted.steps[5].output.scoreCap, {
+      limit: 8,
+      applied: true,
+      uncappedScore: 10,
+      reasons: ['AC2 declares a negative scenario without an observed passing test.']
+    });
+
+    // The accepted evidence recorded a skipped run of the negative case: it is
+    // audit evidence, so the cap stays even though the entry is now in the ledger.
+    const accept = tests => captureConsole(() => {
+      const accepted = stateManager.loadRunState(root, state.runId);
+      const linked = sdwOrch.linkAcceptedTaskEvidence({
+        targetRoot: root,
+        state: accepted,
+        taskId: 'task-1',
+        acIds: ['AC2'],
+        files: [],
+        tests,
+        commitSha: null
+      });
+      stateManager.saveRunState(root, accepted);
+      return linked;
+    });
+
+    assert.equal(accept([{ name: 'invalid input is rejected', status: 'skipped' }]).code, 1,
+      'the skipped test entry is linked as audit evidence');
+    assert.equal(sdwOrch.cmdScoreSubmit({ root, runId: state.runId, verdictPath }), 0);
+    submitted = stateManager.loadRunState(root, state.runId);
+    assert.equal(submitted.score, 8, 'AC4: a skipped test never lifts the cap');
+    let record = readLedgerFile(init.ledgerPath).criteria.find(criterion => criterion.id === 'AC2');
+    assert.deepEqual(record.evidence.filter(entry => entry.type === 'test'), [
+      { type: 'test', name: 'invalid input is rejected', status: 'skipped', taskId: 'task-1' }
+    ]);
+
+    // Re-accepting the same test with an observed passing status updates the one
+    // entry and lifts the cap.
+    assert.equal(accept([{ name: 'invalid input is rejected', status: 'passed' }]).code, 1,
+      'the changed status updates the stored entry');
+    assert.equal(sdwOrch.cmdScoreSubmit({ root, runId: state.runId, verdictPath }), 0);
+    submitted = stateManager.loadRunState(root, state.runId);
+    assert.equal(submitted.score, 10, 'AC5: the accepted passing test lifts the cap');
+    assert.equal(submitted.steps[5].output.scoreCap, null, 'no cap is reported once a passing test exists');
+    record = readLedgerFile(init.ledgerPath).criteria.find(criterion => criterion.id === 'AC2');
+    assert.deepEqual(record.evidence.filter(entry => entry.type === 'test'), [
+      { type: 'test', name: 'invalid input is rejected', status: 'passed', taskId: 'task-1' }
+    ], 'AC3: the replay keeps one entry per test name');
+    assert.equal(acLedger.deriveScore(readLedgerFile(init.ledgerPath)).score, submitted.score,
+      'the reported score equals the ledger-derived score');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('AC7 & AC8: the score counts only evidenced records and rounds verified/total*10', () => {
   const ledger = acLedger.buildLedger({
     runId: 'run-score-demo',
