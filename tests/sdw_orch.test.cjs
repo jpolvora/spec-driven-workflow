@@ -14,6 +14,7 @@ const dagPlanner = require('../skills/sdw-orch/scripts/dag_planner.cjs');
 const scoreEvaluator = require('../skills/sdw-orch/scripts/score_evaluator.cjs');
 const reviewRunner = require('../skills/sdw-orch/scripts/review_runner.cjs');
 const deliveryReport = require('../skills/sdw-orch/scripts/delivery_report.cjs');
+const reviewFindings = require('../skills/sdw-orch/scripts/review_findings.cjs');
 const modelCapabilities = require('../skills/sdw-orch/scripts/model_capabilities.cjs');
 const sdwOrch = require('../skills/sdw-orch/scripts/sdw_orch.cjs');
 
@@ -1299,6 +1300,56 @@ test('00054 AC16: an unwritable report path records a warning and delivery still
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
+});
+
+test('00068 AC6 & AC7: the delivery report renders dispositions and counts only undisposed findings as open', (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-00068-report-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  const findings = [
+    {
+      id: 'CR-001', severity: 'warning', path: 'skills/a.cjs', message: 'guard the branch',
+      status: 'open', disposition: 'fixed', at: '2026-10-24T10:00:00.000Z', commit: 'abc1234def', reason: null
+    },
+    {
+      id: 'CR-002', severity: 'suggestion', path: 'skills/b.cjs', message: 'split the diff',
+      status: 'open', disposition: 'waived', at: '2026-10-24T10:01:00.000Z', commit: null,
+      reason: 'accepted: scheduled with spec 00069'
+    },
+    {
+      id: 'CR-003', severity: 'suggestion', path: 'skills/c.cjs', message: 'rename the helper',
+      status: 'open', disposition: null, at: null, commit: null, reason: null
+    }
+  ];
+  const state = {
+    runId: 'run-00068-report',
+    specSlug: '00068-review-findings',
+    status: 'completed',
+    steps: { 7: { name: 'code_review', status: 'completed', output: { passed: true, blockingCount: 0, findings } } }
+  };
+  const markdown = deliveryReport.buildDeliveryReport({ targetRoot: tmpDir, state, minScore: 8, now: '2026-10-24T11:00:00.000Z' });
+
+  assert.match(markdown, /- Dispositions: 1 fixed, 1 waived, 1 open/, 'AC6: every finding carries status open, but only the undisposed one counts as open');
+  assert.match(markdown, /\| CR-001 \| warning \| skills\/a\.cjs \| fixed in abc1234def \|/, 'AC6: a fixed finding renders its sha');
+  assert.match(markdown, /\| CR-002 \| suggestion \| skills\/b\.cjs \| waived: accepted: scheduled with spec 00069 \|/, 'AC6: a waived finding renders its rationale');
+  assert.match(markdown, /\| CR-003 \| suggestion \| skills\/c\.cjs \| open \|/, 'AC6: an undisposed finding renders open');
+
+  // A resume re-runs Step 7: the reviewer raises the same findings again without
+  // dispositions and the ledger restores the ones recorded before the pause.
+  const reportedAgain = findings.map(({ disposition, at, commit, reason, ...rest }) => rest);
+  const resumedState = {
+    ...state,
+    steps: {
+      ...state.steps,
+      7: {
+        ...state.steps[7],
+        output: { ...state.steps[7].output, findings: reviewFindings.normalizeFindings(reportedAgain, findings) }
+      }
+    }
+  };
+  const resumed = deliveryReport.buildDeliveryReport({ targetRoot: tmpDir, state: resumedState, minScore: 8, now: '2026-10-24T11:05:00.000Z' });
+  assert.match(resumed, /- Dispositions: 1 fixed, 1 waived, 1 open/, 'AC6: the disposition survives a resume');
+  assert.match(resumed, /\| CR-001 \| warning \| skills\/a\.cjs \| fixed in abc1234def \|/, 'AC2: the fixing sha survives a resume');
+  assert.match(resumed, /\| CR-002 \| suggestion \| skills\/b\.cjs \| waived: accepted: scheduled with spec 00069 \|/, 'AC3: the waiver rationale survives a resume');
 });
 
 test('00054 AC17: a resumed run rewrites the report from current state instead of appending', () => {

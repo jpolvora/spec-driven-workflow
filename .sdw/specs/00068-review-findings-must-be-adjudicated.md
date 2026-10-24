@@ -4,7 +4,7 @@ localSpecId: "00068"
 slug: 00068-review-findings-must-be-adjudicated
 title: "Review findings must be adjudicated before a run completes"
 source: local
-status: draft
+status: implemented
 specDate: 2026-10-24
 priority: high
 value: "Stops 12 Step 7 suggestions from every batch staying open forever, so a completed run means every finding was fixed or explicitly waived"

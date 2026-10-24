@@ -124,7 +124,7 @@ Signals are read from the state object, never invented from prose.
 | `abandonedDispatches` | `steps.4.dispatch.abandonments[*]` | Task, reason, time, and locator. |
 | `scoreIterations` | `steps.5.output` | Score, minimum score, pass flag, judge score, and iteration. |
 | `gateRepairs` | `steps.4.gates.*`, `steps.4.output.gates.*` | Gates whose recorded status is not `passed` or whose exit code is not `0`. |
-| `reviewFindings` | `steps.7.output.findings[*]` | Counts by severity, open findings, and locators. |
+| `reviewFindings` | `steps.7.output.findings[*]` | Counts by severity, undisposed (open) findings only, and locators with each finding's disposition. |
 | `unresolvedThreads` | `steps.8.output.reviewConvergence` | Active, resolved, and pending threads with locators. |
 | `missingArtifacts` | declared artifact paths | Present only when a declared path is absent. |
 | `leftover_run` | sibling `*.state.json` files with the same `specSlug` | Sibling runs that never reached `completed` or `failed`, with run id, status, and age. |

@@ -4,6 +4,11 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
+// Spec 00068 AC1: the disposition vocabulary owned by review_findings.cjs. It is
+// repeated here because state_manager requires this module and review_findings
+// requires state_manager, so requiring the ledger would close that cycle.
+const REVIEW_DISPOSITIONS = ['fixed', 'waived'];
+
 const REPORT_SUFFIX = '-report.md';
 const REPORT_DIR = '.sdw/reports';
 const IN_PROGRESS_REPORT_NAME = 'report.md';
@@ -941,6 +946,33 @@ function countFindings(findings) {
   return counts;
 }
 
+// Spec 00068 AC6: the disposition is part of the finding record, so the report
+// renders one row per finding and counts only undisposed findings as open. The
+// reviewer's original `status` is never the disposition: a finding it left
+// `open` is closed once it is fixed or waived.
+function summarizeFindingDispositions(findings) {
+  const entries = (Array.isArray(findings) ? findings : []).map((finding) => ({
+    id: String((finding && finding.id) || 'finding'),
+    severity: String((finding && finding.severity) || 'info').toLowerCase(),
+    path: String((finding && (finding.path || finding.file)) || 'unknown path'),
+    disposition: finding && REVIEW_DISPOSITIONS.includes(finding.disposition) ? finding.disposition : null,
+    commit: finding && finding.commit ? String(finding.commit) : null,
+    reason: finding && finding.reason ? String(finding.reason) : null
+  }));
+  return {
+    entries,
+    fixedCount: entries.filter((entry) => entry.disposition === 'fixed').length,
+    waivedCount: entries.filter((entry) => entry.disposition === 'waived').length,
+    openCount: entries.filter((entry) => entry.disposition === null).length
+  };
+}
+
+function renderFindingDisposition(entry) {
+  if (entry.disposition === 'fixed') return `fixed in ${entry.commit || 'unknown sha'}`;
+  if (entry.disposition === 'waived') return `waived: ${entry.reason || 'no rationale'}`;
+  return 'open';
+}
+
 function summarizeReview(state) {
   const step7 = (state.steps && state.steps[7]) || {};
   const report = step7.output || {};
@@ -972,8 +1004,19 @@ function renderCodeReviewSection(context) {
   if (report.blockingCount !== undefined) {
     markdown += `- Blocking findings: ${report.blockingCount}\n`;
   }
+  // Spec 00068 AC6: an undisposed finding is the only thing that stays open.
+  const dispositions = summarizeFindingDispositions(report.findings);
+  if (dispositions.entries.length > 0) {
+    markdown += `- Dispositions: ${dispositions.fixedCount} fixed, ${dispositions.waivedCount} waived, ${dispositions.openCount} open\n`;
+  }
   if (step7.artifact) {
     markdown += `- Report: \`${escapeCell(step7.artifact)}\`\n`;
+  }
+  if (dispositions.entries.length > 0) {
+    markdown += '\n| Finding | Severity | Path | Disposition |\n|---|---|---|---|\n';
+    for (const entry of dispositions.entries) {
+      markdown += `| ${escapeCell(entry.id)} | ${escapeCell(entry.severity)} | ${escapeCell(entry.path)} | ${escapeCell(renderFindingDisposition(entry))} |\n`;
+    }
   }
   return markdown.trimEnd();
 }
