@@ -116,4 +116,4 @@ Orchestrates spec execution from input requirement to delivery commit, automated
 ## References
 
 - Architecture, batch protocol, and step artifacts persistence: [`references/orchestrator_protocol.md`](references/orchestrator_protocol.md)
-
+- Reporting commands, data sources, fields, and `unknown` semantics: [`references/reporting.md`](references/reporting.md)

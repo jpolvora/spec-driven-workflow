@@ -21,6 +21,7 @@ const modelCapabilities = require('./model_capabilities.cjs');
 const diagnostics = require('./diagnostics.cjs');
 const telemetry = require('./telemetry.cjs');
 const monitor = require('./monitor.cjs');
+const reporting = require('./reporting.cjs');
 const memory = require('../../sdw-memory/scripts/sdw_memory.cjs');
 
 // Spec 00043: short, consistent step-number progress headers. Additive only:
@@ -428,6 +429,11 @@ function parseArgs(args) {
     refreshModels: false,
     ledgerAction: null,
     reportFormat: null,
+    // Spec 00023 AC1/AC4/AC5: `report activity --date`, `report standup
+    // --hours`, and `report explain <spec>`.
+    reportDate: null,
+    reportHours: null,
+    reportSpec: null,
     acIds: [],
     evidenceType: null,
     evidenceFilePath: null,
@@ -481,6 +487,11 @@ function parseArgs(args) {
     // Spec 00017 AC11: `ledger report` renders Markdown or JSON.
     else if (arg === '--format') result.reportFormat = args[++i];
     else if (arg.startsWith('--format=')) result.reportFormat = arg.slice(9);
+    // Spec 00023 AC1/AC4: reporting window and delivery day.
+    else if (arg === '--date') result.reportDate = args[++i];
+    else if (arg.startsWith('--date=')) result.reportDate = arg.slice(7);
+    else if (arg === '--hours') result.reportHours = Number(args[++i]);
+    else if (arg.startsWith('--hours=')) result.reportHours = Number(arg.slice(8));
     // Spec 00017 AC3: `--ac` takes one or more criterion ids until the next flag.
     else if (arg === '--ac') {
       while (i + 1 < args.length && !args[i + 1].startsWith('-')) result.acIds.push(args[++i]);
@@ -528,6 +539,10 @@ function parseArgs(args) {
     'task abandon': 'task-abandon',
     'score submit': 'score-submit',
     'report re-render': 'report-re-render',
+    // Spec 00023 AC1/AC4/AC5: read-only delivery reports.
+    'report activity': 'report-activity',
+    'report standup': 'report-standup',
+    'report explain': 'report-explain',
     'dag preview': 'dag-preview',
     'ledger link': 'ledger',
     'ledger report': 'ledger',
@@ -549,6 +564,15 @@ function parseArgs(args) {
     } else if (combinedMatch === 'telemetry-report') {
       // Spec 00021 AC13: `telemetry report` takes no positional path or task id.
       result.specPaths = [];
+    } else if (combinedMatch === 'report-activity' || combinedMatch === 'report-standup') {
+      // Spec 00023 AC1/AC4: reporting takes flags only, never a positional task.
+      result.specPaths = [];
+      result.taskId = null;
+    } else if (combinedMatch === 'report-explain') {
+      // Spec 00023 AC5: the positional argument is the specification slug.
+      result.specPaths = [];
+      result.taskId = null;
+      result.reportSpec = rest[0] || null;
     } else if (!result.taskId && rest[0]) {
       result.taskId = rest[0];
     }
@@ -5998,6 +6022,70 @@ function cmdTelemetryReport(options) {
   }
 }
 
+// Spec 00023 AC1-AC3: `report activity --date` is a read-only timesheet
+// projection. It never loads or initializes a ledger and never touches state.
+function cmdReportActivity(options) {
+  const targetRoot = options.root ? path.resolve(options.root) : process.cwd();
+  try {
+    const report = reporting.collectActivity({
+      targetRoot,
+      date: options.reportDate,
+      now: options.now
+    });
+    for (const warning of report.warnings) {
+      console.error(`[sdw-orch report activity] Warning: ${warning.file}: ${warning.error}`);
+    }
+    console.log(options.json ? JSON.stringify(report, null, 2) : reporting.renderActivity(report));
+    return 0;
+  } catch (err) {
+    console.error(`[sdw-orch report activity] Error: ${err.message}`);
+    return 1;
+  }
+}
+
+// Spec 00023 AC4: `report standup --hours` is the same read-only projection over
+// the run state, telemetry clocks, and the specification index.
+function cmdReportStandup(options) {
+  const targetRoot = options.root ? path.resolve(options.root) : process.cwd();
+  try {
+    const report = reporting.collectStandup({
+      targetRoot,
+      hours: options.reportHours,
+      now: options.now
+    });
+    for (const warning of report.warnings) {
+      console.error(`[sdw-orch report standup] Warning: ${warning.file}: ${warning.error}`);
+    }
+    console.log(options.json ? JSON.stringify(report, null, 2) : reporting.renderStandup(report));
+    return 0;
+  } catch (err) {
+    console.error(`[sdw-orch report standup] Error: ${err.message}`);
+    return 1;
+  }
+}
+
+// Spec 00023 AC5: `report explain <spec>` projects status, delivered files,
+// verification, and manual test steps from the registry, run state, ledger,
+// telemetry, and delivery commit. It is read-only like the other reports.
+function cmdReportExplain(options) {
+  const targetRoot = options.root ? path.resolve(options.root) : process.cwd();
+  try {
+    const report = reporting.collectExplain({
+      targetRoot,
+      spec: options.reportSpec,
+      now: options.now
+    });
+    for (const warning of report.warnings) {
+      console.error(`[sdw-orch report explain] Warning: ${warning.file}: ${warning.error}`);
+    }
+    console.log(options.json ? JSON.stringify(report, null, 2) : reporting.renderExplain(report));
+    return 0;
+  } catch (err) {
+    console.error(`[sdw-orch report explain] Error: ${err.message}`);
+    return 1;
+  }
+}
+
 function cmdStatus(options) {
   const targetRoot = options.root ? path.resolve(options.root) : process.cwd();
   let state = null;
@@ -6508,6 +6596,9 @@ Subcommands:
   task abandon           Return the dispatched DAG task to the queue
   score submit           Submit a judge verdict for Step 5 conformance scoring (per-criterion verdicts: ${scoreEvaluator.VERDICT_VALUES.join(' | ')})
   report re-render       Refresh the delivery report and the in-progress report from run state (never commits)
+  report activity        Timesheet entries for a delivery day (--date YYYY-MM-DD, --json)
+  report standup         Delivered, in-progress, and next items (--hours, default: 36, --json)
+  report explain <spec>  Status, delivered files, verification, and manual test steps (--json)
   ledger link            Link typed evidence to one or more acceptance criteria (--run-id, --ac, --type)
   ledger report          Print the AC status and evidence summary (--run-id, --format md|json)
   ledger audit           List acceptance criteria without evidence (--run-id, --format md|json; exit 1 when any remain)
@@ -6539,6 +6630,8 @@ Options:
   --sha <sha>            Commit SHA for --type commit
   --id <id>              Review or sabotage id for --type review | sabotage
   --format <format>      Report format for ledger report and ledger audit: md | json (default: md)
+  --date <YYYY-MM-DD>    Delivery day for report activity
+  --hours <n>            Lookback window for report standup (default: 36)
   --mode <mode>          Implementation mode (subagent | command)
   --dry-run              Print the execution plan and validate the spec; execute nothing
   --diagnostic           Record step transitions and tool failures for run, resume
@@ -6628,6 +6721,15 @@ function main() {
       case 'report-re-render':
         code = cmdReportReRender(options);
         break;
+      case 'report-activity':
+        code = cmdReportActivity(options);
+        break;
+      case 'report-standup':
+        code = cmdReportStandup(options);
+        break;
+      case 'report-explain':
+        code = cmdReportExplain(options);
+        break;
       case 'ledger':
         code = cmdLedger(options);
         break;
@@ -6664,8 +6766,14 @@ function main() {
   try {
     // Spec 00030 AC19: `dag preview` is pure; it never refreshes a sandbox report.
     // Spec 00021 AC4/AC13: `monitor` and `telemetry report` are read-only, so
-    // they never refresh one either.
-    if (options.subcommand !== 'dag-preview' && options.subcommand !== 'monitor' && options.subcommand !== 'telemetry-report') {
+    // they never refresh one either. Spec 00023 AC6: every reporting command is
+    // strictly read-only, so it must not write a sandbox report as a side effect.
+    if (options.subcommand !== 'dag-preview'
+      && options.subcommand !== 'monitor'
+      && options.subcommand !== 'telemetry-report'
+      && options.subcommand !== 'report-activity'
+      && options.subcommand !== 'report-standup'
+      && options.subcommand !== 'report-explain') {
       const refreshRoot = options._effectiveRoot || (options.root ? path.resolve(options.root) : process.cwd());
       sandbox.refreshReportForRoot(refreshRoot);
     }
@@ -6687,6 +6795,9 @@ module.exports = {
   cmdStatus,
   cmdMonitor,
   cmdTelemetryReport,
+  cmdReportActivity,
+  cmdReportStandup,
+  cmdReportExplain,
   cmdDagPreview,
   cmdTaskNext,
   cmdTaskAbandon,
