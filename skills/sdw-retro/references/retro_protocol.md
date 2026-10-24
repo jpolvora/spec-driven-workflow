@@ -127,7 +127,8 @@ Signals are read from the state object, never invented from prose.
 | `reviewFindings` | `steps.7.output.findings[*]` | Counts by severity, undisposed (open) findings only, and locators with each finding's disposition. |
 | `unresolvedThreads` | `steps.8.output.reviewConvergence` | Active, resolved, and pending threads with locators. |
 | `missingArtifacts` | declared artifact paths | Present only when a declared path is absent. |
-| `leftover_run` | sibling `*.state.json` files with the same `specSlug` | Sibling runs that never reached `completed` or `failed`, with run id, status, and age. |
+| `leftover_run` | sibling `*.state.json` files with the same `specSlug` | Sibling runs that never reached `completed`, `failed`, or `superseded`, with run id, status, and age. |
+| `superseded_runs` | sibling `*.state.json` files with the same `specSlug` | Sibling runs replaced by another run, with the run id and the replacing run id. A superseded run is terminal, so it is never a `leftover_run`. |
 | `repeated_run_invocation` | configured transcripts | Two `sdw-orch ... run` invocations for the same `--spec` in one transcript with no `resume` between them. Adjacent lines carrying the same command excerpt count once. Cites the file and both line numbers; never copies line bodies. |
 | `transcript_unreadable` | named transcripts | A named transcript path that does not exist, cannot be read, or is not decodable text, with `not-found`, `read-error`, or `not-text`. The command still exits `0`. |
 

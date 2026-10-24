@@ -25,7 +25,7 @@ every fix its routes allow; a code change still needs a specification.
 - Unconfigured host transcripts, session logs, and agent chat logs stay excluded from the analyzer and are reported as excluded inputs.
 - Configured transcripts are scanned line by line; the report cites path and line numbers only and never copies transcript line bodies.
 - Missing declared artifacts are recorded as absences; the report never synthesizes their content.
-- The report carries the `leftover_run`, `repeated_run_invocation`, and `transcript_unreadable` signals.
+- The report carries the `leftover_run`, `superseded_runs`, `repeated_run_invocation`, and `transcript_unreadable` signals.
 - The run writes `<runId>.retro.md` and `<runId>.retro.json` inside the run artifact directory.
 - A report with signals and no candidates is valid for a smooth delivery.
 - `scripts/validate_candidates.cjs` accepts only complete candidates ordered `critical` -> `low`; rejections carry a stable reason code.
@@ -36,6 +36,7 @@ every fix its routes allow; a code change still needs a specification.
 ## Signals
 
 - `leftover_run`: a sibling run state of the same specification never reached a terminal status. Names the run id, status, and age.
+- `superseded_runs`: a sibling run state of the same specification carries `status: superseded`. Names the run id and the replacing run; it is terminal, so it is never a `leftover_run`.
 - `repeated_run_invocation`: one transcript contains more than one `sdw-orch ... run` invocation for the same `--spec` with no `resume` between them. Names the file and line numbers.
 - `transcript_unreadable`: a named transcript path does not exist, cannot be read, or is not decodable text. Names the file and reason; the command still exits `0`.
 

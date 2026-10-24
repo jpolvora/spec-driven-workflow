@@ -704,6 +704,35 @@ test('00071 AC2: a superseded sibling run is terminal and never reported as left
   assert.deepEqual(report.signals.leftover_run, [], 'AC2: a deliberately replaced run is not an abandoned thread');
 });
 
+test('00071 AC4 & AC5: a superseded sibling run is named as superseded, never leftover_run', (t) => {
+  const root = makeProject(t);
+  const selected = makeState({ runId: 'run-4400-completed', slug: '00440-superseded-summary' });
+  const superseded = makeState({
+    runId: 'run-4410-superseded',
+    slug: '00440-superseded-summary',
+    status: 'superseded',
+    updatedAt: '2020-01-01T00:00:00.000Z'
+  });
+  superseded.supersededBy = selected.runId;
+  superseded.supersededAt = '2026-01-01T00:00:00.000Z';
+  writeState(root, selected);
+  writeState(root, superseded);
+  writeDefaultArtifacts(root, selected);
+
+  const result = runRetroCli(root, ['run', '--run-id', selected.runId, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.deepEqual(report.signals.leftover_run, [], 'AC4: a superseded run is never reported as leftover_run');
+  assert.deepEqual(report.signals.superseded_runs, [
+    { runId: superseded.runId, supersededBy: selected.runId }
+  ], 'AC4: the summary names the superseded run and the run that replaced it');
+
+  const markdown = fs.readFileSync(path.join(root, report.outputs.markdown), 'utf8');
+  assert.match(markdown, /### Superseded Runs/);
+  assert.ok(markdown.includes(`\`${superseded.runId}\``), 'AC4: the markdown summary names the superseded run');
+  assert.ok(markdown.includes(`superseded by \`${selected.runId}\``), 'AC4: it names the replacing run');
+});
+
 function writeRetroConfig(root, retro) {
   fs.writeFileSync(
     path.join(root, '.sdw', 'config.json'),

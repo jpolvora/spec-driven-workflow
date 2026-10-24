@@ -167,15 +167,19 @@ function selectRun(root, wantedRunId) {
   return selectRunEntry(readStateFiles(root), wantedRunId);
 }
 
-// Spec 00045 AC5: sibling run states of the same specification that never
-// reached a terminal status. Only files already read for run selection are used.
+// Spec 00045 AC5: sibling run states of the same specification. Only files
+// already read for run selection are used.
+function collectSiblingRuns(entries, selected) {
+  const specSlug = selected.state.specSlug;
+  if (!specSlug) return [];
+  return entries.filter((entry) => entry.file !== selected.file && entry.state.specSlug === specSlug);
+}
+
+// Spec 00045 AC5: siblings that never reached a terminal status.
 // Spec 00071 AC2: `superseded` is terminal — a replaced run is not an abandoned
 // thread, so it is never reported as a leftover.
 function collectLeftoverRuns(entries, selected) {
-  const specSlug = selected.state.specSlug;
-  if (!specSlug) return [];
-  return entries
-    .filter((entry) => entry.file !== selected.file && entry.state.specSlug === specSlug)
+  return collectSiblingRuns(entries, selected)
     .filter((entry) => entry.state.status !== 'completed'
       && entry.state.status !== 'failed'
       && entry.state.status !== 'superseded')
@@ -189,6 +193,17 @@ function collectLeftoverRuns(entries, selected) {
       };
     })
     .sort((a, b) => (b.ageMs || 0) - (a.ageMs || 0));
+}
+
+// Spec 00071 AC4: the sibling summary names a replaced run as superseded along
+// with the run that replaced it; it never appears in leftover_run.
+function collectSupersededRuns(entries, selected) {
+  return collectSiblingRuns(entries, selected)
+    .filter((entry) => entry.state.status === 'superseded')
+    .map((entry) => ({
+      runId: entry.state.runId || entry.name.replace(/\.state\.json$/i, ''),
+      supersededBy: entry.state.supersededBy || null
+    }));
 }
 
 function formatAge(ageMs) {
@@ -486,7 +501,7 @@ function durationBetween(start, end) {
   return Math.max(0, to - from);
 }
 
-function collectSignals(state, inspection, leftoverRuns = [], transcripts = {}) {
+function collectSignals(state, inspection, leftoverRuns = [], transcripts = {}, supersededRuns = []) {
   const steps = state.steps && typeof state.steps === 'object' ? state.steps : {};
   const stepKeys = Object.keys(steps).sort((a, b) => toNumber(a) - toNumber(b));
   const step4 = steps['4'] && typeof steps['4'] === 'object' ? steps['4'] : {};
@@ -632,6 +647,7 @@ function collectSignals(state, inspection, leftoverRuns = [], transcripts = {}) 
     unresolvedThreads,
     missingArtifacts: inspection.missingArtifacts,
     leftover_run: leftoverRuns,
+    superseded_runs: supersededRuns,
     repeated_run_invocation: toArray(transcripts.repeated),
     transcript_unreadable: toArray(transcripts.unreadable)
   };
@@ -987,6 +1003,16 @@ function renderMarkdown(report) {
   }
   lines.push('');
 
+  lines.push('### Superseded Runs', '');
+  if (toArray(signals.superseded_runs).length === 0) {
+    lines.push('No sibling run was superseded for this specification.');
+  } else {
+    for (const item of signals.superseded_runs) {
+      lines.push(`- \`${item.runId}\`: superseded by \`${item.supersededBy || 'unknown'}\`; terminal, so it is never a leftover.`);
+    }
+  }
+  lines.push('');
+
   lines.push('## Candidates', '');
   if (report.candidates.length === 0) {
     lines.push('No candidates recorded. A report with signals and no candidates is valid.');
@@ -1088,7 +1114,13 @@ function runRetro(options = {}) {
   for (const transcript of transcripts.inputs) {
     if (!inspection.inputs.includes(transcript.path)) inspection.inputs.push(transcript.path);
   }
-  const signals = collectSignals(state, inspection, collectLeftoverRuns(entries, selected), transcripts);
+  const signals = collectSignals(
+    state,
+    inspection,
+    collectLeftoverRuns(entries, selected),
+    transcripts,
+    collectSupersededRuns(entries, selected)
+  );
 
   // Spec 00057 AC26, AC27: candidates handed in with --candidates are validated,
   // then every fix the routes allow is applied before the report is written.
