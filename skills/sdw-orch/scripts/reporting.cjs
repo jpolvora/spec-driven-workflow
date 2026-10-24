@@ -1099,6 +1099,33 @@ function lifecycleSteps(state) {
  * with its reason, never an inference. Like the other reporting commands this
  * reader never initializes or writes anything.
  */
+// AC5: the explain report includes what the feature does and what it excludes,
+// both read from the specification body. A missing or empty section is `unknown`
+// with its reason, never an empty string that looks authored.
+function extractSpecSection(content, heading) {
+  if (!content) return null;
+  const normalized = String(content).replace(/\r\n?/g, '\n');
+  const pattern = new RegExp(`(?:^|\\n)## ${heading}[ \\t]*\\r?\\n([\\s\\S]*?)(?=\\n## |$)`);
+  const match = normalized.match(pattern);
+  if (!match) return null;
+  const body = match[1].trim();
+  return body || null;
+}
+
+function extractSectionTableRows(content, heading) {
+  const section = extractSpecSection(content, heading);
+  if (!section) return null;
+  const rows = section
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => line.startsWith('|'))
+    .map(line => line.split('|').slice(1, -1).map(cell => cell.trim()))
+    .filter(cells => cells.length >= 2 && !cells.every(cell => /^-+$/.test(cell)))
+    .filter(cells => !/^(feature|item)$/i.test(cells[0]));
+  if (rows.length === 0) return null;
+  return rows.map(cells => ({ item: cells[0], reason: cells[1] }));
+}
+
 function collectExplain(options = {}) {
   const targetRoot = options.targetRoot ? path.resolve(options.targetRoot) : process.cwd();
   const specSlug = String(options.spec === undefined || options.spec === null ? '' : options.spec).trim();
@@ -1161,6 +1188,13 @@ function collectExplain(options = {}) {
   const observed = collectTestsObserved(ledgerInfo);
   const manual = buildManualTestSteps(ledgerInfo, observed.tests === 'unknown' ? [] : observed.tests);
   const steps = lifecycleSteps(state);
+  const description = extractSpecSection(content, 'Description');
+  const descriptionUnknownReason = description ? null : 'the specification declares no Description section';
+  const outOfScopeRows = extractSectionTableRows(content, 'Out of Scope');
+  const outOfScope = outOfScopeRows || 'unknown';
+  const outOfScopeUnknownReason = outOfScopeRows
+    ? null
+    : 'the specification declares no Out of Scope table';
   // AC9: a run whose state records no update time is `unknown`; a pending
   // specification with no run at all has no update time to report (null).
   const updatedAt = state && state.updatedAt ? String(state.updatedAt) : null;
@@ -1172,6 +1206,8 @@ function collectExplain(options = {}) {
   };
   noteUnknown('title', titleUnknownReason);
   noteUnknown('status', statusUnknownReason);
+  noteUnknown('description', descriptionUnknownReason);
+  noteUnknown('outOfScope', outOfScopeUnknownReason);
   noteUnknown('deliveredFiles', deliveredFilesUnknownReason);
   noteUnknown('lifecycle.updatedAt', updatedAtUnknownReason);
   noteUnknown('verification.score', verification.scoreUnknownReason);
@@ -1192,6 +1228,12 @@ function collectExplain(options = {}) {
     statusSource: registryStatus ? 'registry' : null,
     statusUnknownReason,
     specPath: specFileAbs ? normalizePath(path.relative(targetRoot, specFileAbs)) : null,
+    description: description || 'unknown',
+    descriptionSource: description ? 'spec-file' : null,
+    descriptionUnknownReason,
+    outOfScope,
+    outOfScopeSource: outOfScopeRows ? 'spec-file' : null,
+    outOfScopeUnknownReason,
     lifecycle: {
       registryStatus: registryStatus || 'unknown',
       runId: state && state.runId ? String(state.runId) : null,
@@ -1254,6 +1296,14 @@ function renderExplain(report = {}) {
   }
 
   const deliveredFiles = report.deliveredFiles;
+  lines.push('', 'What the feature does', '---------------------');
+  if (report.description === 'unknown' || !report.description) {
+    lines.push(timeCell('unknown', report.descriptionUnknownReason));
+  } else {
+    for (const paragraph of String(report.description).split('\n').filter(line => line.trim() !== '')) {
+      lines.push(paragraph.trim());
+    }
+  }
   if (deliveredFiles === 'unknown') {
     lines.push(
       '',
@@ -1348,6 +1398,21 @@ function renderExplain(report = {}) {
     const manualSteps = Array.isArray(report.manualTestSteps) ? report.manualTestSteps : [];
     if (manualSteps.length === 0) lines.push('- none');
     else manualSteps.forEach((step, index) => lines.push(`${index + 1}. ${step}`));
+  }
+
+  lines.push('', 'Out of scope', '------------');
+  if (report.outOfScope === 'unknown') {
+    lines.push(`- ${timeCell('unknown', report.outOfScopeUnknownReason)}`);
+  } else {
+    const exclusions = Array.isArray(report.outOfScope) ? report.outOfScope : [];
+    if (exclusions.length === 0) {
+      lines.push('- none');
+    } else {
+      lines.push('| Item | Reason |', '| --- | --- |');
+      for (const exclusion of exclusions) {
+        lines.push(`| ${cell(exclusion.item)} | ${cell(exclusion.reason)} |`);
+      }
+    }
   }
 
   return lines.join('\n');

@@ -48,6 +48,7 @@ the value is `unknown` (or `null` when the fact is not applicable).
 | standup | `deliverySource` | `delivery-commit`, `step-6-completed`, `state.updatedAt`, `state.mtime`, `telemetry` |
 | standup | `lastEventSource` | `telemetry`, `state.updatedAt`, `state.mtime` |
 | explain | `statusSource` | `registry` |
+| explain | `descriptionSource`, `outOfScopeSource` | `spec-file` |
 | explain | `scoreSource` | `state.score`, `step-5-output` |
 | explain | `gatesSource` | `run-state`, `telemetry` |
 | explain | `deliveredFilesSource` | list of `run-state`, `ac-ledger`, `git` |
@@ -91,11 +92,18 @@ has no run (`currentStep: null`, `notStarted: true`).
 
 ### explain
 
-Sections: `Lifecycle`, `Delivered files`, `Verification`, `Acceptance criteria`
-(verified and unverified tables), `Tests observed`, `Manual test steps`.
+Sections: `Lifecycle`, `What the feature does`, `Delivered files`, `Verification`,
+`Acceptance criteria` (verified and unverified tables), `Tests observed`,
+`Manual test steps`, `Out of scope`.
+
+`What the feature does` is the specification's `## Description` section;
+`Out of scope` is its `## Out of Scope` table as `Item | Reason` rows. A missing
+section renders `unknown` with its reason.
 
 JSON: `command`, `specSlug`, `generatedAt`, `title`, `titleUnknownReason`,
-`status`, `statusSource`, `statusUnknownReason`, `specPath`, `lifecycle`,
+`status`, `statusSource`, `statusUnknownReason`, `specPath`, `description`,
+`descriptionSource`, `descriptionUnknownReason`, `outOfScope`,
+`outOfScopeSource`, `outOfScopeUnknownReason`, `lifecycle`,
 `deliveredFiles`, `deliveredFilesSource`, `deliveredFilesUnknownReason`,
 `verification`, `acceptanceCriteria`, `acceptanceCriteriaSource`,
 `testsObserved`, `testsObservedSource`, `testsObservedUnknownReason`,

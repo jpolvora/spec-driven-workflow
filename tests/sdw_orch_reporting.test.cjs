@@ -448,7 +448,13 @@ test('AC5: explain shows status, delivered files, verification results, and manu
     writeSpecIndex(root, [
       { prefix: '00023', slug: 'demo-spec', title: 'Demo Spec', status: 'completed' }
     ]);
-    writeSpecFile(root, 'demo-spec', '---\nslug: demo-spec\ntitle: "Demo Spec"\n---\n');
+    writeSpecFile(
+      root,
+      'demo-spec',
+      '---\nslug: demo-spec\ntitle: "Demo Spec"\n---\n'
+        + '## Description\n\nDelivers the reporting suite.\n\n'
+        + '## Out of Scope\n\n| Feature | Reason |\n|---|---|\n| Central telemetry upload | Stays local |\n'
+    );
     writeLedger(root, state, {
       runId: 'run-explain',
       specSlug: 'demo-spec',
@@ -535,8 +541,22 @@ test('AC5: explain shows status, delivered files, verification results, and manu
     ]);
     assert.deepEqual(report.unknowns, []);
 
+    assert.equal(report.description, 'Delivers the reporting suite.', 'AC5: the description comes from the spec body');
+    assert.equal(report.descriptionSource, 'spec-file');
+    assert.equal(report.descriptionUnknownReason, null);
+    assert.deepEqual(
+      report.outOfScope,
+      [{ item: 'Central telemetry upload', reason: 'Stays local' }],
+      'AC5: the out-of-scope table comes from the spec body'
+    );
+    assert.equal(report.outOfScopeSource, 'spec-file');
+
     const rendered = reporting.renderExplain(report);
     assert.match(rendered, /SDW Explain Report/);
+    assert.match(rendered, /What the feature does/);
+    assert.match(rendered, /Delivers the reporting suite\./);
+    assert.match(rendered, /Out of scope/);
+    assert.match(rendered, /Central telemetry upload/);
     assert.match(rendered, /Status: completed/);
     assert.match(rendered, /Delivered files \(3\)/);
     assert.match(rendered, /- Score: 9\/10 \(minimum 8\) passed/);
@@ -595,7 +615,11 @@ test('AC5 & AC9: explain marks unavailable evidence unknown and rejects an unreg
     assert.match(report.acceptanceCriteria.unknownReason, /no run state/);
     assert.equal(report.testsObserved, 'unknown');
     assert.equal(report.manualTestSteps, 'unknown');
-    assert.ok(report.unknowns.length >= 6, 'every unavailable fact is listed with its reason');
+    assert.equal(report.description, 'unknown', 'a spec with no Description section reports unknown');
+    assert.match(report.descriptionUnknownReason, /no Description section/);
+    assert.equal(report.outOfScope, 'unknown', 'a spec with no Out of Scope table reports unknown');
+    assert.match(report.outOfScopeUnknownReason, /no Out of Scope table/);
+    assert.ok(report.unknowns.length >= 8, 'every unavailable fact is listed with its reason');
 
     const rendered = reporting.renderExplain(report);
     assert.match(rendered, /Delivered files \(unknown\)/);
@@ -787,8 +811,10 @@ test('AC7: every reporting command emits a stable JSON shape and documents --jso
       Object.keys(explain).sort(),
       [
         'acceptanceCriteria', 'acceptanceCriteriaSource', 'command', 'deliveredFiles', 'deliveredFilesSource',
-        'deliveredFilesUnknownReason', 'generatedAt', 'lifecycle', 'manualTestSteps', 'manualTestStepsSource',
-        'manualTestStepsUnknownReason', 'specPath', 'specSlug', 'status', 'statusSource', 'statusUnknownReason',
+        'deliveredFilesUnknownReason', 'description', 'descriptionSource', 'descriptionUnknownReason',
+        'generatedAt', 'lifecycle', 'manualTestSteps', 'manualTestStepsSource',
+        'manualTestStepsUnknownReason', 'outOfScope', 'outOfScopeSource', 'outOfScopeUnknownReason',
+        'specPath', 'specSlug', 'status', 'statusSource', 'statusUnknownReason',
         'testsObserved', 'testsObservedSource', 'testsObservedUnknownReason', 'title', 'titleUnknownReason',
         'unknowns', 'verification', 'warnings'
       ]
@@ -843,7 +869,13 @@ test('AC8: every reported value names a traceable source', () => {
       { prefix: '00023', slug: 'demo-spec', title: 'Demo Spec', status: 'pending' },
       { prefix: '00024', slug: 'next-spec', title: 'Next Spec', status: 'pending' }
     ]);
-    writeSpecFile(root, 'demo-spec', '---\nslug: demo-spec\ntitle: "Demo Spec"\n---\n');
+    writeSpecFile(
+      root,
+      'demo-spec',
+      '---\nslug: demo-spec\ntitle: "Demo Spec"\n---\n'
+        + '## Description\n\nDelivers the reporting suite.\n\n'
+        + '## Out of Scope\n\n| Feature | Reason |\n|---|---|\n| Central telemetry upload | Stays local |\n'
+    );
     writeLedger(root, state, {
       runId: 'run-sources',
       specSlug: 'demo-spec',
