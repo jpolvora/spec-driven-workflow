@@ -7,7 +7,7 @@
 | Specification file | `.sdw/specs/00023-sdw-reporting-suite.md` |
 | Specification slug | 00023-sdw-reporting-suite |
 | Run ID | run-1792804634664-00023-sdw-reporting-suite |
-| Run status | paused |
+| Run status | completed |
 | Branch | `feature/00023-sdw-reporting-suite` |
 | Base branch | `master` |
 | Base commit | `15a8888bad2440557dbc9eed763a1cb08347cac2` |
@@ -17,7 +17,7 @@
 | Implementation start | 2026-10-24T01:17:16.745Z |
 | Implementation end | 2026-10-24T02:27:31.325Z |
 | Total wall-clock duration | 1h 10m 14s |
-| Generated at | 2026-10-24T03:17:32.452Z |
+| Generated at | 2026-10-24T03:23:41.127Z |
 | Step 1: derivation (skipped) | 6ms |
 | Step 2: refinement (completed) | 43ms |
 | Step 3: dag_generation (completed) | 10ms |
@@ -25,7 +25,7 @@
 | Step 5: scoring (completed) | 2m 24s |
 | Step 6: delivery_commit (completed) | 438ms |
 | Step 7: code_review (completed) | 1s |
-| Step 8: pr_preparation (blocked_convergence) | n/a |
+| Step 8: pr_preparation (completed) | 48m 51s |
 
 
 ## Tasks
@@ -41,6 +41,8 @@
 
 | SHA | Subject | Range |
 |---|---|---|
+| `5e5dce0` | chore(00023-sdw-reporting-suite): mark the specification completed in the registry | base..HEAD |
+| `7c278cb` | docs(00023-sdw-reporting-suite): record delivery report | base..HEAD |
 | `d1a3264` | fix(00023-sdw-reporting-suite): explain reports what the feature does and excludes | base..HEAD |
 | `3fa1849` | docs(00023-sdw-reporting-suite): record delivery report | base..HEAD |
 | `7e37b6f` | task(00023-sdw-reporting-suite): task-4 | base..HEAD |
@@ -87,11 +89,13 @@
 | File | Change |
 |---|---|
 | `.sdw/reports/00023-sdw-reporting-suite-report.md` | added |
+| `.sdw/specs/00023-sdw-reporting-suite.md` | modified |
+| `.sdw/specs/index.specs.md` | modified |
 
 ## Verification
 
 - test gate: status `passed`, exit code `0`, duration 4m 35s
-- Step 8 delivery: `blocked_convergence` (ship status `review_pending`)
+- Step 8 delivery: `completed` (ship status `review_pending`)
 
 ## Code Review
 
@@ -140,7 +144,13 @@ Not available
 
 ## Retrospective
 
-Not available
+- Status: `passed`
+- Report: `.sdw/state/00023-sdw-reporting-suite/run-1792804634664-00023-sdw-reporting-suite/run-1792804634664-00023-sdw-reporting-suite.retro.md`
+- Data: `.sdw/state/00023-sdw-reporting-suite/run-1792804634664-00023-sdw-reporting-suite/run-1792804634664-00023-sdw-reporting-suite.retro.json`
+- Signals: retries 4 (score 2, review 0, rounds 2, abandonments 0); leftover runs 0; missing artifacts 0; review findings 1 (1 open)
+- Candidates: 0
+- Applied fixes:
+  - none
 
 ## Breaking Changes
 
@@ -316,18 +326,18 @@ Not available
 - Task task-2 accepted after re-dispatch (sequence 2)
 - Task task-3 accepted after re-dispatch (sequence 3)
 - Task task-4 accepted after re-dispatch (sequence 4)
-- Environment: workspace: 6 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
+- Environment: workspace: 8 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
 
 ## Outcome
 
-- Result: `paused`
+- Result: `completed`
 - Delivery commit: `7e37b6f54336f76a09c1b1fdf51e046ae9f25bb8`
 - Ship status: `review_pending`
 - Duration: 1h 10m 14s
 
 ## Step Contributions
 
-- Recorded: 10 contribution(s)
+- Recorded: 13 contribution(s)
 
 ### Step 1: derivation
 
@@ -375,11 +385,18 @@ Not available
 
 ### Step 8: pr_preparation
 
-- **convergence** 2026-10-24T02:46:45.473Z - Convergence iteration 1
+- **convergence** 2026-10-24T03:23:34.072Z - Convergence iteration 1
   - Body: `{"iteration":1,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":false}`
-- **convergence** 2026-10-24T02:46:46.302Z - Convergence iteration 2
-  - Body: `{"iteration":2,"rounds":2,"failingChecks":[{"name":"review","status":""}],"openThreads":1,"resolvedThreads":0,"fixCommit":null,"converged":false}`
+- **convergence** 2026-10-24T03:23:35.005Z - Convergence iteration 2
+  - Body: `{"iteration":2,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":true}`
+- **gates** 2026-10-24T03:23:35.750Z - Pre-PR gates: 6 result(s)
+  - Body: `{"gates":[{"name":"prePrCommand","status":"skipped","detail":"prePrCommand is not configured"},{"name":"build","status":"skipped","detail":"requiredBuild is false"},{"name":"tests","status":"pass","detail":"npm test exited 0"},{"name":"security","status":"pass","detail":"sdw-security-checks found no blocking leak"},{"name":"runState","status":"pass","detail":"step 4, step 6 and step 7 completed; score 8 >= scoreMin 8"},{"name":"discovery","status":"pass","detail":"no prepare obligations discovered"}]}`
+- **ship** 2026-10-24T03:23:35.751Z - Pull request #66
+  - Body: `{"pushed":true,"branch":"feature/00023-sdw-reporting-suite","pullRequest":{"number":"66","url":"https://github.com/jpolvora/spec-driven-workflow/pull/66","title":null},"shipStatus":"delivered"}`
+  - Evidence: `https://github.com/jpolvora/spec-driven-workflow/pull/66`
 
 ### Step 9: retrospective
 
-Not available
+- **retro** 2026-10-24T03:23:40.764Z - Retrospective passed: 0 candidate(s)
+  - Body: `{"status":"passed","runStatus":"completed","signals":{"retries":{"scoreIterations":2,"reviewIterations":0,"reviewRounds":2,"dispatchAbandonments":0,"total":4},"leftoverRuns":0,"missingArtifacts":0,"reviewFindings":{"total":1,"open":1}},"candidates":[],"fixes":{"recorded":[],"consolidated":null,"queuedSpecifications":[],"failures":[]},"routedCandidates":[],"reportMd":".sdw/state/00023-sdw-reporting-suite/run-1792804634664-00023-sdw-reporting-suite/run-1792804634664-00023-sdw-reporting-suite.retro.md","reportJson":".sdw/state/00023-sdw-reporting-suite/run-1792804634664-00023-sdw-reporting-suite/run-1792804634664-00023-sdw-reporting-suite.retro.json"}`
+  - Evidence: `.sdw/state/00023-sdw-reporting-suite/run-1792804634664-00023-sdw-reporting-suite/run-1792804634664-00023-sdw-reporting-suite.retro.md`, `.sdw/state/00023-sdw-reporting-suite/run-1792804634664-00023-sdw-reporting-suite/run-1792804634664-00023-sdw-reporting-suite.retro.json`
