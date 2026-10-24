@@ -370,6 +370,24 @@ function getSpecIndexHelper(targetRoot, options = {}) {
   }
 }
 
+/**
+ * Spec 00069 AC4: the no-target-files refusal guards a specification the
+ * registry queues for implementation (`pending`), which is the surface
+ * `sdw-orch` dispatches from. An archived or completed row, a sandbox trial, and
+ * an unregistered ad-hoc document keep the spec 00064 no-file plan.
+ */
+function readRegistryEntry(targetRoot, specSlug, options = {}) {
+  const specIndex = getSpecIndexHelper(targetRoot, options);
+  if (!specIndex || !specSlug) return null;
+  try {
+    const index = specIndex.readIndex({ root: targetRoot });
+    if (!index || !index.exists) return null;
+    return (index.entries || []).find(entry => entry.slug === specSlug) || null;
+  } catch (e) {
+    return null;
+  }
+}
+
 function getScmProviderContract(targetRoot, options = {}) {
   try {
     const scriptPath = resolveSkillScript(targetRoot, 'sdw-spec', path.join('scripts', 'scm_provider_contract.cjs'), options);
@@ -4214,12 +4232,14 @@ function executeRun(options) {
   } else if (startStep <= 3 && state.steps[3].status !== 'completed') {
     state = stateManager.updateStepState(targetRoot, state.runId, 3, 'in_progress');
     logStepEnter(3);
-    dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint, targetRoot, maxTasksPerSpec: config.maxTasksPerSpec, orchestratorHint: modelHints.orchestrator });
+    dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint, targetRoot, requireTargetFiles: registryStatus === 'pending' && !options._sandbox, maxTasksPerSpec: config.maxTasksPerSpec, orchestratorHint: modelHints.orchestrator });
     if (dagPlan.refused) {
       // Spec 00030 AC13/AC14: a decomposition beyond the cap is refused with a
       // split proposal, never merged into coarse tasks and never planned.
       // Spec 00064 AC2: a plan whose assigned criteria cannot prove a supporting
       // file in their slice is refused the same way.
+      // Spec 00069 AC4: a registered specification that names no path and
+      // declares no new file is refused with the declaration its author needs.
       const refusal = formatDagRefusal(dagPlan);
       console.error(`[Step 3: DAG] ${refusal}`);
       printSplitProposal(dagPlan.splitProposal);
@@ -4244,7 +4264,7 @@ function executeRun(options) {
   } else if (state.steps[3].output) {
     dagPlan = state.steps[3].output;
   } else {
-    dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint, targetRoot, maxTasksPerSpec: config.maxTasksPerSpec, orchestratorHint: modelHints.orchestrator });
+    dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint, targetRoot, requireTargetFiles: registryStatus === 'pending' && !options._sandbox, maxTasksPerSpec: config.maxTasksPerSpec, orchestratorHint: modelHints.orchestrator });
     if (dagPlan.refused) {
       const refusal = formatDagRefusal(dagPlan);
       console.error(`[Step 3: DAG] ${refusal}`);
@@ -5892,6 +5912,9 @@ function formatDagRefusal(plan) {
     const missing = (plan.missingFiles || []).join(', ');
     return `missing-target-file rule=${plan.fallbackRule} missing=${missing} (name the file in backticks in the specification)`;
   }
+  if (plan.reason === 'no-target-files') {
+    return `no-target-files spec=${plan.specSlug} (${plan.declaration})`;
+  }
   return `split-required tasks-needed=${plan.tasksNeeded} cap=${plan.cap}${plan.detail === 'criteria-undersupplied' ? ` criteria=${plan.acs}` : ''}`;
 }
 
@@ -5935,13 +5958,20 @@ function logDagPlan(plan) {
 
 /**
  * Spec 00030 AC20: the plan emitted by `dag preview --json`.
+ * Spec 00069 AC5: the preview also reports the resolved target files, the
+ * declared new files, and the reason for any refusal.
  */
 function buildPreviewPlan(plan) {
+  const resolvedTargetFiles = Array.isArray(plan.targetFiles)
+    ? plan.targetFiles.slice()
+    : [...new Set((plan.tasks || []).flatMap(task => task.targetFiles || []))];
   const preview = {
     complexity: (plan.complexity && plan.complexity.level) || 'unknown',
     execMode: plan.execMode || 'sequential',
     taskCount: plan.taskCount || 0,
     levels: plan.levels || [],
+    targetFiles: resolvedTargetFiles,
+    declaredNewFiles: Array.isArray(plan.declaredNewFiles) ? plan.declaredNewFiles.slice() : [],
     tasks: (plan.tasks || []).map(task => ({
       id: task.id,
       acIds: (task.coveredAcs || []).slice(),
@@ -5954,13 +5984,15 @@ function buildPreviewPlan(plan) {
   if (plan.coverage) preview.coverage = plan.coverage;
   if (plan.refused) {
     preview.refused = true;
+    preview.reason = plan.reason;
     if (plan.reason === 'criteria-uncovered') {
-      preview.reason = plan.reason;
       preview.uncovered = plan.uncovered || [];
     } else if (plan.reason === 'missing-target-file') {
-      preview.reason = plan.reason;
       preview.fallbackRule = plan.fallbackRule;
       preview.missingTargetFiles = plan.missingFiles || [];
+    } else if (plan.reason === 'no-target-files') {
+      preview.specSlug = plan.specSlug;
+      preview.declaration = plan.declaration;
     } else {
       preview.tasksNeeded = plan.tasksNeeded;
       preview.cap = plan.cap;
@@ -6188,7 +6220,9 @@ function cmdDagPreview(options) {
     ? slugMatch[1].trim()
     : path.basename(resolvedSpec, path.extname(resolvedSpec));
   const blueprint = specGrilling.generateRefinementBlueprint(specContent, { slug: specSlug });
-  const plan = dagPlanner.generateDagPlan(specContent, { slug: specSlug, blueprint, targetRoot, maxTasksPerSpec: config.maxTasksPerSpec });
+  const registryEntry = readRegistryEntry(targetRoot, specSlug, options);
+  const requireTargetFiles = Boolean(registryEntry && registryEntry.status === 'pending');
+  const plan = dagPlanner.generateDagPlan(specContent, { slug: specSlug, blueprint, targetRoot, requireTargetFiles, maxTasksPerSpec: config.maxTasksPerSpec });
 
   if (options.json) {
     console.log(JSON.stringify(buildPreviewPlan(plan), null, 2));

@@ -1,8 +1,9 @@
 'use strict';
 
-// Spec 00069 AC1-AC3: target-file resolution draws only from paths the
-// specification names, verifies a bucket fallback against the repository, and
-// accepts a declared new file that does not exist yet.
+// Spec 00069 AC1-AC6: target-file resolution draws only from paths the
+// specification names, verifies a bucket fallback against the repository,
+// accepts a declared new file that does not exist yet, refuses a managed
+// specification that promises no file, and reports all of it in the preview.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -50,6 +51,20 @@ function makeRepo(slug, content) {
   fs.mkdirSync(specsDir, { recursive: true });
   fs.writeFileSync(path.join(specsDir, `${slug}.md`), content, 'utf8');
   return root;
+}
+
+// Spec 00069 AC4: the refusal guards a registered backlog specification, so the
+// fixture needs a real registry row for the planner to treat it as managed.
+function registerSpec(root, slug) {
+  const indexPath = path.join(root, '.sdw', 'specs', 'index.specs.md');
+  fs.writeFileSync(indexPath, [
+    '# Specification Index',
+    '',
+    '| Prefix | Slug | Title | Status | Source | Spec Date | Validation | Archival Date |',
+    '|---|---|---|---|---|---|---|---|',
+    `| ${slug.slice(0, 5)} | ${slug} | ${slug} | pending | local | 2026-10-24 | PASS | - |`,
+    ''
+  ].join('\n'), 'utf8');
 }
 
 function initGit(root) {
@@ -194,6 +209,123 @@ test('AC3: a declared new file under a New files note is planned without existin
       'the declared new file is carried into the plan as a target file');
     assert.equal(fs.existsSync(path.join(root, ...declared.split('/'))), false,
       'planning never creates the declared file');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC6: a specification with real backticked paths plans those files', () => {
+  const slug = '00073-real-path-demo';
+  const named = 'skills/demo/scripts/widget.cjs';
+  const content = buildSpec(slug, {
+    sections: ['## Implementation Surfaces', '', `- \`${named}\``]
+  });
+  const root = makeRepo(slug, content);
+  try {
+    fs.mkdirSync(path.join(root, ...named.split('/').slice(0, -1)), { recursive: true });
+    fs.writeFileSync(path.join(root, ...named.split('/')), "'use strict';\n", 'utf8');
+    registerSpec(root, slug);
+
+    const result = preview(root, slug);
+    assert.equal(result.status, 0, result.stderr);
+    const plan = JSON.parse(result.stdout);
+    assert.deepEqual(plan.targetFiles, [named], 'the resolved target file is reported');
+    assert.deepEqual(taskFiles(plan), [named], 'the task slice carries the resolved file');
+    assert.deepEqual(plan.declaredNewFiles, [], 'no file was declared new');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC5: dag preview --json reports resolved target files and declared new files without state', () => {
+  const slug = '00074-preview-report';
+  const named = 'skills/demo/scripts/widget.cjs';
+  const declared = 'tests/widget_carrier.test.cjs';
+  const content = buildSpec(slug, {
+    sections: [
+      '## Implementation Surfaces',
+      '',
+      `- \`${named}\``,
+      '',
+      '## New files',
+      '',
+      `- \`${declared}\` — created by this work.`
+    ]
+  });
+  const root = makeRepo(slug, content);
+  try {
+    fs.mkdirSync(path.join(root, ...named.split('/').slice(0, -1)), { recursive: true });
+    fs.writeFileSync(path.join(root, ...named.split('/')), "'use strict';\n", 'utf8');
+    registerSpec(root, slug);
+    const indexPath = path.join(root, '.sdw', 'specs', 'index.specs.md');
+    const indexBefore = fs.readFileSync(indexPath, 'utf8');
+
+    const result = preview(root, slug);
+    assert.equal(result.status, 0, result.stderr);
+    const plan = JSON.parse(result.stdout);
+    assert.deepEqual(plan.targetFiles, [named, declared], 'the preview reports every resolved target');
+    assert.deepEqual(plan.declaredNewFiles, [declared], 'the preview reports the declared new file');
+    assert.deepEqual(taskFiles(plan), [named, declared], 'the tasks carry the same targets');
+    assert.equal(fs.existsSync(path.join(root, '.sdw', 'state')), false, 'preview writes no run state');
+    assert.equal(fs.readFileSync(indexPath, 'utf8'), indexBefore, 'preview leaves the registry untouched');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC4, AC5 & AC6: a registered specification with no path and no declared new file is refused', () => {
+  const slug = '00075-pathless-refusal';
+  const content = buildSpec(slug);
+  const root = makeRepo(slug, content);
+  try {
+    registerSpec(root, slug);
+
+    const result = preview(root, slug);
+    assert.equal(result.status, 1, 'the refusal exits non-zero');
+    assert.match(result.stderr, /no-target-files/);
+    assert.ok(result.stderr.includes(`spec=${slug}`), 'the refusal names the specification');
+    assert.match(result.stderr, /New files/, 'the refusal names the declaration the author must add');
+
+    const plan = JSON.parse(result.stdout);
+    assert.equal(plan.refused, true);
+    assert.equal(plan.reason, 'no-target-files', 'the preview reports the refusal reason');
+    assert.equal(plan.specSlug, slug, 'the preview reports the refused specification');
+    assert.deepEqual(plan.targetFiles, [], 'no target file is resolved');
+    assert.deepEqual(plan.declaredNewFiles, [], 'no new file is declared');
+    assert.match(plan.declaration, /backticks/);
+    assert.match(plan.declaration, /New files/);
+    assert.equal(fs.existsSync(path.join(root, '.sdw', 'state')), false, 'preview writes no run state');
+
+    // The run path records the same refusal at Step 3 and plans no task.
+    initGit(root);
+    const runCode = sdwOrch.cmdRun({
+      root,
+      specPath: `.sdw/specs/${slug}.md`,
+      skipReview: true,
+      skipPr: true
+    });
+    assert.equal(runCode, 1, 'the run refuses at Step 3');
+    const state = stateManager.findLatestRunState(root);
+    assert.equal(state.steps[3].status, 'failed');
+    assert.match(String(state.steps[3].error || ''), /no-target-files/);
+    assert.ok(String(state.steps[3].error || '').includes(slug), 'the recorded refusal names the specification');
+    assert.deepEqual(state.dagTasks || [], [], 'no DAG task is planned');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC4: an unregistered pathless specification keeps the spec 00064 no-file plan', () => {
+  const slug = 'ad-hoc-widget-demo';
+  const content = buildSpec(slug);
+  const root = makeRepo(slug, content);
+  try {
+    const result = preview(root, slug);
+    assert.equal(result.status, 0, 'an ad-hoc specification is not a managed backlog item');
+    const plan = JSON.parse(result.stdout);
+    assert.equal(plan.refused, undefined, 'the plan is emitted, not refused');
+    assert.deepEqual(plan.targetFiles, [], 'it still resolves no invented file');
+    assert.deepEqual(taskFiles(plan), []);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

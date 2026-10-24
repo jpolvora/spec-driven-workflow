@@ -2,6 +2,11 @@
 
 const fs = require('fs');
 const path = require('path');
+const specGrilling = require('./spec_grilling.cjs');
+
+// Spec 00069 AC4: a plan that resolves no target file promises nothing, so it is
+// refused and the author is told the declaration the specification must add.
+const NO_TARGET_FILES_DECLARATION = 'name the implementation files in backticks, or declare the files this work creates under a `New files` note';
 
 // Spec 00030 AC3-AC6: acceptance-count bands plus the touchpoint escalation.
 const LOW_MAX_ACS = 4;
@@ -394,6 +399,19 @@ function findMissingFallbackFiles(fallback, targetRoot) {
   return fallback.targetFiles.filter(file => !fs.existsSync(path.join(targetRoot, file)));
 }
 
+/**
+ * Spec 00069 AC3/AC4: the declared new files reach the plan through the Step 2
+ * blueprint; a caller that already resolved them passes them directly, and a
+ * caller that passes neither gets the specification's own declaration.
+ */
+function readDeclaredNewFiles(opts, specContent) {
+  if (opts.blueprint && Array.isArray(opts.blueprint.declaredNewFiles)) {
+    return opts.blueprint.declaredNewFiles.slice();
+  }
+  if (Array.isArray(opts.declaredNewFiles)) return opts.declaredNewFiles.slice();
+  return specGrilling.extractDeclaredNewFiles(specContent);
+}
+
 /** Low complexity: exactly one task carrying every criterion (AC7). */
 function buildSingleTaskPlan(context) {
   const { slug, acs, complexity, targetFiles, architecturalApproach, testPlan } = context;
@@ -550,19 +568,18 @@ function generateDagPlan(specContent, options) {
   const slugMatch = content.match(/slug:\s*([^\r\n]+)/);
   const slug = opts.slug || (slugMatch ? slugMatch[1].trim() : 'task');
 
-  // Ingest the technical blueprint from Step 2 (AC2).
+  // Ingest the technical blueprint from Step 2 (AC2). The declared new files are
+  // read even when the blueprint resolved nothing, so AC4 can tell an author who
+  // promised a file from one who promised none.
   let targetFiles = [];
-  let declaredNewFiles = [];
   let architecturalApproach = null;
   let testPlan = null;
+  const declaredNewFiles = readDeclaredNewFiles(opts, content);
 
   if (opts.blueprint && Array.isArray(opts.blueprint.targetFiles) && opts.blueprint.targetFiles.length > 0) {
     targetFiles = opts.blueprint.targetFiles.slice();
     architecturalApproach = opts.blueprint.architecturalApproach;
     testPlan = opts.blueprint.testPlan;
-    declaredNewFiles = Array.isArray(opts.blueprint.declaredNewFiles)
-      ? opts.blueprint.declaredNewFiles.slice()
-      : [];
   } else if (Array.isArray(opts.targetFiles) && opts.targetFiles.length > 0) {
     targetFiles = opts.targetFiles.slice();
   } else {
@@ -587,6 +604,27 @@ function generateDagPlan(specContent, options) {
       };
     }
     targetFiles = fallback ? fallback.targetFiles.slice() : [];
+  }
+
+  // Spec 00069 AC4: a managed specification that names no path and declares no
+  // new file leaves the plan without a promise. Refusing names the specification
+  // and the declaration the author must add, instead of dispatching a slice that
+  // can touch no file. Ad-hoc specifications keep the spec 00064 no-file plan.
+  if (opts.requireTargetFiles && targetFiles.length === 0 && declaredNewFiles.length === 0) {
+    return {
+      refused: true,
+      reason: 'no-target-files',
+      specSlug: slug,
+      targetFiles: [],
+      declaredNewFiles: [],
+      declaration: NO_TARGET_FILES_DECLARATION,
+      complexity: analyzeComplexity(content, { targetFiles: [] }),
+      taskCount: 0,
+      execMode: 'sequential',
+      levels: [],
+      fileDisjointness: [],
+      tasks: []
+    };
   }
 
   const complexity = analyzeComplexity(content, { targetFiles });
@@ -623,9 +661,10 @@ function generateDagPlan(specContent, options) {
     }
   }
 
-  // Spec 00069 AC3: the declared new files travel with the plan so reporting can
-  // distinguish a promise from a file the repository already contains.
-  if (declaredNewFiles.length > 0) plan.declaredNewFiles = declaredNewFiles;
+  // Spec 00069 AC3/AC5: the resolved slice and the declared new files travel with
+  // the plan so `dag preview --json` can report both without re-deriving them.
+  plan.targetFiles = targetFiles.slice();
+  plan.declaredNewFiles = declaredNewFiles.slice();
   if (opts.orchestratorHint) plan.orchestratorHint = opts.orchestratorHint;
   return plan;
 }

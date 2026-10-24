@@ -1358,6 +1358,8 @@ status: ready-to-implement
 # Registry Fixture
 ## Acceptance Criteria
 - AC1: The orchestrator shall transition the registry after delivery.
+## Target Files
+Target file: \`src/registry-fixture.cjs\`
 `, 'utf8');
   fs.writeFileSync(path.join(tmpDir, '.sdw', 'specs', 'index.specs.md'), [
     '# Specification Index',
