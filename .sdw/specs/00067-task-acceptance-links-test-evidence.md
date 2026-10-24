@@ -4,7 +4,7 @@ localSpecId: "00067"
 slug: 00067-task-acceptance-links-test-evidence
 title: "Task acceptance must link test evidence to the acceptance criteria ledger"
 source: local
-status: draft
+status: implemented
 specDate: 2026-10-24
 priority: high
 value: "Unblocks the negative-scenario score cap that silently capped 7 of 10 delivered specs at 8/10, and gives explain/report real test evidence"
