@@ -4,7 +4,7 @@ localSpecId: "00067"
 slug: 00067-task-acceptance-links-test-evidence
 title: "Task acceptance must link test evidence to the acceptance criteria ledger"
 source: local
-status: draft
+status: implemented
 specDate: 2026-10-24
 priority: high
 value: "Unblocks the negative-scenario score cap that silently capped 7 of 10 delivered specs at 8/10, and gives explain/report real test evidence"
@@ -27,7 +27,7 @@ Make the ledger reflect what the run actually observed. Task evidence already ca
 
 - AC1: When `task finish` accepts a task, the system shall link each named test entry from the accepted evidence file to every acceptance criterion the task claims, as `test` evidence carrying the test name and its status.
 - AC2: If a test entry has no name or a status outside `passed`, `failed`, and `skipped`, then the system shall skip that entry, report a warning, and leave the task acceptance unchanged.
-- AC3: The system shall deduplicate linked test evidence by test name and status, so replaying the same acceptance adds no duplicate entry.
+- AC3: The system shall deduplicate linked test evidence by test name, with the status as the compared identity field, so replaying the same acceptance adds no duplicate entry and a re-linked result that reports another status replaces the stored entry instead of appending a second one.
 - AC4: When the ledger derives the score, the system shall apply the negative-scenario cap only to a criterion that declares a negative scenario and has no `test` evidence with status `passed`.
 - AC5: The system shall cover the linking, the skip warning, the dedupe, and the cap lift with tests.
 
@@ -49,7 +49,7 @@ Make the ledger reflect what the run actually observed. Task evidence already ca
 
 | Assumption | Chosen default | Rationale | Confirmed |
 |------------|----------------|-----------|-----------|
-| Test identity | Test name plus status | Matches the existing evidence de-duplication rule | y |
+| Test identity | Test name, with the status compared on replay (the 00017 update-in-place rule) | Matches the existing evidence de-duplication rule: `test` evidence is keyed by name, and a re-linked result with another status replaces the stored entry | y |
 | Conflict handling | Malformed entries are skipped, never invented | A missing name is not evidence | y |
 | Cap source | Any criterion whose text declares a negative scenario | Same rule as today, now satisfied by real test evidence | y |
 
