@@ -7,7 +7,7 @@
 | Specification file | `.sdw/specs/00071-superseded-runs-must-be-terminal.md` |
 | Specification slug | 00071-superseded-runs-must-be-terminal |
 | Run ID | run-1792845560345-00071-superseded-runs-must-be- |
-| Run status | paused |
+| Run status | completed |
 | Branch | `feature/00071-superseded-runs-must-be-terminal` |
 | Base branch | `master` |
 | Base commit | `454a0c04f0f5076c19405bf3cc2084904eeea907` |
@@ -17,7 +17,7 @@
 | Implementation start | 2026-10-24T12:39:22.474Z |
 | Implementation end | 2026-10-24T13:06:57.219Z |
 | Total wall-clock duration | 27m 34s |
-| Generated at | 2026-10-24T13:51:24.539Z |
+| Generated at | 2026-10-24T13:56:39.982Z |
 | Step 1: derivation (skipped) | 6ms |
 | Step 2: refinement (completed) | 42ms |
 | Step 3: dag_generation (completed) | 10ms |
@@ -25,7 +25,7 @@
 | Step 5: scoring (completed) | 28s |
 | Step 6: delivery_commit (completed) | 338ms |
 | Step 7: code_review (completed) | 1s |
-| Step 8: pr_preparation (blocked_convergence) | n/a |
+| Step 8: pr_preparation (completed) | 45m 50s |
 
 
 ## Tasks
@@ -39,6 +39,8 @@
 
 | SHA | Subject | Range |
 |---|---|---|
+| `6410be9` | chore(00071-superseded-runs-must-be-terminal): mark the specification completed in the registry | base..HEAD |
+| `7fd43a4` | docs(00071-superseded-runs-must-be-terminal): record delivery report | base..HEAD |
 | `bd22aaa` | fix(00071-superseded-runs-must-be-terminal): recover an interrupted supersession on the next queue pass | base..HEAD |
 | `f10af3b` | docs(00071-superseded-runs-must-be-terminal): record delivery report | base..HEAD |
 | `9c84849` | fix(00071-superseded-runs-must-be-terminal): refuse a superseded run id and persist the replacement first | base..HEAD |
@@ -75,13 +77,15 @@
 | File | Change |
 |---|---|
 | `.sdw/reports/00071-superseded-runs-must-be-terminal-report.md` | added |
+| `.sdw/specs/00071-superseded-runs-must-be-terminal.md` | modified |
+| `.sdw/specs/index.specs.md` | modified |
 | `skills/sdw-batch/references/batch_protocol.md` | modified |
 | `skills/sdw-orch/references/orchestrator_protocol.md` | modified |
 
 ## Verification
 
 - test gate: status `passed`, exit code `0`, duration 3m 9s
-- Step 8 delivery: `blocked_convergence` (ship status `review_pending`)
+- Step 8 delivery: `completed` (ship status `review_pending`)
 
 ## Fresh Verification & Audit
 
@@ -135,7 +139,13 @@ Not available
 
 ## Retrospective
 
-Not available
+- Status: `passed`
+- Report: `.sdw/state/00071-superseded-runs-must-be-terminal/run-1792845560345-00071-superseded-runs-must-be-/run-1792845560345-00071-superseded-runs-must-be-.retro.md`
+- Data: `.sdw/state/00071-superseded-runs-must-be-terminal/run-1792845560345-00071-superseded-runs-must-be-/run-1792845560345-00071-superseded-runs-must-be-.retro.json`
+- Signals: retries 4 (score 2, review 0, rounds 2, abandonments 0); leftover runs 0; missing artifacts 0; review findings 0 (0 open)
+- Candidates: 0
+- Applied fixes:
+  - none
 
 ## Breaking Changes
 
@@ -213,18 +223,18 @@ None detected.
 
 - Step 1 (derivation) skipped: not recorded
 - Task task-2 accepted after re-dispatch (sequence 2)
-- Environment: workspace: 13 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
+- Environment: workspace: 15 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
 
 ## Outcome
 
-- Result: `paused`
+- Result: `completed`
 - Delivery commit: `c0eb20cecccc580a5b17128cabea8bdc79ea4caa`
 - Ship status: `review_pending`
 - Duration: 27m 34s
 
 ## Step Contributions
 
-- Recorded: 10 contribution(s)
+- Recorded: 13 contribution(s)
 
 ### Step 1: derivation
 
@@ -272,11 +282,18 @@ None detected.
 
 ### Step 8: pr_preparation
 
-- **convergence** 2026-10-24T13:40:51.238Z - Convergence iteration 1
+- **convergence** 2026-10-24T13:56:33.864Z - Convergence iteration 1
   - Body: `{"iteration":1,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":false}`
-- **convergence** 2026-10-24T13:40:52.165Z - Convergence iteration 2
-  - Body: `{"iteration":2,"rounds":2,"failingChecks":[{"name":"review","status":""}],"openThreads":1,"resolvedThreads":0,"fixCommit":null,"converged":false}`
+- **convergence** 2026-10-24T13:56:34.827Z - Convergence iteration 2
+  - Body: `{"iteration":2,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":true}`
+- **gates** 2026-10-24T13:56:35.617Z - Pre-PR gates: 6 result(s)
+  - Body: `{"gates":[{"name":"prePrCommand","status":"skipped","detail":"prePrCommand is not configured"},{"name":"build","status":"skipped","detail":"requiredBuild is false"},{"name":"tests","status":"pass","detail":"npm test exited 0"},{"name":"security","status":"pass","detail":"sdw-security-checks found no blocking leak"},{"name":"runState","status":"pass","detail":"step 4, step 6 and step 7 completed; score 10 >= scoreMin 8"},{"name":"discovery","status":"pass","detail":"no prepare obligations discovered"}]}`
+- **ship** 2026-10-24T13:56:35.617Z - Pull request #73
+  - Body: `{"pushed":true,"branch":"feature/00071-superseded-runs-must-be-terminal","pullRequest":{"number":"73","url":"https://github.com/jpolvora/spec-driven-workflow/pull/73","title":null},"shipStatus":"delivered"}`
+  - Evidence: `https://github.com/jpolvora/spec-driven-workflow/pull/73`
 
 ### Step 9: retrospective
 
-Not available
+- **retro** 2026-10-24T13:56:39.444Z - Retrospective passed: 0 candidate(s)
+  - Body: `{"status":"passed","runStatus":"completed","signals":{"retries":{"scoreIterations":2,"reviewIterations":0,"reviewRounds":2,"dispatchAbandonments":0,"total":4},"leftoverRuns":0,"missingArtifacts":0,"reviewFindings":{"total":0,"open":0}},"candidates":[],"fixes":{"recorded":[],"consolidated":null,"queuedSpecifications":[],"failures":[]},"routedCandidates":[],"reportMd":".sdw/state/00071-superseded-runs-must-be-terminal/run-1792845560345-00071-superseded-runs-must-be-/run-1792845560345-00071-superseded-runs-must-be-.retro.md","reportJson":".sdw/state/00071-superseded-runs-must-be-terminal/run-1792845560345-00071-superseded-runs-must-be-/run-1792845560345-00071-superseded-runs-must-be-.retro.json"}`
+  - Evidence: `.sdw/state/00071-superseded-runs-must-be-terminal/run-1792845560345-00071-superseded-runs-must-be-/run-1792845560345-00071-superseded-runs-must-be-.retro.md`, `.sdw/state/00071-superseded-runs-must-be-terminal/run-1792845560345-00071-superseded-runs-must-be-/run-1792845560345-00071-superseded-runs-must-be-.retro.json`
