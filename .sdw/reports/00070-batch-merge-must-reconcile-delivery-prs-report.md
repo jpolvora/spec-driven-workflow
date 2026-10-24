@@ -7,7 +7,7 @@
 | Specification file | `.sdw/specs/00070-batch-merge-must-reconcile-delivery-prs.md` |
 | Specification slug | 00070-batch-merge-must-reconcile-delivery-prs |
 | Run ID | run-1792850307534-00070-batch-merge-must-reconci |
-| Run status | paused |
+| Run status | completed |
 | Branch | `feature/00070-batch-merge-must-reconcile-delivery-prs` |
 | Base branch | `master` |
 | Base commit | `b8e955f1e547a54ff6da60f71ca8120df222ca3c` |
@@ -17,7 +17,7 @@
 | Implementation start | 2026-10-24T13:58:29.076Z |
 | Implementation end | 2026-10-24T14:29:25.231Z |
 | Total wall-clock duration | 30m 56s |
-| Generated at | 2026-10-24T14:33:46.294Z |
+| Generated at | 2026-10-24T14:39:26.049Z |
 | Step 1: derivation (skipped) | 5ms |
 | Step 2: refinement (completed) | 41ms |
 | Step 3: dag_generation (completed) | 10ms |
@@ -25,7 +25,7 @@
 | Step 5: scoring (completed) | 26s |
 | Step 6: delivery_commit (completed) | 315ms |
 | Step 7: code_review (completed) | 841ms |
-| Step 8: pr_preparation (pending) | n/a |
+| Step 8: pr_preparation (completed) | 5m 34s |
 
 
 ## Tasks
@@ -39,6 +39,8 @@
 
 | SHA | Subject | Range |
 |---|---|---|
+| `9baaeab` | chore(00070-batch-merge-must-reconcile-delivery-prs): mark the specification completed in the registry | base..HEAD |
+| `79fcf2e` | docs(00070-batch-merge-must-reconcile-delivery-prs): record delivery report | base..HEAD |
 | `6782271` | task(00070-batch-merge-must-reconcile-delivery-prs): task-2 | base..HEAD |
 | `412867f` | task(00070-batch-merge-must-reconcile-delivery-prs): task-1 | base..HEAD |
 
@@ -62,9 +64,18 @@
 | `skills/sdw-batch/SKILL.md` | modified |
 | `skills/sdw-orch/references/orchestrator_protocol.md` | modified |
 
+### Unattributed changes
+
+| File | Change |
+|---|---|
+| `.sdw/reports/00070-batch-merge-must-reconcile-delivery-prs-report.md` | added |
+| `.sdw/specs/00070-batch-merge-must-reconcile-delivery-prs.md` | modified |
+| `.sdw/specs/index.specs.md` | modified |
+
 ## Verification
 
 - test gate: status `passed`, exit code `0`, duration 3m 46s
+- Step 8 delivery: `completed`
 
 ## Fresh Verification & Audit
 
@@ -118,7 +129,13 @@ Not available
 
 ## Retrospective
 
-Not available
+- Status: `passed`
+- Report: `.sdw/state/00070-batch-merge-must-reconcile-delivery-prs/run-1792850307534-00070-batch-merge-must-reconci/run-1792850307534-00070-batch-merge-must-reconci.retro.md`
+- Data: `.sdw/state/00070-batch-merge-must-reconcile-delivery-prs/run-1792850307534-00070-batch-merge-must-reconci/run-1792850307534-00070-batch-merge-must-reconci.retro.json`
+- Signals: retries 4 (score 2, review 0, rounds 2, abandonments 0); leftover runs 0; missing artifacts 0; review findings 0 (0 open)
+- Candidates: 0
+- Applied fixes:
+  - none
 
 ## Breaking Changes
 
@@ -182,18 +199,18 @@ None detected.
 
 - Step 1 (derivation) skipped: not recorded
 - Task task-2 accepted after re-dispatch (sequence 2)
-- Environment: workspace: 6 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
+- Environment: workspace: 9 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
 
 ## Outcome
 
-- Result: `paused`
+- Result: `completed`
 - Delivery commit: `67822719fa2e9ca196f0b23a6b5d4f9784516737`
 - Ship status: `pending`
 - Duration: 30m 56s
 
 ## Step Contributions
 
-- Recorded: 8 contribution(s)
+- Recorded: 13 contribution(s)
 
 ### Step 1: derivation
 
@@ -241,8 +258,18 @@ None detected.
 
 ### Step 8: pr_preparation
 
-Not available
+- **convergence** 2026-10-24T14:39:20.543Z - Convergence iteration 1
+  - Body: `{"iteration":1,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":false}`
+- **convergence** 2026-10-24T14:39:21.124Z - Convergence iteration 2
+  - Body: `{"iteration":2,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":true}`
+- **gates** 2026-10-24T14:39:21.775Z - Pre-PR gates: 6 result(s)
+  - Body: `{"gates":[{"name":"prePrCommand","status":"skipped","detail":"prePrCommand is not configured"},{"name":"build","status":"skipped","detail":"requiredBuild is false"},{"name":"tests","status":"pass","detail":"npm test exited 0"},{"name":"security","status":"pass","detail":"sdw-security-checks found no blocking leak"},{"name":"runState","status":"pass","detail":"step 4, step 6 and step 7 completed; score 10 >= scoreMin 8"},{"name":"discovery","status":"pass","detail":"no prepare obligations discovered"}]}`
+- **ship** 2026-10-24T14:39:21.775Z - Pull request #74
+  - Body: `{"pushed":true,"branch":"feature/00070-batch-merge-must-reconcile-delivery-prs","pullRequest":{"number":"74","url":"https://github.com/jpolvora/spec-driven-workflow/pull/74","title":null},"shipStatus":"delivered"}`
+  - Evidence: `https://github.com/jpolvora/spec-driven-workflow/pull/74`
 
 ### Step 9: retrospective
 
-Not available
+- **retro** 2026-10-24T14:39:25.415Z - Retrospective passed: 0 candidate(s)
+  - Body: `{"status":"passed","runStatus":"completed","signals":{"retries":{"scoreIterations":2,"reviewIterations":0,"reviewRounds":2,"dispatchAbandonments":0,"total":4},"leftoverRuns":0,"missingArtifacts":0,"reviewFindings":{"total":0,"open":0}},"candidates":[],"fixes":{"recorded":[],"consolidated":null,"queuedSpecifications":[],"failures":[]},"routedCandidates":[],"reportMd":".sdw/state/00070-batch-merge-must-reconcile-delivery-prs/run-1792850307534-00070-batch-merge-must-reconci/run-1792850307534-00070-batch-merge-must-reconci.retro.md","reportJson":".sdw/state/00070-batch-merge-must-reconcile-delivery-prs/run-1792850307534-00070-batch-merge-must-reconci/run-1792850307534-00070-batch-merge-must-reconci.retro.json"}`
+  - Evidence: `.sdw/state/00070-batch-merge-must-reconcile-delivery-prs/run-1792850307534-00070-batch-merge-must-reconci/run-1792850307534-00070-batch-merge-must-reconci.retro.md`, `.sdw/state/00070-batch-merge-must-reconcile-delivery-prs/run-1792850307534-00070-batch-merge-must-reconci/run-1792850307534-00070-batch-merge-must-reconci.retro.json`
