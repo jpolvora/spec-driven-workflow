@@ -1576,8 +1576,14 @@ function executeQueue(manifest, config, options) {
       if (options.newRun) {
         // AC16: the flag starts a fresh run and records the run it replaced,
         // whether or not that run is stale; a stale one is never resumed.
+        // Spec 00071 AC1: the replaced run state becomes terminal and names the
+        // replacing run, so the retrospective, the monitor, resume, and the next
+        // queue pass all treat it as history instead of an open run.
+        const replacementRunId = generateRunId(item.slug);
+        const stateManager = require('../../sdw-orch/scripts/state_manager.cjs');
+        stateManager.markRunSuperseded(config.root, openRun.runId, replacementRunId);
         item.supersededRunId = openRun.runId;
-        item.runId = null;
+        item.runId = replacementRunId;
         if (stale) item.staleRun = { ...stale, superseded: true };
         say(options, stale
           ? `[sdw-batch] Open run "${stale.runId}" for ${item.slug} is ${stale.classification}: base ${stale.baseCommit} is not an ancestor of the refreshed lane commit ${stale.laneCommit}; superseded by --new-run.`

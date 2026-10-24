@@ -169,12 +169,16 @@ function selectRun(root, wantedRunId) {
 
 // Spec 00045 AC5: sibling run states of the same specification that never
 // reached a terminal status. Only files already read for run selection are used.
+// Spec 00071 AC2: `superseded` is terminal — a replaced run is not an abandoned
+// thread, so it is never reported as a leftover.
 function collectLeftoverRuns(entries, selected) {
   const specSlug = selected.state.specSlug;
   if (!specSlug) return [];
   return entries
     .filter((entry) => entry.file !== selected.file && entry.state.specSlug === specSlug)
-    .filter((entry) => entry.state.status !== 'completed' && entry.state.status !== 'failed')
+    .filter((entry) => entry.state.status !== 'completed'
+      && entry.state.status !== 'failed'
+      && entry.state.status !== 'superseded')
     .map((entry) => {
       const stamp = entry.state.updatedAt || entry.state.createdAt;
       const parsed = Date.parse(stamp);

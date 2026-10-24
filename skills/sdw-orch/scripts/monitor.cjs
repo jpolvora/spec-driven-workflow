@@ -8,7 +8,9 @@ const path = require('path');
 const telemetry = require('./telemetry.cjs');
 
 // Spec 00021 AC5/AC6: a run in one of these statuses has nothing left to watch.
-const TERMINAL_STATUSES = ['completed', 'failed', 'cancelled'];
+// Spec 00071 AC2: a superseded run was deliberately replaced, so it is terminal
+// too and never reported as active or stalled.
+const TERMINAL_STATUSES = ['completed', 'failed', 'cancelled', 'superseded'];
 
 // Spec 00021 AC6/AC5: documented defaults for the configurable stall window and
 // watch interval. `.sdw/config.json` overrides them per workspace.

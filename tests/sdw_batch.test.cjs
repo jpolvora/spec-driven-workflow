@@ -1919,7 +1919,7 @@ test('00058 AC14 & AC15: a stale open run halts naming the run, its base commit,
   }
 });
 
-test('00058 AC13 & AC16: --new-run supersedes the stale run, records its id, and never resumes it', () => {
+test('00058 AC13 & AC16 / 00071 AC1 & AC2: --new-run supersedes the stale run, records its id, and never resumes it', () => {
   const fixture = staleRunFixture();
   try {
     const invocations = [];
@@ -1941,10 +1941,18 @@ test('00058 AC13 & AC16: --new-run supersedes the stale run, records its id, and
     assert.equal(invocations[0].newRun, true, 'the flag is forwarded to the delegated run');
     const manifest = queue.loadManifest(queue.loadConfig(fixture.root));
     assert.equal(manifest.queue[0].supersededRunId, 'run-stale-alpha', 'the superseded run id is recorded on the item');
+    assert.equal(manifest.queue[0].runId, invocations[0].runId, 'the item owns the replacing run');
     assert.equal(manifest.queue[0].staleRun.superseded, true);
     assert.equal(manifest.queue[0].status, 'completed');
     const staleState = queue.readRunState(queue.loadConfig(fixture.root), 'run-stale-alpha');
-    assert.equal(staleState.status, 'paused', 'the stale run state is left untouched');
+    assert.equal(staleState.status, 'superseded', 'AC1: the replaced run state becomes terminal');
+    assert.equal(staleState.supersededBy, invocations[0].runId, 'AC1: it names the replacing run');
+    assert.ok(Number.isFinite(Date.parse(staleState.supersededAt)), 'AC1: it records when it was replaced');
+    assert.deepEqual(
+      queue.openRunsForSpec(queue.loadConfig(fixture.root), '00001-alpha'),
+      [],
+      'AC2: the batch stale-run check treats the superseded run as terminal, not open'
+    );
     assert.match(logs.join('\n'), /superseded by --new-run/);
   } finally {
     fs.rmSync(fixture.root, { recursive: true, force: true });
