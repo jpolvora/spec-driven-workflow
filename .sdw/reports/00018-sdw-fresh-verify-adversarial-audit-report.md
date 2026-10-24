@@ -17,7 +17,7 @@
 | Implementation start | 2026-10-24T03:23:58.141Z |
 | Implementation end | 2026-10-24T05:05:04.833Z |
 | Total wall-clock duration | 1h 41m 6s |
-| Generated at | 2026-10-24T06:25:38.169Z |
+| Generated at | 2026-10-24T06:25:42.951Z |
 | Step 1: derivation (skipped) | 4ms |
 | Step 2: refinement (completed) | 43ms |
 | Step 3: dag_generation (completed) | 19ms |
@@ -42,6 +42,7 @@
 
 | SHA | Subject | Range |
 |---|---|---|
+| `b41f809` | docs(00018-sdw-fresh-verify-adversarial-audit): record delivery report | base..HEAD |
 | `db5e059` | fix(00018-sdw-fresh-verify-adversarial-audit): a failed re-verification is a caveat, not a refutation | base..HEAD |
 | `b546397` | fix(00018-sdw-fresh-verify-adversarial-audit): stale audits block ship and untracked files join the delivery | base..HEAD |
 | `662d3cb` | fix(00018-sdw-fresh-verify-adversarial-audit): a submitted verdict cannot reopen a paused round | base..HEAD |
