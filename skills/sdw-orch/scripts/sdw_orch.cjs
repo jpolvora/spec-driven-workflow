@@ -24,6 +24,7 @@ const monitor = require('./monitor.cjs');
 const reporting = require('./reporting.cjs');
 const freshVerify = require('./fresh_verify.cjs');
 const auditRunner = require('./audit_runner.cjs');
+const reviewFindings = require('./review_findings.cjs');
 const memory = require('../../sdw-memory/scripts/sdw_memory.cjs');
 
 // Spec 00043: short, consistent step-number progress headers. Additive only:
@@ -5045,6 +5046,11 @@ function executeRun(options) {
     }]);
   } else if (startStep <= 7 && state.steps[7].status !== 'completed' && !options.skipReview) {
     state = stateManager.updateStepState(targetRoot, state.runId, 7, 'in_progress');
+    // Spec 00068 AC1: a re-run or a resumed Step 7 starts from the dispositions
+    // already recorded, so an unchanged finding is not raised again.
+    const previousReviewFindings = (state.steps[7] && state.steps[7].output && Array.isArray(state.steps[7].output.findings))
+      ? state.steps[7].output.findings
+      : [];
     logStepEnter(7);
     const resolvedCodeReviewScript = resolveSkillScript(targetRoot, 'sdw-code-review', path.join('scripts', 'sdw_code_review.cjs'), resolveOptions);
     const codeReviewScript = resolvedCodeReviewScript || path.resolve(__dirname, '../../sdw-code-review/scripts/sdw_code_review.cjs');
@@ -5213,6 +5219,14 @@ function executeRun(options) {
       const verify = invokeReview(false);
       reviewReport = (verify && verify.report) ? verify.report : fixRes.report;
     }
+
+    // Spec 00068 AC1: persist every finding with an explicit disposition slot;
+    // AC2 and AC3 fill it (commit sha or rationale plus timestamp) when the
+    // finding is disposed.
+    reviewReport = {
+      ...reviewReport,
+      findings: reviewFindings.normalizeFindings(reviewReport.findings, previousReviewFindings)
+    };
 
     state.reviewIteration = reviewLoop;
     let artifactRel = null;
