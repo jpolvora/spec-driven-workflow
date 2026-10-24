@@ -2382,6 +2382,53 @@ test('00070 AC3: a follow-up pull request on the delivery branch merges under th
   }
 });
 
+// The head branch is reused across runs, so the provider can list an earlier
+// pull request that is already merged ahead of the open follow-up. The search
+// must skip the merged entry and merge the pull request that can still merge.
+test('00070 AC3: an earlier merged pull request on the head branch is never selected as the follow-up', () => {
+  const { root, specs } = setup();
+  try {
+    writeConfig(root, { scmProvider: 'github', batch: { autoMerge: true } });
+    const probes = [];
+    const mergeCalls = [];
+    const { result } = captureLogs(() => queue.runBatch([specs[0]], {
+      root,
+      noSync: true,
+      _invoke: ({ runId }) => {
+        writeState(root, runId, 'completed', {
+          specSlug: '00001-alpha',
+          deliveryCommit: 'delivery-alpha',
+          branch: 'feature/00001-alpha',
+          prNumber: '58',
+          shipStatus: 'delivered'
+        });
+        return 0;
+      },
+      // Pull request 57 is the earlier run's merged pull request on the reused
+      // branch; the provider lists it before the open follow-up, 59.
+      _isPrMerged: ({ prNumber }) => {
+        probes.push(String(prNumber));
+        return ['57', '58'].includes(String(prNumber));
+      },
+      _listPrs: () => [{ number: 57, state: 'merged' }, { number: 59, state: 'open' }],
+      _checksStatus: () => ({ state: 'pass', failing: [] }),
+      _mergePr: ({ prNumber }) => { mergeCalls.push(String(prNumber)); return { merged: true }; }
+    }));
+
+    assert.equal(result, 0);
+    assert.deepEqual(mergeCalls, ['59'], 'only the open follow-up is merged');
+    assert.ok(!probes.includes('57'), 'the merged earlier pull request is never a merge candidate');
+    const item = queue.loadManifest(queue.loadConfig(root)).queue[0];
+    assert.equal(item.merge.prNumber, '58', 'the delivery record still describes the delivery');
+    assert.equal(item.followUp.prNumber, 59, 'the open follow-up is the recorded follow-up');
+    assert.notEqual(item.followUp.prNumber, 57, 'the merged earlier pull request is never the follow-up');
+    assert.equal(item.followUp.status, 'merged');
+    assert.equal(item.followUp.attempted, true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('00070 AC3: failing required checks on the follow-up halt the queue naming the check', () => {
   const { root, specs } = setup();
   try {

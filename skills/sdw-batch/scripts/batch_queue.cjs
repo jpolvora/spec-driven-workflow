@@ -1317,9 +1317,9 @@ function deliveryMerged({ config, prNumber, options = {} } = {}) {
 }
 
 // AC3: a follow-up pull request is another pull request on the delivery's head
-// branch, created by the post-merge commits. A closed or abandoned pull request
-// never merges, so it is not a follow-up.
-const UNMERGEABLE_PR_STATES = new Set(['closed', 'abandoned']);
+// branch, created by the post-merge commits. A closed, abandoned, or already
+// merged pull request cannot be merged again, so it is not a follow-up.
+const UNMERGEABLE_PR_STATES = new Set(['closed', 'abandoned', 'merged']);
 
 function followUpPullRequest({ config, head, deliveryNumber, options = {} } = {}) {
   return providerPullRequests({ config, head, options }).find(pullRequest =>

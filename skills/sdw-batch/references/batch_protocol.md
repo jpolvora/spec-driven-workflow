@@ -167,7 +167,7 @@ Two call sites read a recorded attempt, and they differ by design:
 
 ### Follow-up pull request
 
-Once the delivery is merged, the queue lists the pull requests on the delivery's head branch and takes the first one that is neither the delivery itself nor closed or abandoned. That follow-up, typically the post-merge registry and report commits shipped on the same branch, merges under the same required-check gate as the delivery: no merge request is created while its checks are pending, a provider refusal while they are pending waits, polls, and retries once, and failing checks halt the queue naming the pull request and the checks.
+Once the delivery is merged, the queue lists the pull requests on the delivery's head branch and takes the first one that is neither the delivery itself nor closed, abandoned, or already merged. That follow-up, typically the post-merge registry and report commits shipped on the same branch, merges under the same required-check gate as the delivery: no merge request is created while its checks are pending, a provider refusal while they are pending waits, polls, and retries once, and failing checks halt the queue naming the pull request and the checks.
 
 The follow-up keeps its own record on the item, so `merge` keeps describing the delivery:
 
