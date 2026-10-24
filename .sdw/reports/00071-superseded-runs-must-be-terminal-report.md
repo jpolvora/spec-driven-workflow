@@ -17,7 +17,7 @@
 | Implementation start | 2026-10-24T12:39:22.474Z |
 | Implementation end | 2026-10-24T13:06:57.219Z |
 | Total wall-clock duration | 27m 34s |
-| Generated at | 2026-10-24T13:31:46.297Z |
+| Generated at | 2026-10-24T13:51:24.539Z |
 | Step 1: derivation (skipped) | 6ms |
 | Step 2: refinement (completed) | 42ms |
 | Step 3: dag_generation (completed) | 10ms |
@@ -39,6 +39,8 @@
 
 | SHA | Subject | Range |
 |---|---|---|
+| `bd22aaa` | fix(00071-superseded-runs-must-be-terminal): recover an interrupted supersession on the next queue pass | base..HEAD |
+| `f10af3b` | docs(00071-superseded-runs-must-be-terminal): record delivery report | base..HEAD |
 | `9c84849` | fix(00071-superseded-runs-must-be-terminal): refuse a superseded run id and persist the replacement first | base..HEAD |
 | `94baacd` | docs(00071-superseded-runs-must-be-terminal): record delivery report | base..HEAD |
 | `c0eb20c` | task(00071-superseded-runs-must-be-terminal): task-2 | base..HEAD |
@@ -73,6 +75,7 @@
 | File | Change |
 |---|---|
 | `.sdw/reports/00071-superseded-runs-must-be-terminal-report.md` | added |
+| `skills/sdw-batch/references/batch_protocol.md` | modified |
 | `skills/sdw-orch/references/orchestrator_protocol.md` | modified |
 
 ## Verification
@@ -210,7 +213,7 @@ None detected.
 
 - Step 1 (derivation) skipped: not recorded
 - Task task-2 accepted after re-dispatch (sequence 2)
-- Environment: workspace: 12 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
+- Environment: workspace: 13 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
 
 ## Outcome
 
@@ -269,9 +272,9 @@ None detected.
 
 ### Step 8: pr_preparation
 
-- **convergence** 2026-10-24T13:19:08.883Z - Convergence iteration 1
+- **convergence** 2026-10-24T13:40:51.238Z - Convergence iteration 1
   - Body: `{"iteration":1,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":false}`
-- **convergence** 2026-10-24T13:19:09.866Z - Convergence iteration 2
+- **convergence** 2026-10-24T13:40:52.165Z - Convergence iteration 2
   - Body: `{"iteration":2,"rounds":2,"failingChecks":[{"name":"review","status":""}],"openThreads":1,"resolvedThreads":0,"fixCommit":null,"converged":false}`
 
 ### Step 9: retrospective
