@@ -17,7 +17,7 @@
 | Implementation start | 2026-10-24T03:23:58.141Z |
 | Implementation end | 2026-10-24T05:05:04.833Z |
 | Total wall-clock duration | 1h 41m 6s |
-| Generated at | 2026-10-24T05:21:16.471Z |
+| Generated at | 2026-10-24T06:25:42.951Z |
 | Step 1: derivation (skipped) | 4ms |
 | Step 2: refinement (completed) | 43ms |
 | Step 3: dag_generation (completed) | 19ms |
@@ -42,6 +42,14 @@
 
 | SHA | Subject | Range |
 |---|---|---|
+| `b41f809` | docs(00018-sdw-fresh-verify-adversarial-audit): record delivery report | base..HEAD |
+| `db5e059` | fix(00018-sdw-fresh-verify-adversarial-audit): a failed re-verification is a caveat, not a refutation | base..HEAD |
+| `b546397` | fix(00018-sdw-fresh-verify-adversarial-audit): stale audits block ship and untracked files join the delivery | base..HEAD |
+| `662d3cb` | fix(00018-sdw-fresh-verify-adversarial-audit): a submitted verdict cannot reopen a paused round | base..HEAD |
+| `364e196` | fix(00018-sdw-fresh-verify-adversarial-audit): keep unverified rounds paused instead of scoring | base..HEAD |
+| `7498dec` | fix(00018-sdw-fresh-verify-adversarial-audit): treat cited unchanged files as caveats, never refutations | base..HEAD |
+| `ff0cc7f` | fix(00018-sdw-fresh-verify-adversarial-audit): insert fault replacement text literally | base..HEAD |
+| `f89e676` | docs(00018-sdw-fresh-verify-adversarial-audit): record the final delivery report | base..HEAD |
 | `85f56e9` | chore(00018-sdw-fresh-verify-adversarial-audit): mark the specification completed in the registry | base..HEAD |
 | `5ae8a3d` | docs(00018-sdw-fresh-verify-adversarial-audit): record delivery report | base..HEAD |
 | `e921f90` | task(00018-sdw-fresh-verify-adversarial-audit): task-5 | base..HEAD |
