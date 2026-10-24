@@ -382,7 +382,7 @@ Template order:
 4. `## Commits`: `git log --format='%h %s' <baseCommit>..HEAD`, plus the delivery commit when it is outside that range.
 5. `## Files Changed`: change type from `git diff --name-status <baseCommit>..HEAD`, grouped by the task whose `filesChanged` names the path; a file owned by several tasks lists under each.
 6. `## Verification`: Step 4 gate status, exit code, and duration, plus the Step 8 delivery status.
-7. `## Code Review`: Step 7 status, result, findings by severity, blocking count, and report path.
+7. `## Code Review`: Step 7 status, result, findings by severity, blocking count, per-finding dispositions (`fixed` with its sha, or `waived` with its rationale; only an undisposed finding renders open), the undisposed count, and report path.
 8. `## Conformance Judgment`: the Step 5 score, the required minimum, the verified and failed counts, and one row per criterion with its verdict and evidence.
 9. `## Judge Analysis`: the Step 5 judge `summary`, `risks`, and `followUps`, attributed to the judge and marked advisory.
 10. `## Learnings`: every `learning` contribution with its kind, slug, severity, recording step, applying step with its evidence, and path patterns.

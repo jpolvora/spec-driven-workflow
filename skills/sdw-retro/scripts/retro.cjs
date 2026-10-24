@@ -582,6 +582,14 @@ function collectSignals(state, inspection, leftoverRuns = [], transcripts = {}) 
     path: finding && finding.path ? finding.path : null,
     line: finding && finding.line !== undefined ? finding.line : null,
     status: finding && finding.status ? finding.status : null,
+    // Spec 00068 AC6: the reviewer status is not the disposition; only a finding
+    // with neither `fixed` nor `waived` is still open.
+    disposition: finding && (finding.disposition === 'fixed' || finding.disposition === 'waived')
+      ? finding.disposition
+      : null,
+    at: finding && finding.at ? finding.at : null,
+    commit: finding && finding.commit ? finding.commit : null,
+    reason: finding && finding.reason ? finding.reason : null,
     ref: `#steps.7.output.findings[${index}]`
   }));
   const bySeverity = {};
@@ -591,7 +599,7 @@ function collectSignals(state, inspection, leftoverRuns = [], transcripts = {}) 
   }
   const reviewFindings = {
     total: findings.length,
-    open: findings.filter((finding) => finding.status === 'open').length,
+    open: findings.filter((finding) => finding.disposition === null).length,
     bySeverity,
     blockingCount: step7Output.blockingCount !== undefined ? step7Output.blockingCount : null,
     findings
@@ -845,6 +853,14 @@ function buildReport(options) {
   };
 }
 
+// Spec 00068 AC6: each finding renders its disposition instead of the reviewer's
+// stale `open` status; only an undisposed finding reads `open`.
+function findingDispositionLabel(finding) {
+  if (!finding || !finding.disposition) return 'open';
+  if (finding.disposition === 'fixed') return `fixed in ${finding.commit || 'unknown sha'}`;
+  return `waived: ${finding.reason || 'no rationale'}`;
+}
+
 function renderMarkdown(report) {
   const lines = [];
   const signals = report.signals;
@@ -918,7 +934,7 @@ function renderMarkdown(report) {
   lines.push(`- Total: ${signals.reviewFindings.total}`);
   lines.push(`- Open: ${signals.reviewFindings.open}`);
   for (const item of signals.reviewFindings.findings) {
-    lines.push(`- \`${item.id || 'finding'}\` (${item.severity || 'unknown'}, ${item.status || 'unknown'}) at ${item.path || 'unknown path'}${item.line === null ? '' : `:${item.line}`} (${item.ref})`);
+    lines.push(`- \`${item.id || 'finding'}\` (${item.severity || 'unknown'}, ${findingDispositionLabel(item)}) at ${item.path || 'unknown path'}${item.line === null ? '' : `:${item.line}`} (${item.ref})`);
   }
   lines.push('');
 

@@ -13,6 +13,7 @@ const retro = require('../skills/sdw-retro/scripts/retro.cjs');
 const sdwConfig = require('../skills/sdw-config/scripts/sdw_config.cjs');
 const sdwOrch = require('../skills/sdw-orch/scripts/sdw_orch.cjs');
 const stateManager = require('../skills/sdw-orch/scripts/state_manager.cjs');
+const reviewFindings = require('../skills/sdw-orch/scripts/review_findings.cjs');
 
 // Spec 027: run the deterministic judge stub when an orchestration fixture
 // completes past Step 4.
@@ -198,6 +199,61 @@ test('AC2 & AC5: explicit run reads declared artifacts and writes both reports b
   assert.match(markdown, new RegExp(`# Run Retrospective: ${state.runId}`));
   assert.match(markdown, /## Signals/);
   assert.match(markdown, /## Candidates/);
+});
+
+test('00068 AC6 & AC7: the retrospective renders dispositions, counts undisposed findings as open, and keeps them across a resume', (t) => {
+  const root = makeProject(t);
+  const state = makeState({ runId: 'run-00068-retro', slug: '00680-retro' });
+  const findings = [
+    {
+      id: 'CR-001', severity: 'warning', path: 'skills/x.cjs', line: 3, message: 'guard the branch',
+      status: 'open', disposition: 'fixed', at: '2026-10-24T10:00:00.000Z', commit: 'abc1234def', reason: null
+    },
+    {
+      id: 'CR-002', severity: 'suggestion', path: 'skills/y.cjs', line: 4, message: 'split the diff',
+      status: 'open', disposition: 'waived', at: '2026-10-24T10:01:00.000Z', commit: null,
+      reason: 'accepted: scheduled with spec 00069'
+    },
+    {
+      id: 'CR-003', severity: 'suggestion', path: 'skills/z.cjs', line: 5, message: 'rename the helper',
+      status: 'open', disposition: null, at: null, commit: null, reason: null
+    }
+  ];
+  state.steps['7'].output.findings = findings;
+  writeDefaultArtifacts(root, state);
+
+  // A resume re-runs Step 7: the reviewer re-reports the same findings without
+  // dispositions and the ledger restores the ones recorded before the pause.
+  const resumedFindings = reviewFindings.normalizeFindings(
+    findings.map(({ disposition, at, commit, reason, ...rest }) => rest),
+    findings
+  );
+  writeState(root, {
+    ...state,
+    steps: {
+      ...state.steps,
+      '7': { ...state.steps['7'], output: { ...state.steps['7'].output, findings: resumedFindings } }
+    }
+  });
+
+  const result = runRetroCli(root, ['run', '--run-id', state.runId, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.signals.reviewFindings.total, 3);
+  assert.equal(report.signals.reviewFindings.open, 1, 'AC6: every finding records status open, but only the undisposed one counts as open');
+  const ledger = report.signals.reviewFindings.findings;
+  assert.equal(ledger.find((item) => item.id === 'CR-001').disposition, 'fixed', 'AC6: the disposition survives a resume');
+  assert.equal(ledger.find((item) => item.id === 'CR-001').commit, 'abc1234def', 'AC2: the fixing sha survives a resume');
+  assert.equal(ledger.find((item) => item.id === 'CR-002').disposition, 'waived', 'AC6: the waiver survives a resume');
+  assert.equal(ledger.find((item) => item.id === 'CR-002').reason, 'accepted: scheduled with spec 00069', 'AC3: the rationale survives a resume');
+  assert.equal(ledger.find((item) => item.id === 'CR-003').disposition, null, 'AC6: an undisposed finding stays open');
+
+  const markdown = fs.readFileSync(path.join(root, report.outputs.markdown), 'utf8');
+  assert.ok(markdown.includes('### Review Findings\n\n- Total: 3\n- Open: 1'), 'AC6: the report counts only undisposed findings as open');
+  assert.match(markdown, /`CR-001` \(warning, fixed in abc1234def\)/, 'AC6: each finding renders its disposition');
+  assert.match(markdown, /`CR-002` \(suggestion, waived: accepted: scheduled with spec 00069\)/);
+  assert.match(markdown, /`CR-003` \(suggestion, open\)/);
+  assert.doesNotMatch(markdown, /`CR-001` \(warning, open\)/, 'AC6: a disposed finding is never rendered as open');
 });
 
 test('AC3: host transcripts and agent chat logs are excluded from inputs', (t) => {
