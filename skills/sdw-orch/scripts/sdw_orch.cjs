@@ -418,6 +418,7 @@ function parseArgs(args) {
     taskId: null,
     evidencePath: null,
     verdictPath: null,
+    faultsPath: null,
     reason: null,
     progress: null,
     progressFile: null,
@@ -519,6 +520,8 @@ function parseArgs(args) {
     else if (arg.startsWith('--mode=')) result.implementationMode = arg.slice(7);
     else if (arg === '--verdict') result.verdictPath = args[++i];
     else if (arg.startsWith('--verdict=')) result.verdictPath = arg.slice(10);
+    else if (arg === '--faults') result.faultsPath = args[++i];
+    else if (arg.startsWith('--faults=')) result.faultsPath = arg.slice(9);
     else if (arg === '--reason') result.reason = args[++i];
     else if (arg.startsWith('--reason=')) result.reason = arg.slice(9);
     else if (arg === '--progress-file') result.progressFile = args[++i];
@@ -2487,6 +2490,26 @@ function freshVerifyEnabled(config) {
   return Boolean(config && config.verification && config.verification.freshVerifyEnabled === true);
 }
 
+// Spec 00018 AC8: at most three fix and re-verify rounds per run. Round 4 and
+// later are refused; the counter lives on state.freshVerify.round so the
+// residual-defect pause can compare it with maxRounds.
+const FRESH_VERIFY_MAX_ROUNDS = 3;
+
+function resolveFreshVerifyTestCommand(config) {
+  const verification = (config && config.verification) || {};
+  const explicit = typeof verification.testCommand === 'string' ? verification.testCommand.trim() : '';
+  if (explicit) return explicit;
+  const legacy = config && typeof config.testCommand === 'string' ? config.testCommand.trim() : '';
+  return legacy || null;
+}
+
+function resolveFreshVerifyTestTimeout(config) {
+  const verification = (config && config.verification) || {};
+  return Number.isInteger(verification.timeoutMs) && verification.timeoutMs > 0
+    ? verification.timeoutMs
+    : undefined;
+}
+
 function parseFreshVerifyCriteria(targetRoot, state) {
   if (!state || !state.specPath) return [];
   try {
@@ -2535,7 +2558,37 @@ function printFreshVerifyHandoff(targetRoot, state, record) {
 // Spec 00018 AC2/AC3: creates the scratch worktree from the delivery diff,
 // writes the fenced verifier prompt, and records the scratch path on the run
 // state. A failure records a failed verification and never continues silently.
-function beginFreshVerification(targetRoot, state, criteria) {
+function beginFreshVerification(targetRoot, state, criteria, options = {}) {
+  const config = options.config || {};
+  const priorRound = state.freshVerify && Number.isInteger(state.freshVerify.round) ? state.freshVerify.round : 0;
+
+  // Spec 00018 AC8: the fourth fix and re-verify attempt is refused before any
+  // scratch worktree or state mutation, so the round policy is never exceeded.
+  if (priorRound >= FRESH_VERIFY_MAX_ROUNDS) {
+    return {
+      ok: false,
+      refused: true,
+      state,
+      error: new freshVerify.FreshVerifyError(
+        `Fresh verification round limit reached: ${priorRound} of ${FRESH_VERIFY_MAX_ROUNDS} fix and re-verify rounds are already used. A fourth round is refused; resolve the residual defects from the last verdict or start a new run.`,
+        { code: 'round_limit_reached' }
+      )
+    };
+  }
+
+  let plannedFaults = null;
+  try {
+    plannedFaults = options.faultsPath ? freshVerify.readFaultPlan(path.resolve(targetRoot, options.faultsPath)) : null;
+  } catch (err) {
+    const failed = updateFreshVerifyRecord(targetRoot, state.runId, {
+      status: 'failed',
+      error: err.message,
+      errorCode: err.code || 'fault_plan_invalid',
+      updatedAt: new Date().toISOString()
+    });
+    return { ok: false, state: failed, error: err };
+  }
+
   let started;
   try {
     started = freshVerify.startVerification({
@@ -2556,11 +2609,44 @@ function beginFreshVerification(targetRoot, state, criteria) {
     return { ok: false, state: failed, error: err };
   }
 
+  // Spec 00018 AC5/AC6/AC7: inject one fault per criterion in the scratch
+  // worktree and record both the observed passing baseline and the fault
+  // observations. A failure here removes the scratch worktree and fails closed.
+  let faultEvidence;
+  try {
+    faultEvidence = freshVerify.runFaultInjection({
+      scratchPath: started.scratch.path,
+      criteria,
+      faults: plannedFaults,
+      testCommand: resolveFreshVerifyTestCommand(config),
+      timeoutMs: resolveFreshVerifyTestTimeout(config)
+    });
+  } catch (err) {
+    const cleanup = freshVerify.removeScratchWorktree({ projectRoot: targetRoot, worktreePath: started.scratch.path });
+    const message = cleanup.ok ? err.message : `${err.message}; scratch cleanup also failed: ${cleanup.error}`;
+    const failedAt = new Date().toISOString();
+    const failed = updateFreshVerifyRecord(targetRoot, state.runId, {
+      status: 'failed',
+      error: message,
+      errorCode: err.code || 'fault_injection_failed',
+      scratch: {
+        path: started.scratch.rel,
+        createdAt: failedAt,
+        diffBytes: started.diff.bytes,
+        diffApplied: started.scratch.diffApplied,
+        removedAt: cleanup.ok ? failedAt : null
+      },
+      startedAt: failedAt,
+      updatedAt: failedAt
+    });
+    return { ok: false, state: failed, error: new freshVerify.FreshVerifyError(message, { code: err.code }) };
+  }
+
   const now = new Date().toISOString();
-  const priorRound = state.freshVerify && Number.isInteger(state.freshVerify.round) ? state.freshVerify.round : 0;
   const record = {
     status: 'awaiting_verdict',
     round: priorRound + 1,
+    maxRounds: FRESH_VERIFY_MAX_ROUNDS,
     baseCommit: String(state.baseCommit),
     acIds: criteria.map(ac => ac.id),
     scratch: {
@@ -2574,6 +2660,8 @@ function beginFreshVerification(targetRoot, state, criteria) {
     verdictPath: started.verdictFileRel,
     verdicts: [],
     residualDefects: [],
+    faults: faultEvidence.faults,
+    faultBaseline: faultEvidence.baseline,
     startedAt: now,
     updatedAt: now,
     error: null
@@ -2597,11 +2685,19 @@ function finishFreshVerification(targetRoot, state, criteria, verdictPath) {
     ? freshVerify.removeScratchWorktree({ projectRoot: targetRoot, worktreePath: scratchAbs })
     : { ok: true, removed: false, reason: 'no_worktree' };
 
+  // Spec 00018 AC6/AC7: a `verified` verdict is only accepted when the recorded
+  // fault evidence shows an observed passing baseline and a detected fault.
+  // Every other verified claim is downgraded to unverified with its reason.
+  const gated = freshVerify.applyFaultEvidence(validation.verdicts, {
+    baseline: prior.faultBaseline || null,
+    faults: Array.isArray(prior.faults) ? prior.faults : []
+  });
+
   const ok = validation.valid && cleanup.ok;
   const now = new Date().toISOString();
   const patch = {
     status: ok ? 'completed' : 'failed',
-    verdicts: validation.verdicts,
+    verdicts: gated.verdicts,
     residualDefects: validation.residualDefects,
     verificationErrors: validation.errors,
     cleanup: cleanup.ok
@@ -2678,7 +2774,7 @@ function runFreshVerifyTransition(targetRoot, state, config, options = {}) {
           result: { runId: state.runId, status: 'failed', error: `Fresh verification failed: ${reason}` }
         };
       }
-      const verifiedCount = finished.validation.verdicts.filter(item => item.verdict === 'verified').length;
+      const verifiedCount = (finished.record.verdicts || []).filter(item => item.verdict === 'verified').length;
       console.log(`[Fresh Verify] Verdict accepted: ${verifiedCount}/${criteria.length} AC(s) verified.`);
       return { code: 0, state: finished.state, skipped: false };
     }
@@ -2688,7 +2784,14 @@ function runFreshVerifyTransition(targetRoot, state, config, options = {}) {
     return { code: 4, state, skipped: false, awaiting: true, record: prior };
   }
 
-  const started = beginFreshVerification(targetRoot, state, criteria);
+  const started = beginFreshVerification(targetRoot, state, criteria, {
+    config,
+    faultsPath: options.faultsPath || null
+  });
+  if (!started.ok && started.refused) {
+    console.error(`[Fresh Verify] ${started.error.message}`);
+    return { code: 1, state, result: { runId: state.runId, status: 'paused', error: started.error.message } };
+  }
   if (!started.ok) {
     const reason = `Fresh verification failed closed: ${started.error.message}`;
     state = stateManager.loadRunState(targetRoot, state.runId);
@@ -2712,6 +2815,7 @@ function runFreshVerifyTransition(targetRoot, state, config, options = {}) {
 // validates the verdict file, records it, and cleans up the scratch worktree.
 function cmdFreshVerify(options) {
   const targetRoot = options.root ? path.resolve(options.root) : process.cwd();
+  const config = loadProjectConfig(targetRoot, options);
   let state;
   try {
     state = options.runId
@@ -2756,8 +2860,16 @@ function cmdFreshVerify(options) {
       }
       return 1;
     }
-    const verifiedCount = finished.validation.verdicts.filter(item => item.verdict === 'verified').length;
+    const acceptedVerdicts = finished.record.verdicts || [];
+    const verifiedCount = acceptedVerdicts.filter(item => item.verdict === 'verified').length;
     console.log(`[sdw-orch fresh-verify] Verdict accepted for run "${state.runId}": ${verifiedCount}/${criteria.length} AC(s) verified.`);
+    for (const entry of acceptedVerdicts) {
+      if (entry.verdict === 'verified') {
+        console.log(`  - ${entry.id} verified (fault observed, evidence: ${entry.passingEvidence})`);
+      } else if (entry.unverifiedReason) {
+        console.log(`  - ${entry.id} unverified: ${entry.unverifiedReason}`);
+      }
+    }
     if (finished.cleanup.removed) {
       console.log('[sdw-orch fresh-verify] Scratch worktree removed.');
     }
@@ -2765,7 +2877,7 @@ function cmdFreshVerify(options) {
       console.log(JSON.stringify({
         runId: state.runId,
         status: 'completed',
-        verdicts: finished.validation.verdicts,
+        verdicts: acceptedVerdicts,
         residualDefects: finished.validation.residualDefects,
         cleanup: finished.cleanup
       }, null, 2));
@@ -2783,7 +2895,14 @@ function cmdFreshVerify(options) {
     return 4;
   }
 
-  const started = beginFreshVerification(targetRoot, state, criteria);
+  const started = beginFreshVerification(targetRoot, state, criteria, {
+    config,
+    faultsPath: options.faultsPath || null
+  });
+  if (!started.ok && started.refused) {
+    console.error(`[sdw-orch fresh-verify] ${started.error.message}`);
+    return 1;
+  }
   if (!started.ok) {
     console.error(`[sdw-orch fresh-verify] Scratch worktree creation failed; scoring is blocked: ${started.error.message}`);
     return 1;
@@ -2797,10 +2916,12 @@ function cmdFreshVerify(options) {
       runId: state.runId,
       status: 'awaiting_verdict',
       round: started.record.round,
+      maxRounds: started.record.maxRounds,
       scratch: started.record.scratch.path,
       promptPath: started.record.promptPath,
       verdictPath: started.record.verdictPath,
-      acIds: started.record.acIds
+      acIds: started.record.acIds,
+      faults: started.record.faults
     }, null, 2));
   }
   return 4;
@@ -6971,6 +7092,7 @@ Options:
   --progress-file <path> File containing the checkpoint progress JSON
   --next-action <text>   Action the next turn must take after pause-turn
   --verdict <path>       Path to a verdict JSON file for score submit (per-criterion verdicts: ${scoreEvaluator.VERDICT_VALUES.join(' | ')}) or fresh-verify (verified | unverified)
+  --faults <path>        Fault plan JSON for fresh-verify: one entry per AC, either {acId,file,find,replace} or {acId,noOp,reason}
   --ac <id...>           Acceptance criterion ids for ledger link (one or more, until the next flag)
   --type <type>          Evidence type for ledger link: file | test | commit | review | sabotage
   --path <path>          Evidence path for --type file (stored project-relative with forward slashes; outside-root paths are refused)

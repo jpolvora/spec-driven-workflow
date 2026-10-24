@@ -39,12 +39,17 @@ function git(root, command) {
   return execSync(`git ${command}`, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 }
 
-function setupRepo() {
+function setupRepo(options = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-fv-test-'));
   git(root, 'init -q');
   git(root, 'config user.email "test@example.com"');
   git(root, 'config user.name "SDW Test"');
-  fs.writeFileSync(path.join(root, 'app.cjs'), '// baseline\n', 'utf8');
+  fs.writeFileSync(path.join(root, 'app.cjs'), options.appFile || '// baseline\n', 'utf8');
+  for (const [relPath, content] of Object.entries(options.files || {})) {
+    const absPath = path.join(root, relPath);
+    fs.mkdirSync(path.dirname(absPath), { recursive: true });
+    fs.writeFileSync(absPath, content, 'utf8');
+  }
   git(root, 'add -A');
   git(root, 'commit -qm baseline');
   return { root, baseCommit: git(root, 'rev-parse HEAD') };
@@ -58,11 +63,19 @@ function setupWorkspace(options = {}) {
   fs.writeFileSync(path.join(root, '.gitignore'), '.sdw/state/\n.sdw/worktrees/\n.sdw/sandbox/\n', 'utf8');
   fs.writeFileSync(path.join(root, 'app.cjs'), '// baseline\n', 'utf8');
   fs.writeFileSync(path.join(root, '.sdw', 'specs', 'fresh-spec.md'), options.specBody || SPEC_BODY, 'utf8');
+  for (const [relPath, content] of Object.entries(options.baselineFiles || {})) {
+    const absPath = path.join(root, relPath);
+    fs.mkdirSync(path.dirname(absPath), { recursive: true });
+    fs.writeFileSync(absPath, content, 'utf8');
+  }
 
   const configPath = path.join(root, '.sdw', 'config.json');
   const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
   if (options.freshVerifyEnabled) {
     config.verification = { ...(config.verification || {}), freshVerifyEnabled: true };
+  }
+  if (options.testCommand) {
+    config.verification = { ...(config.verification || {}), testCommand: options.testCommand };
   }
   if (options.implementation) {
     config.implementation = options.implementation;
@@ -490,6 +503,252 @@ test('AC1-AC4: the Step 4 -> 5 transition pauses on the verifier, then resumes s
     assert.equal(state.steps[5].status, 'completed');
     assert.equal(state.freshVerify.status, 'completed');
     assert.equal(fs.existsSync(path.resolve(root, state.freshVerify.scratch.path)), false, 'no scratch worktree survives');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC5 & AC6: one fault per AC is isolated and a fault that leaves the suite green is not detection', () => {
+  const appFile = "'use strict';\nfunction total() { return 2; }\nmodule.exports = total;\n";
+  const verifyFile = [
+    "'use strict';",
+    "const assert = require('assert');",
+    "assert.equal(require('./app.cjs')(), 2);",
+    "console.log('ok');",
+    ''
+  ].join('\n');
+  const { root, baseCommit } = setupRepo({ appFile, files: { 'verify.cjs': verifyFile } });
+  const scratchDir = freshVerify.resolveScratchDir(root, 'run-faults');
+  try {
+    const scratch = freshVerify.createScratchWorktree({ projectRoot: root, baseCommit, diff: '', scratchDir });
+    const originalApp = fs.readFileSync(path.join(scratch.path, 'app.cjs'));
+    const criteria = [
+      { id: 'AC1', text: 'The system shall return the documented total.' },
+      { id: 'AC2', text: 'The system shall expose the total to callers.' },
+      { id: 'AC3', text: 'The system shall document the total.' }
+    ];
+
+    const evidence = freshVerify.runFaultInjection({
+      scratchPath: scratch.path,
+      criteria,
+      faults: [
+        { acId: 'AC1', file: 'app.cjs', find: 'return 2;', replace: 'return 3;' },
+        // AC2 targets the same text as AC1: it only resolves when AC1's fault
+        // was reverted before AC2 was applied.
+        { acId: 'AC2', file: 'app.cjs', find: 'return 2;', replace: 'return 2; /* inert */' },
+        { acId: 'AC3', noOp: true, reason: 'documentation-only criterion with no executable surface' }
+      ],
+      testCommand: 'node verify.cjs'
+    });
+
+    assert.equal(evidence.baseline.passed, true, `baseline must pass: ${evidence.baseline.outputTail}`);
+    assert.equal(evidence.faults.length, 3, 'one fault per acceptance criterion');
+    const byId = new Map(evidence.faults.map(item => [item.id, item]));
+    assert.equal(byId.get('AC1').faultObserved, true, 'the deliberate defect is detected by the suite');
+    assert.equal(byId.get('AC1').reverted, true);
+    assert.equal(byId.get('AC2').faultObserved, false, 'an inert mutation leaves the suite green');
+    assert.match(byId.get('AC2').reason, /not detected/);
+    assert.match(byId.get('AC2').reason, /return 2; \/\* inert \*\//);
+    assert.equal(byId.get('AC3').applied, false);
+    assert.match(byId.get('AC3').reason, /No-op mutation/);
+
+    assert.ok(
+      fs.readFileSync(path.join(scratch.path, 'app.cjs')).equals(originalApp),
+      'every injected fault is reverted before verification continues'
+    );
+    assert.equal(git(scratch.path, 'status --porcelain'), '', 'the scratch worktree is clean after the fault run');
+
+    const gated = freshVerify.applyFaultEvidence([
+      { id: 'AC1', verdict: 'verified' },
+      { id: 'AC2', verdict: 'verified' },
+      { id: 'AC3', verdict: 'verified' }
+    ], evidence);
+    assert.equal(gated.verdicts[0].verdict, 'verified');
+    assert.equal(gated.verdicts[0].faultObserved, true);
+    assert.match(gated.verdicts[0].passingEvidence, /node verify\.cjs exited 0/);
+    assert.equal(gated.verdicts[1].verdict, 'unverified', 'an undetected fault can never verify its AC');
+    assert.equal(gated.verdicts[1].claimedVerdict, 'verified');
+    assert.match(gated.verdicts[1].unverifiedReason, /not detected/);
+    assert.match(gated.verdicts[1].unverifiedReason, /inert/, 'the unverified reason names the fault');
+    assert.match(gated.verdicts[1].unverifiedReason, /exited 0 \(passed\)/, 'the unverified reason names the observed result');
+    assert.equal(gated.verdicts[2].verdict, 'unverified');
+    assert.match(gated.verdicts[2].unverifiedReason, /no-op mutation/);
+
+    // A supplied plan must cover every AC, name known ids, and match the diff.
+    assert.throws(
+      () => freshVerify.runFaultInjection({
+        scratchPath: scratch.path,
+        criteria,
+        faults: [{ acId: 'AC1', file: 'app.cjs', find: 'return 2;', replace: 'return 3;' }],
+        testCommand: 'node verify.cjs'
+      }),
+      err => err.name === 'FreshVerifyError' && err.code === 'fault_plan_missing_criterion' && /AC2, AC3/.test(err.message)
+    );
+    assert.throws(
+      () => freshVerify.runFaultInjection({
+        scratchPath: scratch.path,
+        criteria,
+        faults: [
+          { acId: 'AC1', file: 'app.cjs', find: 'return 2;', replace: 'return 3;' },
+          { acId: 'AC2', file: 'app.cjs', find: 'return 2;', replace: 'return 2;' },
+          { acId: 'AC9', noOp: true, reason: 'unknown criterion' }
+        ],
+        testCommand: 'node verify.cjs'
+      }),
+      err => err.code === 'fault_plan_invalid' && /AC9/.test(err.message)
+    );
+    assert.throws(
+      () => freshVerify.runFaultInjection({
+        scratchPath: scratch.path,
+        criteria,
+        faults: [
+          { acId: 'AC1', file: 'app.cjs', find: 'not-present-anywhere', replace: 'x' },
+          { acId: 'AC2', file: 'app.cjs', find: 'return 2;', replace: 'return 2;' },
+          { acId: 'AC3', noOp: true, reason: 'documentation-only' }
+        ],
+        testCommand: 'node verify.cjs'
+      }),
+      err => err.code === 'fault_target_mismatch'
+    );
+    assert.equal(git(scratch.path, 'status --porcelain'), '', 'rejected plans never leave the scratch worktree dirty');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC7: verified requires an observed passing test run in the scratch worktree', () => {
+  const verdicts = [
+    { id: 'AC1', verdict: 'verified', passingEvidence: 'claimed by the verifier' },
+    { id: 'AC2', verdict: 'unverified' }
+  ];
+  const detected = { id: 'AC1', faultInjected: 'app.cjs: replace "return 2;" with "return 3;"', faultObserved: true };
+
+  const noCommand = freshVerify.applyFaultEvidence(verdicts, { baseline: null, faults: [detected] });
+  assert.equal(noCommand.verdicts[0].verdict, 'unverified', 'no observation means no verified verdict');
+  assert.match(noCommand.verdicts[0].unverifiedReason, /no observed passing test evidence/);
+  assert.equal(noCommand.verdicts[0].evidenceClaim, 'claimed by the verifier');
+
+  const failingBaseline = freshVerify.applyFaultEvidence(verdicts, {
+    baseline: { command: 'node verify.cjs', passed: false, exitCode: 1 },
+    faults: [detected]
+  });
+  assert.equal(failingBaseline.verdicts[0].verdict, 'unverified', 'a non-passing observation blocks verified');
+  assert.match(failingBaseline.verdicts[0].unverifiedReason, /exited 1/);
+
+  const passingBaseline = freshVerify.applyFaultEvidence(verdicts, {
+    baseline: { command: 'node verify.cjs', passed: true, exitCode: 0 },
+    faults: [detected]
+  });
+  assert.equal(passingBaseline.verdicts[0].verdict, 'verified', 'passing observation plus detected fault verifies');
+  assert.match(passingBaseline.verdicts[0].passingEvidence, /node verify\.cjs exited 0/);
+  assert.equal(passingBaseline.verdicts[1].verdict, 'unverified', 'an unverified claim is never promoted');
+
+  const undetected = freshVerify.applyFaultEvidence(verdicts, {
+    baseline: { command: 'node verify.cjs', passed: true, exitCode: 0 },
+    faults: [{ ...detected, faultObserved: false }]
+  });
+  assert.equal(undetected.verdicts[0].verdict, 'unverified');
+  assert.match(undetected.verdicts[0].unverifiedReason, /not detected/);
+});
+
+test('AC5-AC7: the fresh-verify CLI records fault evidence and gates verified verdicts', () => {
+  const verifyFile = [
+    "'use strict';",
+    "const fs = require('fs');",
+    "const path = require('path');",
+    "const app = fs.readFileSync(path.join(__dirname, 'app.cjs'), 'utf8');",
+    "if (!app.includes('// implemented')) { console.error('missing implemented marker'); process.exit(1); }",
+    "console.log('ok');",
+    ''
+  ].join('\n');
+  const { root } = setupWorkspace({
+    createState: true,
+    testCommand: 'node verify.cjs',
+    baselineFiles: { 'verify.cjs': verifyFile }
+  });
+  try {
+    fs.appendFileSync(path.join(root, 'app.cjs'), '// implemented\n', 'utf8');
+    const runId = latestState(root).runId;
+    const faultsFile = path.join(root, 'faults.json');
+    fs.writeFileSync(faultsFile, JSON.stringify({
+      faults: [
+        { acId: 'AC1', file: 'app.cjs', find: '// implemented', replace: '// fault' },
+        { acId: 'AC2', file: 'app.cjs', find: '// implemented', replace: '// implemented // inert' }
+      ]
+    }), 'utf8');
+
+    const started = runCli(root, ['fresh-verify', '--run-id', runId, '--faults', faultsFile]);
+    assert.equal(started.status, 4, `expected the awaiting-verdict handoff; stderr: ${started.stderr}`);
+    let state = latestState(root);
+    assert.equal(state.freshVerify.round, 1);
+    assert.equal(state.freshVerify.maxRounds, 3);
+    assert.equal(state.freshVerify.faultBaseline.passed, true, state.freshVerify.faultBaseline.outputTail);
+    assert.equal(state.freshVerify.faults.length, 2);
+    assert.equal(state.freshVerify.faults[0].faultObserved, true);
+    assert.equal(state.freshVerify.faults[1].faultObserved, false);
+    const scratchApp = fs.readFileSync(path.resolve(root, state.freshVerify.scratch.path, 'app.cjs'), 'utf8');
+    assert.ok(scratchApp.includes('// implemented'), 'the delivery diff is present in the scratch worktree');
+    assert.ok(!scratchApp.includes('// fault'), 'the injected fault is reverted before the verifier handoff');
+
+    const verdictFile = path.join(root, 'verdict.json');
+    fs.writeFileSync(verdictFile, JSON.stringify({
+      criteria: [
+        { id: 'AC1', verdict: 'verified' },
+        { id: 'AC2', verdict: 'verified' }
+      ]
+    }), 'utf8');
+    const submitted = runCli(root, ['fresh-verify', '--run-id', runId, '--verdict', verdictFile]);
+    assert.equal(submitted.status, 0, `verdict submission failed: ${submitted.stderr}`);
+    assert.match(submitted.stdout, /1\/2 AC\(s\) verified/);
+
+    state = latestState(root);
+    const [ac1, ac2] = state.freshVerify.verdicts;
+    assert.equal(ac1.verdict, 'verified');
+    assert.equal(ac2.verdict, 'unverified');
+    assert.equal(ac2.claimedVerdict, 'verified');
+    assert.match(ac2.unverifiedReason, /not detected/);
+    assert.match(ac2.unverifiedReason, /inert/);
+    assert.equal(state.freshVerify.status, 'completed');
+    assert.equal(state.freshVerify.cleanup.removed, true);
+    assert.equal(fs.existsSync(path.resolve(root, state.freshVerify.scratch.path)), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC8: a fourth fix and re-verify round is refused', () => {
+  const { root } = setupWorkspace({ createState: true, testCommand: 'node -e "process.exit(0)"' });
+  try {
+    fs.appendFileSync(path.join(root, 'app.cjs'), '// implemented\n', 'utf8');
+    const runId = latestState(root).runId;
+    const badVerdict = path.join(root, 'bad-verdict.json');
+    fs.writeFileSync(badVerdict, JSON.stringify({
+      criteria: [{ id: 'AC1', verdict: 'verified' }]
+    }), 'utf8');
+
+    for (let round = 1; round <= 3; round++) {
+      const started = runCli(root, ['fresh-verify', '--run-id', runId]);
+      assert.equal(started.status, 4, `round ${round} must start; stderr: ${started.stderr}`);
+      assert.equal(latestState(root).freshVerify.round, round, `round ${round} is recorded on run state`);
+      const rejected = runCli(root, ['fresh-verify', '--run-id', runId, '--verdict', badVerdict]);
+      assert.equal(rejected.status, 1, `round ${round} verdict is rejected`);
+      assert.match(rejected.stderr, /Missing verdict for AC2/);
+    }
+
+    const refused = runCli(root, ['fresh-verify', '--run-id', runId]);
+    assert.equal(refused.status, 1, 'the fourth attempt is refused');
+    assert.match(refused.stderr, /round limit reached/i);
+    assert.match(refused.stderr, /fourth round is refused/i);
+
+    const state = latestState(root);
+    assert.equal(state.freshVerify.round, 3, 'no fourth round is recorded');
+    assert.equal(state.freshVerify.maxRounds, 3);
+    assert.equal(state.freshVerify.status, 'failed');
+    assert.equal(
+      fs.existsSync(freshVerify.resolveScratchDir(root, runId)),
+      false,
+      'a refused round creates no scratch worktree'
+    );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

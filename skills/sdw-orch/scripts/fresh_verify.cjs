@@ -17,6 +17,9 @@ const SCRATCH_ROOT_REL = '.sdw/worktrees';
 const SCRATCH_DIRNAME = 'fresh-verify';
 const PROMPT_FILE_NAME = 'fresh-verify.prompt.md';
 const VERDICT_FILE_NAME = 'fresh-verify.verdict.json';
+const DEFAULT_TEST_TIMEOUT_MS = 600000;
+// The recorded output is a bounded tail, never the whole test transcript.
+const TEST_OUTPUT_TAIL_CHARS = 1200;
 
 // Spec 00018 AC3: the verifier context is fenced to these two inputs. Any other
 // key is refused instead of silently omitted, so a transcript, DAG prompt,
@@ -174,6 +177,322 @@ function removeScratchWorktree(options = {}) {
     };
   }
   return { ok: true, removed: true };
+}
+
+// Spec 00018 AC5: one deterministic, reversible mutation per acceptance
+// criterion. A fault is an exact-string replacement in one file of the scratch
+// worktree, so it never depends on a mutation-testing tool or a random seed.
+// A criterion with no executable surface is recorded as a documented no-op.
+function describeFault(fault) {
+  if (!fault) return null;
+  if (fault.noOp) return `no-op mutation: ${fault.reason}`;
+  return `${normalizePath(fault.file)}: replace ${JSON.stringify(fault.find)} with ${JSON.stringify(fault.replace)}`;
+}
+
+function readFaultPlan(faultsFileAbs) {
+  const fileAbs = faultsFileAbs ? path.resolve(faultsFileAbs) : null;
+  if (!fileAbs || !fs.existsSync(fileAbs)) {
+    throw new FreshVerifyError(
+      `Fault plan not found: "${normalizePath(fileAbs || '')}". Pass --faults <path> with one entry per acceptance criterion.`,
+      { code: 'fault_plan_missing' }
+    );
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(fileAbs, 'utf8'));
+  } catch (err) {
+    throw new FreshVerifyError(`Fault plan "${normalizePath(fileAbs)}" is not valid JSON: ${err.message}`, { code: 'fault_plan_invalid' });
+  }
+  const faults = Array.isArray(parsed)
+    ? parsed
+    : (parsed && typeof parsed === 'object' && Array.isArray(parsed.faults) ? parsed.faults : null);
+  if (!faults) {
+    throw new FreshVerifyError(
+      `Fault plan "${normalizePath(fileAbs)}" must be a JSON array or an object with a "faults" array.`,
+      { code: 'fault_plan_invalid' }
+    );
+  }
+  return faults;
+}
+
+// Spec 00018 AC5: normalize the operator-supplied plan into exactly one entry
+// per acceptance criterion, in declaration order. An omitted entry is refused
+// when a plan was supplied; only a wholly absent plan degrades to documented
+// no-ops, so verification still records why nothing could be proven.
+function planFaults(criteria, faults) {
+  const acs = Array.isArray(criteria) ? criteria : [];
+  const supplied = Array.isArray(faults);
+  if (!supplied) {
+    return acs.map(ac => ({
+      id: String(ac.id).trim(),
+      fault: {
+        noOp: true,
+        reason: 'no defect was injected because no fault plan was supplied for this verification'
+      }
+    }));
+  }
+
+  const knownIds = new Set(acs.map(ac => String(ac.id).trim()));
+  const planned = new Map();
+  faults.forEach((entry, index) => {
+    const label = `faults[${index}]`;
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw new FreshVerifyError(`${label} must be an object.`, { code: 'fault_plan_invalid' });
+    }
+    const id = typeof entry.acId === 'string' ? entry.acId.trim() : (typeof entry.id === 'string' ? entry.id.trim() : '');
+    if (!id) {
+      throw new FreshVerifyError(`${label} is missing an acceptance-criterion id (acId).`, { code: 'fault_plan_invalid' });
+    }
+    if (!knownIds.has(id)) {
+      throw new FreshVerifyError(`${label} names unknown acceptance criterion "${id}".`, { code: 'fault_plan_invalid' });
+    }
+    if (planned.has(id)) {
+      throw new FreshVerifyError(`${label} repeats the fault for ${id}; exactly one fault per acceptance criterion is required.`, { code: 'fault_plan_invalid' });
+    }
+    if (entry.noOp === true) {
+      const reason = typeof entry.reason === 'string' ? entry.reason.trim() : '';
+      if (!reason) {
+        throw new FreshVerifyError(`${label} (${id}) is a no-op fault without a reason; document why the criterion has no executable surface.`, { code: 'fault_plan_invalid' });
+      }
+      planned.set(id, { noOp: true, reason });
+      return;
+    }
+    const file = typeof entry.file === 'string' ? entry.file.trim() : '';
+    const find = typeof entry.find === 'string' ? entry.find : '';
+    const replace = typeof entry.replace === 'string' ? entry.replace : '';
+    if (!file || !find) {
+      throw new FreshVerifyError(
+        `${label} (${id}) needs "file" and "find" strings, or "noOp": true with a "reason".`,
+        { code: 'fault_plan_invalid' }
+      );
+    }
+    planned.set(id, { file, find, replace });
+  });
+
+  const missing = acs.map(ac => String(ac.id).trim()).filter(id => !planned.has(id));
+  if (missing.length > 0) {
+    throw new FreshVerifyError(
+      `Fault plan is missing a fault for ${missing.join(', ')}; one fault per acceptance criterion is required.`,
+      { code: 'fault_plan_missing_criterion' }
+    );
+  }
+  return acs.map(ac => ({ id: String(ac.id).trim(), fault: planned.get(String(ac.id).trim()) }));
+}
+
+function runTestCommand(command, cwd, timeoutMs) {
+  const result = spawnSync(command, {
+    cwd,
+    shell: true,
+    encoding: 'utf8',
+    timeout: timeoutMs,
+    maxBuffer: 32 * 1024 * 1024
+  });
+  const output = `${result.stdout || ''}${result.stderr || ''}`;
+  return {
+    command,
+    passed: !result.error && result.status === 0,
+    exitCode: result.status,
+    signal: result.signal || null,
+    timedOut: Boolean(result.error && result.error.code === 'ETIMEDOUT'),
+    error: result.error ? result.error.message : null,
+    outputTail: output.length > TEST_OUTPUT_TAIL_CHARS ? output.slice(-TEST_OUTPUT_TAIL_CHARS) : output
+  };
+}
+
+function describeTestObservation(run) {
+  if (!run) return 'no test run was recorded';
+  if (run.timedOut) return 'the test command timed out';
+  if (run.signal) return `the test command was terminated by signal ${run.signal}`;
+  if (run.error) return `the test command failed to run: ${run.error}`;
+  return `the test command exited ${run.exitCode}${run.passed ? ' (passed)' : ''}`;
+}
+
+function readFileStatus(scratchPath, relFile) {
+  const result = runGit(scratchPath, ['status', '--porcelain', '--', relFile]);
+  if (result.error || result.status !== 0) {
+    throw new FreshVerifyError(
+      `Reading the scratch worktree status failed: ${gitFailure(result, 'git status failed')}`,
+      { code: 'scratch_status_failed' }
+    );
+  }
+  return (result.stdout || '').trim();
+}
+
+// Spec 00018 AC5: apply one fault inside the scratch worktree and keep the
+// bytes needed to revert it. The target must resolve inside the scratch tree and
+// contain the injected text exactly once, so the mutation is deterministic.
+function applyFault(scratchPath, fault) {
+  const root = path.resolve(scratchPath);
+  const absPath = path.resolve(root, fault.file);
+  const rel = normalizePath(path.relative(root, absPath));
+  if (!rel || rel === '.' || rel === '..' || rel.startsWith('../') || path.isAbsolute(rel)) {
+    throw new FreshVerifyError(
+      `Fault target "${fault.file}" resolves outside the scratch worktree; refusing to inject it.`,
+      { code: 'fault_target_outside_scratch' }
+    );
+  }
+  let original;
+  try {
+    original = fs.readFileSync(absPath);
+  } catch (err) {
+    throw new FreshVerifyError(`Fault target "${rel}" is unreadable in the scratch worktree: ${err.message}`, { code: 'fault_target_missing' });
+  }
+  const text = original.toString('utf8');
+  const occurrences = text.split(fault.find).length - 1;
+  if (occurrences !== 1) {
+    throw new FreshVerifyError(
+      `Fault target "${rel}" must contain the injected text exactly once (found ${occurrences}); the fault plan is not applicable to this delivery diff.`,
+      { code: 'fault_target_mismatch' }
+    );
+  }
+  const statusBefore = readFileStatus(root, rel);
+  fs.writeFileSync(absPath, text.replace(fault.find, fault.replace), 'utf8');
+  return { absPath, rel, original, statusBefore };
+}
+
+// Spec 00018 AC5: every fault is reverted before the next one is applied. A
+// revert that leaves the file changed, or the scratch tree dirty, fails closed.
+function revertFault(scratchPath, applied) {
+  fs.writeFileSync(applied.absPath, applied.original);
+  const restored = fs.readFileSync(applied.absPath);
+  const statusAfter = readFileStatus(path.resolve(scratchPath), applied.rel);
+  if (!restored.equals(applied.original) || statusAfter !== applied.statusBefore) {
+    throw new FreshVerifyError(
+      `Scratch worktree is dirty after reverting the injected fault in "${applied.rel}"; refusing to continue verification.`,
+      { code: 'scratch_dirty' }
+    );
+  }
+}
+
+// Spec 00018 AC5/AC6/AC7: run the test command once on the unmutated scratch
+// worktree (the observed passing evidence), then inject and revert one fault per
+// criterion. A fault whose mutation leaves the suite green is recorded as not
+// detected; the caller marks that criterion unverified.
+function runFaultInjection(options = {}) {
+  if (!options.scratchPath) {
+    throw new FreshVerifyError('Fault injection requires the scratch worktree path.', { code: 'invalid_scratch_dir' });
+  }
+  const scratchPath = path.resolve(options.scratchPath);
+  const criteria = Array.isArray(options.criteria) ? options.criteria : [];
+  const planned = planFaults(criteria, options.faults);
+  const testCommand = typeof options.testCommand === 'string' && options.testCommand.trim()
+    ? options.testCommand.trim()
+    : null;
+  const timeoutMs = Number.isInteger(options.timeoutMs) && options.timeoutMs > 0
+    ? options.timeoutMs
+    : DEFAULT_TEST_TIMEOUT_MS;
+
+  // AC7: observed passing evidence must exist before any fault result is
+  // interpretable; without it every criterion stays unverified.
+  const baseline = testCommand ? runTestCommand(testCommand, scratchPath, timeoutMs) : null;
+  const baselinePassed = Boolean(baseline && baseline.passed);
+  const faults = [];
+
+  for (const item of planned) {
+    const fault = item.fault;
+    const evidence = {
+      id: item.id,
+      fault,
+      faultInjected: describeFault(fault),
+      applied: false,
+      reverted: false,
+      noOpReason: fault.noOp ? fault.reason : null,
+      baselinePassed,
+      faultStatus: null,
+      faultObserved: false,
+      reason: null
+    };
+
+    if (fault.noOp) {
+      evidence.reason = `No-op mutation: ${fault.reason}; the test suite proves nothing about this acceptance criterion.`;
+      faults.push(evidence);
+      continue;
+    }
+
+    const applied = applyFault(scratchPath, fault);
+    evidence.applied = true;
+    try {
+      if (baselinePassed) {
+        evidence.faultStatus = runTestCommand(testCommand, scratchPath, timeoutMs);
+      }
+    } finally {
+      revertFault(scratchPath, applied);
+      evidence.reverted = true;
+    }
+
+    if (!baselinePassed) {
+      evidence.reason = baseline
+        ? `No observed passing test evidence: ${describeTestObservation(baseline)} before any fault was injected.`
+        : 'No observed passing test evidence: no test command is configured in the scratch worktree.';
+    } else if (!evidence.faultStatus || evidence.faultStatus.passed) {
+      evidence.reason = `Injected fault not detected: ${evidence.faultInjected}; ${describeTestObservation(evidence.faultStatus)}.`;
+    } else {
+      evidence.faultObserved = true;
+    }
+    faults.push(evidence);
+  }
+
+  return { baseline, faults, testCommand };
+}
+
+// Spec 00018 AC6/AC7: a verdict may only stay `verified` when the system holds
+// both an observed passing test run and a detected fault for that criterion.
+// Everything else is downgraded to `unverified` with the fault and the observed
+// result named; the verifier's claim is preserved separately.
+function faultUnverifiedReason(fault, baseline) {
+  if (!fault) {
+    return 'no fault injection evidence is recorded, so the test suite proves nothing about this acceptance criterion';
+  }
+  if (!baseline) {
+    return 'no observed passing test evidence: no test command is configured, so the scratch worktree never ran tests';
+  }
+  if (!baseline.passed) {
+    return `no observed passing test evidence: ${describeTestObservation(baseline)} before any fault was injected`;
+  }
+  if (fault.noOpReason || (fault.fault && fault.fault.noOp)) {
+    return `the injected fault was a no-op mutation (${fault.noOpReason || fault.fault.reason}), so the test suite proves nothing about this criterion`;
+  }
+  if (!fault.faultObserved) {
+    return `the injected fault was not detected: ${fault.faultInjected}; ${describeTestObservation(fault.faultStatus)}`;
+  }
+  return null;
+}
+
+function applyFaultEvidence(verdicts, evidence) {
+  const baseline = evidence && evidence.baseline ? evidence.baseline : null;
+  const faults = evidence && Array.isArray(evidence.faults) ? evidence.faults : [];
+  const byId = new Map(faults.map(item => [String(item.id).trim(), item]));
+  const out = [];
+
+  for (const entry of Array.isArray(verdicts) ? verdicts : []) {
+    const id = entry && entry.id ? String(entry.id).trim() : '';
+    const fault = byId.get(id) || null;
+    const claimedVerdict = entry && entry.verdict;
+    const result = {
+      ...entry,
+      claimedVerdict,
+      faultInjected: fault ? fault.faultInjected : null,
+      faultObserved: fault ? Boolean(fault.faultObserved) : false,
+      evidenceClaim: entry && typeof entry.passingEvidence === 'string' ? entry.passingEvidence : null
+    };
+
+    if (claimedVerdict === 'verified') {
+      const reason = faultUnverifiedReason(fault, baseline);
+      if (reason) {
+        result.verdict = 'unverified';
+        result.passingEvidence = null;
+        result.unverifiedReason = reason;
+      } else {
+        result.passingEvidence = `${baseline.command} exited 0 in the scratch worktree`;
+        result.unverifiedReason = null;
+      }
+    } else {
+      result.passingEvidence = null;
+      result.unverifiedReason = null;
+    }
+    out.push(result);
+  }
+  return { verdicts: out };
 }
 
 function diffFence(diff) {
@@ -389,6 +708,10 @@ module.exports = {
   collectDeliveryDiff,
   createScratchWorktree,
   removeScratchWorktree,
+  readFaultPlan,
+  planFaults,
+  runFaultInjection,
+  applyFaultEvidence,
   renderVerifierPrompt,
   validateVerdict,
   readVerdictFile,
