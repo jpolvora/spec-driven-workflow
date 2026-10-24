@@ -429,9 +429,11 @@ function parseArgs(args) {
     refreshModels: false,
     ledgerAction: null,
     reportFormat: null,
-    // Spec 00023 AC1/AC4: `report activity --date` and `report standup --hours`.
+    // Spec 00023 AC1/AC4/AC5: `report activity --date`, `report standup
+    // --hours`, and `report explain <spec>`.
     reportDate: null,
     reportHours: null,
+    reportSpec: null,
     acIds: [],
     evidenceType: null,
     evidenceFilePath: null,
@@ -537,9 +539,10 @@ function parseArgs(args) {
     'task abandon': 'task-abandon',
     'score submit': 'score-submit',
     'report re-render': 'report-re-render',
-    // Spec 00023 AC1/AC4: read-only delivery reports.
+    // Spec 00023 AC1/AC4/AC5: read-only delivery reports.
     'report activity': 'report-activity',
     'report standup': 'report-standup',
+    'report explain': 'report-explain',
     'dag preview': 'dag-preview',
     'ledger link': 'ledger',
     'ledger report': 'ledger',
@@ -565,6 +568,11 @@ function parseArgs(args) {
       // Spec 00023 AC1/AC4: reporting takes flags only, never a positional task.
       result.specPaths = [];
       result.taskId = null;
+    } else if (combinedMatch === 'report-explain') {
+      // Spec 00023 AC5: the positional argument is the specification slug.
+      result.specPaths = [];
+      result.taskId = null;
+      result.reportSpec = rest[0] || null;
     } else if (!result.taskId && rest[0]) {
       result.taskId = rest[0];
     }
@@ -6056,6 +6064,28 @@ function cmdReportStandup(options) {
   }
 }
 
+// Spec 00023 AC5: `report explain <spec>` projects status, delivered files,
+// verification, and manual test steps from the registry, run state, ledger,
+// telemetry, and delivery commit. It is read-only like the other reports.
+function cmdReportExplain(options) {
+  const targetRoot = options.root ? path.resolve(options.root) : process.cwd();
+  try {
+    const report = reporting.collectExplain({
+      targetRoot,
+      spec: options.reportSpec,
+      now: options.now
+    });
+    for (const warning of report.warnings) {
+      console.error(`[sdw-orch report explain] Warning: ${warning.file}: ${warning.error}`);
+    }
+    console.log(options.json ? JSON.stringify(report, null, 2) : reporting.renderExplain(report));
+    return 0;
+  } catch (err) {
+    console.error(`[sdw-orch report explain] Error: ${err.message}`);
+    return 1;
+  }
+}
+
 function cmdStatus(options) {
   const targetRoot = options.root ? path.resolve(options.root) : process.cwd();
   let state = null;
@@ -6568,6 +6598,7 @@ Subcommands:
   report re-render       Refresh the delivery report and the in-progress report from run state (never commits)
   report activity        Timesheet entries for a delivery day (--date YYYY-MM-DD)
   report standup         Delivered, in-progress, and next items (--hours, default: 36)
+  report explain <spec>  Status, delivered files, verification, and manual test steps
   ledger link            Link typed evidence to one or more acceptance criteria (--run-id, --ac, --type)
   ledger report          Print the AC status and evidence summary (--run-id, --format md|json)
   ledger audit           List acceptance criteria without evidence (--run-id, --format md|json; exit 1 when any remain)
@@ -6696,6 +6727,9 @@ function main() {
       case 'report-standup':
         code = cmdReportStandup(options);
         break;
+      case 'report-explain':
+        code = cmdReportExplain(options);
+        break;
       case 'ledger':
         code = cmdLedger(options);
         break;
@@ -6732,13 +6766,14 @@ function main() {
   try {
     // Spec 00030 AC19: `dag preview` is pure; it never refreshes a sandbox report.
     // Spec 00021 AC4/AC13: `monitor` and `telemetry report` are read-only, so
-    // they never refresh one either. Spec 00023 AC1/AC4: reporting is strictly
-    // read-only, so it must not write a sandbox report as a side effect.
+    // they never refresh one either. Spec 00023 AC6: every reporting command is
+    // strictly read-only, so it must not write a sandbox report as a side effect.
     if (options.subcommand !== 'dag-preview'
       && options.subcommand !== 'monitor'
       && options.subcommand !== 'telemetry-report'
       && options.subcommand !== 'report-activity'
-      && options.subcommand !== 'report-standup') {
+      && options.subcommand !== 'report-standup'
+      && options.subcommand !== 'report-explain') {
       const refreshRoot = options._effectiveRoot || (options.root ? path.resolve(options.root) : process.cwd());
       sandbox.refreshReportForRoot(refreshRoot);
     }
@@ -6762,6 +6797,7 @@ module.exports = {
   cmdTelemetryReport,
   cmdReportActivity,
   cmdReportStandup,
+  cmdReportExplain,
   cmdDagPreview,
   cmdTaskNext,
   cmdTaskAbandon,

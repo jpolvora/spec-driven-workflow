@@ -1,11 +1,11 @@
 'use strict';
 
-// Spec 00023 AC1-AC4: read-only delivery reporting. Every value is a projection
-// of existing evidence (run state, run artifacts, telemetry, git history, and
-// the specification index); nothing is inferred and nothing is written. The
-// module never initializes the state directory, the acceptance ledger, or a
-// telemetry stream. `now`, `git`, and `provider` are injectable so tests never
-// depend on the wall clock, a real repository, or a network provider.
+// Spec 00023 AC1-AC6: read-only delivery reporting. Every value is a projection
+// of existing evidence (run state, run artifacts, telemetry, the AC ledger, git
+// history, and the specification index); nothing is inferred and nothing is
+// written. The module never initializes the state directory, the acceptance
+// ledger, or a telemetry stream. `now`, `git`, and `provider` are injectable so
+// tests never depend on the wall clock, a real repository, or a network provider.
 
 const fs = require('fs');
 const path = require('path');
@@ -13,6 +13,7 @@ const { spawnSync } = require('child_process');
 
 const telemetry = require('./telemetry.cjs');
 const monitor = require('./monitor.cjs');
+const acLedger = require('./ac_ledger.cjs');
 
 // Spec 00023 AC4: `report standup --hours 36` is the documented default window.
 const DEFAULT_STANDUP_HOURS = 36;
@@ -661,6 +662,588 @@ function renderStandup(report = {}) {
   return lines.join('\n');
 }
 
+// ---------------------------------------------------------------------------
+// Spec 00023 AC5: `report explain <spec>`
+// ---------------------------------------------------------------------------
+
+// AC5/AC9: the registry row is the only proof that a specification exists. An
+// unregistered slug is a caller error that names the discovery command, never a
+// report assembled from a guess.
+function resolveRegisteredSpec(targetRoot, slug, warnings) {
+  const specIndex = require('../../sdw-spec/scripts/spec_index.cjs');
+  let index = null;
+  try {
+    index = specIndex.readIndex({ root: targetRoot });
+  } catch (err) {
+    warnings.push({ file: '.sdw/specs/index.specs.md', error: err.message });
+  }
+  const entries = index && Array.isArray(index.entries) ? index.entries : [];
+  const entry = entries.find(item => String(item && item.slug ? item.slug : '') === slug) || null;
+  if (!entry) {
+    throw new Error(
+      `Unknown specification "${slug}"${index && index.exists ? '' : ' (no specification index found)'}. `
+      + 'Run "node skills/sdw-spec/scripts/sdw_spec.cjs list" to see registered specifications.'
+    );
+  }
+  const paths = specIndex.resolvePaths(targetRoot);
+  const specFileAbs = specIndex.specFileForSlug(paths.specsDir, slug);
+  let content = null;
+  if (specFileAbs) {
+    try {
+      content = fs.readFileSync(specFileAbs, 'utf8');
+    } catch (err) {
+      warnings.push({
+        file: normalizePath(path.relative(targetRoot, specFileAbs)),
+        error: err.message
+      });
+    }
+  }
+  return { entry, specFileAbs, content, specIndex };
+}
+
+function newestRunForSpec(runs, slug) {
+  let newest = null;
+  let newestMs = -Infinity;
+  for (const run of runs) {
+    const state = run && run.state ? run.state : null;
+    if (!state || String(state.specSlug || '') !== slug) continue;
+    const updatedMs = timestampMs(state.updatedAt);
+    const ms = updatedMs !== null ? updatedMs : (Number.isFinite(run.stateMtimeMs) ? run.stateMtimeMs : -Infinity);
+    const currentId = String(state.runId || '');
+    const previousId = newest ? String(newest.state.runId || '') : '';
+    if (newest === null || ms > newestMs || (ms === newestMs && currentId > previousId)) {
+      newest = run;
+      newestMs = ms;
+    }
+  }
+  return newest;
+}
+
+// AC5: only project-relative, in-tree paths are reportable delivered files.
+function projectRelativeFile(value) {
+  const normalized = normalizePath(String(value === undefined || value === null ? '' : value).trim())
+    .replace(/^\.\//, '');
+  if (!normalized || normalized.includes('..') || path.isAbsolute(normalized) || /^[a-zA-Z]:/.test(normalized)) {
+    return null;
+  }
+  return normalized;
+}
+
+// AC5: completed tasks record the files they changed; the fallback list is the
+// pre-filesChanged task shape, never an inference.
+function filesFromCompletedTasks(state) {
+  const step4 = state && state.steps ? state.steps[4] : null;
+  const tasks = step4 && step4.tasks && typeof step4.tasks === 'object' && !Array.isArray(step4.tasks)
+    ? step4.tasks
+    : null;
+  if (!tasks) return null;
+  const files = new Set();
+  for (const task of Object.values(tasks)) {
+    if (!task || task.status !== 'completed') continue;
+    const list = Array.isArray(task.filesChanged)
+      ? task.filesChanged
+      : (Array.isArray(task.files) ? task.files : []);
+    for (const value of list) {
+      const file = projectRelativeFile(value);
+      if (file) files.add(file);
+    }
+  }
+  return [...files];
+}
+
+function filesFromLedger(ledger) {
+  const files = new Set();
+  for (const record of ledger && Array.isArray(ledger.criteria) ? ledger.criteria : []) {
+    for (const entry of Array.isArray(record.evidence) ? record.evidence : []) {
+      if (!entry || entry.type !== 'file') continue;
+      const file = projectRelativeFile(entry.path);
+      if (file) files.add(file);
+    }
+  }
+  return [...files];
+}
+
+// AC5: git history is a delivered-files source only when it can answer. A
+// missing commit, an unreadable repository, or a git failure is unavailable
+// evidence, never an empty delivery.
+function filesFromCommit(git, sha, targetRoot) {
+  const commit = String(sha === undefined || sha === null ? '' : sha).trim();
+  if (!commit) return { ok: false, reason: 'the run records no delivery commit' };
+  try {
+    const output = String(git(['show', '--name-only', '--format=', commit], targetRoot) || '');
+    const files = output
+      .split(/\r?\n/)
+      .map(line => projectRelativeFile(line))
+      .filter(Boolean);
+    return { ok: true, files };
+  } catch (err) {
+    return { ok: false, reason: `git could not read commit ${commit}: ${err.message}` };
+  }
+}
+
+// AC5/AC9: a missing, unreadable, or malformed ledger is unavailable evidence
+// with a reason, so explain reports `unknown` instead of an invented verdict.
+function readRunLedger(targetRoot, state, stateDir, warnings) {
+  if (!state) return { available: false, reason: 'no run state' };
+  const artifactsAbs = resolveArtifactsDirAbs(targetRoot, state, stateDir);
+  if (!artifactsAbs) return { available: false, reason: 'the run records no artifact directory' };
+  const artifactsRel = projectRelativeFile(path.relative(targetRoot, artifactsAbs));
+  if (!artifactsRel) return { available: false, reason: 'the run artifact directory is outside the project root' };
+  let ledgerPath;
+  try {
+    ledgerPath = acLedger.resolveLedgerPath({ root: targetRoot, artifactsDir: artifactsRel });
+  } catch (err) {
+    return { available: false, reason: err.message };
+  }
+  const ledgerRel = normalizePath(path.relative(targetRoot, ledgerPath));
+  if (!fs.existsSync(ledgerPath)) {
+    return { available: false, path: ledgerRel, reason: `no acceptance criteria ledger at ${ledgerRel}` };
+  }
+  try {
+    return { available: true, path: ledgerRel, ledger: acLedger.readLedger(ledgerPath) };
+  } catch (err) {
+    if (Array.isArray(warnings)) warnings.push({ file: ledgerRel, error: err.message });
+    return { available: false, path: ledgerRel, reason: err.message };
+  }
+}
+
+function finiteNumber(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function normalizeGates(list) {
+  return list
+    .filter(gate => gate && gate.name !== undefined && gate.name !== null && String(gate.name).trim() !== '')
+    .map(gate => ({
+      name: String(gate.name),
+      status: gate.status === undefined || gate.status === null || gate.status === ''
+        ? 'unknown'
+        : String(gate.status)
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+// AC5: the newest Step 4 gate event is the telemetry fallback when run state
+// predates the gates map.
+function currentTelemetryGates(targetRoot, state, stateDir) {
+  const artifactsAbs = resolveArtifactsDirAbs(targetRoot, state, stateDir);
+  if (!artifactsAbs) return null;
+  const telemetryRel = telemetry.telemetryPathFor(normalizePath(path.relative(targetRoot, artifactsAbs)));
+  let newest = null;
+  for (const event of telemetry.readEvents(telemetryRel, targetRoot)) {
+    if (!event || event.event !== 'gate') continue;
+    const gates = event.payload && Array.isArray(event.payload.gates) ? event.payload.gates : null;
+    if (!gates) continue;
+    const ms = timestampMs(event.ts);
+    if (newest === null
+      || (newest.ms === null && ms !== null)
+      || (newest.ms !== null && ms !== null && ms > newest.ms)) {
+      newest = { ms, gates };
+    }
+  }
+  return newest ? newest.gates : null;
+}
+
+// AC5: score, gates, and the code-review outcome, each with its source and an
+// explicit unknown reason when the run records none.
+function buildVerification(state, telemetryGates) {
+  const steps = state && state.steps && typeof state.steps === 'object' ? state.steps : null;
+  const step4 = steps ? steps[4] : null;
+  const step5 = steps ? steps[5] : null;
+  const step7 = steps ? steps[7] : null;
+  const scoreOutput = step5 && step5.output && typeof step5.output === 'object' ? step5.output : {};
+
+  const stateScore = finiteNumber(state ? state.score : null);
+  const outputScore = finiteNumber(scoreOutput.score);
+  const score = stateScore !== null ? stateScore : outputScore;
+  const scoreSource = stateScore !== null ? 'state.score' : (outputScore !== null ? 'step-5-output' : null);
+  const minScore = finiteNumber(scoreOutput.minScore);
+  const scorePassed = typeof scoreOutput.passed === 'boolean' ? scoreOutput.passed : 'unknown';
+
+  let gates = 'unknown';
+  let gatesSource = null;
+  let gatesUnknownReason = null;
+  const stateGates = step4 && step4.gates && typeof step4.gates === 'object' && !Array.isArray(step4.gates)
+    ? step4.gates
+    : null;
+  const recordedGateNames = stateGates ? Object.keys(stateGates) : [];
+  if (recordedGateNames.length > 0) {
+    gates = normalizeGates(recordedGateNames.map(name => ({
+      name,
+      status: stateGates[name] && stateGates[name].status
+    })));
+    gatesSource = 'run-state';
+  } else if (Array.isArray(telemetryGates)) {
+    gates = normalizeGates(telemetryGates);
+    gatesSource = 'telemetry';
+  } else {
+    gatesUnknownReason = state
+      ? 'no gate results recorded for the run'
+      : 'no run state';
+  }
+
+  const review = { stepStatus: 'unknown', outcome: 'unknown', blockingCount: null, findings: [] };
+  let reviewUnknownReason = state ? 'the code review step has not run' : 'no run state';
+  if (step7 && step7.status && step7.status !== 'pending') {
+    review.stepStatus = String(step7.status);
+    const output = step7.output && typeof step7.output === 'object' ? step7.output : {};
+    if (typeof output.passed === 'boolean') review.outcome = output.passed ? 'passed' : 'failed';
+    else if (review.stepStatus === 'skipped') review.outcome = 'skipped';
+    else if (review.stepStatus === 'review_failed' || review.stepStatus === 'failed') review.outcome = 'failed';
+    review.blockingCount = finiteNumber(output.blockingCount);
+    review.findings = Array.isArray(output.findings)
+      ? output.findings
+        .filter(item => item && typeof item === 'object')
+        .map(item => ({
+          severity: item.severity ? String(item.severity) : 'unknown',
+          file: item.file ? String(item.file) : null,
+          message: item.message ? String(item.message) : null
+        }))
+      : [];
+    reviewUnknownReason = review.outcome === 'unknown'
+      ? `the code review step status "${review.stepStatus}" records no verdict`
+      : null;
+  }
+
+  return {
+    score: score === null ? 'unknown' : score,
+    scoreSource,
+    scoreUnknownReason: score === null ? 'no score recorded in run state' : null,
+    minScore: minScore === null ? 'unknown' : minScore,
+    scorePassed,
+    gates,
+    gatesSource,
+    gatesUnknownReason,
+    review,
+    reviewUnknownReason
+  };
+}
+
+function describeLedgerEvidence(entry) {
+  if (!entry || typeof entry !== 'object') return 'unknown';
+  const identity = entry.type === 'file'
+    ? entry.path
+    : entry.type === 'test'
+      ? entry.name
+      : entry.type === 'commit'
+        ? entry.sha
+        : entry.id;
+  const status = entry.status ? ` (${entry.status})` : '';
+  return `${entry.type || 'unknown'}: ${identity || 'unknown'}${status}`;
+}
+
+// AC5/AC9: the ledger decides which criteria are verified. Without a ledger the
+// verified and unverified sets are `unknown` instead of inferred from the AC text.
+function buildCriteria(ledgerInfo) {
+  if (!ledgerInfo.available) {
+    return { verified: 'unknown', unverified: 'unknown', unknownReason: ledgerInfo.reason };
+  }
+  const summary = acLedger.summarizeLedger(ledgerInfo.ledger);
+  const describe = record => ({
+    id: record.id,
+    status: record.status,
+    text: record.text,
+    evidence: (Array.isArray(record.evidence) ? record.evidence : []).map(describeLedgerEvidence)
+  });
+  return {
+    verified: summary.criteria.filter(record => record.status === acLedger.STATUS_VERIFIED).map(describe),
+    unverified: summary.criteria.filter(record => record.status !== acLedger.STATUS_VERIFIED).map(describe),
+    unknownReason: null
+  };
+}
+
+function collectTestsObserved(ledgerInfo) {
+  if (!ledgerInfo.available) {
+    return { tests: 'unknown', reason: ledgerInfo.reason };
+  }
+  const byName = new Map();
+  for (const record of ledgerInfo.ledger.criteria) {
+    for (const entry of Array.isArray(record.evidence) ? record.evidence : []) {
+      if (!entry || entry.type !== 'test') continue;
+      const name = String(entry.name || '').trim();
+      if (!name) continue;
+      const status = entry.status ? String(entry.status) : 'unknown';
+      if (!byName.has(name)) byName.set(name, { name, status });
+    }
+  }
+  return {
+    tests: [...byName.values()].sort((a, b) => a.name.localeCompare(b.name)),
+    reason: null
+  };
+}
+
+// AC5: a manual step is a recorded test to re-run or a ledger criterion that
+// carries no test evidence to confirm by hand. Both come from the ledger, so a
+// missing ledger makes the whole list `unknown`.
+function buildManualTestSteps(ledgerInfo, testsObserved) {
+  if (!ledgerInfo.available) {
+    return { steps: 'unknown', reason: ledgerInfo.reason };
+  }
+  const steps = testsObserved.map(test => `Run recorded test: ${test.name} (observed: ${test.status})`);
+  for (const record of ledgerInfo.ledger.criteria) {
+    const evidence = Array.isArray(record.evidence) ? record.evidence : [];
+    const hasTest = evidence.some(entry => entry && entry.type === 'test');
+    if (!hasTest) steps.push(`Manually verify ${record.id}: ${record.text}`);
+  }
+  return { steps, reason: null };
+}
+
+function lifecycleSteps(state) {
+  const steps = state && state.steps && typeof state.steps === 'object' ? state.steps : null;
+  if (!steps) return 'unknown';
+  return Object.keys(steps)
+    .map(Number)
+    .filter(step => Number.isInteger(step))
+    .sort((a, b) => a - b)
+    .map(step => ({
+      step,
+      name: steps[step] && steps[step].name ? String(steps[step].name) : 'unknown',
+      status: steps[step] && steps[step].status ? String(steps[step].status) : 'unknown',
+      completedAt: steps[step] && steps[step].completedAt ? String(steps[step].completedAt) : null
+    }));
+}
+
+/**
+ * Spec 00023 AC5: status, delivered files, verification results, and manual test
+ * steps for one registered specification.
+ *
+ * Every value is a projection of the registry row, the specification file, the
+ * newest run state for the slug, the acceptance criteria ledger, telemetry, and
+ * the delivery commit. A fact that no source answers is the literal `unknown`
+ * with its reason, never an inference. Like the other reporting commands this
+ * reader never initializes or writes anything.
+ */
+function collectExplain(options = {}) {
+  const targetRoot = options.targetRoot ? path.resolve(options.targetRoot) : process.cwd();
+  const specSlug = String(options.spec === undefined || options.spec === null ? '' : options.spec).trim();
+  if (!specSlug) {
+    throw new Error('report explain requires a specification slug. Usage: report explain <spec>.');
+  }
+  const nowMs = resolveNowMs(options.now);
+  const stateDir = options.stateDir ? path.resolve(targetRoot, options.stateDir) : resolveStateDir(targetRoot);
+  const git = typeof options.git === 'function' ? options.git : defaultGit;
+  const warnings = [];
+
+  const { entry, specFileAbs, content, specIndex } = resolveRegisteredSpec(targetRoot, specSlug, warnings);
+  const frontmatter = content ? specIndex.parseFrontmatter(content.replace(/\r\n?/g, '\n')) : {};
+  const title = entry.title ? String(entry.title) : (frontmatter.title ? String(frontmatter.title) : null);
+
+  const newest = newestRunForSpec(readRunStates(targetRoot, stateDir, warnings), specSlug);
+  const state = newest ? newest.state : null;
+
+  const taskFiles = filesFromCompletedTasks(state);
+  const ledgerInfo = readRunLedger(targetRoot, state, stateDir, warnings);
+  const ledgerFiles = ledgerInfo.available ? filesFromLedger(ledgerInfo.ledger) : null;
+  const commit = state && state.deliveryCommit ? String(state.deliveryCommit) : null;
+  const commitFiles = filesFromCommit(git, commit, targetRoot);
+
+  const deliveredSources = [];
+  const delivered = new Set();
+  if (taskFiles !== null) {
+    deliveredSources.push('run-state');
+    for (const file of taskFiles) delivered.add(file);
+  }
+  if (ledgerFiles !== null) {
+    deliveredSources.push('ac-ledger');
+    for (const file of ledgerFiles) delivered.add(file);
+  }
+  if (commitFiles.ok) {
+    deliveredSources.push('git');
+    for (const file of commitFiles.files) delivered.add(file);
+  }
+  const deliveredFiles = deliveredSources.length > 0 ? [...delivered].sort() : 'unknown';
+  const deliveredFilesUnknownReason = deliveredSources.length > 0
+    ? null
+    : (state
+      ? [
+        taskFiles === null ? 'run state records no implementation tasks' : null,
+        ledgerFiles === null ? ledgerInfo.reason : null,
+        commitFiles.reason
+      ].filter(Boolean).join('; ')
+      : 'no run state');
+
+  const telemetryGates = currentTelemetryGates(targetRoot, state, stateDir);
+  const verification = buildVerification(state, telemetryGates);
+  const acceptanceCriteria = buildCriteria(ledgerInfo);
+  const observed = collectTestsObserved(ledgerInfo);
+  const manual = buildManualTestSteps(ledgerInfo, observed.tests === 'unknown' ? [] : observed.tests);
+  const steps = lifecycleSteps(state);
+
+  const unknowns = [];
+  const noteUnknown = (field, reason) => {
+    if (reason) unknowns.push({ field, reason });
+  };
+  noteUnknown('deliveredFiles', deliveredFilesUnknownReason);
+  noteUnknown('verification.score', verification.scoreUnknownReason);
+  noteUnknown('verification.gates', verification.gatesUnknownReason);
+  noteUnknown('verification.review', verification.reviewUnknownReason);
+  noteUnknown('acceptanceCriteria', acceptanceCriteria.unknownReason);
+  noteUnknown('testsObserved', observed.reason);
+  noteUnknown('manualTestSteps', manual.reason);
+
+  return {
+    command: 'explain',
+    specSlug,
+    generatedAt: isoAt(nowMs),
+    title,
+    status: entry.status ? String(entry.status) : 'unknown',
+    specPath: specFileAbs ? normalizePath(path.relative(targetRoot, specFileAbs)) : null,
+    lifecycle: {
+      registryStatus: entry.status ? String(entry.status) : 'unknown',
+      runId: state && state.runId ? String(state.runId) : null,
+      runStatus: state && state.status ? String(state.status) : 'unknown',
+      currentStep: state && Number.isInteger(state.currentStep) ? state.currentStep : null,
+      totalSteps: state && Number.isInteger(state.totalSteps) ? state.totalSteps : null,
+      updatedAt: state && state.updatedAt ? String(state.updatedAt) : null,
+      steps,
+      stepsUnknownReason: state ? (steps === 'unknown' ? 'the run state records no steps' : null) : 'no run state'
+    },
+    deliveredFiles,
+    deliveredFilesSource: deliveredSources,
+    deliveredFilesUnknownReason,
+    verification,
+    acceptanceCriteria,
+    testsObserved: observed.tests,
+    testsObservedUnknownReason: observed.reason,
+    manualTestSteps: manual.steps,
+    manualTestStepsUnknownReason: manual.reason,
+    unknowns,
+    warnings
+  };
+}
+
+// AC5: one human-readable explanation. Unknown values carry their reason inline;
+// `--json` serializes `collectExplain` directly so the two cannot drift.
+function renderExplain(report = {}) {
+  const lifecycle = report.lifecycle || {};
+  const verification = report.verification || {};
+  const criteria = report.acceptanceCriteria || {};
+  const lines = [
+    'SDW Explain Report',
+    '==================',
+    `Spec: ${report.specSlug || 'unknown'}`,
+    `Title: ${report.title || 'unknown'}`,
+    `Status: ${report.status || 'unknown'}`,
+    `Spec file: ${report.specPath || 'unknown'}`,
+    `Generated: ${report.generatedAt || 'unknown'}`,
+    '',
+    'Lifecycle',
+    '---------',
+    `Run: ${lifecycle.runId || 'unknown'} (${lifecycle.runStatus || 'unknown'})`,
+    `Step: ${stepCell(lifecycle)}`,
+    `Updated: ${lifecycle.updatedAt || 'unknown'}`
+  ];
+  if (Array.isArray(lifecycle.steps)) {
+    lines.push('', '| Step | Name | Status | Completed |', '| --- | --- | --- | --- |');
+    for (const step of lifecycle.steps) {
+      lines.push(`| ${cell(step.step)} | ${cell(step.name)} | ${cell(step.status)} | ${cell(step.completedAt)} |`);
+    }
+  } else {
+    lines.push(`Steps: ${timeCell('unknown', lifecycle.stepsUnknownReason)}`);
+  }
+
+  const deliveredFiles = report.deliveredFiles;
+  if (deliveredFiles === 'unknown') {
+    lines.push(
+      '',
+      'Delivered files (unknown)',
+      '-------------------------',
+      `- ${timeCell('unknown', report.deliveredFilesUnknownReason)}`
+    );
+  } else {
+    const files = Array.isArray(deliveredFiles) ? deliveredFiles : [];
+    lines.push('', `Delivered files (${files.length})`, '---------------------');
+    if (files.length === 0) lines.push('- none');
+    else for (const file of files) lines.push(`- ${file}`);
+    if (Array.isArray(report.deliveredFilesSource) && report.deliveredFilesSource.length > 0) {
+      lines.push(`Source: ${report.deliveredFilesSource.join(', ')}`);
+    }
+  }
+
+  let scoreLine;
+  if (verification.score === 'unknown') {
+    scoreLine = timeCell('unknown', verification.scoreUnknownReason);
+  } else {
+    scoreLine = `${verification.score}/10`;
+    if (verification.minScore !== 'unknown' && verification.minScore !== undefined) {
+      scoreLine += ` (minimum ${verification.minScore})`;
+    }
+    if (verification.scorePassed === true) scoreLine += ' passed';
+    else if (verification.scorePassed === false) scoreLine += ' failed';
+  }
+  let gatesLine;
+  if (verification.gates === 'unknown') {
+    gatesLine = timeCell('unknown', verification.gatesUnknownReason);
+  } else {
+    const gates = Array.isArray(verification.gates) ? verification.gates : [];
+    gatesLine = gates.length === 0 ? 'none' : gates.map(gate => `${gate.name} (${gate.status})`).join('; ');
+  }
+  const review = verification.review || {};
+  const reviewDetails = [];
+  if (review.stepStatus && review.stepStatus !== 'unknown') reviewDetails.push(`step ${review.stepStatus}`);
+  if (review.blockingCount !== null && review.blockingCount !== undefined) {
+    reviewDetails.push(`${review.blockingCount} blocking`);
+  }
+  if (Array.isArray(review.findings) && review.findings.length > 0) {
+    reviewDetails.push(`${review.findings.length} finding(s)`);
+  }
+  const reviewLine = review.outcome === 'unknown'
+    ? timeCell('unknown', verification.reviewUnknownReason)
+    : `${review.outcome}${reviewDetails.length > 0 ? ` (${reviewDetails.join(', ')})` : ''}`;
+  lines.push('', 'Verification', '------------', `- Score: ${scoreLine}`, `- Gates: ${gatesLine}`, `- Review: ${reviewLine}`);
+  for (const finding of Array.isArray(review.findings) ? review.findings : []) {
+    lines.push(`  - [${finding.severity}] ${finding.file || 'unknown'}: ${finding.message || 'unknown'}`);
+  }
+
+  lines.push('', 'Acceptance criteria', '-------------------');
+  if (criteria.verified === 'unknown') {
+    lines.push(`- ${timeCell('unknown', criteria.unknownReason || 'no acceptance criteria ledger')}`);
+  } else {
+    const verified = Array.isArray(criteria.verified) ? criteria.verified : [];
+    const unverified = Array.isArray(criteria.unverified) ? criteria.unverified : [];
+    lines.push(`Verified (${verified.length})`);
+    if (verified.length === 0) {
+      lines.push('- none');
+    } else {
+      lines.push('| AC | Criterion | Evidence |', '| --- | --- | --- |');
+      for (const record of verified) {
+        lines.push(`| ${cell(record.id)} | ${cell(record.text)} | ${cell(record.evidence.join('; ') || 'none')} |`);
+      }
+    }
+    lines.push('', `Unverified (${unverified.length})`);
+    if (unverified.length === 0) {
+      lines.push('- none');
+    } else {
+      lines.push('| AC | Status | Criterion |', '| --- | --- | --- |');
+      for (const record of unverified) {
+        lines.push(`| ${cell(record.id)} | ${cell(record.status)} | ${cell(record.text)} |`);
+      }
+    }
+  }
+
+  lines.push('', 'Tests observed', '--------------');
+  if (report.testsObserved === 'unknown') {
+    lines.push(`- ${timeCell('unknown', report.testsObservedUnknownReason)}`);
+  } else {
+    const tests = Array.isArray(report.testsObserved) ? report.testsObserved : [];
+    if (tests.length === 0) lines.push('- none');
+    else for (const test of tests) lines.push(`- ${test.name} (${test.status})`);
+  }
+
+  lines.push('', 'Manual test steps', '-----------------');
+  if (report.manualTestSteps === 'unknown') {
+    lines.push(`1. ${timeCell('unknown', report.manualTestStepsUnknownReason)}`);
+  } else {
+    const manualSteps = Array.isArray(report.manualTestSteps) ? report.manualTestSteps : [];
+    if (manualSteps.length === 0) lines.push('- none');
+    else manualSteps.forEach((step, index) => lines.push(`${index + 1}. ${step}`));
+  }
+
+  return lines.join('\n');
+}
+
 module.exports = {
   DEFAULT_STANDUP_HOURS,
   parseReportDate,
@@ -669,6 +1252,8 @@ module.exports = {
   resolveStateDir,
   collectActivity,
   collectStandup,
+  collectExplain,
   renderActivity,
-  renderStandup
+  renderStandup,
+  renderExplain
 };
