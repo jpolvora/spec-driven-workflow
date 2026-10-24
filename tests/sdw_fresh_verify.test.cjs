@@ -753,3 +753,151 @@ test('AC8: a fourth fix and re-verify round is refused', () => {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('AC9 & AC10: residual defects after the third round pause the run with the defect list', () => {
+  const { root } = setupWorkspace({ createState: true, testCommand: 'node -e "process.exit(0)"' });
+  try {
+    fs.appendFileSync(path.join(root, 'app.cjs'), '// implemented\n', 'utf8');
+    const runId = latestState(root).runId;
+    const badVerdict = path.join(root, 'bad-verdict.json');
+    fs.writeFileSync(badVerdict, JSON.stringify({
+      criteria: [{ id: 'AC1', verdict: 'verified' }]
+    }), 'utf8');
+
+    // Rounds 1 and 2 are consumed by rejected verdicts; round 3 will be valid.
+    for (let round = 1; round <= 2; round++) {
+      assert.equal(runCli(root, ['fresh-verify', '--run-id', runId]).status, 4, `round ${round} must start`);
+      assert.equal(runCli(root, ['fresh-verify', '--run-id', runId, '--verdict', badVerdict]).status, 1);
+    }
+
+    assert.equal(runCli(root, ['fresh-verify', '--run-id', runId]).status, 4, 'round 3 must start');
+    const residualVerdict = path.join(root, 'residual-verdict.json');
+    fs.writeFileSync(residualVerdict, JSON.stringify({
+      criteria: [
+        { id: 'AC1', verdict: 'unverified' },
+        { id: 'AC2', verdict: 'unverified' }
+      ],
+      residualDefects: [
+        { acId: 'AC1', reason: 'the run state file is never written' },
+        { acId: 'AC2', reason: 'the resume path has no test' }
+      ]
+    }), 'utf8');
+
+    const paused = runCli(root, ['fresh-verify', '--run-id', runId, '--verdict', residualVerdict]);
+    assert.equal(paused.status, 4, `a residual third round pauses instead of scoring: ${paused.stderr}`);
+    assert.match(paused.stdout, /paused after round 3\/3/i);
+    assert.match(paused.stdout, /AC1: the run state file is never written/);
+    assert.match(paused.stdout, /AC2: the resume path has no test/);
+
+    let state = latestState(root);
+    assert.equal(state.status, 'paused', 'the run is paused, not completed');
+    assert.equal(state.freshVerify.status, 'paused_residual_defects');
+    assert.equal(state.freshVerify.round, 3);
+    assert.equal(state.freshVerify.maxRounds, 3);
+    assert.deepEqual(state.freshVerify.residualDefects.map(item => item.acId), ['AC1', 'AC2']);
+    assert.match(state.freshVerify.residualDefects[0].reason, /run state file is never written/);
+    assert.equal(state.steps[5].status, 'pending', 'Step 5 never starts while residual defects remain');
+    assert.equal(
+      fs.existsSync(path.resolve(root, state.freshVerify.scratch.path)),
+      false,
+      'the scratch worktree is removed when the run pauses'
+    );
+
+    // The pause is sticky: another fresh-verify call re-reports it, starts no
+    // fourth round, and the Step 4 -> 5 transition still refuses to score.
+    const again = runCli(root, ['fresh-verify', '--run-id', runId]);
+    assert.equal(again.status, 4, 'a paused residual run stays paused');
+    assert.match(again.stdout, /residual defect/);
+    assert.match(again.stdout, /AC2: the resume path has no test/);
+
+    const transition = sdwOrch.runFreshVerifyTransition(root, latestState(root), {
+      verification: { freshVerifyEnabled: true, testCommand: 'node -e "process.exit(0)"' }
+    }, {});
+    assert.equal(transition.code, 4, 'the transition pauses instead of scoring');
+    state = latestState(root);
+    assert.equal(state.status, 'paused');
+    assert.equal(state.steps[5].status, 'pending');
+    assert.equal(state.freshVerify.round, 3, 'no fourth round is started');
+    assert.equal(fs.existsSync(freshVerify.resolveScratchDir(root, runId)), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC10: the scratch worktree is removed on accepted, rejected, and fault-failed verification', () => {
+  // Accepted path: the injected faults are detected, so the verdict is accepted.
+  const verifyFile = [
+    "'use strict';",
+    "const fs = require('fs');",
+    "if (!fs.readFileSync('app.cjs', 'utf8').includes('// implemented')) process.exit(1);",
+    ''
+  ].join('\n');
+  const acceptedWorkspace = setupWorkspace({
+    createState: true,
+    testCommand: 'node verify.cjs',
+    baselineFiles: { 'verify.cjs': verifyFile }
+  });
+  try {
+    fs.appendFileSync(path.join(acceptedWorkspace.root, 'app.cjs'), '// implemented\n', 'utf8');
+    const runId = latestState(acceptedWorkspace.root).runId;
+    const faultsFile = path.join(acceptedWorkspace.root, 'faults.json');
+    fs.writeFileSync(faultsFile, JSON.stringify([
+      { acId: 'AC1', file: 'app.cjs', find: '// implemented', replace: '// fault' },
+      { acId: 'AC2', file: 'app.cjs', find: '// implemented', replace: '// fault' }
+    ]), 'utf8');
+    assert.equal(runCli(acceptedWorkspace.root, ['fresh-verify', '--run-id', runId, '--faults', faultsFile]).status, 4);
+    const goodVerdict = path.join(acceptedWorkspace.root, 'good-verdict.json');
+    fs.writeFileSync(goodVerdict, JSON.stringify({
+      criteria: [
+        { id: 'AC1', verdict: 'verified' },
+        { id: 'AC2', verdict: 'verified' }
+      ]
+    }), 'utf8');
+    const accepted = runCli(acceptedWorkspace.root, ['fresh-verify', '--run-id', runId, '--verdict', goodVerdict]);
+    assert.equal(accepted.status, 0, `expected acceptance; stderr: ${accepted.stderr}`);
+    const acceptedState = latestState(acceptedWorkspace.root);
+    assert.equal(acceptedState.freshVerify.status, 'completed');
+    assert.equal(fs.existsSync(path.resolve(acceptedWorkspace.root, acceptedState.freshVerify.scratch.path)), false, 'cleanup after acceptance');
+    assert.ok(!git(acceptedWorkspace.root, 'worktree list').includes('fresh-verify'), 'git no longer tracks the accepted scratch worktree');
+  } finally {
+    fs.rmSync(acceptedWorkspace.root, { recursive: true, force: true });
+  }
+
+  // Rejected path: an invalid verdict is refused and the worktree is removed.
+  const rejectedWorkspace = setupWorkspace({ createState: true, testCommand: 'node -e "process.exit(0)"' });
+  try {
+    fs.appendFileSync(path.join(rejectedWorkspace.root, 'app.cjs'), '// implemented\n', 'utf8');
+    const runId = latestState(rejectedWorkspace.root).runId;
+    assert.equal(runCli(rejectedWorkspace.root, ['fresh-verify', '--run-id', runId]).status, 4);
+    const badVerdict = path.join(rejectedWorkspace.root, 'bad-verdict.json');
+    fs.writeFileSync(badVerdict, JSON.stringify({ criteria: [{ id: 'AC1', verdict: 'verified' }] }), 'utf8');
+    assert.equal(runCli(rejectedWorkspace.root, ['fresh-verify', '--run-id', runId, '--verdict', badVerdict]).status, 1);
+    const rejectedState = latestState(rejectedWorkspace.root);
+    assert.equal(rejectedState.freshVerify.status, 'failed');
+    assert.equal(fs.existsSync(path.resolve(rejectedWorkspace.root, rejectedState.freshVerify.scratch.path)), false, 'cleanup after rejection');
+    assert.ok(!git(rejectedWorkspace.root, 'worktree list').includes('fresh-verify'), 'git no longer tracks the rejected scratch worktree');
+  } finally {
+    fs.rmSync(rejectedWorkspace.root, { recursive: true, force: true });
+  }
+
+  // Fault-failed path: an inapplicable fault plan fails closed and cleans up.
+  const faultWorkspace = setupWorkspace({ createState: true, testCommand: 'node -e "process.exit(0)"' });
+  try {
+    fs.appendFileSync(path.join(faultWorkspace.root, 'app.cjs'), '// implemented\n', 'utf8');
+    const runId = latestState(faultWorkspace.root).runId;
+    const badFaults = path.join(faultWorkspace.root, 'bad-faults.json');
+    fs.writeFileSync(badFaults, JSON.stringify([
+      { acId: 'AC1', file: 'app.cjs', find: 'not-present-in-the-diff', replace: 'x' },
+      { acId: 'AC2', noOp: true, reason: 'documentation-only criterion' }
+    ]), 'utf8');
+    const failed = runCli(faultWorkspace.root, ['fresh-verify', '--run-id', runId, '--faults', badFaults]);
+    assert.equal(failed.status, 1, 'an inapplicable fault fails closed');
+    assert.match(failed.stderr, /must contain the injected text exactly once/);
+    const faultState = latestState(faultWorkspace.root);
+    assert.equal(faultState.freshVerify.status, 'failed');
+    assert.equal(fs.existsSync(path.resolve(faultWorkspace.root, faultState.freshVerify.scratch.path)), false, 'cleanup after a fault failure');
+    assert.ok(!git(faultWorkspace.root, 'worktree list').includes('fresh-verify'), 'git no longer tracks the failed scratch worktree');
+  } finally {
+    fs.rmSync(faultWorkspace.root, { recursive: true, force: true });
+  }
+});

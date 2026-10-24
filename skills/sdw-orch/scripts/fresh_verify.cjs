@@ -710,6 +710,8 @@ module.exports = {
   removeScratchWorktree,
   readFaultPlan,
   planFaults,
+  runTestCommand,
+  describeTestObservation,
   runFaultInjection,
   applyFaultEvidence,
   renderVerifierPrompt,
