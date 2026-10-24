@@ -7,7 +7,7 @@
 | Specification file | `.sdw/specs/00069-dag-planning-must-not-invent-target-files.md` |
 | Specification slug | 00069-dag-planning-must-not-invent-target-files |
 | Run ID | run-1792836957288-00069-dag-planning-must-not-in |
-| Run status | paused |
+| Run status | completed |
 | Branch | `feature/00069-dag-planning-must-not-invent-target-files` |
 | Base branch | `master` |
 | Base commit | `a047778b40bc921eb0cd36d6abb4f28619ae414b` |
@@ -17,7 +17,7 @@
 | Implementation start | 2026-10-24T10:16:00.955Z |
 | Implementation end | 2026-10-24T11:05:28.113Z |
 | Total wall-clock duration | 49m 27s |
-| Generated at | 2026-10-24T11:10:15.583Z |
+| Generated at | 2026-10-24T11:15:09.560Z |
 | Step 1: derivation (skipped) | 6ms |
 | Step 2: refinement (completed) | 50ms |
 | Step 3: dag_generation (completed) | 9ms |
@@ -25,7 +25,7 @@
 | Step 5: scoring (completed) | 1m 20s |
 | Step 6: delivery_commit (completed) | 408ms |
 | Step 7: code_review (completed) | 1s |
-| Step 8: pr_preparation (pending) | n/a |
+| Step 8: pr_preparation (completed) | 4m 47s |
 
 
 ## Tasks
@@ -39,6 +39,8 @@
 
 | SHA | Subject | Range |
 |---|---|---|
+| `f8284b3` | chore(00069-dag-planning-must-not-invent-target-files): mark the specification completed in the registry | base..HEAD |
+| `cb5026b` | docs(00069-dag-planning-must-not-invent-target-files): record delivery report | base..HEAD |
 | `14d0dd2` | task(00069-dag-planning-must-not-invent-target-files): task-2 | base..HEAD |
 | `5e2350d` | task(00069-dag-planning-must-not-invent-target-files): task-1 | base..HEAD |
 
@@ -62,9 +64,18 @@
 | `tests/sdw_dag_target_files.test.cjs` | added |
 | `tests/sdw_orch.test.cjs` | modified |
 
+### Unattributed changes
+
+| File | Change |
+|---|---|
+| `.sdw/reports/00069-dag-planning-must-not-invent-target-files-report.md` | added |
+| `.sdw/specs/00069-dag-planning-must-not-invent-target-files.md` | modified |
+| `.sdw/specs/index.specs.md` | modified |
+
 ## Verification
 
 - test gate: status `passed`, exit code `0`, duration 3m 17s
+- Step 8 delivery: `completed`
 
 ## Fresh Verification & Audit
 
@@ -120,7 +131,13 @@ Not available
 
 ## Retrospective
 
-Not available
+- Status: `passed`
+- Report: `.sdw/state/00069-dag-planning-must-not-invent-target-files/run-1792836957288-00069-dag-planning-must-not-in/run-1792836957288-00069-dag-planning-must-not-in.retro.md`
+- Data: `.sdw/state/00069-dag-planning-must-not-invent-target-files/run-1792836957288-00069-dag-planning-must-not-in/run-1792836957288-00069-dag-planning-must-not-in.retro.json`
+- Signals: retries 4 (score 2, review 0, rounds 2, abandonments 0); leftover runs 0; missing artifacts 0; review findings 0 (0 open)
+- Candidates: 0
+- Applied fixes:
+  - none
 
 ## Breaking Changes
 
@@ -187,18 +204,18 @@ Not available
 
 - Step 1 (derivation) skipped: not recorded
 - Task task-2 accepted after re-dispatch (sequence 2)
-- Environment: workspace: 5 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
+- Environment: workspace: 8 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
 
 ## Outcome
 
-- Result: `paused`
+- Result: `completed`
 - Delivery commit: `14d0dd2e3cb821218645258769116462b272f572`
 - Ship status: `pending`
 - Duration: 49m 27s
 
 ## Step Contributions
 
-- Recorded: 8 contribution(s)
+- Recorded: 13 contribution(s)
 
 ### Step 1: derivation
 
@@ -246,8 +263,18 @@ Not available
 
 ### Step 8: pr_preparation
 
-Not available
+- **convergence** 2026-10-24T11:15:02.158Z - Convergence iteration 1
+  - Body: `{"iteration":1,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":false}`
+- **convergence** 2026-10-24T11:15:03.644Z - Convergence iteration 2
+  - Body: `{"iteration":2,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":true}`
+- **gates** 2026-10-24T11:15:04.535Z - Pre-PR gates: 6 result(s)
+  - Body: `{"gates":[{"name":"prePrCommand","status":"skipped","detail":"prePrCommand is not configured"},{"name":"build","status":"skipped","detail":"requiredBuild is false"},{"name":"tests","status":"pass","detail":"npm test exited 0"},{"name":"security","status":"pass","detail":"sdw-security-checks found no blocking leak"},{"name":"runState","status":"pass","detail":"step 4, step 6 and step 7 completed; score 8 >= scoreMin 8"},{"name":"discovery","status":"pass","detail":"no prepare obligations discovered"}]}`
+- **ship** 2026-10-24T11:15:04.535Z - Pull request #71
+  - Body: `{"pushed":true,"branch":"feature/00069-dag-planning-must-not-invent-target-files","pullRequest":{"number":"71","url":"https://github.com/jpolvora/spec-driven-workflow/pull/71","title":null},"shipStatus":"delivered"}`
+  - Evidence: `https://github.com/jpolvora/spec-driven-workflow/pull/71`
 
 ### Step 9: retrospective
 
-Not available
+- **retro** 2026-10-24T11:15:09.130Z - Retrospective passed: 0 candidate(s)
+  - Body: `{"status":"passed","runStatus":"completed","signals":{"retries":{"scoreIterations":2,"reviewIterations":0,"reviewRounds":2,"dispatchAbandonments":0,"total":4},"leftoverRuns":0,"missingArtifacts":0,"reviewFindings":{"total":0,"open":0}},"candidates":[],"fixes":{"recorded":[],"consolidated":null,"queuedSpecifications":[],"failures":[]},"routedCandidates":[],"reportMd":".sdw/state/00069-dag-planning-must-not-invent-target-files/run-1792836957288-00069-dag-planning-must-not-in/run-1792836957288-00069-dag-planning-must-not-in.retro.md","reportJson":".sdw/state/00069-dag-planning-must-not-invent-target-files/run-1792836957288-00069-dag-planning-must-not-in/run-1792836957288-00069-dag-planning-must-not-in.retro.json"}`
+  - Evidence: `.sdw/state/00069-dag-planning-must-not-invent-target-files/run-1792836957288-00069-dag-planning-must-not-in/run-1792836957288-00069-dag-planning-must-not-in.retro.md`, `.sdw/state/00069-dag-planning-must-not-invent-target-files/run-1792836957288-00069-dag-planning-must-not-in/run-1792836957288-00069-dag-planning-must-not-in.retro.json`
