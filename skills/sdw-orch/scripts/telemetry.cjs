@@ -134,6 +134,11 @@ function buildStepEvent(fields = {}) {
   });
 }
 
+// Spec 00021 AC10: a step transition's identity is (runId, step, status).
+function stepStatusKey(runId, step, status) {
+  return `${String(runId)}|${Number(step)}|${String(status)}`;
+}
+
 /**
  * Spec 00021 AC1-AC2: the append-only writer.
  *
@@ -142,6 +147,11 @@ function buildStepEvent(fields = {}) {
  * event. A failed append returns null and turns the writer degraded; it never
  * throws and never fails the calling step (AC12 owns the operator-facing
  * warning, so the default sink is silent).
+ *
+ * Spec 00021 AC10: a step event whose (runId, step, status) identity already
+ * exists in the append-only stream is a replay of a transition the stream
+ * already holds. It appends nothing and returns null without degrading the
+ * writer.
  */
 function createWriter(options = {}) {
   const targetRoot = options.targetRoot ? path.resolve(options.targetRoot) : process.cwd();
@@ -153,6 +163,30 @@ function createWriter(options = {}) {
 
   let degraded = false;
   let lastError = null;
+  // AC10: the step-transition identities already in the stream, seeded lazily
+  // from the existing file so a resumed run recognizes its prior transitions.
+  const recordedStepStatuses = new Set();
+  let recordedStepStatusesLoaded = false;
+
+  function loadRecordedStepStatuses() {
+    if (recordedStepStatusesLoaded) return;
+    recordedStepStatusesLoaded = true;
+    for (const existing of readEvents(telemetryPath, targetRoot)) {
+      if (!existing || existing.event !== EVENT_NAMES.STEP) continue;
+      if (existing.runId === undefined || existing.runId === null) continue;
+      if (existing.step === undefined || existing.step === null) continue;
+      recordedStepStatuses.add(stepStatusKey(existing.runId, existing.step, existing.status));
+    }
+  }
+
+  // AC10: replaying a recorded transition is a no-op, while a status the stream
+  // does not hold yet (for example completed after in_progress) is new.
+  function isRecordedStep(event) {
+    if (event.event !== EVENT_NAMES.STEP) return false;
+    if (event.runId === null || event.step === undefined) return false;
+    loadRecordedStepStatuses();
+    return recordedStepStatuses.has(stepStatusKey(event.runId, event.step, event.status));
+  }
 
   function degrade(message) {
     lastError = message;
@@ -178,9 +212,13 @@ function createWriter(options = {}) {
         runId: fields.runId === undefined ? runId : fields.runId,
         specSlug: fields.specSlug === undefined ? specSlug : fields.specSlug
       });
+      if (isRecordedStep(event)) return null;
       const absolutePath = path.resolve(targetRoot, telemetryPath);
       fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
       fs.appendFileSync(absolutePath, `${JSON.stringify(event)}\n`, 'utf8');
+      if (event.event === EVENT_NAMES.STEP) {
+        recordedStepStatuses.add(stepStatusKey(event.runId, event.step, event.status));
+      }
       return event;
     } catch (err) {
       degrade(`telemetry append failed: ${err.message}; the run continues without an event.`);

@@ -791,3 +791,299 @@ test('AC5, AC6, AC8: monitor parses --watch, --json, --interval, and --stall-win
   assert.equal(parsed.stallWindowSeconds, 120);
   assert.equal(parsed.runId, 'run-1');
 });
+
+test('AC9: monitor, monitor --json, and monitor --watch leave state, telemetry, ledger, and config bytes untouched', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-monitor-readonly-'));
+  try {
+    const slug = '021-readonly-demo';
+    const runId = 'run-readonly-demo';
+    const artifactsRel = `.sdw/state/${slug}/${runId}`;
+    const artifactsAbs = path.join(root, artifactsRel);
+    fs.mkdirSync(artifactsAbs, { recursive: true });
+
+    // Config, state, telemetry, and ledger are the four byte surfaces AC9 names.
+    writeMonitorConfig(root, { stallWindowSeconds: 900, intervalSeconds: 5 });
+    const state = {
+      orchestrator: 'sdw-orch',
+      runId,
+      specSlug: slug,
+      status: 'in_progress',
+      currentStep: 4,
+      totalSteps: 8,
+      createdAt: '2026-10-23T18:00:00.000Z',
+      updatedAt: '2026-10-23T19:59:00.000Z',
+      artifactsDir: artifactsRel,
+      steps: { 4: { name: 'implementation', status: 'in_progress', startedAt: '2026-10-23T19:58:00.000Z', completedAt: null } }
+    };
+    const stateFile = writeStateFile(root, state);
+    setMtime(stateFile, '2026-10-23T19:59:00.000Z');
+    const telemetryFile = path.join(artifactsAbs, telemetry.TELEMETRY_FILENAME);
+    const telemetryBytes = `${JSON.stringify({
+      ts: '2026-10-23T19:59:00.000Z', runId, specSlug: slug, event: 'step', step: 4, stepName: 'implementation', status: 'in_progress', durationMs: null
+    })}\n`;
+    fs.writeFileSync(telemetryFile, telemetryBytes, 'utf8');
+    fs.writeFileSync(path.join(artifactsAbs, 'ac-ledger.json'), JSON.stringify({ runId, criteria: [] }, null, 2), 'utf8');
+
+    // AC9 also covers the run-without-state path: artifacts with no state file.
+    const orphanDir = path.join(root, '.sdw', 'state', slug, 'run-readonly-orphan');
+    fs.mkdirSync(orphanDir, { recursive: true });
+    const orphanFile = path.join(orphanDir, `${slug}-step-1.md`);
+    fs.writeFileSync(orphanFile, '# Derivation\n', 'utf8');
+    setMtime(orphanFile, '2026-10-23T19:59:50.000Z');
+
+    const before = snapshotTree(root);
+
+    const table = spawnSync(process.execPath, [ORCH, 'monitor', '--root', root], { encoding: 'utf8' });
+    assert.equal(table.status, 0, table.stderr);
+    assert.match(table.stdout, new RegExp(`\\| ${runId} \\| ${slug} \\| in_progress \\| 4/8 implementation \\|`));
+    assert.match(table.stdout, /\| run-without-state \|$/m, 'AC9: the artifact-only run is listed');
+
+    const json = spawnSync(process.execPath, [ORCH, 'monitor', '--json', '--root', root], { encoding: 'utf8' });
+    assert.equal(json.status, 0, json.stderr);
+    const snapshot = JSON.parse(json.stdout);
+    assert.equal(snapshot.runs.length, 2, 'AC9: both the state run and the artifact-only run are listed');
+
+    assert.deepEqual(snapshotTree(root), before, 'AC9: monitor and monitor --json leave every byte unchanged');
+    assert.equal(fs.readFileSync(telemetryFile, 'utf8'), telemetryBytes, 'AC9: the telemetry stream is not appended to');
+    assert.equal(fs.readFileSync(stateFile, 'utf8').includes('"status": "in_progress"'), true, 'AC9: the state status is unchanged');
+
+    // AC9: the watch loop reads on every refresh; only the test's sleep callback
+    // writes the terminal state, and the tree captured inside that callback is
+    // proof the monitor itself added nothing.
+    let duringWatch = null;
+    const polls = [];
+    const final = monitor.watchMonitor({
+      targetRoot: root,
+      runId,
+      now: '2026-10-23T20:00:00.000Z',
+      intervalMs: 5000,
+      sleep: () => {
+        if (duringWatch === null) duringWatch = snapshotTree(root);
+        writeStateFile(root, {
+          ...state,
+          status: 'completed',
+          currentStep: 8,
+          updatedAt: '2026-10-23T20:00:01.000Z',
+          steps: { ...state.steps, 4: { ...state.steps[4], status: 'completed', completedAt: '2026-10-23T20:00:01.000Z' } }
+        });
+      },
+      onSnapshot: (snap, poll) => polls.push(poll)
+    });
+    assert.deepEqual(polls, [1, 2], 'AC9: two refreshes, one injected sleep');
+    assert.deepEqual(duringWatch, before, 'AC9: a watch refresh writes nothing');
+    assert.equal(final.runs[0].classification, 'terminal');
+
+    // The state file the test wrote is the only change, and the telemetry, ledger,
+    // and configuration still carry their original bytes.
+    assert.deepEqual(
+      Object.keys(snapshotTree(root)).sort(),
+      Object.keys(before).sort(),
+      'AC9: the monitor created no new file'
+    );
+    assert.equal(fs.readFileSync(telemetryFile, 'utf8'), telemetryBytes);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(artifactsAbs, 'ac-ledger.json'), 'utf8')), { runId, criteria: [] });
+    assert.deepEqual(
+      JSON.parse(fs.readFileSync(path.join(root, '.sdw', 'config.json'), 'utf8')),
+      { specsDir: '{projectRoot}/.sdw/specs', monitor: { stallWindowSeconds: 900, intervalSeconds: 5 } },
+      'AC9: the configuration is read, never rewritten'
+    );
+
+    // A workspace with only artifact-only directories is still read-only.
+    const orphanOnly = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-monitor-readonly-orphan-'));
+    try {
+      const onlyDir = path.join(orphanOnly, '.sdw', 'state', slug, 'run-only-orphan');
+      fs.mkdirSync(onlyDir, { recursive: true });
+      fs.writeFileSync(path.join(onlyDir, `${slug}-step-1.md`), '# Derivation\n', 'utf8');
+      const onlyBefore = snapshotTree(orphanOnly);
+      const orphanRun = spawnSync(process.execPath, [ORCH, 'monitor', '--root', orphanOnly], { encoding: 'utf8' });
+      assert.equal(orphanRun.status, 0, orphanRun.stderr);
+      assert.match(orphanRun.stdout, /run-only-orphan/);
+      assert.deepEqual(snapshotTree(orphanOnly), onlyBefore, 'AC9: the run-without-state path is read-only too');
+    } finally {
+      fs.rmSync(orphanOnly, { recursive: true, force: true });
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC10: a replayed step transition is de-duplicated by runId + step + status', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-telemetry-dedupe-'));
+  try {
+    const telemetryRel = '.sdw/state/021-dedupe/run-dedupe/telemetry.jsonl';
+    fs.mkdirSync(path.join(root, '.sdw', 'state', '021-dedupe', 'run-dedupe'), { recursive: true });
+    const enterEvent = { ts: '2026-10-23T19:00:00.000Z', runId: 'run-dedupe', specSlug: '021-dedupe', event: 'step', step: 4, stepName: 'implementation', status: 'in_progress', durationMs: null };
+    fs.writeFileSync(path.join(root, telemetryRel), `${JSON.stringify(enterEvent)}\n`, 'utf8');
+
+    const writer = telemetry.createWriter({
+      targetRoot: root,
+      telemetryPath: telemetryRel,
+      runId: 'run-dedupe',
+      specSlug: '021-dedupe',
+      now: () => new Date('2026-10-23T19:05:00.000Z')
+    });
+
+    // Replaying the already-recorded entry appends nothing and does not degrade.
+    const replay = writer.recordStep({ step: 4, stepName: 'implementation', status: 'in_progress', durationMs: null });
+    assert.equal(replay, null, 'AC10: the replayed transition is not appended');
+    assert.equal(writer.isDegraded(), false, 'AC10: de-duplication is not an append failure');
+    assert.equal(fs.readFileSync(path.join(root, telemetryRel), 'utf8'), `${JSON.stringify(enterEvent)}\n`, 'AC10: prior bytes are untouched');
+
+    // A genuinely new status for the same step is still a new event.
+    const completed = writer.recordStep({ step: 4, stepName: 'implementation', status: 'completed', durationMs: 42000 });
+    assert.ok(completed, 'AC10: a new status is recorded');
+    const lines = fs.readFileSync(path.join(root, telemetryRel), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    assert.deepEqual(lines.map(event => event.status), ['in_progress', 'completed']);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AC10: resuming a paused run appends new events only, and replaying the resume appends nothing', () => {
+  const repoRoot = setupTestRepo();
+  try {
+    const slug = '021-telemetry-dedupe-resume';
+    const specPath = createDummySpec(repoRoot, slug);
+    const runId = `run-${Date.now()}-telemetry-dedupe`;
+
+    const firstCode = sdwOrch.cmdRun({
+      root: repoRoot,
+      specPath,
+      runId,
+      skipSecurity: true,
+      skipReview: true,
+      skipPr: true,
+      unattended: true
+    });
+    assert.equal(firstCode, 4, 'subagent mode pauses with the dispatched task');
+
+    const state = stateManager.loadRunState(repoRoot, runId);
+    const before = readTelemetry(repoRoot, state.artifactsDir);
+    assert.ok(before.events.some(event => event.step === 4 && event.status === 'in_progress'));
+
+    const secondCode = sdwOrch.cmdResume({
+      root: repoRoot,
+      runId,
+      skipSecurity: true,
+      skipReview: true,
+      skipPr: true,
+      unattended: true,
+      implementationMode: 'command',
+      implementation: { mode: 'command', command: IMPLEMENTATION_COMMAND }
+    });
+    assert.equal(secondCode, 0, 'the resumed run completes');
+
+    const after = readTelemetry(repoRoot, state.artifactsDir);
+    assert.ok(after.raw.startsWith(before.raw), 'AC10: the resume appends; prior bytes are untouched');
+    const appended = after.events.slice(before.events.length);
+    assert.equal(
+      appended.filter(event => event.step === 4 && event.status === 'in_progress').length,
+      0,
+      'AC10: the replayed Step 4 entry is not re-emitted'
+    );
+    assert.ok(
+      appended.some(event => event.step === 4 && event.status === 'completed'),
+      'AC10: the genuinely new Step 4 completion is recorded'
+    );
+
+    // Every step transition identity is unique across the whole stream.
+    const identities = after.events
+      .filter(event => event.event === 'step')
+      .map(event => `${event.runId}|${event.step}|${event.status}`);
+    assert.equal(new Set(identities).size, identities.length, 'AC10: no step transition is recorded twice');
+
+    // Replaying the same resume against the completed run appends nothing.
+    const replayedCode = sdwOrch.cmdResume({
+      root: repoRoot,
+      runId,
+      skipSecurity: true,
+      skipReview: true,
+      skipPr: true,
+      unattended: true,
+      implementationMode: 'command',
+      implementation: { mode: 'command', command: IMPLEMENTATION_COMMAND }
+    });
+    assert.equal(replayedCode, 0, 'the replayed resume exits 0');
+    const replayed = readTelemetry(repoRoot, state.artifactsDir);
+    assert.equal(replayed.raw, after.raw, 'AC10: replaying a resume re-emits no step event');
+    assert.equal(stateManager.loadRunState(repoRoot, runId).status, 'completed', 'the run stays completed');
+  } finally {
+    fs.rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('AC12: an unwritable telemetry file records a warning on the run without failing the step', () => {
+  const repoRoot = setupTestRepo();
+  try {
+    const slug = '021-telemetry-append-failure';
+    const specPath = createDummySpec(repoRoot, slug);
+    const runId = `run-${Date.now()}-telemetry-failure`;
+
+    // A directory in place of telemetry.jsonl makes every append fail while the
+    // rest of the run artifact directory stays writable.
+    const artifactsAbs = path.join(repoRoot, '.sdw', 'state', slug, runId);
+    fs.mkdirSync(path.join(artifactsAbs, telemetry.TELEMETRY_FILENAME), { recursive: true });
+
+    const warnings = [];
+    const originalWarn = console.warn;
+    console.warn = (...args) => warnings.push(args.map(String).join(' '));
+    let code;
+    try {
+      code = sdwOrch.cmdRun({
+        root: repoRoot,
+        specPath,
+        runId,
+        skipSecurity: true,
+        skipReview: true,
+        skipPr: true,
+        unattended: true,
+        implementation: { mode: 'command', command: IMPLEMENTATION_COMMAND }
+      });
+    } finally {
+      console.warn = originalWarn;
+    }
+
+    assert.equal(code, 0, 'AC12: the run completes despite the failed appends');
+    const state = stateManager.loadRunState(repoRoot, runId);
+    assert.equal(state.status, 'completed', 'AC12: the run status is unchanged');
+    for (let step = 1; step <= 8; step++) {
+      assert.ok(
+        ['completed', 'skipped'].includes(state.steps[step].status),
+        `AC12: step ${step} keeps its resolved status (${state.steps[step].status})`
+      );
+    }
+
+    assert.ok(warnings.some(line => line.includes('[sdw-orch telemetry]')), 'AC12: the console carries the warning');
+    const warningEntries = (state.errors || []).filter(entry => entry.warning === true);
+    assert.ok(warningEntries.length > 0, 'AC12: the run records the warning in state.errors');
+    const telemetryWarning = warningEntries.find(entry => /telemetry/i.test(entry.error));
+    assert.ok(telemetryWarning, 'AC12: the recorded warning names telemetry');
+    assert.ok(Number.isInteger(telemetryWarning.step) && telemetryWarning.step >= 1 && telemetryWarning.step <= 8, 'AC12: the warning names its step');
+    assert.equal(fs.statSync(path.join(artifactsAbs, telemetry.TELEMETRY_FILENAME)).isDirectory(), true, 'AC12: the failed target is never rewritten');
+  } finally {
+    fs.rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('AC11: the orchestrator protocol documents the telemetry schema, classifications, and stall threshold', () => {
+  const protocol = fs.readFileSync(
+    path.resolve(__dirname, '..', 'skills', 'sdw-orch', 'references', 'orchestrator_protocol.md'),
+    'utf8'
+  );
+  assert.match(protocol, /^## 14\. Live Run Monitor & Append-Only Telemetry/m);
+  assert.match(protocol, /telemetry\.jsonl/);
+  for (const field of ['ts', 'runId', 'specSlug', 'event', 'step', 'stepName', 'status', 'durationMs']) {
+    assert.match(protocol, new RegExp(`\`${field}\``), `AC11: the schema documents "${field}"`);
+  }
+  for (const eventName of ['run_started', 'step', 'dispatch', 'gate', 'checkpoint', 'turn_paused', 'run_completed', 'run_failed']) {
+    assert.ok(protocol.includes(eventName), `AC11: the event name "${eventName}" is documented`);
+  }
+  for (const classification of ['active', 'stalled', 'paused', 'terminal', 'run-without-state']) {
+    assert.ok(protocol.includes(`\`${classification}\``), `AC11: classification "${classification}" is documented`);
+  }
+  assert.match(protocol, /monitor\.stallWindowSeconds/);
+  assert.match(protocol, /monitor\.intervalSeconds/);
+  assert.match(protocol, /900/);
+  assert.match(protocol, /older than/);
+});
+

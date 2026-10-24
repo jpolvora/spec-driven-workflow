@@ -511,3 +511,70 @@ test('00056 AC12: cmdCheck rejects a malformed model hint and runs no detection 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+// Spec 00021: the monitor reads `.sdw/config.json`, so both monitor keys are
+// declared wherever the repository declares configuration.
+test('00021: monitor.stallWindowSeconds and monitor.intervalSeconds are declared in the config surfaces', () => {
+  const defaults = { stallWindowSeconds: 900, intervalSeconds: 60 };
+  assert.deepEqual(sdwConfig.DEFAULT_CONFIG.monitor, defaults, 'the defaults publish the documented monitor values');
+
+  const schemaMonitor = sdwConfig.DEFAULT_SCHEMA.properties.monitor;
+  assert.equal(schemaMonitor.type, 'object');
+  assert.equal(schemaMonitor.additionalProperties, false);
+  for (const [key, value] of Object.entries(defaults)) {
+    const declared = schemaMonitor.properties[key];
+    assert.equal(declared.type, 'integer', `00021: DEFAULT_SCHEMA declares monitor.${key} as an integer`);
+    assert.equal(declared.minimum, 1, `00021: DEFAULT_SCHEMA gives monitor.${key} a minimum`);
+    assert.equal(declared.default, value, `00021: DEFAULT_SCHEMA publishes the monitor.${key} default`);
+  }
+
+  const valid = sdwConfig.validateConfigSchema({
+    specsDir: '.sdw/specs',
+    monitor: { stallWindowSeconds: 120, intervalSeconds: 5 }
+  });
+  assert.equal(valid.valid, true, '00021: a positive integer monitor block is valid');
+  assert.equal(valid.errors.length, 0);
+
+  for (const value of [0, -1, 1.5, '900', null, true]) {
+    for (const key of ['stallWindowSeconds', 'intervalSeconds']) {
+      const invalid = sdwConfig.validateConfigSchema({ specsDir: '.sdw/specs', monitor: { [key]: value } });
+      assert.equal(invalid.valid, false, `00021: monitor.${key} ${JSON.stringify(value)} is rejected`);
+      assert.ok(invalid.errors.some(err => err.includes(`monitor.${key}`)), '00021: the error names the key');
+    }
+  }
+
+  const notObject = sdwConfig.validateConfigSchema({ specsDir: '.sdw/specs', monitor: 900 });
+  assert.equal(notObject.valid, false);
+  assert.ok(notObject.errors.some(err => err.includes('"monitor"') && err.includes('must be an object')));
+
+  const unknownKey = sdwConfig.validateConfigSchema({ specsDir: '.sdw/specs', monitor: { stallWindow: 900 } });
+  assert.equal(unknownKey.valid, false);
+  assert.ok(unknownKey.errors.some(err => err.includes('monitor.stallWindow') && err.includes('not a recognized key')));
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-cfg-monitor-'));
+  try {
+    assert.deepEqual(sdwConfig.loadConfig(tmpDir).monitor, defaults, '00021: loadConfig applies the monitor defaults');
+    fs.mkdirSync(path.join(tmpDir, '.sdw'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, '.sdw', 'config.json'),
+      JSON.stringify({ specsDir: '{projectRoot}/.sdw/specs', monitor: { stallWindowSeconds: 120 } }, null, 2),
+      'utf8'
+    );
+    assert.equal(sdwConfig.loadConfig(tmpDir).monitor.stallWindowSeconds, 120, '00021: loadConfig reads the configured stall window');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+
+  // The repository template and its reference must declare the same keys.
+  const repoRoot = path.resolve(__dirname, '..');
+  const repoConfig = JSON.parse(fs.readFileSync(path.join(repoRoot, '.sdw', 'config.json'), 'utf8'));
+  assert.deepEqual(repoConfig.monitor, defaults, '00021: the repository config carries the documented monitor block');
+  const repoSchema = JSON.parse(fs.readFileSync(path.join(repoRoot, '.sdw', 'config.schema.json'), 'utf8'));
+  assert.equal(repoSchema.properties.monitor.properties.stallWindowSeconds.default, 900);
+  assert.equal(repoSchema.properties.monitor.properties.intervalSeconds.default, 60);
+  const reference = fs.readFileSync(path.join(repoRoot, 'skills', 'sdw-config', 'references', 'config_spec.md'), 'utf8');
+  assert.match(reference, /\|\s*`monitor\.stallWindowSeconds`\s*\|/);
+  assert.match(reference, /\|\s*`monitor\.intervalSeconds`\s*\|/);
+  assert.match(reference, /"monitor": \{/);
+});
+

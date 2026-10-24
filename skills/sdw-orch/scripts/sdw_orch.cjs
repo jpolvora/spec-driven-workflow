@@ -122,21 +122,36 @@ let activeTelemetry = null;
 // Spec 00021 AC2: bind one writer to the run artifact directory. Starting the
 // session never throws: an observability setup failure leaves the run unchanged.
 function startTelemetrySession(targetRoot, state) {
+  // AC12: a resumed invocation rebinds the writer, so warnings buffered before
+  // the rebind travel with it instead of being lost.
+  const carriedWarnings = activeTelemetry && Array.isArray(activeTelemetry.pendingWarnings)
+    ? activeTelemetry.pendingWarnings
+    : [];
   activeTelemetry = null;
   try {
     if (!state || !state.runId) return null;
     const artifactsDir = state.artifactsDir
       || stateManager.getArtifactsRelDir(targetRoot, state.specSlug, state.runId);
     const telemetryPath = telemetry.telemetryPathFor(artifactsDir);
+    const pendingWarnings = carriedWarnings;
     activeTelemetry = {
       telemetryPath,
       stateFilePath: stateManager.getStateFilePath(targetRoot, state.runId),
       targetRoot,
+      pendingWarnings,
       writer: telemetry.createWriter({
         targetRoot,
         telemetryPath,
         runId: state.runId,
-        specSlug: state.specSlug
+        specSlug: state.specSlug,
+        // Spec 00021 AC12: a failed append is a warning on the run, never a step
+        // failure. The warning is printed here and buffered for the next state
+        // save the caller already owns, because an extra state write from inside
+        // a step transition would race the state revision guard.
+        onWarn: message => {
+          console.warn(`[sdw-orch telemetry] ${message}`);
+          pendingWarnings.push(message);
+        }
       })
     };
   } catch (e) {
@@ -180,6 +195,30 @@ function recordTelemetryStepTransition(step, transition) {
   } catch (e) {
     // AC12 owns the warning; a telemetry failure never fails a step.
     return null;
+  }
+}
+
+/**
+ * Spec 00021 AC12: record buffered telemetry append warnings on the run.
+ *
+ * The caller passes a state object it already owns, so the warning is persisted
+ * through the same revision-guarded write path every other warning uses and the
+ * returned object replaces it. Nothing here can fail a step: an unrecordable
+ * warning is dropped and the caller keeps its state.
+ */
+function flushTelemetryWarnings(targetRoot, state) {
+  if (!activeTelemetry || activeTelemetry.pendingWarnings.length === 0) return state;
+  const pending = activeTelemetry.pendingWarnings.splice(0);
+  let current = state;
+  try {
+    const step = Number.isInteger(current.currentStep) ? current.currentStep : 1;
+    for (const message of pending) {
+      stateManager.recordWarning(targetRoot, current.runId, step, `Telemetry warning: ${message}`);
+    }
+    return stateManager.loadRunState(targetRoot, current.runId) || current;
+  } catch (e) {
+    // A warning that cannot be recorded must not fail the step either.
+    return current;
   }
 }
 
@@ -1565,7 +1604,9 @@ function refreshInProgressReport(targetRoot, state) {
  * duplicates, so a resumed run never duplicates its history.
  */
 function recordStepContributions(targetRoot, state, stepNumber, entries, options = {}) {
-  let current = state;
+  // Spec 00021 AC12: a telemetry append failure from this step's transitions is
+  // recorded on the run here, where the caller re-owns a fresh state object.
+  let current = flushTelemetryWarnings(targetRoot, state);
   let changed = false;
   for (const entry of entries || []) {
     if (!options.allowDuplicates && deliveryReport.hasContribution(current, stepNumber, entry.kind)) {
@@ -3015,6 +3056,7 @@ function executeRun(options) {
       if (options.abortOnGaps && !options.unattended) {
         console.log(`[Step 2: Refinement] User cancellation / gate stop triggered (--abort-on-gaps). Halting without dispatch.`);
         state = stateManager.updateStepState(targetRoot, state.runId, 2, 'paused_grilling_gate', grillingResult);
+        state = flushTelemetryWarnings(targetRoot, state);
         state.status = 'paused';
         stateManager.saveRunState(targetRoot, state);
         options._runResult = { runId: state.runId, status: 'paused', error: 'User cancellation at grilling gate' };
@@ -3240,6 +3282,7 @@ function executeRun(options) {
         return 1;
       }
 
+      state = flushTelemetryWarnings(targetRoot, state);
       state.status = 'paused';
       state.steps[4].status = 'awaiting_implementation';
       state = stateManager.saveRunState(targetRoot, state);
@@ -3634,6 +3677,7 @@ function executeRun(options) {
           judge: judgeMeta
         };
         state = stateManager.updateStepState(targetRoot, state.runId, 5, 'awaiting_judgment', pausedOutput);
+        state = flushTelemetryWarnings(targetRoot, state);
         state.status = 'paused';
         stateManager.saveRunState(targetRoot, state);
         console.log(`\n[Step 5: Conformance Scoring] Status: awaiting_judgment (criticity: ${judgeBundle.criticity}).`);
@@ -4508,6 +4552,7 @@ function executeRun(options) {
               shipStatus: state.shipStatus,
               error: pauseMessage
             });
+            state = flushTelemetryWarnings(targetRoot, state);
             state.status = 'paused';
             state = stateManager.saveRunState(targetRoot, state);
             state = refreshInProgressReport(targetRoot, state);
@@ -4634,6 +4679,10 @@ function executeRun(options) {
     console.log(`[Step 8: PR Preparation] Pre-PR verification passed. PR payload assembled (remote push disabled).`);
   }
 
+  // Spec 00021 AC12: any telemetry warning still buffered reaches the run state
+  // before the terminal save, so it survives even when no step contributed after
+  // the failure.
+  state = flushTelemetryWarnings(targetRoot, state);
   state.status = 'completed';
   state.currentStep = 8;
   state.retroCommand = retroCommandFor(targetRoot, state.runId);

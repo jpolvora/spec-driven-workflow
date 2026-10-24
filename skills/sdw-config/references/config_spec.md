@@ -194,6 +194,25 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
       "description": "Path to the directory storing run session state files. Supports tokens {projectRoot} and {skillsRoot}.",
       "default": "{projectRoot}/.sdw/state"
     },
+    "monitor": {
+      "type": "object",
+      "description": "Live run monitor (spec 00021). Every value is a positive integer count of seconds.",
+      "properties": {
+        "stallWindowSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 900,
+          "description": "Age in seconds after which a non-terminal run whose newest state and telemetry clock stopped advancing is classified 'stalled'."
+        },
+        "intervalSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 60,
+          "description": "Refresh interval in seconds for 'monitor --watch'."
+        }
+      },
+      "additionalProperties": false
+    },
     "lockStaleMs": {
       "type": "integer",
       "minimum": 1,
@@ -424,6 +443,8 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
 | `changelogEnabled` | `boolean` | `true` | Enable appending delivery records to the project changelog; `false` skips the append with exit `0` and writes nothing |
 | `changelogFile` | `string` | `"{projectRoot}/CHANGELOG.md"` | Changelog path; supports `{projectRoot}` and must resolve inside the project root |
 | `stateDir` | `string` | `"{projectRoot}/.sdw/state"` | Path to isolated execution run state directory (supports `{projectRoot}` and `{skillsRoot}`) |
+| `monitor.stallWindowSeconds` | `integer` | `900` | Seconds without state or telemetry progress after which `sdw-orch monitor` classifies a non-terminal run as `stalled` (spec 00021); `--stall-window` overrides it per invocation |
+| `monitor.intervalSeconds` | `integer` | `60` | Refresh interval in seconds for `sdw-orch monitor --watch` (spec 00021); `--interval` overrides it per invocation |
 | `lockStaleMs` | `integer` | `300000` | Age in milliseconds after which an abandoned run lock (`{stateFile}.lock`) may be reclaimed; reclamation also requires the recorded owner process to be proven absent, and a younger lock always blocks mutation |
 | `sandboxDir` | `string` | `"{projectRoot}/.sdw/sandbox"` | Root directory for `sdw-orch --sandbox` clones; each run creates `{sandboxDir}/{runId}/repo`. Supports `{projectRoot}`, `{skillsRoot}`, and `{temp}` (OS temp directory). A custom value must resolve **outside** the project root; only the default may live inside it |
 | `skillsRoot` | `string` | — | Path to the active skills directory (supports `{projectRoot}` and `{skillsRoot}`) |
@@ -484,6 +505,10 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
   "changelogEnabled": true,
   "changelogFile": "{projectRoot}/CHANGELOG.md",
   "stateDir": "{projectRoot}/.sdw/state",
+  "monitor": {
+    "stallWindowSeconds": 900,
+    "intervalSeconds": 60
+  },
   "lockStaleMs": 300000,
   "sandboxDir": "{projectRoot}/.sdw/sandbox",
   "autoResolveGaps": true,

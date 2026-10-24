@@ -222,6 +222,25 @@
       "description": "Path to the directory storing run session state files. Supports tokens {projectRoot} and {skillsRoot}.",
       "default": "{projectRoot}/.sdw/state"
     },
+    "monitor": {
+      "type": "object",
+      "description": "Live run monitor (spec 00021). Every value is a positive integer count of seconds.",
+      "properties": {
+        "stallWindowSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 900,
+          "description": "Age in seconds after which a non-terminal run whose newest state and telemetry clock stopped advancing is classified 'stalled'."
+        },
+        "intervalSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 60,
+          "description": "Refresh interval in seconds for 'monitor --watch'."
+        }
+      },
+      "additionalProperties": false
+    },
     "lockStaleMs": {
       "type": "integer",
       "minimum": 1,
