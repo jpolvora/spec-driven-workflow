@@ -1279,3 +1279,38 @@ test('AC16: the fresh-verify and audit contract is documented in the Tier-2 refe
   const doctor = sdwRules.cmdDoctor({ root: REPO_ROOT });
   assert.equal(doctor.passed, true, doctor.violations.map(item => item.message).join('; '));
 });
+
+// Spec 00018 AC5: the mutation applied must be the mutation reported. A plan whose
+// replacement text contains replacement patterns (`$&`, `$'`, `$$`) is inserted
+// literally, so the tested fault never differs from the described one.
+test('AC5: fault replacement text is inserted literally, including $ patterns', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-fault-literal-'));
+  try {
+    fs.mkdirSync(path.join(root, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'src', 'app.cjs'), "const label = 'RUNNING';\n", 'utf8');
+    execSync('git init -q', { cwd: root, stdio: 'ignore' });
+    execSync('git config user.email "test@example.com"', { cwd: root, stdio: 'ignore' });
+    execSync('git config user.name "SDW Test"', { cwd: root, stdio: 'ignore' });
+    execSync('git add src/app.cjs', { cwd: root, stdio: 'ignore' });
+    execSync('git commit -qm "baseline"', { cwd: root, stdio: 'ignore' });
+
+    const applied = freshVerify.applyFault(root, {
+      acId: 'AC1',
+      file: 'src/app.cjs',
+      find: 'RUNNING',
+      replace: "RUNNING-$&-$'-$$"
+    });
+    const written = fs.readFileSync(path.join(root, 'src', 'app.cjs'), 'utf8');
+    assert.equal(written, "const label = 'RUNNING-$&-$'-$$';\n", 'the replacement text is inserted verbatim');
+    assert.ok(!written.includes("'RUNNING-RUNNING"), 'no replacement pattern was expanded');
+
+    freshVerify.revertFault(root, applied);
+    assert.equal(
+      fs.readFileSync(path.join(root, 'src', 'app.cjs'), 'utf8'),
+      "const label = 'RUNNING';\n",
+      'the revert restores the original bytes'
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

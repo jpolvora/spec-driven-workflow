@@ -448,7 +448,9 @@ function applyFault(scratchPath, fault) {
     );
   }
   const statusBefore = readFileStatus(root, rel);
-  fs.writeFileSync(absPath, text.replace(fault.find, fault.replace), 'utf8');
+  // A function replacement keeps `$&`, `$'`, `$$`, and `$1` in the plan text
+  // literal, so the mutation tested is exactly the mutation reported.
+  fs.writeFileSync(absPath, text.replace(fault.find, () => fault.replace), 'utf8');
   return { absPath, rel, original, statusBefore };
 }
 
@@ -813,6 +815,8 @@ module.exports = {
   removeScratchWorktree,
   readFaultPlan,
   planFaults,
+  applyFault,
+  revertFault,
   runTestCommand,
   describeTestObservation,
   quoteCommandValue,
