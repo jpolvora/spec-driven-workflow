@@ -20,7 +20,7 @@ const freshVerify = require('./fresh_verify.cjs');
 // AC12: the only verdict values an audit may record.
 const AUDIT_VERDICT_VALUES = Object.freeze(['confirmed', 'refuted', 'caveats']);
 // AC13/AC14: refuted always blocks ship; caveats blocks only when configured.
-const AUDIT_POLICIES = Object.freeze(['refuted', 'caveats', 'none']);
+const AUDIT_POLICIES = Object.freeze(['refuted', 'caveats']);
 const DEFAULT_AUDIT_POLICY = 'refuted';
 const AUDIT_SCRATCH_DIRNAME = 'audit';
 
@@ -364,9 +364,7 @@ function normalizeAuditPolicy(policy) {
 function resolveAuditBlocking(options = {}) {
   const policy = normalizeAuditPolicy(options.policy);
   const verdicts = Array.isArray(options.verdicts) ? options.verdicts : [];
-  const selected = policy === 'none'
-    ? []
-    : verdicts.filter(item => item.verdict === 'refuted' || (policy === 'caveats' && item.verdict === 'caveats'));
+  const selected = verdicts.filter(item => item.verdict === 'refuted' || (policy === 'caveats' && item.verdict === 'caveats'));
   return {
     policy,
     blocked: selected.length > 0,

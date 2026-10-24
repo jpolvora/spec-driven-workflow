@@ -69,7 +69,8 @@
     "buildCommand": null,
     "testCommand": "npm test",
     "timeoutMs": 600000,
-    "freshVerifyEnabled": false
+    "freshVerifyEnabled": false,
+    "auditVerdictsBlockShip": "refuted"
   },
   "requiredBuild": false,
   "buildCommand": "npm run build",

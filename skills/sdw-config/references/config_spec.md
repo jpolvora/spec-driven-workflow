@@ -320,6 +320,12 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
           "type": "boolean",
           "default": false,
           "description": "Run fresh-context verification between Step 4 evidence acceptance and Step 5 scoring. Disabled by default; when enabled, scoring is blocked until one verdict per acceptance criterion is accepted."
+        },
+        "auditVerdictsBlockShip": {
+          "type": "string",
+          "enum": ["refuted", "caveats"],
+          "default": "refuted",
+          "description": "Which adversarial audit verdicts block ship: `refuted` blocks refuted verdicts only; `caveats` also blocks caveats."
         }
       },
       "additionalProperties": false
@@ -488,6 +494,7 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
 | `branching.pushSyncedWorkBranch` | `boolean` | `false` | Push the synchronized work branch to `origin` after the post-merge fast-forward |
 | `scmProvider` | `string` | `"none"` | Configured SCM provider for issues, work items, and pull requests (`none`, `ado`, `github`) |
 | `verification.freshVerifyEnabled` | `boolean` | `false` | Run fresh-context verification between Step 4 evidence acceptance and Step 5 scoring; when enabled, scoring is blocked until the verifier returns one `verified` or `unverified` verdict per acceptance criterion (spec 00018) |
+| `verification.auditVerdictsBlockShip` | `string` | `"refuted"` | Audit verdicts that block ship (spec 00018): `refuted` blocks any `refuted` verdict; `caveats` also blocks `caveats` verdicts |
 | `requiredBuild` | `boolean` | `false` | Enforce successful build verification in Step 8 before creating delivery commit or PR |
 | `buildCommand` | `string` | `"npm run build"` | Command to execute for build verification |
 | `runAllTests` | `boolean` | `false` | Enforce passing all test suites in Step 8 before creating delivery commit or PR |
@@ -557,7 +564,8 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
     "buildCommand": "npm run build",
     "testCommand": "npm test",
     "timeoutMs": 600000,
-    "freshVerifyEnabled": false
+    "freshVerifyEnabled": false,
+    "auditVerdictsBlockShip": "refuted"
   },
   "requiredBuild": false,
   "runAllTests": false,

@@ -348,7 +348,8 @@ const DEFAULT_CONFIG = {
     buildCommand: null,
     testCommand: null,
     timeoutMs: 600000,
-    freshVerifyEnabled: false
+    freshVerifyEnabled: false,
+    auditVerdictsBlockShip: 'refuted'
   },
   requiredBuild: false,
   buildCommand: 'npm run build',
@@ -692,6 +693,12 @@ const DEFAULT_SCHEMA = {
           "type": "boolean",
           "default": false,
           "description": "Run fresh-context verification between Step 4 evidence acceptance and Step 5 scoring. Disabled by default; when enabled, scoring is blocked until one verdict per acceptance criterion is accepted."
+        },
+        "auditVerdictsBlockShip": {
+          "type": "string",
+          "enum": ["refuted", "caveats"],
+          "default": "refuted",
+          "description": "Which adversarial audit verdicts block ship: `refuted` blocks refuted verdicts only; `caveats` also blocks caveats."
         }
       },
       "additionalProperties": false
@@ -1127,6 +1134,12 @@ function validateConfigSchema(config) {
       }
       if ('freshVerifyEnabled' in config.verification && typeof config.verification.freshVerifyEnabled !== 'boolean') {
         errors.push('Property "verification.freshVerifyEnabled" must be a boolean.');
+      }
+      if ('auditVerdictsBlockShip' in config.verification) {
+        const allowedPolicies = ['refuted', 'caveats'];
+        if (typeof config.verification.auditVerdictsBlockShip !== 'string' || !allowedPolicies.includes(config.verification.auditVerdictsBlockShip)) {
+          errors.push(`Property "verification.auditVerdictsBlockShip" must be one of: ${allowedPolicies.join(', ')}.`);
+        }
       }
     }
   }

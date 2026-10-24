@@ -15,6 +15,7 @@ const { execSync, spawnSync } = require('child_process');
 const freshVerify = require('../skills/sdw-orch/scripts/fresh_verify.cjs');
 const sdwOrch = require('../skills/sdw-orch/scripts/sdw_orch.cjs');
 const sdwConfig = require('../skills/sdw-config/scripts/sdw_config.cjs');
+const sdwRules = require('../skills/sdw-rules/scripts/sdw_rules.cjs');
 const stateManager = require('../skills/sdw-orch/scripts/state_manager.cjs');
 
 // Spec 027: the resumed run must clear Step 5 without an interactive judge.
@@ -900,4 +901,44 @@ test('AC10: the scratch worktree is removed on accepted, rejected, and fault-fai
   } finally {
     fs.rmSync(faultWorkspace.root, { recursive: true, force: true });
   }
+});
+
+// Spec 00018 AC16: the Tier-2 reference is the contract for the verifier,
+// fault injection, and audit verdicts, linked from the Tier-1 skill within the
+// 120-line budget.
+test('AC16: the fresh-verify and audit contract is documented in the Tier-2 reference', () => {
+  const reference = fs.readFileSync(
+    path.join(REPO_ROOT, 'skills', 'sdw-orch', 'references', 'fresh_verify.md'),
+    'utf8'
+  );
+  for (const anchor of [
+    '## Verifier contract',
+    '### Fault injection rules',
+    '### Round policy',
+    '## Audit verdict semantics',
+    '## Ship gate and reporting',
+    '`verification.auditVerdictsBlockShip`',
+    '`fresh-verify --run-id',
+    '`audit --run-id',
+    'faultObserved',
+    '`blocked_audit`'
+  ]) {
+    assert.ok(reference.includes(anchor), `the reference documents ${anchor}`);
+  }
+  for (const verdict of ['confirmed', 'refuted', 'caveats']) {
+    assert.match(reference, new RegExp(`\\| \`${verdict}\` \\|`), `the verdict table documents ${verdict}`);
+  }
+  assert.match(reference, /one deterministic, reversible mutation per criterion/i, 'the fault rule is documented');
+  assert.match(reference, /leaves the suite green/i, 'the undetected-fault rule is documented');
+  assert.match(reference, /three fix-and-re-verify rounds/i, 'the round cap is documented');
+
+  const skill = fs.readFileSync(path.join(REPO_ROOT, 'skills', 'sdw-orch', 'SKILL.md'), 'utf8');
+  assert.match(
+    skill,
+    /\[`references\/fresh_verify\.md`\]\(references\/fresh_verify\.md\)/,
+    'the Tier-1 skill links the reference'
+  );
+  assert.ok(skill.split(/\r?\n/).length <= 120, 'the Tier-1 skill stays within the 120-line budget');
+  const doctor = sdwRules.cmdDoctor({ root: REPO_ROOT });
+  assert.equal(doctor.passed, true, doctor.violations.map(item => item.message).join('; '));
 });

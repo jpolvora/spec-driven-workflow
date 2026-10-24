@@ -847,6 +847,90 @@ function renderVerificationSection(context) {
   return markdown.trimEnd();
 }
 
+/**
+ * Spec 00018 AC15: the fresh-verification and audit blocks a reader needs
+ * without opening run state. Counts are derived from the recorded verdicts when
+ * the record's own summary is absent, and every tree degrades to a literal
+ * `not recorded` instead of failing the report.
+ */
+function summarizeFreshVerification(state) {
+  const record = (state && state.freshVerify) || null;
+  if (!record || !record.status) return null;
+  const verdicts = Array.isArray(record.verdicts) ? record.verdicts : [];
+  const cleanup = record.cleanup || null;
+  const scratch = record.scratch || null;
+  let cleanupOutcome = 'not recorded';
+  if (cleanup && cleanup.removed === true) cleanupOutcome = 'removed';
+  else if (cleanup && cleanup.error) cleanupOutcome = `failed: ${escapeCell(cleanup.error)}`;
+  else if (scratch && scratch.removedAt) cleanupOutcome = 'removed';
+  else if (scratch && scratch.path) cleanupOutcome = `not removed (scratch worktree \`${escapeCell(scratch.path)}\`)`;
+  return {
+    status: record.status,
+    round: Number.isInteger(record.round) ? record.round : null,
+    maxRounds: Number.isInteger(record.maxRounds) ? record.maxRounds : null,
+    verifiedCount: verdicts.filter(item => item && item.verdict === 'verified').length,
+    unverifiedCount: verdicts.filter(item => item && item.verdict === 'unverified').length,
+    verdictCount: verdicts.length,
+    residualCount: Array.isArray(record.residualDefects) ? record.residualDefects.length : 0,
+    cleanupOutcome
+  };
+}
+
+function summarizeAuditOutcome(state) {
+  const record = (state && state.audit) || null;
+  if (!record || !record.status) return null;
+  const verdicts = Array.isArray(record.verdicts) ? record.verdicts : [];
+  const summary = record.summary || {};
+  const count = value => (summary[value] !== undefined && summary[value] !== null
+    ? Number(summary[value])
+    : verdicts.filter(item => item && item.verdict === value).length);
+  const blocking = record.blocking || {};
+  return {
+    status: record.status,
+    overall: record.overall || null,
+    confirmedCount: count('confirmed'),
+    refutedCount: count('refuted'),
+    caveatsCount: count('caveats'),
+    verdictCount: verdicts.length,
+    blocked: blocking.blocked === true,
+    policy: blocking.policy || null,
+    blockingAcIds: Array.isArray(blocking.acIds) ? blocking.acIds : []
+  };
+}
+
+function renderFreshVerificationSection(context) {
+  const { state } = context;
+  const fresh = summarizeFreshVerification(state);
+  const audit = summarizeAuditOutcome(state);
+  let markdown = '## Fresh Verification & Audit\n\n';
+
+  if (!fresh) {
+    markdown += '- Fresh verification: not recorded\n';
+    markdown += '- Fresh verification scratch cleanup: not recorded\n';
+  } else {
+    const round = fresh.round === null
+      ? 'round not recorded'
+      : `round ${fresh.round}${fresh.maxRounds === null ? '' : ` of ${fresh.maxRounds}`}`;
+    const verdictLabel = fresh.verdictCount === 1 ? 'verdict' : 'verdicts';
+    const defectLabel = fresh.residualCount === 1 ? 'residual defect' : 'residual defects';
+    markdown += `- Fresh verification: \`${fresh.status}\` (${round}); ${fresh.verifiedCount} verified, ${fresh.unverifiedCount} unverified (${fresh.verdictCount} ${verdictLabel}), ${fresh.residualCount} ${defectLabel}\n`;
+    markdown += `- Fresh verification scratch cleanup: ${fresh.cleanupOutcome}\n`;
+  }
+
+  if (!audit) {
+    markdown += '- Audit: not recorded\n';
+    markdown += '- Audit ship gate: not recorded\n';
+    markdown += '- Audit blocking criteria: not recorded\n';
+  } else {
+    const overall = audit.overall ? `\`${audit.overall}\`` : 'not recorded';
+    const verdictLabel = audit.verdictCount === 1 ? 'verdict' : 'verdicts';
+    markdown += `- Audit: \`${audit.status}\` (overall ${overall}); ${audit.confirmedCount} confirmed, ${audit.refutedCount} refuted, ${audit.caveatsCount} caveats (${audit.verdictCount} ${verdictLabel})\n`;
+    markdown += `- Audit ship gate: ${audit.blocked ? 'blocked' : 'not blocked'}${audit.policy ? ` (policy \`${audit.policy}\`)` : ''}\n`;
+    markdown += `- Audit blocking criteria: ${audit.blockingAcIds.length > 0 ? audit.blockingAcIds.map(escapeCell).join(', ') : 'none'}\n`;
+  }
+  return markdown.trimEnd();
+}
+
 function countFindings(findings) {
   const counts = { error: 0, warning: 0, suggestion: 0, info: 0 };
   for (const finding of findings || []) {
@@ -1235,6 +1319,7 @@ function buildDeliveryReport(options) {
     renderCommitsSection(context),
     renderFilesChangedSection(context),
     renderVerificationSection(context),
+    renderFreshVerificationSection(context),
     renderCodeReviewSection(context),
     renderConformanceJudgmentSection(context),
     renderJudgeAnalysisSection(context),

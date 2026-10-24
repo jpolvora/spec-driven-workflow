@@ -415,6 +415,15 @@
           "type": "boolean",
           "default": false,
           "description": "Run fresh-context verification between Step 4 evidence acceptance and Step 5 scoring. Disabled by default; when enabled, scoring is blocked until one verdict per acceptance criterion is accepted."
+        },
+        "auditVerdictsBlockShip": {
+          "type": "string",
+          "enum": [
+            "refuted",
+            "caveats"
+          ],
+          "default": "refuted",
+          "description": "Which adversarial audit verdicts block ship: refuted blocks refuted verdicts only; caveats also blocks caveats."
         }
       },
       "additionalProperties": false

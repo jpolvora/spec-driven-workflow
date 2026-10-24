@@ -3077,12 +3077,36 @@ function cmdFreshVerify(options) {
   return 4;
 }
 
-// Spec 00018 AC13/AC14: the configured ship-block policy. Until the ship gate
-// consumes it, the audit records the decision so the verdicts are ready without
-// rework. `refuted` is the default safety floor.
+// Spec 00018 AC13/AC14: the configured ship-block policy. The ship gate
+// consumes the verdicts the audit recorded on run state; `refuted` is the
+// default safety floor.
 function resolveAuditPolicy(config) {
   const verification = (config && config.verification) || {};
   return auditRunner.normalizeAuditPolicy(verification.auditVerdictsBlockShip);
+}
+
+// Spec 00018 AC13/AC14: the ship gate. The audit records one verdict per
+// claimed acceptance criterion on run state; a `refuted` verdict always blocks
+// ship, and `caveats` blocks when the configured policy says so. A run with no
+// audit record keeps its previous pipeline behaviour.
+function evaluateAuditShipGate(state, config) {
+  const policy = resolveAuditPolicy(config);
+  const record = state && state.audit;
+  const verdicts = record && Array.isArray(record.verdicts) ? record.verdicts : [];
+  if (verdicts.length === 0) {
+    return { applies: false, blocked: false, policy, acIds: [], verdicts: [], message: null };
+  }
+  const blocking = auditRunner.resolveAuditBlocking({ verdicts, policy });
+  return {
+    applies: true,
+    blocked: blocking.blocked,
+    policy: blocking.policy,
+    acIds: blocking.acIds,
+    verdicts: blocking.verdicts,
+    message: blocking.blocked
+      ? `Ship blocked by the adversarial audit under policy "${blocking.policy}": ${blocking.reasons.join('; ')}`
+      : null
+  };
 }
 
 // Spec 00018 AC11/AC12: the explicit `audit` command. It reads the run's claim
@@ -5084,6 +5108,34 @@ function executeRun(options) {
   } else if (startStep <= 8 && state.steps[8].status !== 'completed' && !options.skipPr) {
     state = stateManager.updateStepState(targetRoot, state.runId, 8, 'in_progress');
     logStepEnter(8);
+
+    // Spec 00018 AC13/AC14: audit verdicts block delivery before any ship or
+    // pre-PR work starts. `refuted` always blocks; `caveats` blocks only under
+    // verification.auditVerdictsBlockShip. No audit record means no gate.
+    const auditGate = evaluateAuditShipGate(state, config);
+    if (auditGate.applies) {
+      state.auditGate = {
+        blocked: auditGate.blocked,
+        policy: auditGate.policy,
+        acIds: auditGate.acIds,
+        verdicts: auditGate.verdicts,
+        evaluatedAt: new Date().toISOString()
+      };
+      state = stateManager.saveRunState(targetRoot, state);
+    }
+    if (auditGate.blocked) {
+      console.error(`[Step 8: Audit Gate] ${auditGate.message}`);
+      state = stateManager.updateStepState(targetRoot, state.runId, 8, 'blocked_audit', { auditGate: state.auditGate }, auditGate.message);
+      stateManager.saveRunState(targetRoot, state);
+      options._runResult = {
+        runId: state.runId,
+        status: 'failed',
+        error: auditGate.message,
+        auditGate: state.auditGate
+      };
+      return 1;
+    }
+
     const step8GateAttempts = [];
     let step8ShipResult = null;
 
@@ -7511,6 +7563,7 @@ module.exports = {
   cmdTaskFinish,
   cmdFreshVerify,
   cmdAudit,
+  evaluateAuditShipGate,
   runFreshVerifyTransition,
   freshVerifyEnabled,
   cmdScoreSubmit,
