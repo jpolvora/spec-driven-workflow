@@ -2549,6 +2549,13 @@ function verdictsCoverCriteria(verdicts, criteria) {
   return expected.size > 0 && seen.size === expected.size;
 }
 
+// Spec 00018 AC9: only a round where every criterion is verified may advance to
+// Step 5. A completed record with any `unverified` verdict stays a paused round.
+function allVerdictsVerified(verdicts) {
+  const list = Array.isArray(verdicts) ? verdicts : [];
+  return list.length > 0 && list.every(entry => entry && entry.verdict === 'verified');
+}
+
 function freshVerifyArtifactsDir(targetRoot, state) {
   return state.artifactsDir || stateManager.getArtifactsRelDir(targetRoot, state.specSlug, state.runId);
 }
@@ -2614,6 +2621,19 @@ function buildResidualDefects(declared, verdicts) {
 
 // Spec 00018 AC9: the run pauses with the residual defect list instead of
 // scoring unverified work. Step 5 is never reached while the list is non-empty.
+// Spec 00018 AC9: a round that ended with unverified criteria before the cap.
+// The run stays paused; the operator fixes the defects and starts the next round.
+function printAwaitingFix(state, record) {
+  const defects = Array.isArray(record && record.residualDefects) ? record.residualDefects : [];
+  const round = (record && record.round) || 1;
+  const maxRounds = (record && record.maxRounds) || FRESH_VERIFY_MAX_ROUNDS;
+  console.log(`\n[Fresh Verify] Run "${state.runId}" paused after round ${round}/${maxRounds}: ${defects.length} criterion${defects.length === 1 ? '' : 'a'} remain unverified. Step 5 scoring is blocked.`);
+  for (const defect of defects) {
+    console.log(`  - ${defect.acId ? `${defect.acId}: ` : ''}${defect.reason}`);
+  }
+  console.log(`Fix the defects above, then re-run fresh-verify to start round ${round + 1}.`);
+}
+
 function printResidualPause(state, record) {
   const defects = Array.isArray(record && record.residualDefects) ? record.residualDefects : [];
   const round = (record && record.round) || FRESH_VERIFY_MAX_ROUNDS;
@@ -2874,10 +2894,12 @@ function finishFreshVerification(targetRoot, state, criteria, verdictPath) {
     ? buildResidualDefects(validation.residualDefects, gated.verdicts)
     : validation.residualDefects;
   // Spec 00018 AC9: after the third round, remaining defects pause the run
-  // instead of letting unverified work reach Step 5.
+  // instead of letting unverified work reach Step 5. Rounds one and two keep the
+  // run paused too: the operator fixes the defects and runs the next round.
   const paused = ok && round >= FRESH_VERIFY_MAX_ROUNDS && residualDefects.length > 0;
+  const needsFix = ok && !paused && residualDefects.length > 0;
   const patch = {
-    status: ok ? (paused ? 'paused_residual_defects' : 'completed') : 'failed',
+    status: ok ? (paused ? 'paused_residual_defects' : needsFix ? 'awaiting_fix' : 'completed') : 'failed',
     verdicts: gated.verdicts,
     residualDefects,
     verificationErrors: validation.errors,
@@ -2894,11 +2916,11 @@ function finishFreshVerification(targetRoot, state, criteria, verdictPath) {
     patch.scratch = { ...prior.scratch, removedAt: cleanup.ok ? now : null };
   }
   let saved = updateFreshVerifyRecord(targetRoot, state.runId, patch);
-  if (paused) {
+  if (paused || needsFix) {
     saved.status = 'paused';
     saved = stateManager.saveRunState(targetRoot, saved);
   }
-  return { ok, paused, residualDefects, state: saved, validation, cleanup, record: saved.freshVerify, verdictFileAbs };
+  return { ok, paused, needsFix, residualDefects, state: saved, validation, cleanup, record: saved.freshVerify, verdictFileAbs };
 }
 
 // Spec 00018 AC4/AC18: validate a submitted verdict, apply the fault gate, and
@@ -2924,6 +2946,13 @@ function applyFreshVerifyVerdict(targetRoot, state, criteria, verdictPath) {
   if (finished.paused) {
     printResidualPause(finished.state, finished.record);
     return { code: 4, state: finished.state, skipped: false, paused: true, record: finished.record };
+  }
+  // Spec 00018 AC9: a round that still has unverified criteria never reaches
+  // Step 5; the run stays paused until the operator fixes them and starts the
+  // next round.
+  if (finished.needsFix) {
+    printAwaitingFix(finished.state, finished.record);
+    return { code: 4, state: finished.state, skipped: false, paused: true, needsFix: true, record: finished.record };
   }
   return { code: 0, state: finished.state, skipped: false };
 }
@@ -2962,7 +2991,15 @@ function runFreshVerifyTransition(targetRoot, state, config, options = {}) {
     printResidualPause(scratch.state, scratch.state.freshVerify);
     return { code: 4, state: scratch.state, skipped: false, paused: true, record: scratch.state.freshVerify };
   }
-  if (prior && prior.status === 'completed' && verdictsCoverCriteria(prior.verdicts, criteria)) {
+  // Spec 00018 AC9: a round with unverified criteria keeps the run paused; this
+  // transition never scores it and never silently reuses the round.
+  if (prior && prior.status === 'awaiting_fix') {
+    state.status = 'paused';
+    state = stateManager.saveRunState(targetRoot, state);
+    printAwaitingFix(state, prior);
+    return { code: 4, state, skipped: false, paused: true, needsFix: true, record: prior };
+  }
+  if (prior && prior.status === 'completed' && verdictsCoverCriteria(prior.verdicts, criteria) && allVerdictsVerified(prior.verdicts)) {
     const scratchAbs = prior.scratch && prior.scratch.path ? path.resolve(targetRoot, prior.scratch.path) : null;
     if (scratchAbs && fs.existsSync(scratchAbs)) {
       const cleanup = freshVerify.removeScratchWorktree({ projectRoot: targetRoot, worktreePath: scratchAbs });
@@ -3117,6 +3154,23 @@ function cmdFreshVerify(options) {
       }
       return 4;
     }
+    // Spec 00018 AC9: a round before the cap that leaves criteria unverified
+    // keeps the run paused, so the command exits 4 and names the next round.
+    if (finished.needsFix) {
+      printAwaitingFix(finished.state, finished.record);
+      if (options.json) {
+        console.log(JSON.stringify({
+          runId: state.runId,
+          status: 'awaiting_fix',
+          round: finished.record.round,
+          maxRounds: finished.record.maxRounds,
+          residualDefects: finished.residualDefects,
+          cleanup: finished.cleanup,
+          nextRound: finished.record.round + 1
+        }, null, 2));
+      }
+      return 4;
+    }
     if (options.json) {
       console.log(JSON.stringify({
         runId: state.runId,
@@ -3145,7 +3199,13 @@ function cmdFreshVerify(options) {
     printResidualPause(scratch.state, scratch.state.freshVerify);
     return 4;
   }
-  if (prior && prior.status === 'completed' && verdictsCoverCriteria(prior.verdicts, criteria)) {
+  if (prior && prior.status === 'awaiting_fix') {
+    state.status = 'paused';
+    state = stateManager.saveRunState(targetRoot, state);
+    printAwaitingFix(state, prior);
+    return 4;
+  }
+  if (prior && prior.status === 'completed' && verdictsCoverCriteria(prior.verdicts, criteria) && allVerdictsVerified(prior.verdicts)) {
     console.log(`[sdw-orch fresh-verify] Run "${state.runId}" already has accepted verdicts for ${criteria.map(ac => ac.id).join(', ')}.`);
     return 0;
   }

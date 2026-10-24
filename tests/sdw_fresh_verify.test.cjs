@@ -417,12 +417,27 @@ test('AC1: fresh verification is opt-in through verification.freshVerifyEnabled 
 });
 
 test('AC1-AC4: fresh-verify CLI creates a fenced scratch, rejects bad verdicts, and cleans up', () => {
-  const { root } = setupWorkspace({ createState: true });
+  const verifyFile = [
+    "'use strict';",
+    "const fs = require('fs');",
+    "if (!fs.readFileSync('app.cjs', 'utf8').includes('// implemented')) process.exit(1);",
+    ''
+  ].join('\n');
+  const { root } = setupWorkspace({
+    createState: true,
+    testCommand: 'node verify.cjs',
+    baselineFiles: { 'verify.cjs': verifyFile }
+  });
   try {
     fs.appendFileSync(path.join(root, 'app.cjs'), '// implemented\n', 'utf8');
     const runId = latestState(root).runId;
+    const faultsFile = path.join(root, 'faults.json');
+    fs.writeFileSync(faultsFile, JSON.stringify([
+      { acId: 'AC1', file: 'app.cjs', find: '// implemented', replace: '// fault' },
+      { acId: 'AC2', file: 'app.cjs', find: '// implemented', replace: '// fault' }
+    ]), 'utf8');
 
-    const started = runCli(root, ['fresh-verify', '--run-id', runId]);
+    const started = runCli(root, ['fresh-verify', '--run-id', runId, '--faults', faultsFile]);
     assert.equal(started.status, 4, `expected the awaiting-verdict exit code; stderr: ${started.stderr}`);
     let state = latestState(root);
     assert.equal(state.freshVerify.status, 'awaiting_verdict');
@@ -458,7 +473,7 @@ test('AC1-AC4: fresh-verify CLI creates a fenced scratch, rejects bad verdicts, 
       'the scratch worktree is removed on verdict rejection'
     );
 
-    const restarted = runCli(root, ['fresh-verify', '--run-id', runId]);
+    const restarted = runCli(root, ['fresh-verify', '--run-id', runId, '--faults', faultsFile]);
     assert.equal(restarted.status, 4, 'a failed verification can start a new round');
     state = latestState(root);
     assert.equal(state.freshVerify.round, 2);
@@ -504,7 +519,7 @@ test('AC1: the opt-in transition fails closed when the scratch worktree cannot b
   }
 });
 
-test('AC1-AC4: the Step 4 -> 5 transition pauses on the verifier, then resumes scoring', () => {
+test('AC1-AC4: the Step 4 -> 5 transition pauses on unverified verdicts and never scores', () => {
   const implementationScript = [
     "const fs = require('fs');",
     "fs.appendFileSync('app.cjs', '// implemented\\n');",
@@ -553,7 +568,12 @@ test('AC1-AC4: the Step 4 -> 5 transition pauses on the verifier, then resumes s
       ]
     }), 'utf8');
     const submitted = runCli(root, ['fresh-verify', '--run-id', state.runId, '--verdict', verdict]);
-    assert.equal(submitted.status, 0, `verdict submission failed: ${submitted.stderr}`);
+    assert.equal(submitted.status, 4, `unverified verdicts keep the run paused: ${submitted.stderr}`);
+    assert.match(submitted.stdout, /remain unverified/);
+    let afterSubmit = stateManager.loadRunState(root, state.runId);
+    assert.equal(afterSubmit.freshVerify.status, 'awaiting_fix', 'the round is parked for a fix');
+    assert.equal(afterSubmit.status, 'paused');
+    assert.equal(afterSubmit.steps[5].status, 'pending', 'Step 5 never starts on unverified criteria');
 
     const resumed = sdwOrch.cmdResume({
       root,
@@ -562,11 +582,11 @@ test('AC1-AC4: the Step 4 -> 5 transition pauses on the verifier, then resumes s
       skipPr: true,
       minScore: 0
     });
-    assert.equal(resumed, 0, 'after accepted verdicts the run scores and completes');
+    assert.equal(resumed, 4, 'resume keeps the run paused instead of scoring');
 
     state = stateManager.loadRunState(root, state.runId);
-    assert.equal(state.steps[5].status, 'completed');
-    assert.equal(state.freshVerify.status, 'completed');
+    assert.equal(state.steps[5].status, 'pending', 'Step 5 scoring never starts');
+    assert.equal(state.freshVerify.status, 'awaiting_fix');
     assert.equal(fs.existsSync(path.resolve(root, state.freshVerify.scratch.path)), false, 'no scratch worktree survives');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -680,11 +700,11 @@ test('AC18: command mode runs the verifier inside the scratch worktree and consu
     fs.appendFileSync(path.join(root, 'app.cjs'), '// implemented\n', 'utf8');
     const runId = latestState(root).runId;
     const started = runCli(root, ['fresh-verify', '--run-id', runId]);
-    assert.equal(started.status, 0, `command mode finishes without a handoff pause; stderr: ${started.stderr}`);
-    assert.match(started.stdout, /1\/2 AC\(s\) verified|0\/2 AC\(s\) verified/);
+    assert.equal(started.status, 4, `unverified command-mode verdicts keep the run paused: ${started.stderr}`);
+    assert.match(started.stdout, /remain unverified/);
 
     const state = latestState(root);
-    assert.equal(state.freshVerify.status, 'completed');
+    assert.equal(state.freshVerify.status, 'awaiting_fix');
     assert.equal(state.freshVerify.command.exitCode, 0);
     assert.match(state.freshVerify.command.command, /verifier\.cjs/);
     assert.equal(state.freshVerify.verdicts.length, 2);
@@ -713,9 +733,9 @@ test('AC18: command mode runs the verifier inside the scratch worktree and consu
         freshVerifyCommand: command
       }
     }, {});
-    assert.equal(result.code, 0, 'command mode clears the transition for Step 5');
+    assert.equal(result.code, 4, 'unverified command-mode verdicts keep Step 5 blocked');
     const state = latestState(transitioned.root);
-    assert.equal(state.freshVerify.status, 'completed');
+    assert.equal(state.freshVerify.status, 'awaiting_fix');
     assert.equal(state.steps[5].status, 'pending');
     assert.equal(fs.existsSync(freshVerify.resolveScratchDir(transitioned.root, state.runId)), false);
   } finally {
@@ -953,8 +973,9 @@ test('AC5-AC7: the fresh-verify CLI records fault evidence and gates verified ve
       ]
     }), 'utf8');
     const submitted = runCli(root, ['fresh-verify', '--run-id', runId, '--verdict', verdictFile]);
-    assert.equal(submitted.status, 0, `verdict submission failed: ${submitted.stderr}`);
+    assert.equal(submitted.status, 4, `the undetected fault keeps the run paused: ${submitted.stderr}`);
     assert.match(submitted.stdout, /1\/2 AC\(s\) verified/);
+    assert.match(submitted.stdout, /remain unverified/);
 
     state = latestState(root);
     const [ac1, ac2] = state.freshVerify.verdicts;
@@ -963,7 +984,7 @@ test('AC5-AC7: the fresh-verify CLI records fault evidence and gates verified ve
     assert.equal(ac2.claimedVerdict, 'verified');
     assert.match(ac2.unverifiedReason, /not detected/);
     assert.match(ac2.unverifiedReason, /inert/);
-    assert.equal(state.freshVerify.status, 'completed');
+    assert.equal(state.freshVerify.status, 'awaiting_fix', 'round one with a defect parks the run for a fix');
     assert.equal(state.freshVerify.cleanup.removed, true);
     assert.equal(fs.existsSync(path.resolve(root, state.freshVerify.scratch.path)), false);
   } finally {
