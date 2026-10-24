@@ -3183,11 +3183,28 @@ function cmdFreshVerify(options) {
     return 0;
   };
 
+  const prior = state.freshVerify || null;
   if (options.verdictPath) {
+    // Spec 00018 AC9: a submitted verdict never moves a parked run out of its
+    // pause. The third-round pause is final, and an awaiting-fix round must be
+    // restarted (round N+1) instead of being closed by a file.
+    if (prior && prior.status === 'paused_residual_defects') {
+      console.error('[sdw-orch fresh-verify] The run is paused on residual defects after the final round; a submitted verdict cannot reopen it.');
+      printResidualPause(state, prior);
+      return 4;
+    }
+    if (prior && prior.status === 'awaiting_fix') {
+      console.error(`[sdw-orch fresh-verify] Round ${prior.round} is parked for a fix; start round ${(prior.round || 0) + 1} instead of submitting a verdict for the closed round.`);
+      printAwaitingFix(state, prior);
+      return 4;
+    }
+    if (prior && prior.status === 'failed') {
+      console.error('[sdw-orch fresh-verify] The last round failed; start a new round before submitting a verdict.');
+      return 1;
+    }
     return reportFinished(finishFreshVerification(targetRoot, state, criteria, options.verdictPath));
   }
 
-  const prior = state.freshVerify || null;
   if (prior && prior.status === 'paused_residual_defects') {
     state.status = 'paused';
     state = stateManager.saveRunState(targetRoot, state);

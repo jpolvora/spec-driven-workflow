@@ -1335,3 +1335,50 @@ test('AC5: fault replacement text is inserted literally, including $ patterns', 
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+// Spec 00018 AC9: a submitted verdict file can never reopen a parked run.
+test('AC9: a submitted verdict cannot move a paused round out of its pause', () => {
+  const { root } = setupWorkspace({ createState: true });
+  try {
+    fs.appendFileSync(path.join(root, 'app.cjs'), '// implemented\n', 'utf8');
+    const runId = latestState(root).runId;
+    const verifiedVerdict = path.join(root, 'verified-verdict.json');
+    fs.writeFileSync(verifiedVerdict, JSON.stringify({
+      criteria: [
+        { id: 'AC1', verdict: 'verified' },
+        { id: 'AC2', verdict: 'verified' }
+      ]
+    }), 'utf8');
+
+    const patch = (status, round) => {
+      const state = stateManager.loadRunState(root, runId);
+      state.status = 'paused';
+      state.freshVerify = {
+        status,
+        round,
+        maxRounds: 3,
+        verdicts: [
+          { id: 'AC1', verdict: 'unverified', unverifiedReason: 'still missing' },
+          { id: 'AC2', verdict: 'unverified', unverifiedReason: 'still missing' }
+        ],
+        residualDefects: [{ acId: 'AC1', reason: 'still missing' }, { acId: 'AC2', reason: 'still missing' }]
+      };
+      stateManager.saveRunState(root, state);
+    };
+
+    patch('paused_residual_defects', 3);
+    const paused = runCli(root, ['fresh-verify', '--run-id', runId, '--verdict', verifiedVerdict]);
+    assert.equal(paused.status, 4, `the final pause is final: ${paused.stderr}`);
+    assert.match(paused.stderr, /cannot reopen it/);
+    assert.equal(latestState(root).freshVerify.status, 'paused_residual_defects', 'the pause record is unchanged');
+    assert.equal(latestState(root).status, 'paused');
+
+    patch('awaiting_fix', 1);
+    const parked = runCli(root, ['fresh-verify', '--run-id', runId, '--verdict', verifiedVerdict]);
+    assert.equal(parked.status, 4, `an awaiting-fix round is closed: ${parked.stderr}`);
+    assert.match(parked.stderr, /start round 2/);
+    assert.equal(latestState(root).freshVerify.status, 'awaiting_fix', 'the parked round is unchanged');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
