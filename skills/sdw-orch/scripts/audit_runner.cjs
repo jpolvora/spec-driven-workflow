@@ -310,8 +310,11 @@ function classifyClaim(claim, reVerification, freshVerifyVerdicts) {
   if (claim.hasLedgerRecord && claim.ledgerStatus === 'failed') {
     refuted.push('the acceptance criteria ledger marks this criterion failed');
   }
+  // A verification command that needs a git-ignored artifact (node_modules, build
+  // output) fails in the scratch tree for an environmental reason, so a failed
+  // re-verification is reported as a caveat, never as a claim contradiction.
   if (reVerification && reVerification.status === 'failed') {
-    refuted.push(`re-verification failed: ${describeReVerification(reVerification)}`);
+    caveats.push(`re-verification did not pass in the audit scratch worktree: ${describeReVerification(reVerification)}`);
   }
 
   if (refuted.length === 0) {

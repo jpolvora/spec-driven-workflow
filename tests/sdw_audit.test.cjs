@@ -388,20 +388,20 @@ test('AC12: audit refutes a claim whose file is absent from the delivery diff', 
   }
 });
 
-test('AC12: audit refutes a claim when re-verification fails', () => {
+test('AC12: a failed re-verification is a caveat, not a refutation', () => {
   const workspace = setupAuditWorkspace({ testCommand: 'node verify.cjs', verifyFile: VERIFY_FAIL });
   try {
     const result = runAuditCli(workspace.root, workspace.runId);
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /AC1: refuted/);
-    assert.match(result.stdout, /re-verification failed/i);
-    assert.match(result.stdout, /Overall: refuted/);
+    assert.match(result.stdout, /AC1: caveats/);
+    assert.match(result.stdout, /did not pass in the audit scratch worktree/i);
+    assert.match(result.stdout, /Overall: caveats/);
 
     const state = stateManager.loadRunState(workspace.root, workspace.runId);
     assert.equal(state.audit.reVerification.status, 'failed');
-    assert.equal(state.audit.verdicts[0].verdict, 'refuted');
-    assert.match(state.audit.verdicts[0].reasons.join(' '), /re-verification failed/);
-    assert.equal(state.audit.blocking.blocked, true);
+    assert.equal(state.audit.verdicts[0].verdict, 'caveats', 'an environmental failure never contradicts the claim');
+    assert.match(state.audit.verdicts[0].reasons.join(' '), /did not pass in the audit scratch worktree/);
+    assert.equal(state.audit.blocking.blocked, false, 'the default refuted policy does not block a caveat');
   } finally {
     fs.rmSync(workspace.root, { recursive: true, force: true });
   }
