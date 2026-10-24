@@ -5833,6 +5833,11 @@ function executeRun(options) {
           if (shipResult.pullRequest) {
             state.pullRequest = shipResult.pullRequest;
             prPayload.pullRequest = shipResult.pullRequest;
+            // Spec 00070 AC1: the batch merge resolves from the recorded delivery
+            // pull request number, so the delivery identity is recorded on its own.
+            if (shipResult.pullRequest.number !== undefined && shipResult.pullRequest.number !== null) {
+              state.prNumber = shipResult.pullRequest.number;
+            }
           }
           state.shipStatus = shipResult.shipStatus;
           prPayload.shipStatus = shipResult.shipStatus;

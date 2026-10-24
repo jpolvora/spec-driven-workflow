@@ -356,20 +356,7 @@ function runProviderCommand(config, command) {
   }
 }
 
-// AC9: the provider resolves a pull request from the head branch recorded on the
-// item or its run state. A value that is not branch-shaped is never queried.
-function providerPullRequest({ config, head, options = {} } = {}) {
-  const kind = providerKind(config);
-  if (!kind || typeof head !== 'string' || !SAFE_BRANCH.test(head) || head.includes('..')) return null;
-  if (typeof options._findPr === 'function') {
-    const found = options._findPr({ head, provider: kind, config });
-    return hasPullRequestNumber(found) ? found : null;
-  }
-  const command = kind === 'github'
-    ? `gh pr list --head ${head} --state all --json number,url,state --limit 1`
-    : `az repos pr list --source-branch ${head} --status all --output json`;
-  const parsed = runProviderCommand(config, command);
-  const entry = Array.isArray(parsed) ? parsed[0] : parsed;
+function providerPullRequestEntry(entry) {
   if (!entry || typeof entry !== 'object') return null;
   const number = entry.number !== undefined ? entry.number : entry.pullRequestId;
   if (number === undefined || number === null) return null;
@@ -378,6 +365,35 @@ function providerPullRequest({ config, head, options = {} } = {}) {
     url: entry.url || entry.webUrl || null,
     state: String(entry.state || entry.status || '').toLowerCase() || null
   };
+}
+
+// AC1/AC3: one head-branch lookup serves both the fallback resolution and the
+// follow-up search, which needs every pull request recorded on that branch.
+function providerPullRequests({ config, head, options = {} } = {}) {
+  const kind = providerKind(config);
+  if (!kind || typeof head !== 'string' || !SAFE_BRANCH.test(head) || head.includes('..')) return [];
+  // An injected lookup is the provider's answer for the branch; it is never
+  // bypassed with a real provider call.
+  if (typeof options._listPrs === 'function') {
+    const found = options._listPrs({ head, provider: kind, config });
+    return (Array.isArray(found) ? found : []).filter(hasPullRequestNumber);
+  }
+  if (typeof options._findPr === 'function') {
+    const found = options._findPr({ head, provider: kind, config });
+    return hasPullRequestNumber(found) ? [found] : [];
+  }
+  const command = kind === 'github'
+    ? `gh pr list --head ${head} --state all --json number,url,state --limit 10`
+    : `az repos pr list --source-branch ${head} --status all --output json`;
+  const parsed = runProviderCommand(config, command);
+  const entries = Array.isArray(parsed) ? parsed : (parsed ? [parsed] : []);
+  return entries.map(providerPullRequestEntry).filter(Boolean);
+}
+
+// AC9: the provider resolves a pull request from the head branch recorded on the
+// item or its run state. The newest pull request on the branch is the fallback.
+function providerPullRequest({ config, head, options = {} } = {}) {
+  return providerPullRequests({ config, head, options })[0] || null;
 }
 
 // AC10: the provider's merged state proves a delivery even when the delegated
@@ -410,6 +426,15 @@ function resolvePullRequest({ config, item, state, options = {} } = {}) {
   const shipStatus = (stepOutput && stepOutput.shipStatus) || (state && state.shipStatus) || null;
   if (hasPullRequestNumber(fromStep)) return { pullRequest: fromStep, shipStatus, source: 'step-8' };
   if (hasPullRequestNumber(fromState)) return { pullRequest: fromState, shipStatus, source: 'run-state' };
+  // AC1: Step 8 records the delivery pull request number on its own, so a run
+  // state that kept only the number still resolves without the head-branch lookup.
+  if (state && state.prNumber !== undefined && state.prNumber !== null && state.prNumber !== '') {
+    return {
+      pullRequest: { number: state.prNumber, url: fromState ? fromState.url : null },
+      shipStatus,
+      source: 'run-state'
+    };
+  }
   const head = (state && state.branch) || (item && item.branch) || null;
   const fromProvider = providerPullRequest({ config, head, options });
   return { pullRequest: fromProvider, shipStatus, source: fromProvider ? 'provider' : null };
@@ -728,7 +753,9 @@ function mergeEnabled(config, options = {}) {
 
 // Records one merge outcome per queue item. A policy skip or a provider failure
 // is recorded on the item and the queue keeps advancing: the item's delivery
-// status is owned by the delegated run and never changes here.
+// status is owned by the delegated run and never changes here. A merged delivery
+// then merges its follow-up pull request under the same check gate; only a
+// follow-up gate that cannot pass returns a `halt` for the queue to surface.
 function applyMerge({ config, manifest, item, options = {} } = {}) {
   if (!item) return undefined;
   // AC6: a resumed queue never re-merges an item whose attempt is already on
@@ -780,29 +807,33 @@ function applyMerge({ config, manifest, item, options = {} } = {}) {
     return record('skipped', { reason: 'invalid-pr-number', prNumber, source: resolved.source });
   }
 
-  // AC10: a run that stopped at `review_pending` still delivered when the
-  // provider reports that pull request merged.
-  if (resolved.shipStatus !== 'delivered') {
-    const merged = providerMerged({ config, prNumber, options });
-    if (merged === true) {
-      item.merge = {
-        requested,
-        attempted: false,
-        ok: true,
-        status: 'merged',
-        reason: null,
-        prNumber,
-        source: resolved.source,
-        observed: 'merged',
-        at
-      };
-      say(options, `[sdw-batch] Pull request ${prNumber} for ${item.slug} is already merged.`);
-      saveManifest(config, manifest);
-      return item.merge;
-    }
+  const command = mergeCommandFor(config && config.scmProvider, prNumber);
+  // AC2/AC4: a delivery pull request the provider reports merged is final, whether
+  // the probe runs before the merge call or after the provider refuses it. The
+  // delivery record never says `failed` for a merged pull request.
+  const recordMerged = attempted => {
+    item.merge = {
+      requested,
+      attempted,
+      ok: true,
+      status: 'merged',
+      reason: null,
+      prNumber,
+      source: resolved.source,
+      observed: 'merged',
+      at
+    };
+    saveManifest(config, manifest);
+    const posted = mergeFollowUp({ config, manifest, item, state, deliveryNumber: prNumber, options });
+    return posted && posted.halt ? posted : item.merge;
+  };
+  // AC2: an already merged delivery is final whatever ship status the run
+  // recorded; no second merge is issued.
+  if (deliveryMerged({ config, prNumber, options }) === true) {
+    say(options, `[sdw-batch] Pull request ${prNumber} for ${item.slug} is already merged.`);
+    return recordMerged(false);
   }
 
-  const command = mergeCommandFor(config && config.scmProvider, prNumber);
   if (!command) {
     say(options, `[sdw-batch] Merge skipped for ${item.slug}: scmProvider "${config.scmProvider}" cannot merge.`);
     return record('skipped', { reason: 'no scm provider', prNumber, source: resolved.source });
@@ -814,13 +845,25 @@ function applyMerge({ config, manifest, item, options = {} } = {}) {
     item.merge = { requested: true, attempted: true, ok: true, status: 'merged', reason: null, prNumber, source: resolved.source, at };
     say(options, `[sdw-batch] Merged ${prNumber} for ${item.slug}.`);
   } catch (err) {
-    // AC4: record the failure, keep the item completed, let the queue advance.
+    // AC4: the delivery may have merged before the provider refused the call, so
+    // the merged state is probed again before a failure is recorded.
+    if (deliveryMerged({ config, prNumber, options }) === true) {
+      say(options, `[sdw-batch] Pull request ${prNumber} for ${item.slug} is merged; the refused merge is not recorded as a failure.`);
+      return recordMerged(true);
+    }
+    // AC4 of spec 00053: record the failure, keep the item completed, let the queue advance.
     const message = err && err.message ? err.message : String(err);
     item.merge = { requested: true, attempted: true, ok: false, status: 'failed', reason: message, prNumber, source: resolved.source, at };
     say(options, `[sdw-batch] Merge failed for ${item.slug}: ${message}`);
+    saveManifest(config, manifest);
+    return item.merge;
   }
   saveManifest(config, manifest);
-  return item.merge;
+  // AC3: the delivery is merged, so the follow-up pull request on the same head
+  // branch merges under the same check gate. A gate that cannot pass returns a
+  // halt the queue surfaces by name.
+  const posted = mergeFollowUp({ config, manifest, item, state, deliveryNumber: prNumber, options });
+  return posted && posted.halt ? posted : item.merge;
 }
 
 // Spec 00053 AC11-AC13: every delegation is preceded by a base refresh. The
@@ -1091,11 +1134,15 @@ function failingChecksReason(prNumber, failing) {
     : `required checks failed for pull request #${prNumber}`;
 }
 
-// AC1-AC3: merge one earlier delivery pull request under the check gate. No merge
-// request is created while checks are pending; a provider refusal while checks are
-// pending records waiting, polls to a terminal state, and retries exactly once.
-// Returns `{ ok: true }` or `{ halt: reason }`; the caller adds the delivery context.
-function mergeEarlierDelivery({ config, manifest, prior, item, prNumber, command, source, options = {} } = {}) {
+// AC1-AC3 of spec 00066: merge one pull request under the required-check gate. No
+// merge request is created while checks are pending; a provider refusal while
+// checks are pending records waiting, polls to a terminal state, and retries
+// exactly once. The caller supplies the record sink, so a delivery merge and a
+// follow-up merge obey the same gate without sharing a record.
+// Returns `{ ok: true }` or `{ halt: reason }`.
+function gatedMerge({
+  config, manifest, item, prNumber, command, source, options = {}, assign, mergedMessage, retriedMessage
+} = {}) {
   const provider = config.scmProvider;
   const mergePr = typeof options._mergePr === 'function' ? options._mergePr : runMergeCommand;
   // Spec 00066 AC4: the check gate keeps its evidence on the merge record. The
@@ -1105,7 +1152,7 @@ function mergeEarlierDelivery({ config, manifest, prior, item, prNumber, command
   let observed = null;
   let retryOutcome = null;
   const record = fields => {
-    prior.merge = {
+    const merged = {
       requested: true,
       attempted: attempts.length > 0,
       ok: null,
@@ -1119,20 +1166,29 @@ function mergeEarlierDelivery({ config, manifest, prior, item, prNumber, command
       retryOutcome,
       ...fields
     };
+    assign(merged);
     saveManifest(config, manifest);
-    return prior.merge;
+    return merged;
   };
   // One merge attempt, timestamped: the record proves how often and when the
   // provider was asked, whatever the outcome.
   const attempt = () => {
     const at = new Date().toISOString();
     try {
-      mergePr({ config, item: prior, prNumber, command, provider });
+      mergePr({ config, item, prNumber, command, provider });
       attempts.push({ at, ok: true, reason: null });
     } catch (err) {
       attempts.push({ at, ok: false, reason: err && err.message ? err.message : String(err) });
       throw err;
     }
+  };
+  // Spec 00070 AC4: the provider's merged state settles the gate. A call refused
+  // after the delivery merged is recorded `merged`, never `failed`, and no retry
+  // is issued for a pull request that needs none.
+  const recordReconciledMerged = () => {
+    say(options, `[sdw-batch] Pull request ${prNumber} is merged; the refused merge is not recorded as a failure.`);
+    record({ attempted: true, ok: true, status: 'merged', observed: 'merged' });
+    return { ok: true };
   };
 
   // AC1: the merge request is created only after the required checks pass.
@@ -1181,10 +1237,14 @@ function mergeEarlierDelivery({ config, manifest, prior, item, prNumber, command
     attempt();
     retryOutcome = 'not-needed';
     record({ attempted: true, ok: true, status: 'merged' });
-    say(options, `[sdw-batch] Merged ${prNumber} for ${prior.slug} before delegating ${item.slug}.`);
+    say(options, mergedMessage);
     return { ok: true };
   } catch (err) {
     const detail = err && err.message ? err.message : String(err);
+    if (deliveryMerged({ config, prNumber, options }) === true) {
+      retryOutcome = 'not-needed';
+      return recordReconciledMerged();
+    }
     // AC2: the refusal is only a check refusal when the checks are still pending;
     // anything else keeps the established single-attempt failure.
     const refusal = checksStatus({ config, prNumber, provider, options });
@@ -1192,7 +1252,7 @@ function mergeEarlierDelivery({ config, manifest, prior, item, prNumber, command
     if (!refusal || refusal.state !== 'pending') {
       retryOutcome = 'not-needed';
       record({ attempted: true, ok: false, status: 'failed', reason: detail });
-      return { halt: `the pre-flight merge of pull request #${prNumber} failed: ${detail}` };
+      return { halt: `the merge of pull request #${prNumber} failed: ${detail}` };
     }
     record({ attempted: true, ok: null, status: 'waiting', reason: detail });
     say(options, `[sdw-batch] Merge of pull request ${prNumber} was refused while its checks are pending; waiting for them to finish.`);
@@ -1218,16 +1278,100 @@ function mergeEarlierDelivery({ config, manifest, prior, item, prNumber, command
       attempt();
       retryOutcome = 'succeeded';
       record({ attempted: true, ok: true, status: 'merged' });
-      say(options, `[sdw-batch] Merged ${prNumber} for ${prior.slug} after its required checks passed.`);
+      say(options, retriedMessage);
       return { ok: true };
     } catch (retryErr) {
       retryOutcome = 'failed';
+      if (deliveryMerged({ config, prNumber, options }) === true) return recordReconciledMerged();
       const retryDetail = retryErr && retryErr.message ? retryErr.message : String(retryErr);
       const reason = `pull request #${prNumber} is not mergeable after its checks passed: ${retryDetail}`;
       record({ attempted: true, ok: false, status: 'failed', reason });
       return { halt: reason };
     }
   }
+}
+
+// AC1-AC3: merge one earlier delivery pull request under the check gate.
+// Returns `{ ok: true }` or `{ halt: reason }`; the caller adds the delivery context.
+function mergeEarlierDelivery({ config, manifest, prior, item, prNumber, command, source, options = {} } = {}) {
+  return gatedMerge({
+    config,
+    manifest,
+    item: prior,
+    prNumber,
+    command,
+    source,
+    options,
+    assign: merged => { prior.merge = merged; },
+    mergedMessage: `[sdw-batch] Merged ${prNumber} for ${prior.slug} before delegating ${item.slug}.`,
+    retriedMessage: `[sdw-batch] Merged ${prNumber} for ${prior.slug} after its required checks passed.`
+  });
+}
+
+// AC2: a merge request is only issued for a pull request the provider does not
+// already report merged. An injected merge hook owns provider interaction, so the
+// probe never shells out beside a fake seam that supplies no merged state.
+function deliveryMerged({ config, prNumber, options = {} } = {}) {
+  if (typeof options._isPrMerged !== 'function' && typeof options._mergePr === 'function') return null;
+  return providerMerged({ config, prNumber, options });
+}
+
+// AC3: a follow-up pull request is another pull request on the delivery's head
+// branch, created by the post-merge commits. A closed, abandoned, or already
+// merged pull request cannot be merged again, so it is not a follow-up.
+const UNMERGEABLE_PR_STATES = new Set(['closed', 'abandoned', 'merged']);
+
+function followUpPullRequest({ config, head, deliveryNumber, options = {} } = {}) {
+  return providerPullRequests({ config, head, options }).find(pullRequest =>
+    String(pullRequest.number) !== String(deliveryNumber)
+    && !UNMERGEABLE_PR_STATES.has(pullRequest.state)) || null;
+}
+
+// AC3: the follow-up merges under the same required-check gate as a delivery and
+// keeps its own record on the item, so `merge` keeps describing the delivery.
+// Returns the gate outcome, or null when the branch carries no follow-up.
+function mergeFollowUp({ config, manifest, item, state, deliveryNumber, options = {} } = {}) {
+  // An injected provider seam owns provider interaction, so the queue never shells
+  // out to a real CLI beside a fake that supplies only a merge or a merged state.
+  if ((typeof options._mergePr === 'function' || typeof options._isPrMerged === 'function')
+    && typeof options._listPrs !== 'function'
+    && typeof options._findPr !== 'function') return null;
+  const head = (state && state.branch) || (item && item.branch) || null;
+  const candidate = followUpPullRequest({ config, head, deliveryNumber, options });
+  if (!candidate) return null;
+  const prNumber = candidate.number;
+  const command = mergeCommandFor(config.scmProvider, prNumber);
+  // The provider contract only accepts numeric pull request ids; a follow-up that
+  // cannot be merged stays for the operator instead of inventing a record.
+  if (!command || !/^\d+$/.test(String(prNumber))) return null;
+  if (deliveryMerged({ config, prNumber, options }) === true) {
+    item.followUp = {
+      requested: true,
+      attempted: false,
+      ok: true,
+      status: 'merged',
+      reason: null,
+      prNumber,
+      source: 'provider',
+      observed: 'merged',
+      at: new Date().toISOString()
+    };
+    saveManifest(config, manifest);
+    say(options, `[sdw-batch] Follow-up pull request ${prNumber} for ${item.slug} is already merged.`);
+    return { ok: true };
+  }
+  return gatedMerge({
+    config,
+    manifest,
+    item,
+    prNumber,
+    command,
+    source: 'provider',
+    options,
+    assign: merged => { item.followUp = merged; },
+    mergedMessage: `[sdw-batch] Merged follow-up ${prNumber} for ${item.slug}.`,
+    retriedMessage: `[sdw-batch] Merged follow-up ${prNumber} for ${item.slug} after its required checks passed.`
+  });
 }
 
 function runPreflight({ config, manifest, item, options = {} } = {}) {
@@ -1530,6 +1674,17 @@ function haltOnPreflight(manifest, config, item, preflight, options) {
   return 1;
 }
 
+// AC3: a follow-up pull request merges under the delivery's check gate. A gate
+// that cannot pass halts the queue naming the pull request and its checks,
+// exactly like an earlier delivery merge does in the pre-flight.
+function haltOnFollowUp(manifest, config, item, reason, options) {
+  manifest.status = 'halted';
+  saveManifest(config, manifest);
+  console.error(`\n[sdw-batch] Follow-up pull request merge halted the queue after "${item.slug}": ${reason}`);
+  printSummary(manifest, options);
+  return 1;
+}
+
 // AC15: a stale open run halts the queue by name instead of failing the item.
 // The item was never delegated, so it keeps its status and stays resumable once
 // the operator converges it or supersedes it.
@@ -1574,7 +1729,10 @@ function executeQueue(manifest, config, options) {
       if (skipPreflight && skipPreflight.halt) {
         return haltOnPreflight(manifest, config, item, skipPreflight, options);
       }
-      applyMerge({ config, manifest, item, options });
+      const skippedMerge = applyMerge({ config, manifest, item, options });
+      if (skippedMerge && skippedMerge.halt) {
+        return haltOnFollowUp(manifest, config, item, skippedMerge.halt, options);
+      }
       saveManifest(config, manifest);
       continue;
     }
@@ -1687,7 +1845,10 @@ function executeQueue(manifest, config, options) {
       item.status = 'completed';
       item.error = null;
       applyRetroFollowUp({ config, manifest, item, options, deps: options._retroDeps });
-      applyMerge({ config, manifest, item, options });
+      const merge = applyMerge({ config, manifest, item, options });
+      // AC3: a follow-up pull request that cannot merge halts the queue naming
+      // its checks instead of being left for the operator.
+      if (merge && merge.halt) return haltOnFollowUp(manifest, config, item, merge.halt, options);
       const followUp = item.retroFollowUp || {};
       const queued = Array.isArray(followUp.queued) ? followUp.queued.length : 0;
       const failures = Array.isArray(followUp.failures) ? followUp.failures.length : 0;

@@ -4,7 +4,7 @@ localSpecId: "00070"
 slug: 00070-batch-merge-must-reconcile-delivery-prs
 title: "Batch merge must reconcile delivery and follow-up pull requests"
 source: local
-status: draft
+status: implemented
 specDate: 2026-10-24
 priority: medium
 value: "Ends false `merge: failed` rows for already merged deliveries and merges post-merge report PRs instead of leaving them for the operator"
