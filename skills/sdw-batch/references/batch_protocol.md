@@ -200,7 +200,7 @@ A halt prints `[sdw-batch] Pre-flight halted the queue before delegating "<slug>
 - Resume starts at the first item that is not `completed`.
 - If the item records a `runId` whose state is `paused` or `in_progress`, delegate `sdw-orch resume` with that exact id (never a new run).
 - If the recorded state is already `completed`, reconcile the item (copy delivery commit and branch) and advance without re-executing.
-- If the state file is missing, delegate a fresh `run` with a new run id.
+- If the state file is missing, delegate a fresh `run` with a new run id. When the item already records a `supersededRunId` and its own `runId` has no state file while the replaced run is still `paused` or `in_progress`, the batch first completes the interrupted supersession (`markRunSuperseded` with the item's run id) and then delegates the replacement, so the recovery needs no `--new-run`.
 - Every resumed item is pre-flighted again before delegation (§ 4), so a base that advanced while the queue was paused is re-read rather than trusted.
 - A resume never re-issues a merge already recorded on an item through the per-item path. The pre-flight re-issues one only for an earlier pull request that is still open while its delivery is missing from the refreshed base, and never for a record whose status is `merged`.
 - The manifest policy (`continueOnError`, `syncIndex`) is preserved unless the resuming invocation overrides it.
