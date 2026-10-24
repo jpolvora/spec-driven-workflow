@@ -99,6 +99,7 @@ function createClaim(id) {
     text: null,
     taskIds: [],
     claimedFiles: [],
+    citedFiles: [],
     hasLedgerRecord: false,
     ledgerStatus: null,
     ledgerEvidence: [],
@@ -148,10 +149,13 @@ function collectClaims(options = {}) {
     claim.ledgerStatus = trimmed(record.status) || 'unverified';
     claim.ledgerEvidence = Array.isArray(record.evidence) ? record.evidence.map(item => ({ ...item })) : [];
     claim.proofEvidenceCount = claim.ledgerEvidence.filter(isProofBearingEvidence).length;
+    // Ledger `file` evidence proves a path exists, not that the run changed it.
+    // It is tracked as a citation, never as a claimed change, so an existing
+    // unchanged file can only support a caveat and never refute the criterion.
     for (const evidence of claim.ledgerEvidence) {
       if (evidence && evidence.type === 'file') {
         const file = normalizeClaimFile(evidence.path);
-        if (file && !claim.claimedFiles.includes(file)) claim.claimedFiles.push(file);
+        if (file && !claim.citedFiles.includes(file)) claim.citedFiles.push(file);
       }
     }
   }
@@ -159,7 +163,8 @@ function collectClaims(options = {}) {
   const entries = [...claims.values()].map(claim => ({
     ...claim,
     taskIds: [...claim.taskIds].sort(),
-    claimedFiles: uniqueSorted(claim.claimedFiles)
+    claimedFiles: uniqueSorted(claim.claimedFiles),
+    citedFiles: uniqueSorted(claim.citedFiles)
   }));
   return {
     entries,
@@ -314,6 +319,9 @@ function classifyClaim(claim, reVerification, freshVerifyVerdicts) {
     if (claim.claimedFiles.length === 0) {
       caveats.push('no claimed file maps this criterion to the delivery diff');
     }
+    if (claim.claimedFiles.length === 0 && claim.citedFiles && claim.citedFiles.length > 0) {
+      caveats.push(`ledger cites existing file(s) the delivery diff does not change: ${claim.citedFiles.join(', ')}`);
+    }
     const fresh = freshVerifyVerdicts && freshVerifyVerdicts.byAc.get(claim.acId);
     if (fresh && fresh.verdict === 'unverified') {
       caveats.push(`fresh verification marked this criterion unverified${fresh.reason ? `: ${fresh.reason}` : ''}`);
@@ -326,6 +334,7 @@ function classifyClaim(claim, reVerification, freshVerifyVerdicts) {
     verdict,
     reasons: verdict === 'refuted' ? refuted : verdict === 'caveats' ? caveats : [],
     claimedFiles: claim.claimedFiles,
+    citedFiles: claim.citedFiles || [],
     presentFiles: claim.presentFiles || [],
     missingFiles: claim.missingFiles || [],
     taskIds: claim.taskIds,

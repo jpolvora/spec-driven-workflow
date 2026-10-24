@@ -116,7 +116,7 @@ function setupAuditWorkspace(options = {}) {
       root,
       ledgerPath: init.ledgerPath,
       acIds: ['AC1'],
-      evidence: { type: 'file', path: 'app.cjs', taskId: 'task-1' }
+      evidence: { type: 'file', path: options.ledgerEvidencePath || 'app.cjs', taskId: 'task-1' }
     });
     assert.equal(linked.ok, true, linked.errors ? linked.errors.join(' ') : '');
   }
@@ -436,6 +436,32 @@ test('AC12: audit reports caveats when the evidence is present but incomplete', 
     assert.equal(caveatsPolicy.blocked, true);
     assert.deepEqual(caveatsPolicy.acIds, ['AC1']);
     assert.equal(caveatsPolicy.policy, 'caveats');
+  } finally {
+    fs.rmSync(workspace.root, { recursive: true, force: true });
+  }
+});
+
+test('AC11 & AC12: a cited but unchanged file never refutes a claim', () => {
+  // The ledger only requires the cited path to exist. A file the delivery diff
+  // does not change is a citation, not a claimed change, so it can never refute
+  // the criterion and can never block the ship under the default policy.
+  const workspace = setupAuditWorkspace({
+    claimedFiles: [],
+    ledgerEvidencePath: 'verify.cjs',
+    noTestCommand: true
+  });
+  try {
+    const result = runAuditCli(workspace.root, workspace.runId);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /AC1: caveats/);
+
+    const state = stateManager.loadRunState(workspace.root, workspace.runId);
+    const verdict = state.audit.verdicts[0];
+    assert.equal(verdict.verdict, 'caveats', 'an unchanged cited file is incomplete evidence, not a refutation');
+    assert.deepEqual(verdict.claimedFiles, [], 'no task claimed a changed file');
+    assert.deepEqual(verdict.citedFiles, ['verify.cjs'], 'the citation is tracked separately');
+    assert.match(verdict.reasons.join(' '), /ledger cites existing file\(s\) the delivery diff does not change: verify\.cjs/);
+    assert.equal(state.audit.blocking.blocked, false, 'the default policy does not block on caveats');
   } finally {
     fs.rmSync(workspace.root, { recursive: true, force: true });
   }
