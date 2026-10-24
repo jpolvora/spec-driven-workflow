@@ -568,7 +568,7 @@ Every run writes one append-only event stream beside its state and artifacts, an
 
 | Classification | Rule |
 |---|---|
-| `terminal` | run status is `completed`, `failed`, or `cancelled`; terminal runs are history and are not listed as active |
+| `terminal` | run status is `completed`, `failed`, `cancelled`, or `superseded`; terminal runs are history and are not listed as active |
 | `active` | non-terminal and the newest activity clock is inside the stall window |
 | `stalled` | non-terminal and the newest activity clock is older than `monitor.stallWindowSeconds` (default `900`); `--stall-window` overrides the configured value |
 | `paused` | non-terminal and stale, but the run carries an explicit turn pause: a handoff, not a hang |

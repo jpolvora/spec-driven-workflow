@@ -167,7 +167,7 @@ function createRunState(options) {
       specSlug,
       specPath,
       projectRoot: normalizePath(targetRoot),
-      status: 'in_progress', // 'in_progress' | 'paused' | 'completed' | 'failed'
+      status: 'in_progress', // 'in_progress' | 'paused' | 'completed' | 'failed' | 'superseded'
       revision: 0,
       currentStep: 1,
       totalSteps: 8,
@@ -349,6 +349,26 @@ function validateResumableState(state) {
     return { ok: false, error: `revision is ${found}; a non-negative integer is required` };
   }
   return { ok: true };
+}
+
+// Spec 00071 AC1: a superseded run is terminal, not paused and not failed. The
+// replacing run owns the delivery; the old state file stays on disk as audit
+// evidence, carrying who replaced it and when.
+function markRunSuperseded(targetRoot, runId, supersededBy) {
+  const replacingRunId = String(supersededBy === undefined || supersededBy === null ? '' : supersededBy).trim();
+  if (!replacingRunId) {
+    throw new Error(`Cannot mark run "${runId}" superseded without the replacing run id.`);
+  }
+  return withStateLock(targetRoot, getStateFilePath(targetRoot, runId), () => {
+    const state = loadRunState(targetRoot, runId);
+    // An older or hand-written state file may omit runId; the write must still
+    // target the file that was loaded, never a new one named "undefined".
+    state.runId = state.runId || runId;
+    state.status = 'superseded';
+    state.supersededBy = replacingRunId;
+    state.supersededAt = new Date().toISOString();
+    return saveRunState(targetRoot, state);
+  });
 }
 
 function recordError(targetRoot, runId, stepNum, errorMessage) {
@@ -558,6 +578,7 @@ module.exports = {
   getResumptionStep,
   isRunComplete,
   validateResumableState,
+  markRunSuperseded,
   recordError,
   recordWarning,
   recordStepArtifact,

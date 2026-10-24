@@ -4,7 +4,7 @@ localSpecId: "00071"
 slug: 00071-superseded-runs-must-be-terminal
 title: "A superseded run must be recorded as terminal"
 source: local
-status: draft
+status: implemented
 specDate: 2026-10-24
 priority: medium
 value: "Stops a superseded run from being reported as a leftover open run by the retrospective and from tripping queue stale-run checks"

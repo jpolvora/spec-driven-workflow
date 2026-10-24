@@ -244,6 +244,27 @@ function resolveOpenRun({ config, item } = {}) {
   return candidates.length > 0 ? candidates[0] : null;
 }
 
+// Spec 00071 AC1: the manifest records the replacement before the replaced run
+// turns terminal. A process stop between those writes leaves the replaced run
+// open while the item already owns a replacement with no state file. The next
+// pass completes that transition here, so the replacement is delegated normally
+// instead of tripping the orchestrator's open-run guard.
+function recoverInterruptedSupersession({ config, item, options } = {}) {
+  if (!item || !item.supersededRunId || !item.runId) return null;
+  const replacedRunId = item.supersededRunId;
+  const replacementRunId = item.runId;
+  // A replacement state file means the transition already completed, and an
+  // item that owns a replaced run cannot complete its own supersession.
+  if (replacementRunId === replacedRunId) return null;
+  if (readRunState(config, replacementRunId)) return null;
+  const replaced = readRunState(config, replacedRunId);
+  if (!replaced || (replaced.status !== 'paused' && replaced.status !== 'in_progress')) return null;
+  const stateManager = require('../../sdw-orch/scripts/state_manager.cjs');
+  stateManager.markRunSuperseded(config.root, replacedRunId, replacementRunId);
+  say(options, `[sdw-batch] Recovered interrupted supersession for ${item.slug}: run "${replacedRunId}" marked superseded by "${replacementRunId}"; delegating the replacement.`);
+  return replacementRunId;
+}
+
 // AC14: a run is stale when its recorded base commit is not an ancestor of the
 // refreshed work lane commit the next branch starts from. Both commits are
 // recorded on the classification, which the summary prints verbatim.
@@ -1566,6 +1587,11 @@ function executeQueue(manifest, config, options) {
       return haltOnPreflight(manifest, config, item, preflight, options);
     }
 
+    // Spec 00071 AC1: finish an interrupted supersession before reading open
+    // runs, so a replacement the manifest already owns is delegated instead of
+    // halting on the run it replaced.
+    recoverInterruptedSupersession({ config, item, options });
+
     // Spec 00058 AC14-AC16: an open run is resumed only while its own base
     // commit is reachable from the refreshed lane. A stale one halts the queue
     // with the run id, its base commit, and the remedy; `--new-run` supersedes
@@ -1576,13 +1602,25 @@ function executeQueue(manifest, config, options) {
       if (options.newRun) {
         // AC16: the flag starts a fresh run and records the run it replaced,
         // whether or not that run is stale; a stale one is never resumed.
+        // Spec 00071 AC1: the replaced run state becomes terminal and names the
+        // replacing run, so the retrospective, the monitor, resume, and the next
+        // queue pass all treat it as history instead of an open run.
+        const replacementRunId = generateRunId(item.slug);
+        const stateManager = require('../../sdw-orch/scripts/state_manager.cjs');
+        // Spec 00071 AC1/AC2: persist the replacement ownership before the old
+        // state turns terminal. An interruption between the two writes then
+        // leaves a manifest that already names the replacement, whose state file
+        // does not exist yet, so the next pass starts it as a fresh run. The
+        // reverse order leaves the manifest naming a run this pass superseded,
+        // and the next pass delegates straight into it.
         item.supersededRunId = openRun.runId;
-        item.runId = null;
+        item.runId = replacementRunId;
         if (stale) item.staleRun = { ...stale, superseded: true };
+        saveManifest(config, manifest);
+        stateManager.markRunSuperseded(config.root, openRun.runId, replacementRunId);
         say(options, stale
           ? `[sdw-batch] Open run "${stale.runId}" for ${item.slug} is ${stale.classification}: base ${stale.baseCommit} is not an ancestor of the refreshed lane commit ${stale.laneCommit}; superseded by --new-run.`
           : `[sdw-batch] Open run "${openRun.runId}" for ${item.slug} superseded by --new-run.`);
-        saveManifest(config, manifest);
       } else if (stale) {
         item.staleRun = stale;
         saveManifest(config, manifest);

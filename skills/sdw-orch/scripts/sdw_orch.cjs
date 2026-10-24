@@ -798,7 +798,9 @@ function runRetroForCompletedRun(targetRoot, state) {
 
 // Spec 00045 AC4: a specification with a run that never reached a terminal
 // status must be resumed, not restarted. Returns the open runs, newest first.
-// The guard is read-only: a missing state directory means no run exists.
+// Spec 00071 AC2: `superseded` is terminal, so a replaced run never blocks the
+// run that replaced it. The guard is read-only: a missing state directory means
+// no run exists.
 function findOpenRunsForSpec(stateDir, specSlug) {
   if (!fs.existsSync(stateDir)) return [];
   const open = [];
@@ -811,7 +813,7 @@ function findOpenRunsForSpec(stateDir, specSlug) {
       continue;
     }
     if (!run || run.specSlug !== specSlug) continue;
-    if (run.status === 'completed' || run.status === 'failed') continue;
+    if (run.status === 'completed' || run.status === 'failed' || run.status === 'superseded') continue;
     open.push({
       runId: run.runId || name.replace(/\.state\.json$/, ''),
       status: run.status || 'unknown',
@@ -3522,6 +3524,29 @@ function executeRun(options) {
     console.error('[sdw-orch] Error: --sandbox and --push are mutually exclusive: a sandbox run never pushes.');
     options._runResult = { error: '--sandbox and --push are mutually exclusive' };
     return 1;
+  }
+
+  // Spec 00071 AC2: `superseded` is terminal for every path that can load a run
+  // state, `run --run-id` included. Reusing an explicit --run-id restores that
+  // state later in this function, so the refusal must happen before any
+  // configuration, branch, worktree, sandbox, or state write.
+  if (options.runId && fs.existsSync(stateManager.getStateFilePath(targetRoot, options.runId))) {
+    let existingState = null;
+    try {
+      existingState = stateManager.loadRunState(targetRoot, options.runId);
+    } catch (readErr) {
+      // An unreadable state file is reported by the restore path below.
+    }
+    if (existingState && existingState.status === 'superseded') {
+      const supersededRunId = existingState.runId || options.runId;
+      const replacingRunId = existingState.supersededBy ? String(existingState.supersededBy) : null;
+      const supersededAt = existingState.supersededAt ? ` at ${existingState.supersededAt}` : '';
+      console.error(`Error: Refusing to run "${supersededRunId}": it was superseded${supersededAt} by run "${replacingRunId || 'unknown'}".`);
+      console.error(`Remediation: continue the replacing run with:`);
+      console.error(`  node "${orchCommandPath()}" resume --run-id ${replacingRunId || '<replacing-run-id>'}${followUpRootFlag(targetRoot)}`);
+      options._runResult = { error: `Run "${supersededRunId}" was superseded by "${replacingRunId || 'unknown'}"` };
+      return 1;
+    }
   }
 
   let sdwConfig = null;
@@ -6904,6 +6929,17 @@ function cmdResume(options) {
   // Reject obsolete run state files created before sdw-orch migration
   if (!state.orchestrator || state.orchestrator !== 'sdw-orch') {
     console.error(`Error: Run state "${state.runId}" is obsolete or incompatible with sdw-orch (orchestrator: "${state.orchestrator || 'legacy'}"). Resuming legacy run states is unsupported.`);
+    return 1;
+  }
+
+  // Spec 00071 AC3: a superseded run is terminal. Resuming it would start work
+  // the replacing run already owns, so refuse and name the replacement instead.
+  if (state.status === 'superseded') {
+    const replacingRunId = state.supersededBy ? String(state.supersededBy) : null;
+    const supersededAt = state.supersededAt ? ` at ${state.supersededAt}` : '';
+    console.error(`Error: Refusing to resume run "${state.runId || options.runId || 'unknown'}": it was superseded${supersededAt} by run "${replacingRunId || 'unknown'}".`);
+    console.error(`Remediation: continue the replacing run with:`);
+    console.error(`  node "${orchCommandPath()}" resume --run-id ${replacingRunId || '<replacing-run-id>'}${followUpRootFlag(targetRoot)}`);
     return 1;
   }
 
