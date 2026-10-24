@@ -12,12 +12,12 @@
 | Base branch | `master` |
 | Base commit | `454a0c04f0f5076c19405bf3cc2084904eeea907` |
 | Delivery commit | `c0eb20cecccc580a5b17128cabea8bdc79ea4caa` |
-| Ship status | pending |
+| Ship status | review_pending |
 | Score | 10/10 (scoreMin 8) |
 | Implementation start | 2026-10-24T12:39:22.474Z |
 | Implementation end | 2026-10-24T13:06:57.219Z |
 | Total wall-clock duration | 27m 34s |
-| Generated at | 2026-10-24T13:10:44.046Z |
+| Generated at | 2026-10-24T13:31:46.297Z |
 | Step 1: derivation (skipped) | 6ms |
 | Step 2: refinement (completed) | 42ms |
 | Step 3: dag_generation (completed) | 10ms |
@@ -25,7 +25,7 @@
 | Step 5: scoring (completed) | 28s |
 | Step 6: delivery_commit (completed) | 338ms |
 | Step 7: code_review (completed) | 1s |
-| Step 8: pr_preparation (pending) | n/a |
+| Step 8: pr_preparation (blocked_convergence) | n/a |
 
 
 ## Tasks
@@ -39,6 +39,8 @@
 
 | SHA | Subject | Range |
 |---|---|---|
+| `9c84849` | fix(00071-superseded-runs-must-be-terminal): refuse a superseded run id and persist the replacement first | base..HEAD |
+| `94baacd` | docs(00071-superseded-runs-must-be-terminal): record delivery report | base..HEAD |
 | `c0eb20c` | task(00071-superseded-runs-must-be-terminal): task-2 | base..HEAD |
 | `5fc0f9c` | task(00071-superseded-runs-must-be-terminal): task-1 | base..HEAD |
 
@@ -66,9 +68,17 @@
 | `skills/sdw-retro/references/retro_protocol.md` | modified |
 | `tests/sdw_retro.test.cjs` | modified |
 
+### Unattributed changes
+
+| File | Change |
+|---|---|
+| `.sdw/reports/00071-superseded-runs-must-be-terminal-report.md` | added |
+| `skills/sdw-orch/references/orchestrator_protocol.md` | modified |
+
 ## Verification
 
 - test gate: status `passed`, exit code `0`, duration 3m 9s
+- Step 8 delivery: `blocked_convergence` (ship status `review_pending`)
 
 ## Fresh Verification & Audit
 
@@ -200,18 +210,18 @@ None detected.
 
 - Step 1 (derivation) skipped: not recorded
 - Task task-2 accepted after re-dispatch (sequence 2)
-- Environment: workspace: 10 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
+- Environment: workspace: 12 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
 
 ## Outcome
 
 - Result: `paused`
 - Delivery commit: `c0eb20cecccc580a5b17128cabea8bdc79ea4caa`
-- Ship status: `pending`
+- Ship status: `review_pending`
 - Duration: 27m 34s
 
 ## Step Contributions
 
-- Recorded: 8 contribution(s)
+- Recorded: 10 contribution(s)
 
 ### Step 1: derivation
 
@@ -259,7 +269,10 @@ None detected.
 
 ### Step 8: pr_preparation
 
-Not available
+- **convergence** 2026-10-24T13:19:08.883Z - Convergence iteration 1
+  - Body: `{"iteration":1,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":false}`
+- **convergence** 2026-10-24T13:19:09.866Z - Convergence iteration 2
+  - Body: `{"iteration":2,"rounds":2,"failingChecks":[{"name":"review","status":""}],"openThreads":1,"resolvedThreads":0,"fixCommit":null,"converged":false}`
 
 ### Step 9: retrospective
 
