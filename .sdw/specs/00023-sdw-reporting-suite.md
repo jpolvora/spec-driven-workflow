@@ -3,7 +3,7 @@ id: null
 slug: 00023-sdw-reporting-suite
 title: "SDW Delivery Reporting — Activity, Standup, and Spec Explanation"
 source: local
-status: awaiting-approval
+status: implemented
 specDate: 2026-10-19
 priority: medium
 value: "Activity, standup, and specification-explanation reporting from existing run data"
