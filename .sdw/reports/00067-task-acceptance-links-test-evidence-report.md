@@ -12,12 +12,12 @@
 | Base branch | `master` |
 | Base commit | `e3d11e2537463db0443c612f0f99a0c58f5d5330` |
 | Delivery commit | `9cb3b09afcc95110308f9c34ad3e0719bd9cd19d` |
-| Ship status | pending |
+| Ship status | review_pending |
 | Score | 10/10 (scoreMin 8) |
 | Implementation start | 2026-10-24T07:13:44.351Z |
 | Implementation end | 2026-10-24T07:31:03.296Z |
 | Total wall-clock duration | 17m 18s |
-| Generated at | 2026-10-24T09:59:59.395Z |
+| Generated at | 2026-10-24T10:10:01.893Z |
 | Step 1: derivation (skipped) | 5ms |
 | Step 2: refinement (completed) | 44ms |
 | Step 3: dag_generation (completed) | 11ms |
@@ -25,7 +25,7 @@
 | Step 5: scoring (completed) | 37s |
 | Step 6: delivery_commit (completed) | 523ms |
 | Step 7: code_review (completed) | 1s |
-| Step 8: pr_preparation (pending) | n/a |
+| Step 8: pr_preparation (blocked_convergence) | n/a |
 
 
 ## Tasks
@@ -39,6 +39,8 @@
 
 | SHA | Subject | Range |
 |---|---|---|
+| `2b350d1` | docs(00067-task-acceptance-links-test-evidence): align AC3 test identity with the 00017 update-in-place rule | base..HEAD |
+| `eb07027` | docs(00067-task-acceptance-links-test-evidence): record delivery report | base..HEAD |
 | `9cb3b09` | task(00067-task-acceptance-links-test-evidence): task-2 | base..HEAD |
 | `e42365e` | task(00067-task-acceptance-links-test-evidence): task-1 | base..HEAD |
 
@@ -58,9 +60,17 @@
 |---|---|
 | `tests/sdw_ac_ledger.test.cjs` | modified |
 
+### Unattributed changes
+
+| File | Change |
+|---|---|
+| `.sdw/reports/00067-task-acceptance-links-test-evidence-report.md` | added |
+| `.sdw/specs/00067-task-acceptance-links-test-evidence.md` | modified |
+
 ## Verification
 
 - test gate: status `passed`, exit code `0`, duration 3m 19s
+- Step 8 delivery: `blocked_convergence` (ship status `review_pending`)
 
 ## Fresh Verification & Audit
 
@@ -170,18 +180,18 @@ None detected.
 
 - Step 1 (derivation) skipped: not recorded
 - Task task-2 accepted after re-dispatch (sequence 2)
-- Environment: workspace: 3 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
+- Environment: workspace: 5 changed file(s) in base..HEAD; feature branch reused; SCM provider: github; score iterations: 2
 
 ## Outcome
 
 - Result: `paused`
 - Delivery commit: `9cb3b09afcc95110308f9c34ad3e0719bd9cd19d`
-- Ship status: `pending`
+- Ship status: `review_pending`
 - Duration: 17m 18s
 
 ## Step Contributions
 
-- Recorded: 8 contribution(s)
+- Recorded: 10 contribution(s)
 
 ### Step 1: derivation
 
@@ -229,7 +239,10 @@ None detected.
 
 ### Step 8: pr_preparation
 
-Not available
+- **convergence** 2026-10-24T10:07:36.826Z - Convergence iteration 1
+  - Body: `{"iteration":1,"rounds":2,"failingChecks":[],"openThreads":0,"resolvedThreads":0,"fixCommit":null,"converged":false}`
+- **convergence** 2026-10-24T10:07:37.353Z - Convergence iteration 2
+  - Body: `{"iteration":2,"rounds":2,"failingChecks":[{"name":"review","status":""}],"openThreads":1,"resolvedThreads":0,"fixCommit":null,"converged":false}`
 
 ### Step 9: retrospective
 
