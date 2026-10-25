@@ -82,3 +82,7 @@ Central repository index tracking specification lifecycle states, metadata, and 
 | 00069 | 00069-dag-planning-must-not-invent-target-files | DAG planning must not invent target files | completed | local | 2026-10-24 | PASS | - |
 | 00070 | 00070-batch-merge-must-reconcile-delivery-prs | Batch merge must reconcile delivery and follow-up pull requests | completed | local | 2026-10-24 | PASS | - |
 | 00071 | 00071-superseded-runs-must-be-terminal | A superseded run must be recorded as terminal | completed | local | 2026-10-24 | PASS | - |
+| 00072 | 00072-batch-merge-must-gate-and-report | Batch merge must gate on required checks and report unmerged deliveries | pending | local | 2026-10-25 | PASS | - |
+| 00073 | 00073-batch-skip-must-keep-retro-follow-up | A batch skip must keep the retro follow-up and the delivery outcome | pending | local | 2026-10-25 | PASS | - |
+| 00074 | 00074-step-7-review-must-verify-acceptance-criteria | Step 7 review must verify acceptance-criterion conformance | pending | local | 2026-10-25 | PASS | - |
+| 00075 | 00075-batch-report-must-show-real-elapsed-time | Batch reporting must show real elapsed time and merge outcomes | pending | local | 2026-10-25 | PASS | - |
