@@ -61,7 +61,7 @@
   "maxPreemptions": 10,
   "retro": {
     "enabled": true,
-    "followUp": "queue",
+    "followUp": "none",
     "transcripts": []
   },
   "memory": {
