@@ -182,8 +182,10 @@ test('sdw-refinement-gates - AC4, AC13: requiredBuild and runAllTests config sch
   // Schema and defaults
   assert.strictEqual(sdwConfig.DEFAULT_CONFIG.requiredBuild, false);
   assert.strictEqual(sdwConfig.DEFAULT_CONFIG.runAllTests, false);
-  assert.strictEqual(sdwConfig.DEFAULT_CONFIG.buildCommand, 'npm run build');
-  assert.strictEqual(sdwConfig.DEFAULT_CONFIG.testCommand, 'npm test');
+  assert.strictEqual(sdwConfig.DEFAULT_CONFIG.verification.buildCommand, null);
+  assert.strictEqual(sdwConfig.DEFAULT_CONFIG.verification.testCommand, null);
+  assert.strictEqual(sdwConfig.DEFAULT_CONFIG.buildCommand, undefined);
+  assert.strictEqual(sdwConfig.DEFAULT_CONFIG.testCommand, undefined);
   assert.strictEqual(sdwConfig.DEFAULT_CONFIG.prePrCommand, '');
   assert.strictEqual(sdwConfig.DEFAULT_CONFIG.prePrInstructions, '');
 
@@ -192,18 +194,27 @@ test('sdw-refinement-gates - AC4, AC13: requiredBuild and runAllTests config sch
   assert.strictEqual(schema.properties.requiredBuild.type, 'boolean');
   assert.ok(schema.properties.runAllTests);
   assert.strictEqual(schema.properties.runAllTests.type, 'boolean');
+  assert.strictEqual(schema.properties.buildCommand, undefined);
+  assert.strictEqual(schema.properties.testCommand, undefined);
 
   // Type validation
   const valid = sdwConfig.validateConfigSchema({
     specsDir: '.sdw/specs',
     requiredBuild: true,
-    buildCommand: 'npm run custom-build',
     runAllTests: true,
-    testCommand: 'npm run custom-test',
+    verification: { buildCommand: 'npm run custom-build', testCommand: 'npm run custom-test' },
     prePrCommand: 'node scripts/bump.cjs',
     prePrInstructions: 'Bump version in package.json'
   });
   assert.strictEqual(valid.valid, true);
+
+  // The removed top-level command keys are rejected and name their replacement.
+  const legacy = sdwConfig.validateConfigSchema({ specsDir: '.sdw/specs', buildCommand: 'npm run build' });
+  assert.strictEqual(legacy.valid, false);
+  assert.ok(legacy.errors.some(e => e.includes('verification.buildCommand')));
+  const legacyTest = sdwConfig.validateConfigSchema({ specsDir: '.sdw/specs', testCommand: 'npm test' });
+  assert.strictEqual(legacyTest.valid, false);
+  assert.ok(legacyTest.errors.some(e => e.includes('verification.testCommand')));
 
   const invalid = sdwConfig.validateConfigSchema({
     specsDir: '.sdw/specs',
@@ -225,9 +236,12 @@ test('sdw-refinement-gates - AC5, AC6: Step 8 executes buildCommand and testComm
     const configPath = path.join(repoRoot, '.sdw', 'config.json');
     const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     cfg.requiredBuild = true;
-    cfg.buildCommand = `node -e "require('fs').writeFileSync('${buildMarker}', 'built')"`;
     cfg.runAllTests = true;
-    cfg.testCommand = `node -e "require('fs').writeFileSync('${testMarker}', 'tested')"`;
+    cfg.verification = {
+      ...(cfg.verification || {}),
+      buildCommand: `node -e "require('fs').writeFileSync('${buildMarker}', 'built')"`,
+      testCommand: `node -e "require('fs').writeFileSync('${testMarker}', 'tested')"`
+    };
     fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2), 'utf8');
 
     const specPath = createDummySpec(repoRoot, 'test-build-test');
@@ -293,7 +307,7 @@ test('sdw-refinement-gates - AC8, AC10: Failed build/test triggers fix loop and 
     const configPath = path.join(repoRoot, '.sdw', 'config.json');
     const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     cfg.requiredBuild = true;
-    cfg.buildCommand = 'node build.cjs';
+    cfg.verification = { ...(cfg.verification || {}), buildCommand: 'node build.cjs' };
     fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2), 'utf8');
 
     const specPath = createDummySpec(repoRoot, 'test-build-fail');
@@ -329,7 +343,7 @@ test('sdw-refinement-gates - AC8: Successful automated fix resolves test failure
     const configPath = path.join(repoRoot, '.sdw', 'config.json');
     const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     cfg.runAllTests = true;
-    cfg.testCommand = 'node test.cjs';
+    cfg.verification = { ...(cfg.verification || {}), testCommand: 'node test.cjs' };
     fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2), 'utf8');
 
     const specPath = createDummySpec(repoRoot, 'test-fix-success');
@@ -373,7 +387,7 @@ test('sdw-refinement-gates - AC9: Secret leak check rejects fix commit if automa
     const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     cfg.securityChecksEnabled = true;
     cfg.runAllTests = true;
-    cfg.testCommand = 'node test.cjs';
+    cfg.verification = { ...(cfg.verification || {}), testCommand: 'node test.cjs' };
     fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2), 'utf8');
 
     const specPath = createDummySpec(repoRoot, 'test-fix-leak');

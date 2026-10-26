@@ -538,7 +538,6 @@ function runSmokeTest(options = {}) {
       verification: { testCommand: 'node -e "process.exit(0)"', timeoutMs: 60000 },
       requiredBuild: false,
       runAllTests: true,
-      testCommand: 'node -e "process.exit(0)"',
       pushDelivery: false,
       scmProvider: 'none',
       securityChecksEnabled: false,

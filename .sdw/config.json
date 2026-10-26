@@ -51,9 +51,7 @@
     "timeoutMs": 600000
   },
   "requiredBuild": false,
-  "buildCommand": "npm run build",
   "runAllTests": true,
-  "testCommand": "npm test",
   "prePrCommand": "",
   "prePrInstructions": "",
   "prePrDiscovery": "block",

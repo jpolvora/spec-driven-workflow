@@ -575,7 +575,7 @@ function runVerificationGates(targetRoot, config, options = {}) {
     : Boolean(config.runAllTests || (verificationConfig.testCommand && typeof verificationConfig.testCommand === 'string'));
 
   if (reqBuild) {
-    const buildCmd = (config.verification && config.verification.buildCommand) || config.buildCommand || 'npm run build';
+    const buildCmd = (config.verification && config.verification.buildCommand) || 'npm run build';
     console.log(`[Step 4: Verification Gate] Executing build command: "${buildCmd}"...`);
     const start = Date.now();
     let buildPassed = false;
@@ -633,7 +633,7 @@ function runVerificationGates(targetRoot, config, options = {}) {
   }
 
   if (reqTests && passed) {
-    const testCmd = (config.verification && config.verification.testCommand) || config.testCommand || 'npm test';
+    const testCmd = (config.verification && config.verification.testCommand) || 'npm test';
     console.log(`[Step 4: Verification Gate] Executing test command: "${testCmd}"...`);
     const start = Date.now();
     let testPassed = false;
@@ -2377,7 +2377,7 @@ function cmdRun(options) {
       } else {
         // Build Verification (AC5, AC8, AC9, AC10)
         if (requiredBuild) {
-          const buildCmd = config.buildCommand || 'npm run build';
+          const buildCmd = (config.verification && config.verification.buildCommand) || 'npm run build';
           console.log(`[Step 8: Pre-PR Verification] Running build check: ${buildCmd}`);
           let buildPassed = false;
           let buildAttempts = 0;
@@ -2426,7 +2426,7 @@ function cmdRun(options) {
 
         // Test Verification (AC6, AC8, AC9, AC10)
         if (runAllTests) {
-          const testCmd = config.testCommand || 'npm test';
+          const testCmd = (config.verification && config.verification.testCommand) || 'npm test';
           console.log(`[Step 8: Pre-PR Verification] Running test suite: ${testCmd}`);
           let testPassed = false;
           let testAttempts = 0;

@@ -334,9 +334,7 @@ const DEFAULT_CONFIG = {
     timeoutMs: 600000
   },
   requiredBuild: false,
-  buildCommand: 'npm run build',
   runAllTests: false,
-  testCommand: 'npm test',
   prePrCommand: '',
   prePrInstructions: '',
   reviewFixCommand: '',
@@ -567,20 +565,10 @@ const DEFAULT_SCHEMA = {
       "description": "Enforce successful build verification before creating delivery commit or PR.",
       "default": false
     },
-    "buildCommand": {
-      "type": "string",
-      "description": "Command to execute for build verification.",
-      "default": "npm run build"
-    },
     "runAllTests": {
       "type": "boolean",
       "description": "Enforce passing all test suites before creating delivery commit or PR.",
       "default": false
-    },
-    "testCommand": {
-      "type": "string",
-      "description": "Command to execute for test verification pass.",
-      "default": "npm test"
     },
     "prePrCommand": {
       "type": "string",
@@ -885,18 +873,16 @@ function validateConfigSchema(config) {
     if (typeof config.requiredBuild !== 'boolean') {
       errors.push('Property "requiredBuild" must be a boolean.');
     } else if (config.requiredBuild === true) {
-      const buildCmd = (config.verification && config.verification.buildCommand) || config.buildCommand;
+      const buildCmd = config.verification && config.verification.buildCommand;
       if (!buildCmd || typeof buildCmd !== 'string' || buildCmd.trim().length === 0) {
-        errors.push('Missing required build command: "requiredBuild" is true but neither "verification.buildCommand" nor "buildCommand" is specified.');
+        errors.push('Missing required build command: "requiredBuild" is true but "verification.buildCommand" is not specified.');
       }
     }
   }
 
-  // buildCommand
+  // The top-level command keys are gone: verification.* is the single source.
   if ('buildCommand' in config) {
-    if (typeof config.buildCommand !== 'string') {
-      errors.push('Property "buildCommand" must be a string.');
-    }
+    errors.push('Property "buildCommand" was replaced by "verification.buildCommand".');
   }
 
   // runAllTests
@@ -904,18 +890,16 @@ function validateConfigSchema(config) {
     if (typeof config.runAllTests !== 'boolean') {
       errors.push('Property "runAllTests" must be a boolean.');
     } else if (config.runAllTests === true) {
-      const testCmd = (config.verification && config.verification.testCommand) || config.testCommand;
+      const testCmd = config.verification && config.verification.testCommand;
       if (!testCmd || typeof testCmd !== 'string' || testCmd.trim().length === 0) {
-        errors.push('Missing required test command: "runAllTests" is true but neither "verification.testCommand" nor "testCommand" is specified.');
+        errors.push('Missing required test command: "runAllTests" is true but "verification.testCommand" is not specified.');
       }
     }
   }
 
-  // testCommand
+  // The top-level command keys are gone: verification.* is the single source.
   if ('testCommand' in config) {
-    if (typeof config.testCommand !== 'string') {
-      errors.push('Property "testCommand" must be a string.');
-    }
+    errors.push('Property "testCommand" was replaced by "verification.testCommand".');
   }
 
   // prePrCommand

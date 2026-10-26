@@ -228,8 +228,8 @@ function buildPrBody({ explicit, specSlug, specTitle, head, base, commits, files
   }
   lines.push('## Verification');
   if (config.prePrCommand) lines.push(`- prePrCommand: \`${config.prePrCommand}\``);
-  if (config.requiredBuild) lines.push(`- Build: \`${config.buildCommand || 'npm run build'}\``);
-  if (config.runAllTests) lines.push(`- Tests: \`${config.testCommand || 'npm test'}\``);
+  if (config.requiredBuild) lines.push(`- Build: \`${(config.verification && config.verification.buildCommand) || 'npm run build'}\``);
+  if (config.runAllTests) lines.push(`- Tests: \`${(config.verification && config.verification.testCommand) || 'npm test'}\``);
   lines.push(`- Security checks: ${config.securityChecksEnabled ? 'enabled' : 'disabled'}`);
   return lines.join('\n');
 }
@@ -1026,7 +1026,7 @@ async function runShipPr(options = {}, customExecutor = null) {
       log('[sdw-ship-pr] (dry-run) requiredBuild not executed.');
       boardRow('build', 'skipped', 'dry-run: build was not executed');
     } else {
-      const buildCmd = config.buildCommand || (config.verification && config.verification.buildCommand) || 'npm run build';
+      const buildCmd = (config.verification && config.verification.buildCommand) || 'npm run build';
       log(`[sdw-ship-pr] Running requiredBuild (${buildCmd})...`);
       try {
         executor(buildCmd, { timeout: verificationTimeoutMs });
@@ -1042,7 +1042,7 @@ async function runShipPr(options = {}, customExecutor = null) {
       log('[sdw-ship-pr] (dry-run) runAllTests not executed.');
       boardRow('tests', 'skipped', 'dry-run: tests were not executed');
     } else {
-      const testCmd = config.testCommand || (config.verification && config.verification.testCommand) || 'npm test';
+      const testCmd = (config.verification && config.verification.testCommand) || 'npm test';
       log(`[sdw-ship-pr] Running runAllTests (${testCmd})...`);
       try {
         executor(testCmd, { timeout: verificationTimeoutMs });
@@ -1369,7 +1369,7 @@ async function runShipPr(options = {}, customExecutor = null) {
           if (pollIntervalMs > 0) await new Promise(r => setTimeout(r, pollIntervalMs));
         };
         const reviewFixCommand = options.reviewFixCommand || config.reviewFixCommand || null;
-        const testCommand = config.testCommand || (config.verification && config.verification.testCommand) || 'npm test';
+        const testCommand = (config.verification && config.verification.testCommand) || 'npm test';
         const runReviewSecurityGate = () => {
           if (!config.securityChecksEnabled || dryRun) return;
           let securityScanner = null;
