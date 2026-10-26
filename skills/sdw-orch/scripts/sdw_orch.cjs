@@ -902,6 +902,23 @@ function printRunDryRunPlan(context) {
   return 0;
 }
 
+/**
+ * Spec 00069: a refused plan is a failed Step 3, never a dispatched task. The
+ * refusal names the bucket rule or the declaration the specification must add.
+ */
+function refuseDagPlan(targetRoot, state, plan, options) {
+  const detail = plan.reason === 'missing-target-file'
+    ? `fallback rule "${plan.fallbackRule}" names files the repository lacks: ${plan.missingFiles.join(', ')}`
+    : `the specification names no implementation file and declares no new file; ${plan.declaration}`;
+  const message = `DAG plan refused (${plan.reason}): ${detail}.`;
+  console.error(`[Step 3: DAG Generation] ${message}`);
+  let next = stateManager.updateStepState(targetRoot, state.runId, 3, 'failed', { refused: plan.reason, error: message });
+  next.status = 'failed';
+  stateManager.saveRunState(targetRoot, next);
+  options._runResult = { runId: state.runId, status: 'failed', error: message };
+  return next;
+}
+
 function cmdRun(options) {
   let targetRoot = options.root ? path.resolve(options.root) : process.cwd();
   const sourceRoot = targetRoot;
@@ -1439,7 +1456,11 @@ function cmdRun(options) {
     dagPlan = state.steps[3].output;
   } else if (startStep <= 3 && state.steps[3].status !== 'completed') {
     state = stateManager.updateStepState(targetRoot, state.runId, 3, 'in_progress');
-    dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint });
+    dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint, targetRoot });
+    if (dagPlan.refused) {
+      state = refuseDagPlan(targetRoot, state, dagPlan, options);
+      return 1;
+    }
     console.log(`[Step 3: DAG Generation] Complexity: ${dagPlan.complexity.level}. Generated ${dagPlan.totalTasks} task(s).`);
     state.dagTasks = dagPlan.tasks;
     state = stateManager.saveRunState(targetRoot, state);
@@ -1454,7 +1475,11 @@ function cmdRun(options) {
   } else if (state.steps[3].output) {
     dagPlan = state.steps[3].output;
   } else {
-    dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint });
+    dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint, targetRoot });
+    if (dagPlan.refused) {
+      state = refuseDagPlan(targetRoot, state, dagPlan, options);
+      return 1;
+    }
   }
 
   // Step 4: Implementation execution (Spec 028 subagent dispatch / Spec 015 command mode)
