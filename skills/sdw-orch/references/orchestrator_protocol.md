@@ -136,6 +136,11 @@ Step 4 turns each DAG task into a dispatched worker. Exactly one task is in flig
   - Sanitizes environment using allowlist (`PATH`, `HOME`, `USERPROFILE`, `SYSTEMROOT`, `TEMP`, `TMP`, etc.) and injects `SDW_*` variables.
   - Corroborates task changes and evidence on zero exit status; creates no dispatch state.
 
+### Target-File Resolution (Step 3)
+- Resolution order: the Step 2 blueprint `targetFiles`, an explicit `targetFiles` option, the paths the specification names in backticks plus its `New files` declaration, then a known real-file bucket named by the skill it describes (`orch`, `config`, `router`, `spec`).
+- A bucket is accepted only when every file it names exists in the target repository. A missing bucket file refuses the plan: `DAG plan refused (missing-target-file)` names the rule and the missing paths, Step 3 records `failed`, and no task is dispatched.
+- No target path is ever synthesized from the slug. A specification that names no path and declares no new file plans no file fence and records the warning instead.
+
 ### Dispatch Commands
 - **Dispatch:** `node skills/sdw-orch/scripts/sdw_orch.cjs task next --run-id <runId> [--json]`
   - Rejects a second dispatch while one is in flight, naming the active task.
