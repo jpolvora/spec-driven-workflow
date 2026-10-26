@@ -9,3 +9,7 @@
 - **Prompt**: Roll the product back to its optimal feature set after scoring the 20 latest specs (option A: reset to the lean point and replay the keeps)
 - **Done**: Reset develop to c7b56fa (2026-10-22, PR #38), replayed spec 00059 and 00063, ported the spec 00069 target-file rule onto the lean planner, archived 12 reverted specs in the registry, and pinned markdown to LF so text assertions run on Windows
 - **Result**: 68,176 to 35,750 lines in skills and tests (-48%), 814 to 442 tests, suite 442/442 in 47s, doctor PASS with 0 warnings; dropped the reporting, telemetry, fresh-verify, AC-ledger, batch-merge, per-role-model, issue-sync, and DAG-classifier clusters; pre-cut state at tag pre-cut-2026-10-25
+### [2026-10-26 08:06] Agent: deepseek-v4.1-flash
+- **Prompt**: Collapse the duplicate buildCommand/testCommand config keys to verification.*
+- **Done**: Removed the flat keys from both schemas, config defaults, validation and every gate; sdw-orch and sdw-ship-pr now read erification.buildCommand and erification.testCommand only; loadConfig throws on a legacy flat key naming the replacement; config spec, orchestrator protocol and FEATURES updated
+- **Result**: Promoted in PR #76 (merge a992a76, review thread on the silent legacy-key fallback fixed in d89af6d); suite 443/443
