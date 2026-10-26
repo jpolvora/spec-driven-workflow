@@ -123,20 +123,10 @@
       "description": "Enforce successful build verification before creating delivery commit or PR.",
       "default": false
     },
-    "buildCommand": {
-      "type": "string",
-      "description": "Command to execute for build verification.",
-      "default": "npm run build"
-    },
     "runAllTests": {
       "type": "boolean",
       "description": "Enforce passing all test suites before creating delivery commit or PR.",
       "default": false
-    },
-    "testCommand": {
-      "type": "string",
-      "description": "Command to execute for test verification pass.",
-      "default": "npm test"
     },
     "prePrCommand": {
       "type": "string",

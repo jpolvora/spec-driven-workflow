@@ -724,8 +724,7 @@ test('sdw-ship-pr - pre-PR test gate receives verification.timeoutMs', async () 
   };
   const { tmpDir, config } = setupTestWorkspace();
   config.runAllTests = true;
-  config.testCommand = 'npm test';
-  config.verification = { ...(config.verification || {}), timeoutMs: 1234 };
+  config.verification = { ...(config.verification || {}), testCommand: 'npm test', timeoutMs: 1234 };
 
   try {
     const report = await sdwShipPr.runShipPr({

@@ -191,20 +191,10 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
       "description": "Enforce successful build verification in Step 8 before creating delivery commit or PR.",
       "default": false
     },
-    "buildCommand": {
-      "type": "string",
-      "description": "Command to execute for build verification.",
-      "default": "npm run build"
-    },
     "runAllTests": {
       "type": "boolean",
       "description": "Enforce passing all test suites in Step 8 before creating delivery commit or PR.",
       "default": false
-    },
-    "testCommand": {
-      "type": "string",
-      "description": "Command to execute for test verification pass.",
-      "default": "npm test"
     },
     "prePrCommand": {
       "type": "string",
@@ -300,9 +290,10 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
 | `branching.pushSyncedWorkBranch` | `boolean` | `false` | Push the synchronized work branch to `origin` after the post-merge fast-forward |
 | `scmProvider` | `string` | `"none"` | Configured SCM provider for issues, work items, and pull requests (`none`, `ado`, `github`) |
 | `requiredBuild` | `boolean` | `false` | Enforce successful build verification in Step 8 before creating delivery commit or PR |
-| `buildCommand` | `string` | `"npm run build"` | Command to execute for build verification |
+| `verification.buildCommand` | `string \| null` | `"npm run build"` | Command to execute for build verification; the only build command source |
+| `verification.testCommand` | `string \| null` | `"npm test"` | Command to execute for test verification pass; the only test command source |
+| `verification.timeoutMs` | `integer` | `600000` | Execution timeout for both verification gates |
 | `runAllTests` | `boolean` | `false` | Enforce passing all test suites in Step 8 before creating delivery commit or PR |
-| `testCommand` | `string` | `"npm test"` | Command to execute for test verification pass |
 | `prePrCommand` | `string` | `""` | Optional project-specific shell command to execute before PR preparation |
 | `prePrInstructions` | `string` | `""` | Optional project-specific instructions or checklist for agents to verify prior to PR |
 | `reviewFixCommand` | `string` | `""` | Optional command that applies review-thread fixes. When unset, sdw-ship-pr never resolves active threads automatically |

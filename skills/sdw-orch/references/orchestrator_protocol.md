@@ -193,8 +193,8 @@ Prohibitions carried by every prompt: no `git commit`/`push`/`branch`/`checkout`
 ### Build & Test Verification Gates
 - **Focused first, full last:** while iterating, a worker runs only the focused check for the files it touched (the covering test file, a single case, or `node --check` for syntax); it escalates to the full suite only for shared helpers, multi-task areas, or gate fixes outside task scope, recording the run and reason in evidence `tests`, and it runs the full suite once before reporting. The orchestrator runs the full suite once at the gates below.
 - Once all DAG tasks complete, verification gates execute:
-  - `verification.buildCommand` (or `requiredBuild` with `buildCommand`).
-  - `verification.testCommand` (or `runAllTests` with `testCommand`).
+  - `verification.buildCommand` (default `npm run build`), enabled by `requiredBuild`.
+  - `verification.testCommand` (default `npm test`), enabled by `runAllTests`.
 - Supports automated surgical fix loop (up to 3 attempts) with pre-commit secret leak scan.
 - Gate failures halt execution and record failed gate status in `state.steps[4].gates`.
 
