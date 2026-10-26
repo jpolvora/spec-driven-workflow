@@ -1,5 +1,88 @@
 'use strict';
 
+const fs = require('fs');
+const path = require('path');
+const specGrilling = require('./spec_grilling.cjs');
+
+// A plan that resolves no target file promises nothing, so it is refused and
+// the author is told the declaration the specification must add.
+const NO_TARGET_FILES_DECLARATION = 'name the implementation files in backticks, or declare the files this work creates under a `New files` note';
+
+// The only remaining fallback: a known real-file bucket, named by the skill it
+// describes. A bucket file the repository lacks refuses the plan instead of
+// dispatching a slice that cannot exist. `implement` is sdw-orch's former name.
+const FALLBACK_RULES = [
+  {
+    rule: 'orch',
+    matches: (slug) => slug.includes('sdw-orch') || slug.includes('implement'),
+    files: [
+      'skills/sdw-orch/scripts/sdw_orch.cjs',
+      'skills/sdw-orch/scripts/state_manager.cjs',
+      'skills/sdw-orch/scripts/spec_derivation.cjs',
+      'skills/sdw-orch/scripts/spec_grilling.cjs',
+      'skills/sdw-orch/scripts/dag_planner.cjs',
+      'skills/sdw-orch/scripts/score_evaluator.cjs',
+      'skills/sdw-code-review/scripts/sdw_code_review.cjs'
+    ]
+  },
+  {
+    rule: 'config',
+    matches: (slug) => slug.includes('sdw-config'),
+    files: ['skills/sdw-config/scripts/sdw_config.cjs']
+  },
+  {
+    rule: 'router',
+    matches: (slug) => slug.includes('sdw-router'),
+    files: [
+      'skills/sdw-router/SKILL.md',
+      'skills/sdw-router/references/routing_table.md',
+      'skills/sdw-router/references/consumer_agents_setup.md',
+      'skills/sdw-router/scripts/sdw_router.cjs'
+    ]
+  },
+  {
+    rule: 'spec',
+    matches: (slug) => slug.includes('sdw-spec'),
+    files: [
+      'skills/sdw-spec/SKILL.md',
+      'skills/sdw-spec/scripts/sdw_spec.cjs',
+      'skills/sdw-spec/scripts/validate_spec.cjs',
+      'skills/sdw-spec/scripts/spec_index.cjs',
+      'skills/sdw-spec/scripts/spec_creator.cjs',
+      'skills/sdw-spec/scripts/scm_provider_contract.cjs',
+      'skills/sdw-spec/scripts/spec_sync.cjs',
+      'skills/sdw-spec/references/spec_standard.md',
+      'skills/sdw-spec/references/scm_contract.md'
+    ]
+  }
+];
+
+/** Resolves the fallback bucket for a slug, or null when no bucket matches. */
+function inferFallbackTargetFiles(slug) {
+  const value = String(slug || '');
+  const bucket = FALLBACK_RULES.find((candidate) => candidate.matches(value));
+  if (!bucket) return null;
+  return { rule: bucket.rule, targetFiles: bucket.files.slice() };
+}
+
+/** Files from the resolved fallback bucket that the target repository lacks. */
+function findMissingFallbackFiles(fallback, targetRoot) {
+  return fallback.targetFiles.filter((file) => !fs.existsSync(path.join(targetRoot, file)));
+}
+
+/**
+ * The declared new files reach the plan through the Step 2 blueprint; a caller
+ * that already resolved them passes them directly, and a caller that passes
+ * neither gets the specification's own declaration.
+ */
+function readDeclaredNewFiles(opts, specContent) {
+  if (opts.blueprint && Array.isArray(opts.blueprint.declaredNewFiles)) {
+    return opts.blueprint.declaredNewFiles.slice();
+  }
+  if (Array.isArray(opts.declaredNewFiles)) return opts.declaredNewFiles.slice();
+  return specGrilling.extractDeclaredNewFiles(specContent);
+}
+
 function parseAcceptanceCriteria(specContent) {
   const matches = [...specContent.matchAll(/^- (AC\d+):\s*(.+)$/gm)];
   return matches.map(m => ({
@@ -28,10 +111,12 @@ function analyzeComplexity(specContent) {
 }
 
 function generateDagPlan(specContent, options) {
+  const opts = options || {};
+  const targetRoot = path.resolve(opts.targetRoot || '.');
   const complexity = analyzeComplexity(specContent);
   const acs = parseAcceptanceCriteria(specContent);
   const slugMatch = specContent ? specContent.match(/slug:\s*([^\r\n]+)/) : null;
-  const slug = (options && options.slug) || (slugMatch ? slugMatch[1].trim() : 'task');
+  const slug = opts.slug || (slugMatch ? slugMatch[1].trim() : 'task');
 
   const tasks = [];
 
@@ -39,48 +124,50 @@ function generateDagPlan(specContent, options) {
   let defaultTargetFiles = [];
   let architecturalApproach = null;
   let testPlan = null;
+  const declaredNewFiles = readDeclaredNewFiles(opts, specContent);
 
-  if (options && options.blueprint && Array.isArray(options.blueprint.targetFiles) && options.blueprint.targetFiles.length > 0) {
-    defaultTargetFiles = options.blueprint.targetFiles;
-    architecturalApproach = options.blueprint.architecturalApproach;
-    testPlan = options.blueprint.testPlan;
-  } else if (options && options.targetFiles && options.targetFiles.length > 0) {
-    defaultTargetFiles = options.targetFiles;
+  if (opts.blueprint && Array.isArray(opts.blueprint.targetFiles) && opts.blueprint.targetFiles.length > 0) {
+    defaultTargetFiles = opts.blueprint.targetFiles.slice();
+    architecturalApproach = opts.blueprint.architecturalApproach;
+    testPlan = opts.blueprint.testPlan;
+  } else if (Array.isArray(opts.targetFiles) && opts.targetFiles.length > 0) {
+    defaultTargetFiles = opts.targetFiles.slice();
   } else {
-    // Missing blueprint in Step 2: log observable warning and fallback gracefully to heuristic file inference
+    // Missing blueprint or pathless specification: fall back to the paths the
+    // specification names, then to a known real-file bucket used only when every
+    // file it names exists. A missing bucket file refuses the plan instead of
+    // planning it.
     console.warn('[Step 3: DAG Generation] Warning: Step 2 refinement blueprint missing or has no targetFiles; falling back to heuristic file inference.');
-    if (slug.includes('orch') || slug.includes('implement')) {
-      defaultTargetFiles = [
-        'skills/sdw-orch/scripts/sdw_orch.cjs',
-        'skills/sdw-orch/scripts/state_manager.cjs',
-        'skills/sdw-orch/scripts/spec_derivation.cjs',
-        'skills/sdw-orch/scripts/spec_grilling.cjs',
-        'skills/sdw-orch/scripts/dag_planner.cjs',
-        'skills/sdw-orch/scripts/score_evaluator.cjs',
-        'skills/sdw-code-review/scripts/sdw_code_review.cjs'
-      ];
-    } else if (slug.includes('config')) {
-      defaultTargetFiles = ['skills/sdw-config/scripts/sdw_config.cjs'];
-    } else if (slug.includes('router')) {
-      defaultTargetFiles = [
-        'skills/sdw-router/SKILL.md',
-        'skills/sdw-router/references/routing_table.md',
-        'skills/sdw-router/references/consumer_agents_setup.md',
-        'skills/sdw-router/scripts/sdw_router.cjs'
-      ];
-    } else if (slug.includes('spec')) {
-      defaultTargetFiles = [
-        'skills/sdw-spec/SKILL.md',
-        'skills/sdw-spec/scripts/sdw_spec.cjs',
-        'skills/sdw-spec/scripts/validate_spec.cjs',
-        'skills/sdw-spec/scripts/spec_index.cjs',
-        'skills/sdw-spec/scripts/spec_creator.cjs',
-        'skills/sdw-spec/scripts/scm_provider_contract.cjs',
-        'skills/sdw-spec/scripts/spec_sync.cjs',
-        'skills/sdw-spec/references/spec_standard.md',
-        'skills/sdw-spec/references/scm_contract.md'
-      ];
+    const fallback = inferFallbackTargetFiles(slug);
+    if (fallback) {
+      const missingFiles = findMissingFallbackFiles(fallback, targetRoot);
+      if (missingFiles.length > 0) {
+        return {
+          refused: true,
+          reason: 'missing-target-file',
+          fallbackRule: fallback.rule,
+          missingFiles,
+          specSlug: slug,
+          complexity,
+          totalTasks: 0,
+          tasks: []
+        };
+      }
+      defaultTargetFiles = fallback.targetFiles.slice();
+    } else {
+      // The specification's own named paths (or the files it declares new) are
+      // still its promise, so a path-naming specification is planned instead of
+      // being refused as pathless.
+      const namedFiles = specGrilling.extractTargetFiles(specContent || '');
+      defaultTargetFiles = [...new Set([...namedFiles, ...declaredNewFiles])];
     }
+  }
+
+  // A specification that names no path and declares no new file plans no file
+  // fence: the warning is recorded and the slice stays runnable, but no path is
+  // ever synthesized from the slug.
+  if (defaultTargetFiles.length === 0) {
+    console.warn('[Step 3: DAG Generation] Warning: the specification names no target file and declares no new file; the plan carries no file fence.');
   }
 
   if (!complexity.isComplex || acs.length <= 3) {
@@ -153,6 +240,11 @@ function generateDagPlan(specContent, options) {
 }
 
 module.exports = {
+  NO_TARGET_FILES_DECLARATION,
+  FALLBACK_RULES,
+  inferFallbackTargetFiles,
+  findMissingFallbackFiles,
+  readDeclaredNewFiles,
   parseAcceptanceCriteria,
   analyzeComplexity,
   generateDagPlan

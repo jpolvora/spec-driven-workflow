@@ -3,7 +3,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { execSync } = require('child_process');
+const { execSync, spawnSync } = require('child_process');
 
 const sdwShipPr = require('../skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs');
 const { createScmProvider } = require('../skills/sdw-spec/scripts/scm_provider_contract.cjs');
@@ -26,6 +26,48 @@ function setupTestWorkspace() {
   fs.writeFileSync(path.join(sdwDir, 'config.json'), JSON.stringify(config, null, 2), 'utf8');
 
   return { tmpDir, sdwDir, config };
+}
+
+function writeRunState(tmpDir, runId, state) {
+  const stateDir = path.join(tmpDir, '.sdw', 'state');
+  fs.mkdirSync(stateDir, { recursive: true });
+  const stateFilePath = path.join(stateDir, `${runId}.state.json`);
+  fs.writeFileSync(stateFilePath, JSON.stringify(state, null, 2), 'utf8');
+  return stateFilePath;
+}
+
+function completedRunState(overrides = {}) {
+  return {
+    runId: 'run-00050',
+    status: 'completed',
+    score: 9,
+    steps: {
+      4: { step: 4, name: 'code_review', status: 'completed' },
+      6: { step: 6, name: 'conformance_score', status: 'completed' },
+      7: { step: 7, name: 'delegated_review', status: 'completed' },
+      8: { step: 8, name: 'pr_preparation', status: 'in_progress' }
+    },
+    ...overrides
+  };
+}
+
+function writePrepareSection(tmpDir, fileName = 'AGENTS.md') {
+  fs.writeFileSync(
+    path.join(tmpDir, fileName),
+    '# Agent Instructions\n\n## Prepare before push\n\n- Run the packaging check.\n',
+    'utf8'
+  );
+}
+
+function writeIssueSpec(projectRoot, slug, { id = null, source = 'local', title = 'Issue linked specification' } = {}) {
+  const specsDir = path.join(projectRoot, '.sdw', 'specs');
+  fs.mkdirSync(specsDir, { recursive: true });
+  const idLine = id === null ? 'null' : JSON.stringify(String(id));
+  fs.writeFileSync(
+    path.join(specsDir, `${slug}.md`),
+    `---\nid: ${idLine}\nslug: ${slug}\ntitle: "${title}"\nsource: ${source}\nstatus: draft\n---\n\n# Specification — ${title}\n`,
+    'utf8'
+  );
 }
 
 test('sdw-ship-pr - AC8: scmProvider "none" skips remote PR creation cleanly', async () => {
@@ -815,7 +857,13 @@ test('sdw-ship-pr - active PR with review_pending adapts as non-blocking and rec
   fs.writeFileSync(stateFilePath, JSON.stringify({
     runId,
     status: 'in_progress',
-    steps: { 8: { step: 8, name: 'pr_preparation', status: 'in_progress' } }
+    score: 9,
+    steps: {
+      4: { step: 4, name: 'code_review', status: 'completed' },
+      6: { step: 6, name: 'conformance_score', status: 'completed' },
+      7: { step: 7, name: 'delegated_review', status: 'completed' },
+      8: { step: 8, name: 'pr_preparation', status: 'in_progress' }
+    }
   }, null, 2), 'utf8');
 
   const fakeExecutor = (cmd) => {
@@ -1306,3 +1354,901 @@ test('sdw-ship-pr - a failed dirty commit aborts before publishing the branch', 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------------------
+// Spec 00050: discovery modes, acknowledgement, run-state gate, board, dry-run
+// ---------------------------------------------------------------------------
+
+test('sdw-ship-pr - 00050 AC2/AC3: default block discovery refuses unacknowledged prepare rows', async () => {
+  const { tmpDir, config } = setupTestWorkspace();
+  config.scmProvider = 'github';
+  writePrepareSection(tmpDir);
+  const calls = [];
+  const fakeExecutor = (cmd) => { calls.push(cmd); return ''; };
+
+  try {
+    let captured = null;
+    await assert.rejects(
+      () => sdwShipPr.runShipPr({
+        projectRoot: tmpDir, config, head: 'develop', base: 'master', push: true
+      }, fakeExecutor),
+      (err) => { captured = err; return /prepare discovery gate failed/i.test(err.message); }
+    );
+
+    assert.ok(captured.report, 'the partial report is attached to the refusal');
+    assert.strictEqual(captured.report.prepareDiscovery, 'blocked');
+    assert.ok(captured.report.prepareObligations.length >= 1, 'the discovered row is recorded');
+    assert.strictEqual(captured.report.prepareObligations[0].source, 'AGENTS.md');
+    const row = captured.report.prePrBoard.find(r => r.check === 'discovery');
+    assert.strictEqual(row.status, 'fail');
+    assert.match(row.evidence, /unacknowledged/);
+    assert.strictEqual(calls.some(c => c.startsWith('git push')), false, 'no push after a discovery refusal');
+    assert.strictEqual(calls.some(c => c.includes('gh pr create')), false, 'no pull request after a discovery refusal');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('sdw-ship-pr - 00050 AC4: --ack-prepare records the note and allows the ship', async () => {
+  const { tmpDir, config } = setupTestWorkspace();
+  writePrepareSection(tmpDir);
+  const calls = [];
+  const fakeExecutor = (cmd) => {
+    calls.push(cmd);
+    if (cmd.startsWith('git remote')) return 'origin';
+    return '';
+  };
+
+  try {
+    assert.strictEqual(sdwShipPr.parseArgs(['--ack-prepare', 'Ran the packaging check']).ackPrepare, 'Ran the packaging check');
+    const report = await sdwShipPr.runShipPr({
+      projectRoot: tmpDir,
+      config,
+      head: 'develop',
+      base: 'master',
+      push: true,
+      ackPrepare: 'Ran the packaging check'
+    }, fakeExecutor);
+
+    assert.strictEqual(report.success, true);
+    assert.strictEqual(report.prepareAck.note, 'Ran the packaging check');
+    assert.ok(!Number.isNaN(Date.parse(report.prepareAck.at)), 'the acknowledgement carries a UTC timestamp');
+    const row = report.prePrBoard.find(r => r.check === 'discovery');
+    assert.strictEqual(row.status, 'pass');
+    assert.match(row.evidence, /acknowledged via --ack-prepare/);
+    assert.ok(calls.some(c => c.startsWith('git push')), 'the push proceeds after acknowledgement');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('sdw-ship-pr - 00050 AC5: warn discovery prints rows and continues the ship', async () => {
+  const { tmpDir, config } = setupTestWorkspace();
+  config.prePrDiscovery = 'warn';
+  writePrepareSection(tmpDir);
+
+  try {
+    const report = await sdwShipPr.runShipPr({
+      projectRoot: tmpDir, config, head: 'develop', base: 'master'
+    }, () => '');
+
+    assert.strictEqual(report.success, true);
+    assert.strictEqual(report.prepareDiscovery, 'warn');
+    assert.ok(report.prepareObligations.length >= 1);
+    const row = report.prePrBoard.find(r => r.check === 'discovery');
+    assert.strictEqual(row.status, 'pass');
+    assert.match(row.evidence, /"warn": \d+ obligation\(s\) printed; ship continues/);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('sdw-ship-pr - 00050 AC6: off discovery skips the scan and records the mode', async () => {
+  const { tmpDir, config } = setupTestWorkspace();
+  config.prePrDiscovery = 'off';
+  writePrepareSection(tmpDir);
+
+  try {
+    const report = await sdwShipPr.runShipPr({
+      projectRoot: tmpDir, config, head: 'develop', base: 'master'
+    }, () => '');
+
+    assert.strictEqual(report.success, true);
+    assert.strictEqual(report.prepareDiscovery, 'off');
+    assert.deepStrictEqual(report.prepareObligations, [], 'the matching heading is not scanned when discovery is off');
+    const row = report.prePrBoard.find(r => r.check === 'discovery');
+    assert.strictEqual(row.status, 'skipped');
+    assert.match(row.evidence, /"off"/);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('sdw-ship-pr - 00050 AC9: step 7 is required only when code review runs', () => {
+  const { tmpDir, config } = setupTestWorkspace();
+  const runId = 'run-step-7';
+  writeRunState(tmpDir, runId, completedRunState({
+    runId,
+    steps: {
+      4: { step: 4, name: 'code_review', status: 'completed' },
+      6: { step: 6, name: 'conformance_score', status: 'completed' }
+    }
+  }));
+
+  try {
+    const withReview = sdwShipPr.evaluateRunStateGate(tmpDir, runId, null, config, { scmCodeReviewEnabled: true });
+    assert.strictEqual(withReview.codeReviewRequired, true);
+    assert.strictEqual(withReview.steps[7], null);
+    assert.strictEqual(withReview.passed, false);
+    assert.match(withReview.reason, /step 7 is "missing"/);
+
+    const withoutReview = sdwShipPr.evaluateRunStateGate(tmpDir, runId, null, config, { scmCodeReviewEnabled: false });
+    assert.strictEqual(withoutReview.codeReviewRequired, false);
+    assert.strictEqual(withoutReview.passed, true, 'Step 7 is not part of the gate when review is disabled');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('sdw-ship-pr - 00050 AC9: a ship with code review refuses when Step 7 is not completed', async () => {
+  const { tmpDir, config } = setupTestWorkspace();
+  config.scmProvider = 'github';
+  config.scmCodeReviewEnabled = true;
+  const runId = 'run-step-7-ship';
+  writeRunState(tmpDir, runId, completedRunState({
+    runId,
+    steps: {
+      4: { step: 4, name: 'code_review', status: 'completed' },
+      6: { step: 6, name: 'conformance_score', status: 'completed' },
+      8: { step: 8, name: 'pr_preparation', status: 'in_progress' }
+    }
+  }));
+
+  try {
+    let captured = null;
+    await assert.rejects(
+      () => sdwShipPr.runShipPr({
+        projectRoot: tmpDir, config, head: 'develop', base: 'master', runId
+      }, () => ''),
+      (err) => { captured = err; return /step 7/.test(err.message); }
+    );
+
+    assert.strictEqual(captured.report.runStateGate.codeReviewRequired, true);
+    assert.strictEqual(captured.report.runStateGate.steps[7], null);
+    const row = captured.report.prePrBoard.find(r => r.check === 'runState');
+    assert.strictEqual(row.status, 'fail');
+    assert.match(row.evidence, /step 7/);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('sdw-ship-pr - 00050 AC10: missing or unreadable run state fails closed before push and PR', async () => {
+  const { tmpDir, config } = setupTestWorkspace();
+  config.scmProvider = 'github';
+  const calls = [];
+  const fakeExecutor = (cmd) => { calls.push(cmd); return ''; };
+
+  try {
+    let captured = null;
+    await assert.rejects(
+      () => sdwShipPr.runShipPr({
+        projectRoot: tmpDir, config, head: 'develop', base: 'master', runId: 'run-missing', push: true
+      }, fakeExecutor),
+      (err) => { captured = err; return /was not found/.test(err.message); }
+    );
+    let row = captured.report.prePrBoard.find(r => r.check === 'runState');
+    assert.strictEqual(row.status, 'fail');
+    assert.match(row.evidence, /was not found/);
+    assert.strictEqual(calls.some(c => c.startsWith('git push')), false, 'no push on a missing run state');
+    assert.strictEqual(calls.some(c => c.includes('gh pr create')), false, 'no PR on a missing run state');
+
+    calls.length = 0;
+    const malformedRunId = 'run-malformed';
+    fs.mkdirSync(path.join(tmpDir, '.sdw', 'state'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.sdw', 'state', `${malformedRunId}.state.json`), '{not json', 'utf8');
+
+    captured = null;
+    await assert.rejects(
+      () => sdwShipPr.runShipPr({
+        projectRoot: tmpDir, config, head: 'develop', base: 'master', runId: malformedRunId, push: true
+      }, fakeExecutor),
+      (err) => { captured = err; return /is unreadable/.test(err.message); }
+    );
+    row = captured.report.prePrBoard.find(r => r.check === 'runState');
+    assert.strictEqual(row.status, 'fail');
+    assert.match(row.evidence, /is unreadable/);
+    assert.strictEqual(calls.some(c => c.startsWith('git push')), false, 'no push on an unreadable run state');
+    assert.strictEqual(calls.some(c => c.includes('gh pr create')), false, 'no PR on an unreadable run state');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('sdw-ship-pr - 00050 AC10: CLI exits 1 on a missing run state and reports the board', () => {
+  const { tmpDir } = setupTestWorkspace();
+  const scriptPath = path.resolve(__dirname, '../skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs');
+
+  try {
+    const result = spawnSync(process.execPath, [scriptPath, '--run-id', 'run-cli-missing', '--json'], {
+      cwd: tmpDir,
+      encoding: 'utf8',
+      timeout: 60000
+    });
+
+    assert.strictEqual(result.status, 1, 'a missing run state must exit 1');
+    const parsed = JSON.parse(result.stdout);
+    assert.strictEqual(parsed.success, false);
+    assert.match(parsed.error, /was not found/);
+    const row = parsed.prePrBoard.find(r => r.check === 'runState');
+    assert.strictEqual(row.status, 'fail');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('sdw-ship-pr - 00050 AC11: every evaluated check contributes one board row', async () => {
+  const plain = setupTestWorkspace();
+  try {
+    const report = await sdwShipPr.runShipPr({
+      projectRoot: plain.tmpDir, config: plain.config, head: 'develop'
+    }, () => '');
+
+    assert.deepStrictEqual(
+      report.prePrBoard.map(r => r.check),
+      ['prePrCommand', 'build', 'tests', 'security', 'runState', 'discovery']
+    );
+    assert.deepStrictEqual(
+      report.prePrBoard.map(r => r.status),
+      ['skipped', 'skipped', 'skipped', 'skipped', 'skipped', 'pass']
+    );
+    for (const row of report.prePrBoard) {
+      assert.ok(['pass', 'fail', 'skipped'].includes(row.status));
+      assert.strictEqual(typeof row.evidence, 'string');
+      assert.ok(row.evidence.length > 0, `${row.check} must carry evidence`);
+    }
+  } finally {
+    fs.rmSync(plain.tmpDir, { recursive: true, force: true });
+  }
+
+  const enabled = setupTestWorkspace();
+  enabled.config.prePrCommand = 'npm run lint';
+  enabled.config.requiredBuild = true;
+  enabled.config.runAllTests = true;
+  try {
+    const report = await sdwShipPr.runShipPr({
+      projectRoot: enabled.tmpDir, config: enabled.config, head: 'develop'
+    }, () => '');
+
+    assert.deepStrictEqual(
+      report.prePrBoard.map(r => r.status),
+      ['pass', 'pass', 'pass', 'skipped', 'skipped', 'pass']
+    );
+    assert.match(report.prePrBoard[0].evidence, /"npm run lint" exited 0/);
+  } finally {
+    fs.rmSync(enabled.tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('sdw-ship-pr - 00050 AC12: the board prints as a Markdown table before the push', async () => {
+  const { tmpDir, config } = setupTestWorkspace();
+  const calls = [];
+  const fakeExecutor = (cmd) => {
+    calls.push(cmd);
+    if (cmd.startsWith('git remote')) return 'origin';
+    return '';
+  };
+  const logs = [];
+  const originalLog = console.log;
+  console.log = (...args) => { logs.push(args.join(' ')); };
+
+  try {
+    const report = await sdwShipPr.runShipPr({
+      projectRoot: tmpDir, config, head: 'develop', base: 'master', push: true
+    }, fakeExecutor);
+
+    assert.strictEqual(report.success, true);
+    const tableIndex = logs.findIndex(line => line.includes('| Check | Status | Evidence |'));
+    const pushIndex = logs.findIndex(line => line.includes('Pushing branch'));
+    assert.ok(tableIndex >= 0, 'the Markdown table is printed');
+    assert.ok(pushIndex > tableIndex, 'the table is printed before the push');
+    assert.ok(logs.some(line => line.includes('| prePrCommand | skipped |')));
+    assert.ok(calls.some(c => c.startsWith('git push')));
+  } finally {
+    console.log = originalLog;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('sdw-ship-pr - 00050 AC13: --dry-run evaluates every check without push, PR, or state writes', async () => {
+  const { tmpDir, config } = setupTestWorkspace();
+  config.scmProvider = 'github';
+  config.pushDelivery = true;
+  config.prePrCommand = 'npm run lint';
+  config.requiredBuild = true;
+  config.runAllTests = true;
+  config.securityChecksEnabled = true;
+  const runId = 'run-dry-run';
+  const stateFilePath = writeRunState(tmpDir, runId, completedRunState({ runId }));
+  const stateBefore = fs.readFileSync(stateFilePath, 'utf8');
+  const calls = [];
+  const fakeExecutor = (cmd) => {
+    calls.push(cmd);
+    if (cmd.includes('where gh') || cmd.includes('command -v gh')) return '/usr/bin/gh';
+    if (cmd.includes('gh auth status')) return 'Logged in';
+    if (cmd.includes('gh pr list')) return '[]';
+    if (cmd.includes('gh repo view')) return JSON.stringify({ owner: { login: 'fake' }, name: 'repo' });
+    if (cmd.includes('pr checks')) return '[]';
+    if (cmd.includes('reviewThreads')) {
+      return JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } });
+    }
+    if (cmd.startsWith('git remote')) return 'origin';
+    return '';
+  };
+
+  try {
+    const report = await sdwShipPr.runShipPr({
+      projectRoot: tmpDir,
+      config,
+      head: 'develop',
+      base: 'master',
+      runId,
+      dryRun: true,
+      push: true,
+      maxIterations: 1,
+      pollIntervalMs: 0
+    }, fakeExecutor);
+
+    assert.strictEqual(report.success, true);
+    assert.deepStrictEqual(
+      report.prePrBoard.map(r => r.check),
+      ['prePrCommand', 'build', 'tests', 'security', 'runState', 'discovery']
+    );
+    for (const check of ['prePrCommand', 'build', 'tests', 'security']) {
+      const row = report.prePrBoard.find(r => r.check === check);
+      assert.strictEqual(row.status, 'skipped', `${check} must be skipped in dry-run`);
+      assert.match(row.evidence, /dry-run/);
+    }
+    assert.strictEqual(report.prePrBoard.find(r => r.check === 'runState').status, 'pass');
+    assert.strictEqual(report.prePrBoard.find(r => r.check === 'discovery').status, 'pass');
+    assert.ok(report.pullRequest && report.pullRequest.dryRun, 'PR creation is simulated');
+    assert.strictEqual(fs.readFileSync(stateFilePath, 'utf8'), stateBefore, 'dry-run must not write run state');
+    assert.strictEqual(calls.some(c => c.startsWith('git push')), false, 'dry-run must not push');
+    assert.strictEqual(calls.some(c => c.includes('gh pr create')), false, 'dry-run must not create a PR');
+    assert.strictEqual(calls.some(c => c.includes('npm run lint')), false, 'dry-run must not execute configured commands');
+    assert.strictEqual(calls.some(c => c.includes('npm test')), false, 'dry-run must not execute configured tests');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+function fakeGithubExecutor(overrides = {}) {
+  const calls = [];
+  const executor = (cmd) => {
+    calls.push(cmd);
+    if (overrides[cmd]) return overrides[cmd](cmd);
+    if (cmd.startsWith('git log')) return 'abc1234def5678\x1fabc1234\x1ffeat(link): add keyword\x1fSDW Tester\x1f2026-01-01';
+    if (cmd.startsWith('git diff')) return 'M\tsrc/link.cjs';
+    if (cmd.includes('where gh') || cmd.includes('command -v gh')) return '/usr/bin/gh';
+    if (cmd.includes('gh auth status')) return 'Logged in';
+    if (cmd.includes('gh repo view')) return JSON.stringify({ owner: { login: 'fake-owner' }, name: 'fake-repo' });
+    if (cmd.includes('gh pr list')) return '[]';
+    return '';
+  };
+  executor.calls = calls;
+  return executor;
+}
+
+test('sdw-ship-pr - AC3, AC8, AC11: a GitHub specification appends Closes #<id>', async () => {
+  const { tmpDir, config } = setupTestWorkspace();
+  writeIssueSpec(tmpDir, '00060-github-link', { id: '123', source: 'github' });
+  try {
+    const link = sdwShipPr.resolveIssueLink(tmpDir, '00060-github-link');
+    assert.deepStrictEqual(link, { id: '123', provider: 'github', keyword: 'Closes #123', present: true });
+
+    const body = sdwShipPr.buildPrBody({
+      specSlug: '00060-github-link', head: 'feature/gh', base: 'master', commits: [], files: [], config, issueLink: link
+    });
+    assert.match(body, /^Closes #123$/m, 'The GitHub keyword is appended to the body');
+
+    const report = await sdwShipPr.runShipPr({
+      projectRoot: tmpDir, config, head: 'feature/gh', base: 'master', specSlug: '00060-github-link'
+    });
+    assert.strictEqual(report.success, true);
+    assert.deepStrictEqual(report.issueLink, link, 'The success report records the resolved issueLink');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('sdw-ship-pr - AC4, AC8, AC11: an Azure DevOps specification appends Fixes AB#<id>', async () => {
+  const { tmpDir, config } = setupTestWorkspace();
+  writeIssueSpec(tmpDir, '00061-ado-link', { id: '456', source: 'azure-devops' });
+  try {
+    const link = sdwShipPr.resolveIssueLink(tmpDir, '00061-ado-link');
+    assert.deepStrictEqual(link, { id: '456', provider: 'azure-devops', keyword: 'Fixes AB#456', present: true });
+
+    const body = sdwShipPr.buildPrBody({
+      specSlug: '00061-ado-link', head: 'feature/ado', base: 'master', commits: [], files: [], config, issueLink: link
+    });
+    assert.match(body, /^Fixes AB#456$/m, 'The Azure DevOps keyword is appended to the body');
+    assert.doesNotMatch(body, /\bCloses\b/, 'The GitHub keyword is not emitted for Azure DevOps');
+
+    const report = await sdwShipPr.runShipPr({
+      projectRoot: tmpDir, config, head: 'feature/ado', base: 'master', specSlug: '00061-ado-link'
+    });
+    assert.strictEqual(report.success, true);
+    assert.deepStrictEqual(report.issueLink, link);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('sdw-ship-pr - AC5, AC8, AC11: a local specification omits the closing keyword', async () => {
+  const { tmpDir, config } = setupTestWorkspace();
+  writeIssueSpec(tmpDir, '00062-local-link', { id: null, source: 'local' });
+  try {
+    const link = sdwShipPr.resolveIssueLink(tmpDir, '00062-local-link');
+    assert.deepStrictEqual(link, { id: null, provider: 'local', keyword: null, present: false });
+
+    const body = sdwShipPr.buildPrBody({
+      specSlug: '00062-local-link', head: 'feature/local', base: 'master', commits: [], files: [], config, issueLink: link
+    });
+    assert.doesNotMatch(body, /(Closes|Fixes|Resolves)\s+(AB)?#\d+/, 'No closing keyword or placeholder is emitted');
+
+    const report = await sdwShipPr.runShipPr({
+      projectRoot: tmpDir, config, head: 'feature/local', base: 'master', specSlug: '00062-local-link'
+    });
+    assert.strictEqual(report.success, true);
+    assert.deepStrictEqual(report.issueLink, link);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('sdw-ship-pr - AC6, AC11: a reused pull request body carries the closing keyword exactly once', async () => {
+  const { tmpDir, config } = setupTestWorkspace();
+  config.scmProvider = 'github';
+  writeIssueSpec(tmpDir, '00063-reuse-link', { id: '12', source: 'github' });
+  let updatedBody = null;
+  const fakeExecutor = (cmd) => {
+    if (cmd.includes('where gh') || cmd.includes('command -v gh')) return '/usr/bin/gh';
+    if (cmd.includes('gh auth status')) return 'Logged in';
+    if (cmd.includes('gh pr list')) {
+      return JSON.stringify([{ number: 77, url: 'https://example.test/pull/77', headRefName: 'feature/reuse', baseRefName: 'master', title: 'Existing PR' }]);
+    }
+    if (cmd.includes('gh pr view 77 --json body')) {
+      return JSON.stringify({ body: 'Initial PR Body\n\nCloses #12\n\nResolves #3\n' });
+    }
+    if (cmd.includes('gh pr edit 77')) {
+      const match = cmd.match(/--body-file "([^"]+)"/);
+      if (match && fs.existsSync(match[1])) updatedBody = fs.readFileSync(match[1], 'utf8');
+      return '';
+    }
+    return '';
+  };
+  try {
+    const report = await sdwShipPr.runShipPr({
+      projectRoot: tmpDir, config, head: 'feature/reuse', base: 'master', specSlug: '00063-reuse-link'
+    }, fakeExecutor);
+
+    assert.strictEqual(report.success, true);
+    assert.strictEqual(report.pullRequest.reused, true);
+    assert.deepStrictEqual(report.issueLink, { id: '12', provider: 'github', keyword: 'Closes #12', present: true });
+    assert.ok(updatedBody, 'The reused PR body must be rewritten');
+    assert.match(updatedBody, /Initial PR Body/, 'Existing content is preserved');
+    assert.strictEqual((updatedBody.match(/^Closes #12$/gim) || []).length, 1, 'The keyword appears exactly once');
+    assert.doesNotMatch(updatedBody, /Resolves #3/, 'Stale closing keywords are dropped');
+    assert.doesNotMatch(updatedBody, /AB#/);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('sdw-ship-pr - AC7, AC8, AC11: dry-run prints the assembled body and never creates or edits a PR', async () => {
+  const { tmpDir, config } = setupTestWorkspace();
+  config.scmProvider = 'github';
+  config.pushDelivery = true;
+  writeIssueSpec(tmpDir, '00064-dry-link', { id: '99', source: 'github' });
+  const fakeExecutor = fakeGithubExecutor();
+
+  const lines = [];
+  const originalLog = console.log;
+  console.log = (...args) => { lines.push(args.map(String).join(' ')); };
+  let report;
+  try {
+    report = await sdwShipPr.runShipPr({
+      projectRoot: tmpDir, config, head: 'feature/dry', base: 'master', specSlug: '00064-dry-link', dryRun: true
+    }, fakeExecutor);
+  } finally {
+    console.log = originalLog;
+  }
+
+  try {
+    assert.strictEqual(report.success, true);
+    assert.strictEqual(report.pullRequest.dryRun, true);
+    assert.deepStrictEqual(report.issueLink, { id: '99', provider: 'github', keyword: 'Closes #99', present: true });
+    const printed = lines.join('\n');
+    assert.match(printed, /## Summary/, 'The dry-run output contains the assembled body');
+    assert.match(printed, /Closes #99/, 'The printed body includes the closing keyword');
+    assert.strictEqual(fakeExecutor.calls.some(c => c.includes('gh pr create')), false, 'Dry-run must not create a pull request');
+    assert.strictEqual(fakeExecutor.calls.some(c => c.includes('gh pr edit')), false, 'Dry-run must not edit a pull request');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('sdw-ship-pr - AC9, AC11: missing, unreadable, or unsupported specifications skip the link and still ship', async () => {
+  const { tmpDir, config } = setupTestWorkspace();
+  const empty = { id: null, provider: null, keyword: null, present: false };
+  try {
+    const missing = sdwShipPr.resolveIssueLink(tmpDir, '00065-missing-link');
+    assert.deepStrictEqual(missing, empty);
+    const missingReport = await sdwShipPr.runShipPr({
+      projectRoot: tmpDir, config, head: 'develop', base: 'master', specSlug: '00065-missing-link'
+    });
+    assert.strictEqual(missingReport.success, true, 'A missing specification never fails the ship');
+    assert.deepStrictEqual(missingReport.issueLink, missing);
+
+    writeIssueSpec(tmpDir, '00066-gitlab-link', { id: '9', source: 'gitlab' });
+    const unsupported = sdwShipPr.resolveIssueLink(tmpDir, '00066-gitlab-link');
+    assert.deepStrictEqual(unsupported, { id: '9', provider: 'gitlab', keyword: null, present: false });
+    const unsupportedReport = await sdwShipPr.runShipPr({
+      projectRoot: tmpDir, config, head: 'develop', base: 'master', specSlug: '00066-gitlab-link'
+    });
+    assert.strictEqual(unsupportedReport.success, true, 'An unsupported provider never fails the ship');
+    assert.strictEqual(unsupportedReport.issueLink.present, false);
+
+    fs.mkdirSync(path.join(tmpDir, '.sdw', 'specs', '00067-unreadable-link.md'));
+    const unreadable = sdwShipPr.resolveIssueLink(tmpDir, '00067-unreadable-link');
+    assert.deepStrictEqual(unreadable, empty);
+    const unreadableReport = await sdwShipPr.runShipPr({
+      projectRoot: tmpDir, config, head: 'develop', base: 'master', specSlug: '00067-unreadable-link'
+    });
+    assert.strictEqual(unreadableReport.success, true, 'An unreadable specification never fails the ship');
+    assert.strictEqual(unreadableReport.issueLink.present, false);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('sdw-ship-pr - AC6, AC9, AC11: an unreadable reused PR body still appends exactly one keyword', async () => {
+  const { tmpDir, config } = setupTestWorkspace();
+  config.scmProvider = 'github';
+  writeIssueSpec(tmpDir, '00068-fallback-link', { id: '12', source: 'github' });
+  let bodyReads = 0;
+  let updatedBody = null;
+  const fakeExecutor = (cmd) => {
+    if (cmd.includes('where gh') || cmd.includes('command -v gh')) return '/usr/bin/gh';
+    if (cmd.includes('gh auth status')) return 'Logged in';
+    if (cmd.includes('gh pr list')) {
+      return JSON.stringify([{ number: 88, url: 'https://example.test/pull/88', headRefName: 'feature/fallback', baseRefName: 'master' }]);
+    }
+    if (cmd.includes('gh pr view 88 --json body')) {
+      bodyReads += 1;
+      if (bodyReads === 1) throw new Error('body read failed');
+      return JSON.stringify({ body: 'Existing description' });
+    }
+    if (cmd.includes('gh pr edit 88')) {
+      const match = cmd.match(/--body-file "([^"]+)"/);
+      if (match && fs.existsSync(match[1])) updatedBody = fs.readFileSync(match[1], 'utf8');
+      return '';
+    }
+    return '';
+  };
+  try {
+    const report = await sdwShipPr.runShipPr({
+      projectRoot: tmpDir, config, head: 'feature/fallback', base: 'master', specSlug: '00068-fallback-link'
+    }, fakeExecutor);
+
+    assert.strictEqual(report.success, true);
+    assert.strictEqual(report.pullRequest.reused, true);
+    assert.strictEqual(bodyReads, 2, 'The fallback re-reads the body through the provider append path');
+    assert.ok(updatedBody, 'The amendment reaches the provider');
+    assert.match(updatedBody, /Existing description/);
+    assert.strictEqual((updatedBody.match(/^Closes #12$/gim) || []).length, 1, 'The fallback appends exactly one keyword');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('sdw-ship-pr - AC8, AC9, AC11: a failing ship reports issueLink in its failure JSON', async () => {
+  const { tmpDir, config } = setupTestWorkspace();
+  config.prePrCommand = 'node -e "process.exit(1)"';
+  writeIssueSpec(tmpDir, '00069-failure-link', { id: '321', source: 'github' });
+  try {
+    let captured = null;
+    await assert.rejects(
+      () => sdwShipPr.runShipPr({
+        projectRoot: tmpDir, config, head: 'develop', base: 'master', specSlug: '00069-failure-link'
+      }),
+      (err) => { captured = err; return /prePrCommand failed/.test(err.message); }
+    );
+    assert.ok(captured.report, 'The partial report is attached to the error');
+    assert.deepStrictEqual(captured.report.issueLink, { id: '321', provider: 'github', keyword: 'Closes #321', present: true });
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('sdw-ship-pr - AC8, AC11: CLI failure JSON includes issueLink', () => {
+  const { tmpDir, config } = setupTestWorkspace();
+  config.prePrCommand = 'node -e "process.exit(1)"';
+  writeIssueSpec(tmpDir, '00070-cli-failure', { id: '654', source: 'azure-devops' });
+  fs.writeFileSync(path.join(tmpDir, '.sdw', 'config.json'), JSON.stringify(config, null, 2), 'utf8');
+  const scriptPath = path.resolve(__dirname, '../skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs');
+  try {
+    let stdout = '';
+    try {
+      execSync(`node "${scriptPath}" --spec 00070-cli-failure --json`, {
+        cwd: tmpDir,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe']
+      });
+    } catch (err) {
+      stdout = err.stdout || '';
+    }
+    const parsed = JSON.parse(stdout);
+    assert.strictEqual(parsed.success, false);
+    assert.match(parsed.error, /prePrCommand failed/);
+    assert.deepStrictEqual(parsed.issueLink, { id: '654', provider: 'azure-devops', keyword: 'Fixes AB#654', present: true });
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+const LONG_REVIEW_COMMENT_BODY = [
+  'Missing null check in the response parser.',
+  '',
+  '```js',
+  'const value = payload.items[0].id;',
+  '```',
+  '',
+  'Suggested correction: guard `payload.items` before indexing.',
+  '',
+  'The reviewer explained the scenario, the missing protection, and the suggested fix in the same comment; cutting this text would remove the reasoning the fixer needs to repair the defect instead of only its title.',
+  'This final paragraph exists so the body runs past the eighty-character line the old renderer printed and past any fixed-length cut applied to a single comment.'
+].join('\n');
+
+const SHORT_REVIEW_COMMENTS = [
+  {
+    body: 'Applied the null guard in abc1234.\n\nRegression test added in tests/parser.test.js.',
+    author: 'author-two',
+    createdAt: '2026-01-03T04:05:06Z'
+  },
+  {
+    body: 'Confirmed on the latest run.',
+    author: 'reviewer-one',
+    createdAt: '2026-01-04T05:06:07Z'
+  }
+];
+
+function listThreadsGraphQlNodes() {
+  return [
+    {
+      id: 'PRRT_full',
+      isResolved: false,
+      path: 'src/parser.js',
+      line: 42,
+      comments: {
+        nodes: [
+          {
+            id: 'PRRC_1',
+            databaseId: 101,
+            body: LONG_REVIEW_COMMENT_BODY,
+            author: { login: 'reviewer-one' },
+            createdAt: '2026-01-02T03:04:05Z'
+          },
+          {
+            id: 'PRRC_2',
+            databaseId: 102,
+            body: SHORT_REVIEW_COMMENTS[0].body,
+            author: { login: SHORT_REVIEW_COMMENTS[0].author },
+            createdAt: SHORT_REVIEW_COMMENTS[0].createdAt
+          },
+          {
+            id: 'PRRC_3',
+            databaseId: 103,
+            body: SHORT_REVIEW_COMMENTS[1].body,
+            author: { login: SHORT_REVIEW_COMMENTS[1].author },
+            createdAt: SHORT_REVIEW_COMMENTS[1].createdAt
+          }
+        ]
+      }
+    },
+    {
+      id: 'PRRT_empty',
+      isResolved: true,
+      path: 'src/empty.js',
+      line: 7,
+      comments: { nodes: [] }
+    }
+  ];
+}
+
+/**
+ * Runs the real CLI `list-threads` command with a preloaded `gh` stub, so the
+ * test proves stdout, exit code, and the provider-to-renderer path together.
+ */
+function runListThreadsCli(threadNodes, extraArgs = []) {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-list-threads-'));
+  fs.mkdirSync(path.join(tmpDir, '.sdw'), { recursive: true });
+  fs.writeFileSync(
+    path.join(tmpDir, '.sdw', 'config.json'),
+    JSON.stringify({ scmProvider: 'github' }, null, 2),
+    'utf8'
+  );
+  const preloadPath = path.join(tmpDir, 'stub-gh.cjs');
+  const graphQlPayload = JSON.stringify({
+    data: { repository: { pullRequest: { reviewThreads: { nodes: threadNodes } } } }
+  });
+  fs.writeFileSync(preloadPath, [
+    "'use strict';",
+    "const childProcess = require('child_process');",
+    'const realExecSync = childProcess.execSync;',
+    `const graphQlPayload = ${JSON.stringify(graphQlPayload)};`,
+    'childProcess.execSync = function (command, options) {',
+    '  const cmd = String(command);',
+    "  if (cmd.includes('gh repo view')) return JSON.stringify({ owner: { login: 'owner' }, name: 'repo' });",
+    "  if (cmd.includes('gh api graphql')) return graphQlPayload;",
+    '  return realExecSync.call(childProcess, command, options);',
+    '};',
+    ''
+  ].join('\n'), 'utf8');
+
+  const scriptPath = path.resolve(__dirname, '../skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs');
+  try {
+    return spawnSync(process.execPath, [
+      '--require', preloadPath, scriptPath, 'list-threads', '--pr', '42', ...extraArgs
+    ], {
+      cwd: tmpDir,
+      encoding: 'utf8',
+      timeout: 60000
+    });
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
+test('sdw-ship-pr - 00059 AC1, AC2, AC4: list-threads prints every comment with its full body, author, and timestamp', () => {
+  assert.ok(LONG_REVIEW_COMMENT_BODY.length > 300, 'the fixture body is long enough to expose a truncating renderer');
+  const run = runListThreadsCli(listThreadsGraphQlNodes());
+
+  assert.strictEqual(run.status, 0, run.stderr);
+  const stdout = run.stdout;
+  const comments = [
+    { body: LONG_REVIEW_COMMENT_BODY, author: 'reviewer-one', createdAt: '2026-01-02T03:04:05Z' },
+    ...SHORT_REVIEW_COMMENTS
+  ];
+
+  for (const comment of comments) {
+    assert.ok(stdout.includes(comment.body), `comment body prints in full: ${comment.body.slice(0, 48)}`);
+    const metaLine = stdout.split('\n').find(line => line.includes(comment.author) && line.includes(comment.createdAt));
+    assert.ok(metaLine, `author ${comment.author} and timestamp ${comment.createdAt} print for their comment`);
+  }
+
+  const positions = comments.map(comment => stdout.indexOf(comment.body));
+  assert.deepStrictEqual([...positions].sort((a, b) => a - b), positions, 'comments print in chronological order');
+});
+
+test('sdw-ship-pr - 00059 AC3, AC4: list-threads --json emits every comment body, author, and timestamp', () => {
+  const run = runListThreadsCli(listThreadsGraphQlNodes(), ['--json']);
+
+  assert.strictEqual(run.status, 0, run.stderr);
+  const payload = JSON.parse(run.stdout);
+  assert.strictEqual(payload.threads.length, 2);
+  assert.strictEqual(payload.threads[0].comments.length, 3);
+  assert.strictEqual(payload.threads[0].comments[0].body, LONG_REVIEW_COMMENT_BODY, 'the JSON body is byte-for-byte complete');
+  assert.deepStrictEqual(
+    payload.threads[0].comments.slice(1).map(comment => ({ body: comment.body, author: comment.author, createdAt: comment.createdAt })),
+    SHORT_REVIEW_COMMENTS
+  );
+  assert.deepStrictEqual(payload.threads[1].comments, []);
+});
+
+test('sdw-ship-pr - 00059 AC5: a thread without comments prints a placeholder and still exits 0', () => {
+  const run = runListThreadsCli([listThreadsGraphQlNodes()[1]]);
+
+  assert.strictEqual(run.status, 0, run.stderr);
+  assert.match(run.stdout, /\[RESOLVED\] Thread PRRT_empty \[src\/empty\.js:7\] · 0 comment\(s\)\n +\(no comments\)/);
+});
+
+test('sdw-ship-pr - 00059 AC6: consecutive comments and consecutive threads are separated so long threads stay readable', () => {
+  const text = sdwShipPr.formatThreadsReport({
+    activeCount: 1,
+    threads: [
+      {
+        id: 'T1',
+        path: 'a.js',
+        line: 2,
+        isResolved: false,
+        comments: [
+          { body: 'first body', author: 'r1', createdAt: '2026-01-01T00:00:00Z' },
+          { body: 'second body\nwith a second line', author: 'r2', createdAt: '2026-01-02T00:00:00Z' }
+        ]
+      },
+      {
+        id: 'T2',
+        path: 'b.js',
+        line: 3,
+        isResolved: true,
+        comments: [{ body: 'resolved body', author: 'r3', createdAt: '2026-01-03T00:00:00Z' }]
+      }
+    ]
+  }, '42');
+
+  assert.ok(text.includes('Thread T1 [a.js:2] · 2 comment(s)\n\n    comment 1/2'), 'a blank line separates the thread header from its first comment');
+  assert.ok(text.includes('first body\n\n    comment 2/2 · r2 · 2026-01-02T00:00:00Z'), 'a blank line separates consecutive comments');
+  assert.ok(text.includes('with a second line\n\n  - [RESOLVED] Thread T2'), 'a blank line separates consecutive threads');
+  assert.strictEqual(text.includes('undefined'), false, 'the header renders real counts');
+});
+
+test('sdw-ship-pr - 00059 AC8: each thread header prints resolution status, id, path, line, and comment count', () => {
+  const run = runListThreadsCli(listThreadsGraphQlNodes());
+
+  assert.strictEqual(run.status, 0, run.stderr);
+  assert.ok(
+    run.stdout.includes('[ACTIVE] Thread PRRT_full [src/parser.js:42] · 3 comment(s)'),
+    `the active thread header carries every field: ${run.stdout}`
+  );
+  assert.ok(
+    run.stdout.includes('[RESOLVED] Thread PRRT_empty [src/empty.js:7] · 0 comment(s)'),
+    `the resolved empty thread header carries every field: ${run.stdout}`
+  );
+});
+
+test('sdw-ship-pr - 00059 AC7, AC11: the default fixer finding carries every comment body verbatim in chronological order', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-fixer-findings-'));
+  try {
+    const fixerScript = path.join(tmpDir, 'skills', 'sdw-fixer', 'scripts', 'sdw_fixer.cjs');
+    fs.mkdirSync(path.dirname(fixerScript), { recursive: true });
+    fs.writeFileSync(fixerScript, '// stub fixer entrypoint\n', 'utf8');
+
+    const comments = [
+      { body: LONG_REVIEW_COMMENT_BODY, author: 'reviewer-one', createdAt: '2026-01-02T03:04:05Z' },
+      ...SHORT_REVIEW_COMMENTS
+    ];
+    const built = sdwShipPr.buildDefaultFixerCommand(tmpDir, [
+      {
+        id: 'PRRT_full',
+        isResolved: false,
+        path: 'src/parser.js',
+        line: 42,
+        comments
+      },
+      {
+        id: 'PRRT_empty',
+        isResolved: false,
+        path: 'src/empty.js',
+        line: 7,
+        comments: []
+      }
+    ]);
+
+    assert.ok(built, 'the fixer command is built for active threads');
+    const findings = JSON.parse(fs.readFileSync(built.findingsPath, 'utf8'));
+    const full = findings.findings.find(finding => finding.threadId === 'PRRT_full');
+    assert.ok(full, 'one finding is built per active thread');
+    assert.strictEqual(
+      full.evidence,
+      comments.map(comment => comment.body).join('\n\n'),
+      'the evidence is every comment body in chronological order, with nothing cut'
+    );
+    assert.ok(
+      full.evidence.length > 500,
+      'the evidence runs past the 500-character cut the old builder applied'
+    );
+    assert.ok(
+      full.evidence.includes('Suggested correction: guard `payload.items` before indexing.'),
+      'text past 80 characters survives into the finding'
+    );
+    assert.strictEqual(
+      findings.findings.find(finding => finding.threadId === 'PRRT_empty').evidence,
+      'Review feedback',
+      'a thread without comment text keeps the fallback evidence'
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+

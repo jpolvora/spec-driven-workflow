@@ -59,6 +59,7 @@ flowchart TD
 3. **Complexity Analysis & DAG Task Decomposition**
    - Assesses technical scope, dependencies, and risk factors, directly ingesting the Step 2 technical blueprint.
    - Generates a Directed Acyclic Graph (DAG) dividing the work into discrete, atomic execution units with context prompts.
+   - Resolves target files only from what the specification names or declares new, or from a known real-file bucket that exists; it never invents a path from the slug.
    - Persists the DAG plan artifact `{slug}-step-3.md`. Supports isolated git worktrees (`useWorktrees: true`) for multi-task plans.
 
 4. **Sequential Subagent Dispatch & Evidence Gate**

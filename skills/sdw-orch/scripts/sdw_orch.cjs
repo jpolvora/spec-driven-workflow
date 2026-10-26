@@ -256,6 +256,18 @@ function git(targetRoot, args, options = {}) {
   return result.stdout;
 }
 
+// Spec 00063 AC1: the branch a checkpoint commit would land on. A detached HEAD
+// has no branch name, so it is reported as such instead of as a match.
+function readCheckedOutBranch(targetRoot) {
+  try {
+    const name = String(git(targetRoot, ['rev-parse', '--abbrev-ref', 'HEAD'], { stdio: ['ignore', 'pipe', 'ignore'] }) || '').trim();
+    if (!name || name === 'HEAD') return { branch: null, detached: true };
+    return { branch: name, detached: false };
+  } catch (e) {
+    return { branch: null, detached: false };
+  }
+}
+
 function normalizeRel(p) {
   return String(p || '').replace(/\\/g, '/').replace(/^\.\//, '');
 }
@@ -890,6 +902,23 @@ function printRunDryRunPlan(context) {
   return 0;
 }
 
+/**
+ * Spec 00069: a refused plan is a failed Step 3, never a dispatched task. The
+ * refusal names the bucket rule or the declaration the specification must add.
+ */
+function refuseDagPlan(targetRoot, state, plan, options) {
+  const detail = plan.reason === 'missing-target-file'
+    ? `fallback rule "${plan.fallbackRule}" names files the repository lacks: ${plan.missingFiles.join(', ')}`
+    : `the specification names no implementation file and declares no new file; ${plan.declaration}`;
+  const message = `DAG plan refused (${plan.reason}): ${detail}.`;
+  console.error(`[Step 3: DAG Generation] ${message}`);
+  let next = stateManager.updateStepState(targetRoot, state.runId, 3, 'failed', { refused: plan.reason, error: message });
+  next.status = 'failed';
+  stateManager.saveRunState(targetRoot, next);
+  options._runResult = { runId: state.runId, status: 'failed', error: message };
+  return next;
+}
+
 function cmdRun(options) {
   let targetRoot = options.root ? path.resolve(options.root) : process.cwd();
   const sourceRoot = targetRoot;
@@ -1427,7 +1456,11 @@ function cmdRun(options) {
     dagPlan = state.steps[3].output;
   } else if (startStep <= 3 && state.steps[3].status !== 'completed') {
     state = stateManager.updateStepState(targetRoot, state.runId, 3, 'in_progress');
-    dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint });
+    dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint, targetRoot });
+    if (dagPlan.refused) {
+      state = refuseDagPlan(targetRoot, state, dagPlan, options);
+      return 1;
+    }
     console.log(`[Step 3: DAG Generation] Complexity: ${dagPlan.complexity.level}. Generated ${dagPlan.totalTasks} task(s).`);
     state.dagTasks = dagPlan.tasks;
     state = stateManager.saveRunState(targetRoot, state);
@@ -1442,7 +1475,11 @@ function cmdRun(options) {
   } else if (state.steps[3].output) {
     dagPlan = state.steps[3].output;
   } else {
-    dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint });
+    dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint, targetRoot });
+    if (dagPlan.refused) {
+      state = refuseDagPlan(targetRoot, state, dagPlan, options);
+      return 1;
+    }
   }
 
   // Step 4: Implementation execution (Spec 028 subagent dispatch / Spec 015 command mode)
@@ -2961,6 +2998,38 @@ function cmdTaskFinish(options) {
       ? `Error: Task "${taskId}" is not the dispatched task. Active task: "${dispatch.activeTaskId}". Finish or abandon "${dispatch.activeTaskId}" first.`
       : `Error: No task is currently dispatched. Dispatch one with: node "${orchCommandPath()}" task next --run-id ${state.runId}${followUpRootFlag(targetRoot)}`);
     return 1;
+  }
+
+  // Spec 00063 AC1-AC3: the checkpoint commit must land on the run feature branch.
+  // Another session can switch this shared checkout, which would commit accepted
+  // task work onto the integration branch and leave the feature branch empty.
+  const expectedBranch = state.branching && state.branching.featureBranch
+    ? String(state.branching.featureBranch)
+    : null;
+  if (expectedBranch) {
+    const observed = readCheckedOutBranch(targetRoot);
+    if (observed.branch !== expectedBranch) {
+      const observedLabel = observed.detached ? 'HEAD (detached)' : (observed.branch || 'unknown');
+      const reason = `checked-out branch "${observedLabel}" does not match the run feature branch "${expectedBranch}"`;
+      state.steps[4].tasks[taskId] = {
+        ...(state.steps[4].tasks[taskId] || {}),
+        id: taskId,
+        branchGuard: {
+          observedBranch: observed.branch,
+          detached: observed.detached,
+          expectedBranch,
+          reason,
+          refusedAt: new Date().toISOString()
+        }
+      };
+      stateManager.saveRunState(targetRoot, state);
+      const evidenceArg = `"${normalizePath(path.relative(targetRoot, evidenceFileAbs))}"`;
+      console.error(`Error: Refusing to checkpoint task "${taskId}": ${reason}. The task stays dispatched and no commit was created.`);
+      console.error(`Resume the run on its feature branch, then retry:`);
+      console.error(`  git switch ${expectedBranch}`);
+      console.error(`  node "${orchCommandPath()}" task finish --run-id ${state.runId} --task ${taskId} --evidence ${evidenceArg}${followUpRootFlag(targetRoot)}`);
+      return 1;
+    }
   }
 
   const completedTaskIds = new Set(

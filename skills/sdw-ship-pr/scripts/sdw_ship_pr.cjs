@@ -86,6 +86,86 @@ function getSpecTitle(projectRoot, specSlug) {
   return null;
 }
 
+// Spec 00051: the provider-specific closing keyword is the only SCM syntax the
+// body needs; where it appears is provider-agnostic.
+const ISSUE_CLOSING_KEYWORDS = new Map([
+  ['github', (id) => `Closes #${id}`],
+  ['azure-devops', (id) => `Fixes AB#${id}`]
+]);
+
+// Matches a standalone closing line, e.g. `Closes #12`, `Fixes AB#12`, `Resolves #7`.
+const CLOSING_KEYWORD_LINE = /^(Closes|Fixes|Resolves)\s+(AB)?#\d+\b/i;
+
+function parseFrontmatterValue(frontmatter, key) {
+  const match = String(frontmatter || '').match(new RegExp(`^${key}:\\s*(.*)$`, 'm'));
+  if (!match) return null;
+  const raw = match[1].trim().replace(/^["']|["']$/g, '');
+  return raw && raw !== 'null' && raw !== '~' ? raw : null;
+}
+
+/**
+ * Reads the `id` and `source` frontmatter of the specification selected by
+ * `--spec` and derives the provider closing keyword (spec 00051).
+ * A missing specification, a null id, or an unsupported provider yields no
+ * keyword: shipping still proceeds.
+ */
+function resolveIssueLink(projectRoot, specSlug) {
+  const empty = { id: null, provider: null, keyword: null, present: false };
+  try {
+    if (!specSlug) return empty;
+    const dir = path.join(projectRoot, '.sdw', 'specs');
+    if (!fs.existsSync(dir)) return empty;
+    const normSlug = String(specSlug).replace(/^\d+-/, '');
+    const files = fs.readdirSync(dir).filter((f) => f === `${specSlug}.md` || f.replace(/^\d+-/, '').replace(/\.md$/, '') === normSlug);
+    for (const f of files) {
+      const content = fs.readFileSync(path.join(dir, f), 'utf8').split(/\r?\n/).slice(0, 25).join('\n');
+      const id = parseFrontmatterValue(content, 'id');
+      const provider = parseFrontmatterValue(content, 'source');
+      const formatKeyword = id ? ISSUE_CLOSING_KEYWORDS.get(provider || '') : null;
+      const keyword = formatKeyword ? formatKeyword(id) : null;
+      return { id, provider, keyword, present: Boolean(keyword) };
+    }
+  } catch (e) {}
+  return empty;
+}
+
+function stripClosingKeywordLines(text) {
+  return String(text || '')
+    .split(/\r?\n/)
+    .filter((line) => !CLOSING_KEYWORD_LINE.test(line.trim()))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/**
+ * Appends the current closing keyword to an assembled body after removing any
+ * already present closing line, so the body carries it exactly once (AC6).
+ */
+function appendClosingKeyword(body, keyword) {
+  if (!keyword) return String(body || '');
+  const kept = stripClosingKeywordLines(body);
+  return kept ? `${kept}\n\n${keyword}` : keyword;
+}
+
+// The full description needed to replace a reused pull-request body in one
+// write. The provider contract exposes no body getter, so the same read the
+// providers use for `appendBody` is issued here; a failure degrades to append.
+function readPullRequestBody(providerName, prNumber, executor) {
+  if (!/^\d+$/.test(String(prNumber || ''))) return null;
+  try {
+    if (providerName === 'github') {
+      const data = JSON.parse(executor(`gh pr view ${prNumber} --json body`) || '{}');
+      return typeof data.body === 'string' ? data.body : null;
+    }
+    if (providerName === 'ado' || providerName === 'azure-devops') {
+      const body = String(executor(`az repos pr show --id ${prNumber} --query description -o tsv`) || '');
+      return body.replace(/\r?\n$/, '');
+    }
+  } catch (e) {}
+  return null;
+}
+
 function buildPrTitle({ explicit, specSlug, specTitle, head, base, commits }) {
   if (explicit) return explicit;
   if (!commits || commits.length === 0) {
@@ -102,10 +182,12 @@ function buildPrTitle({ explicit, specSlug, specTitle, head, base, commits }) {
   return `feat(${head}): ${first}${suffix}`.slice(0, 120);
 }
 
-function buildPrBody({ explicit, specSlug, specTitle, head, base, commits, files, config }) {
+function buildPrBody({ explicit, specSlug, specTitle, head, base, commits, files, config, issueLink }) {
   if (explicit) return explicit;
+  const closingKeyword = issueLink && issueLink.present ? issueLink.keyword : null;
   if ((!commits || commits.length === 0) && (!files || files.length === 0)) {
-    return specSlug ? `Automated delivery for specification ${specSlug}.` : `Automated delivery pull request.`;
+    const fallback = specSlug ? `Automated delivery for specification ${specSlug}.` : `Automated delivery pull request.`;
+    return appendClosingKeyword(fallback, closingKeyword);
   }
   const lines = [];
   lines.push('## Summary');
@@ -113,6 +195,7 @@ function buildPrBody({ explicit, specSlug, specTitle, head, base, commits, files
   if (specSlug) lines.push(`- Spec: \`${specSlug}\`${specTitle ? ` — ${specTitle}` : ''}`);
   lines.push(`- Commits: ${commits.length}`);
   lines.push(`- Files changed: ${files.length}`);
+  if (closingKeyword) lines.push('', closingKeyword);
   lines.push('');
   if (commits.length > 0) {
     lines.push('## Commits');
@@ -166,8 +249,12 @@ function buildDefaultFixerCommand(projectRoot, activeList) {
   const findings = threads.map(t => {
     const rawPath = typeof t.path === 'string' ? t.path.trim().replace(/\\/g, '/') : '';
     const safe = rawPath && !path.isAbsolute(rawPath) && !/^[A-Za-z]:[\\/]/.test(rawPath) && !rawPath.split('/').includes('..');
-    const firstComment = t.comments && t.comments[0] ? String(t.comments[0].body || '') : '';
-    const evidence = (firstComment.trim() || 'Review feedback').slice(0, 500) || 'Review feedback';
+    // Every comment body, in the provider's chronological order, without a
+    // length cut: the fixer must see the reasoning that names the defect.
+    const bodies = (Array.isArray(t.comments) ? t.comments : [])
+      .map(comment => String((comment && comment.body) || ''))
+      .filter(body => body.trim().length > 0);
+    const evidence = bodies.length > 0 ? bodies.join('\n\n') : 'Review feedback';
     return {
       threadId: t.id || null,
       file: safe ? rawPath : 'REVIEW_THREADS.md',
@@ -237,6 +324,7 @@ function parseArgs(args) {
     commentId: null,
     comment: null,
     runId: null,
+    ackPrepare: null,
     spec: null,
     head: null,
     base: null,
@@ -268,6 +356,8 @@ function parseArgs(args) {
       options.comment = args[++i];
     } else if (arg === '--run-id' && args[i + 1]) {
       options.runId = args[++i];
+    } else if (arg === '--ack-prepare' && args[i + 1]) {
+      options.ackPrepare = args[++i];
     } else if (arg === '--spec' && args[i + 1]) {
       options.spec = args[++i];
     } else if (arg === '--head' && args[i + 1]) {
@@ -372,9 +462,135 @@ function locateStateFile(projectRoot, runId, specSlug = null, config = {}) {
   return null;
 }
 
+// Spec 00050: pre-PR discovery scan and run-state evidence gate.
+const PRE_PR_DISCOVERY_MODES = ['block', 'warn', 'off'];
+const PRE_PR_DISCOVERY_FILES = ['AGENTS.md', 'CONTRIBUTING.md', 'RELEASE.md', 'PUBLISH.md'];
+const PRE_PR_PREPARE_HEADING = /prepare|before push|before publish|before deliver|before delivery|before merge/i;
+const PRE_PR_DISCOVERY_MAX_LINES = 8;
+const PRE_PR_DISCOVERY_MAX_CHARS = 1200;
+
+function formatPrePrBoard(board = []) {
+  const cell = value => String(value === null || value === undefined ? '' : value)
+    .replace(/\|/g, '\\|')
+    .replace(/\r?\n/g, ' ');
+  const lines = [
+    '| Check | Status | Evidence |',
+    '| --- | --- | --- |'
+  ];
+  for (const row of board) {
+    lines.push(`| ${cell(row.check)} | ${cell(row.status)} | ${cell(row.evidence)} |`);
+  }
+  return lines.join('\n');
+}
+
+function resolvePrePrDiscovery(config = {}) {
+  const configured = config.prePrDiscovery;
+  if (configured === undefined || configured === null) return 'block';
+  const mode = String(configured).trim().toLowerCase();
+  if (!PRE_PR_DISCOVERY_MODES.includes(mode)) {
+    throw new Error(
+      `Invalid prePrDiscovery value "${configured}". Allowed values: ${PRE_PR_DISCOVERY_MODES.join(', ')}.`
+    );
+  }
+  return mode;
+}
+
+function discoverPrepareObligations(projectRoot, config = {}) {
+  const rows = [];
+  for (const fileName of PRE_PR_DISCOVERY_FILES) {
+    const filePath = path.join(projectRoot, fileName);
+    let lines;
+    try {
+      if (!fs.existsSync(filePath)) continue;
+      lines = fs.readFileSync(filePath, 'utf8').split(/\r?\n/);
+    } catch (e) {
+      continue;
+    }
+    for (let i = 0; i < lines.length; i++) {
+      const headingMatch = lines[i].match(/^#{1,6}\s+(.+?)\s*$/);
+      if (!headingMatch || !PRE_PR_PREPARE_HEADING.test(headingMatch[1])) continue;
+      const bodyLines = [];
+      for (let j = i + 1; j < lines.length && bodyLines.length < PRE_PR_DISCOVERY_MAX_LINES; j++) {
+        if (/^#{1,6}\s+/.test(lines[j])) break;
+        bodyLines.push(lines[j]);
+      }
+      rows.push({
+        source: fileName,
+        heading: headingMatch[1].trim(),
+        body: bodyLines.join('\n').trim().slice(0, PRE_PR_DISCOVERY_MAX_CHARS)
+      });
+    }
+  }
+  const instructions = typeof config.prePrInstructions === 'string' ? config.prePrInstructions.trim() : '';
+  if (instructions) {
+    rows.push({
+      source: '.sdw/config.json',
+      heading: 'prePrInstructions',
+      body: instructions.slice(0, PRE_PR_DISCOVERY_MAX_CHARS)
+    });
+  }
+  return rows;
+}
+
+function evaluateRunStateGate(projectRoot, runId, specSlug, config = {}, options = {}) {
+  const gate = {
+    runId,
+    stateFile: null,
+    score: null,
+    scoreMin: null,
+    steps: {},
+    codeReviewRequired: Boolean(options.scmCodeReviewEnabled),
+    passed: false,
+    reason: null
+  };
+  let stateFilePath;
+  try {
+    stateFilePath = locateStateFile(projectRoot, runId, specSlug, config);
+  } catch (e) {
+    gate.reason = `run state for "${runId}" is unreadable (${e.message}); refusing to ship without run evidence`;
+    return gate;
+  }
+  if (!stateFilePath) {
+    gate.reason = `run state "${runId}.state.json" was not found; refusing to ship without run evidence`;
+    return gate;
+  }
+  gate.stateFile = path.relative(projectRoot, stateFilePath).split(path.sep).join('/');
+  let state;
+  try {
+    state = JSON.parse(fs.readFileSync(stateFilePath, 'utf8'));
+  } catch (e) {
+    gate.reason = `run state "${gate.stateFile}" is unreadable (${e.message}); refusing to ship`;
+    return gate;
+  }
+  if (!state || typeof state !== 'object' || Array.isArray(state)) {
+    gate.reason = `run state "${gate.stateFile}" is malformed; refusing to ship`;
+    return gate;
+  }
+  const steps = state.steps && typeof state.steps === 'object' ? state.steps : {};
+  const statusOf = (n) => (steps[n] && typeof steps[n] === 'object' && steps[n].status !== undefined
+    ? String(steps[n].status)
+    : null);
+  gate.steps = { 4: statusOf(4), 6: statusOf(6) };
+  if (gate.codeReviewRequired) gate.steps[7] = statusOf(7);
+  gate.score = Number.isFinite(Number(state.score)) ? Number(state.score) : null;
+  gate.scoreMin = Number.isFinite(Number(config.scoreMin)) ? Number(config.scoreMin) : 8;
+
+  const failures = [];
+  if (gate.steps[4] !== 'completed') failures.push(`step 4 is "${gate.steps[4] || 'missing'}" (expected "completed")`);
+  if (gate.steps[6] !== 'completed') failures.push(`step 6 is "${gate.steps[6] || 'missing'}" (expected "completed")`);
+  if (gate.codeReviewRequired && gate.steps[7] !== 'completed') {
+    failures.push(`step 7 is "${gate.steps[7] || 'missing'}" (expected "completed" because code review is enabled)`);
+  }
+  if (gate.score === null) failures.push(`run score is missing (scoreMin ${gate.scoreMin})`);
+  else if (gate.score < gate.scoreMin) failures.push(`run score ${gate.score} is below scoreMin ${gate.scoreMin}`);
+
+  gate.passed = failures.length === 0;
+  gate.reason = gate.passed ? null : failures.join('; ');
+  return gate;
+}
+
 /**
- * Commits a dirty working tree before publishing (adapted from the ws-fix-pr /
- * ws-goal-fix-pr auto-commit posture). Returns null when the tree is clean.
+ * Commits a dirty working tree before publishing. Returns null when the tree is clean.
  */
 function shellQuote(value) {
   const text = String(value);
@@ -679,25 +895,35 @@ async function runShipPr(options = {}, customExecutor = null) {
   assertSafeRef(head, 'head');
   assertSafeRef(base, 'base');
   const specTitle = getSpecTitle(projectRoot, specSlug);
+  const issueLink = resolveIssueLink(projectRoot, specSlug);
   const branchCommits = listBranchCommits(executor, base, head);
   const branchFiles = listBranchFiles(executor, base, head);
   const title = buildPrTitle({ explicit: options.title, specSlug, specTitle, head, base, commits: branchCommits });
   const body = buildPrBody({
     explicit: options.body, specSlug, specTitle, head, base,
-    commits: branchCommits, files: branchFiles, config
+    commits: branchCommits, files: branchFiles, config, issueLink
   });
 
   const pushDelivery = options.push || Boolean(config.pushDelivery);
   const scmProviderName = config.scmProvider || 'none';
   const scmCodeReviewEnabled = options.pollPr || Boolean(config.scmCodeReviewEnabled);
+  // Spec 00050 AC9: Step 7 only exists when review actually runs for this ship.
+  const codeReviewGateEnabled = scmCodeReviewEnabled && scmProviderName !== 'none';
 
   const report = {
     success: false,
     head,
     base,
     scmProvider: scmProviderName,
+    // AC8: the resolved linkage is observable on success and failure runs.
+    issueLink,
     pushed: false,
     prePrPassed: false,
+    prePrBoard: [],
+    prepareDiscovery: null,
+    prepareObligations: [],
+    prepareAck: null,
+    runStateGate: null,
     pullRequest: null,
     // Spec 024 AC26: when merge is requested, an audit record exists from the
     // start, so a delivery that fails before the merge step still explains why
@@ -724,6 +950,13 @@ async function runShipPr(options = {}, customExecutor = null) {
   const log = options.json ? console.error : console.log;
   const warn = options.json ? console.error : console.warn;
 
+  // AC7: dry-run prints the assembled body, closing keyword included, and the
+  // simulated PR path issues no create or edit command.
+  if (dryRun) {
+    log('[sdw-ship-pr] (dry-run) Assembled pull request body:');
+    log(body);
+  }
+
   try {
     // Step 1: Pre-PR Verification Gates
     log('[sdw-ship-pr] Evaluating pre-PR requirements...');
@@ -732,75 +965,101 @@ async function runShipPr(options = {}, customExecutor = null) {
       log(`[sdw-ship-pr] Pre-PR Instructions: ${config.prePrInstructions}`);
     }
 
-    if (dryRun) {
-      log('[sdw-ship-pr] (dry-run) Simulating pre-PR verification gates (prePrCommand, requiredBuild, runAllTests, security checks)...');
-      report.prePrPassed = true;
+    const gateFailures = [];
+    const boardRow = (check, status, evidence) => report.prePrBoard.push({ check, status, evidence });
+    const failGate = (check, message) => {
+      boardRow(check, 'fail', message);
+      gateFailures.push(message);
+    };
+
+    if (!config.prePrCommand) {
+      boardRow('prePrCommand', 'skipped', 'prePrCommand is not configured');
+    } else if (dryRun) {
+      log(`[sdw-ship-pr] (dry-run) prePrCommand not executed: "${config.prePrCommand}".`);
+      boardRow('prePrCommand', 'skipped', 'dry-run: prePrCommand was not executed');
     } else {
-      if (config.prePrCommand) {
-        log(`[sdw-ship-pr] Running prePrCommand: "${config.prePrCommand}"...`);
-        const beforePrePr = listChangedPaths(executor);
-        try {
-          executor(config.prePrCommand, { timeout: verificationTimeoutMs });
-        } catch (cmdErr) {
-          throw new Error(`prePrCommand failed: ${cmdErr.message}`);
-        }
+      log(`[sdw-ship-pr] Running prePrCommand: "${config.prePrCommand}"...`);
+      const beforePrePr = listChangedPaths(executor);
+      try {
+        executor(config.prePrCommand, { timeout: verificationTimeoutMs });
 
         // Stage only files produced by the command; never sweep unrelated worktree changes.
-        try {
-          const changed = stageChangedSince(executor, beforePrePr, projectRoot);
-          if (changed.length > 0) {
-            // Scan the staged pre-PR changes before creating history.
-            if (config.securityChecksEnabled) {
-              let securityScanner = null;
-              try {
-                securityScanner = require('../../sdw-security-checks/scripts/sdw_security_checks.cjs');
-              } catch (e) {
-                securityScanner = null;
-              }
-              if (!securityScanner || typeof securityScanner.scan !== 'function') {
-                throw new Error('Security checks enabled but the sdw-security-checks scanner is unavailable.');
-              }
-              const scanResult = securityScanner.scan({ root: projectRoot, staged: true });
-              if (scanResult.exitCode !== 0) {
-                throw new Error(`Security checks failed on pre-PR changes: ${scanResult.message || 'blocking findings detected'}`);
-              }
+        const changed = stageChangedSince(executor, beforePrePr, projectRoot);
+        if (changed.length > 0) {
+          // Scan the staged pre-PR changes before creating history.
+          if (config.securityChecksEnabled) {
+            let securityScanner = null;
+            try {
+              securityScanner = require('../../sdw-security-checks/scripts/sdw_security_checks.cjs');
+            } catch (e) {
+              securityScanner = null;
             }
-
-            log(`[sdw-ship-pr] Committing ${changed.length} pre-PR change(s)...`);
-            const safeSlug = specSlug && specSlug !== 'unspecified' && /^[a-z0-9][a-z0-9-]*$/.test(specSlug) ? specSlug : null;
-            const commitMsg = safeSlug ? `chore(${safeSlug}): apply pre-pr requirements` : 'chore: apply pre-pr requirements';
-            const commitRes = spawnSync('git', ['commit', '-m', commitMsg], { cwd: projectRoot, stdio: 'ignore' });
-            if (commitRes.status !== 0) {
-              throw new Error(`pre-PR commit failed with exit code ${commitRes.status}`);
+            if (!securityScanner || typeof securityScanner.scan !== 'function') {
+              throw new Error('Security checks enabled but the sdw-security-checks scanner is unavailable.');
+            }
+            const scanResult = securityScanner.scan({ root: projectRoot, staged: true });
+            if (scanResult.exitCode !== 0) {
+              throw new Error(`Security checks failed on pre-PR changes: ${scanResult.message || 'blocking findings detected'}`);
             }
           }
-        } catch (modErr) {
-          throw modErr;
-        }
-      }
 
-      if (config.requiredBuild) {
-        const buildCmd = config.buildCommand || (config.verification && config.verification.buildCommand) || 'npm run build';
-        log(`[sdw-ship-pr] Running requiredBuild (${buildCmd})...`);
-        try {
-          executor(buildCmd, { timeout: verificationTimeoutMs });
-        } catch (buildErr) {
-          throw new Error(`requiredBuild failed: ${buildErr.message}`);
+          log(`[sdw-ship-pr] Committing ${changed.length} pre-PR change(s)...`);
+          const safeSlug = specSlug && specSlug !== 'unspecified' && /^[a-z0-9][a-z0-9-]*$/.test(specSlug) ? specSlug : null;
+          const commitMsg = safeSlug ? `chore(${safeSlug}): apply pre-pr requirements` : 'chore: apply pre-pr requirements';
+          const commitRes = spawnSync('git', ['commit', '-m', commitMsg], { cwd: projectRoot, stdio: 'ignore' });
+          if (commitRes.status !== 0) {
+            throw new Error(`pre-PR commit failed with exit code ${commitRes.status}`);
+          }
         }
+        boardRow('prePrCommand', 'pass', `"${config.prePrCommand}" exited 0`);
+      } catch (cmdErr) {
+        const message = /^prePrCommand failed:/.test(cmdErr.message)
+          ? cmdErr.message
+          : `prePrCommand failed: ${cmdErr.message}`;
+        failGate('prePrCommand', message);
       }
+    }
 
-      if (config.runAllTests) {
-        const testCmd = config.testCommand || (config.verification && config.verification.testCommand) || 'npm test';
-        log(`[sdw-ship-pr] Running runAllTests (${testCmd})...`);
-        try {
-          executor(testCmd, { timeout: verificationTimeoutMs });
-        } catch (testErr) {
-          throw new Error(`runAllTests failed: ${testErr.message}`);
-        }
+    if (!config.requiredBuild) {
+      boardRow('build', 'skipped', 'requiredBuild is false');
+    } else if (dryRun) {
+      log('[sdw-ship-pr] (dry-run) requiredBuild not executed.');
+      boardRow('build', 'skipped', 'dry-run: build was not executed');
+    } else {
+      const buildCmd = config.buildCommand || (config.verification && config.verification.buildCommand) || 'npm run build';
+      log(`[sdw-ship-pr] Running requiredBuild (${buildCmd})...`);
+      try {
+        executor(buildCmd, { timeout: verificationTimeoutMs });
+        boardRow('build', 'pass', `${buildCmd} exited 0`);
+      } catch (buildErr) {
+        failGate('build', `requiredBuild failed: ${buildErr.message}`);
       }
+    }
 
-      if (config.securityChecksEnabled) {
-        log('[sdw-ship-pr] Evaluating security leak checks...');
+    if (!config.runAllTests) {
+      boardRow('tests', 'skipped', 'runAllTests is false');
+    } else if (dryRun) {
+      log('[sdw-ship-pr] (dry-run) runAllTests not executed.');
+      boardRow('tests', 'skipped', 'dry-run: tests were not executed');
+    } else {
+      const testCmd = config.testCommand || (config.verification && config.verification.testCommand) || 'npm test';
+      log(`[sdw-ship-pr] Running runAllTests (${testCmd})...`);
+      try {
+        executor(testCmd, { timeout: verificationTimeoutMs });
+        boardRow('tests', 'pass', `${testCmd} exited 0`);
+      } catch (testErr) {
+        failGate('tests', `runAllTests failed: ${testErr.message}`);
+      }
+    }
+
+    if (!config.securityChecksEnabled) {
+      boardRow('security', 'skipped', 'securityChecksEnabled is false');
+    } else if (dryRun) {
+      log('[sdw-ship-pr] (dry-run) security leak checks not executed.');
+      boardRow('security', 'skipped', 'dry-run: security scan was not executed');
+    } else {
+      log('[sdw-ship-pr] Evaluating security leak checks...');
+      try {
         let securityScanner = null;
         try {
           securityScanner = require('../../sdw-security-checks/scripts/sdw_security_checks.cjs');
@@ -816,10 +1075,85 @@ async function runShipPr(options = {}, customExecutor = null) {
         if (scanResult.exitCode !== 0) {
           throw new Error(`Security checks failed: ${scanResult.message || 'blocking findings detected'}`);
         }
+        boardRow('security', 'pass', 'sdw-security-checks found no blocking leak');
+      } catch (securityErr) {
+        failGate('security', securityErr.message);
+      }
+    }
+
+    // Step 1b: Run-state evidence and discovered prepare obligations (spec 00050).
+    // Both are read-only file checks, so they are evaluated in dry-run too; the
+    // ship refuses after every unmet obligation has been printed.
+    const discoveryMode = resolvePrePrDiscovery(config);
+    report.prepareDiscovery = discoveryMode;
+
+    if (options.runId) {
+      const runStateGate = evaluateRunStateGate(projectRoot, options.runId, specSlug, config, {
+        scmCodeReviewEnabled: codeReviewGateEnabled
+      });
+      report.runStateGate = runStateGate;
+      if (runStateGate.passed) {
+        const stepsLabel = runStateGate.codeReviewRequired ? 'step 4, step 6 and step 7' : 'step 4 and step 6';
+        log(`[sdw-ship-pr] Run-state gate passed: ${stepsLabel} completed, score ${runStateGate.score} >= scoreMin ${runStateGate.scoreMin}.`);
+        boardRow('runState', 'pass', `${stepsLabel} completed; score ${runStateGate.score} >= scoreMin ${runStateGate.scoreMin}`);
+      } else {
+        warn(`[sdw-ship-pr] Run-state gate failed: ${runStateGate.reason}.`);
+        failGate('runState', `run-state gate failed for "${options.runId}": ${runStateGate.reason}`);
+      }
+    } else {
+      log('[sdw-ship-pr] Run-state gate skipped: --run-id not supplied (standalone ship).');
+      boardRow('runState', 'skipped', '--run-id not supplied (standalone ship)');
+    }
+
+    if (discoveryMode === 'off') {
+      log('[sdw-ship-pr] Prepare discovery skipped: prePrDiscovery is "off".');
+      boardRow('discovery', 'skipped', 'prePrDiscovery is "off"');
+    } else {
+      const prepareObligations = discoverPrepareObligations(projectRoot, config);
+      report.prepareObligations = prepareObligations;
+      if (prepareObligations.length > 0) {
+        log(`[sdw-ship-pr] Discovered ${prepareObligations.length} prepare obligation(s) (prePrDiscovery: ${discoveryMode}):`);
+        for (const row of prepareObligations) {
+          log(`[sdw-ship-pr]   [${row.source}] ${row.heading}`);
+          if (row.body) {
+            for (const line of row.body.split('\n')) log(`[sdw-ship-pr]     ${line}`);
+          }
+        }
+      } else {
+        log('[sdw-ship-pr] No prepare obligations discovered.');
       }
 
-      report.prePrPassed = true;
+      if (prepareObligations.length === 0) {
+        boardRow('discovery', 'pass', 'no prepare obligations discovered');
+      } else if (options.ackPrepare) {
+        boardRow('discovery', 'pass', `acknowledged via --ack-prepare: ${options.ackPrepare}`);
+      } else if (discoveryMode === 'block') {
+        report.prepareDiscovery = 'blocked';
+        failGate('discovery', `prepare discovery gate failed: prePrDiscovery is "block" and ${prepareObligations.length} prepare obligation(s) are unacknowledged; complete them and re-run with --ack-prepare "<note>"`);
+      } else {
+        warn(`[sdw-ship-pr] prePrDiscovery is "warn": continuing despite ${prepareObligations.length} prepare obligation(s).`);
+        boardRow('discovery', 'pass', `prePrDiscovery "warn": ${prepareObligations.length} obligation(s) printed; ship continues`);
+      }
     }
+
+    if (options.ackPrepare) {
+      report.prepareAck = { note: options.ackPrepare, at: new Date().toISOString() };
+      log(`[sdw-ship-pr] Prepare obligations acknowledged via --ack-prepare: ${options.ackPrepare}`);
+    }
+
+    // Spec 00050 AC11/AC12: one row per evaluated check, printed before the push.
+    if (!options.json) {
+      for (const row of report.prePrBoard) {
+        log(`[sdw-ship-pr] prePrBoard ${row.status}: ${row.check} - ${row.evidence}`);
+      }
+      log('[sdw-ship-pr] Pre-PR board:');
+      log(formatPrePrBoard(report.prePrBoard));
+    }
+
+    if (gateFailures.length > 0) {
+      throw new Error(`Pre-PR enforcement refused to push or create a pull request. ${gateFailures.join(' ')}`);
+    }
+    report.prePrPassed = true;
 
     // Check if an active PR is already open for this branch
     let activePrEarly = null;
@@ -935,7 +1269,24 @@ async function runShipPr(options = {}, customExecutor = null) {
           `- Files changed: ${branchFiles.length}`,
           latestList ? `#### Latest commits\n${latestList}` : null
         ].filter(Boolean).join('\n');
-        const newBodyContent = options.body || amendmentNote || body;
+        const amendment = options.body || amendmentNote || body;
+        const closingKeyword = issueLink.present ? issueLink.keyword : null;
+        let newBodyContent = amendment;
+        let appendBody = true;
+        if (closingKeyword) {
+          // AC6: the body carries the closing keyword exactly once. Read the
+          // reused body, drop any previous closing line, and rewrite in one write.
+          const existingBody = readPullRequestBody(scmProviderName, prResult.number, executor);
+          if (existingBody !== null) {
+            const combined = [existingBody, amendment].filter((part) => String(part || '').trim()).join('\n\n---\n\n');
+            newBodyContent = appendClosingKeyword(combined, closingKeyword);
+            appendBody = false;
+          } else {
+            // The existing body could not be read; append the amendment with the
+            // keyword rather than overwrite content this run did not see.
+            newBodyContent = appendClosingKeyword(amendment, closingKeyword);
+          }
+        }
         if (newBodyContent || (!options.title && title)) {
           try {
             log(`[sdw-ship-pr] Notice: Amending an active pull request while review/approval is pending is not a recommended practice, but adapting as a non-blocking operation: complementing PR #${prResult.number} description with amending delivery...`);
@@ -943,7 +1294,7 @@ async function runShipPr(options = {}, customExecutor = null) {
               prNumber: prResult.number,
               title: options.title ? undefined : title,
               body: newBodyContent,
-              appendBody: true,
+              appendBody,
               dryRun
             });
             log(`[sdw-ship-pr] Successfully updated PR description for PR #${prResult.number}.`);
@@ -1467,8 +1818,8 @@ async function runShipPr(options = {}, customExecutor = null) {
       }
     }
 
-    // Step 5: State Persistence
-    if (options.runId) {
+    // Step 5: State Persistence (never in dry-run: AC13 forbids writing run state)
+    if (options.runId && !dryRun) {
       const stateFilePath = locateStateFile(projectRoot, options.runId, specSlug, config);
       if (stateFilePath && fs.existsSync(stateFilePath)) {
         try {
@@ -1516,7 +1867,7 @@ async function runShipPr(options = {}, customExecutor = null) {
     // Expose the partial report (including the merge audit record) to callers.
     err.report = report;
 
-    if (options.runId) {
+    if (options.runId && !dryRun) {
       const stateFilePath = locateStateFile(projectRoot, options.runId, specSlug, config);
       if (stateFilePath && fs.existsSync(stateFilePath)) {
         try {
@@ -1534,6 +1885,44 @@ async function runShipPr(options = {}, customExecutor = null) {
 
     throw err;
   }
+}
+
+/**
+ * Renders a review-thread report with every comment printed in full.
+ * A review thread is the specification of a defect, so the report keeps each
+ * body verbatim (line breaks included) and separates consecutive comments and
+ * consecutive threads instead of narrowing the thread to its first comment.
+ */
+function formatThreadsReport(result, prNumber) {
+  const threads = result && Array.isArray(result.threads) ? result.threads : [];
+  const activeCount = result && Number.isInteger(result.activeCount)
+    ? result.activeCount
+    : threads.filter(t => !t.isResolved).length;
+  const totalCount = result && Number.isInteger(result.totalCount)
+    ? result.totalCount
+    : threads.length;
+
+  const sections = threads.map(thread => {
+    const status = thread.isResolved ? 'RESOLVED' : 'ACTIVE';
+    const location = thread.path ? ` [${thread.path}:${thread.line || 1}]` : '';
+    const comments = Array.isArray(thread.comments) ? thread.comments : [];
+    const lines = [`  - [${status}] Thread ${thread.id}${location} · ${comments.length} comment(s)`];
+    if (comments.length === 0) {
+      lines.push('    (no comments)');
+      return lines.join('\n');
+    }
+    comments.forEach((comment, index) => {
+      const author = comment.author || 'unknown';
+      const createdAt = comment.createdAt || 'unknown';
+      lines.push('');
+      lines.push(`    comment ${index + 1}/${comments.length} · ${author} · ${createdAt}`);
+      lines.push(String(comment.body || ''));
+    });
+    return lines.join('\n');
+  });
+
+  const header = `[sdw-ship-pr] PR #${prNumber} Review Threads (${activeCount} active, ${totalCount} total):`;
+  return [header, ...sections].join('\n\n');
 }
 
 /**
@@ -1682,16 +2071,21 @@ if (require.main === module) {
 
   runnerPromise
     .then(result => {
+      const hasActivePr = Boolean(result && result.pullRequest && (result.pullRequest.url || result.pullRequest.number));
+      const ok = options.subcommand === 'check-status'
+        ? Boolean(result && result.allPassed === true)
+        : Boolean(result && (result.success !== false || (hasActivePr && result.shipStatus === 'review_pending')) && result.resolved !== false);
+      if (options.subcommand === 'list-threads') {
+        // The full-thread report can be large; exit from the write callback so a
+        // piped stdout is flushed before the process ends.
+        const output = options.json
+          ? `${JSON.stringify(result, null, 2)}\n`
+          : `\n${formatThreadsReport(result, options.pr)}\n`;
+        process.stdout.write(output, () => process.exit(ok ? 0 : 1));
+        return;
+      }
       if (options.json) {
         process.stdout.write(JSON.stringify(result, null, 2) + '\n');
-      } else if (options.subcommand === 'list-threads') {
-        console.log(`\n[sdw-ship-pr] PR #${options.pr} Review Threads (${result.activeCount} active, ${result.totalCount} total):`);
-        for (const t of result.threads) {
-          const status = t.isResolved ? 'RESOLVED' : 'ACTIVE';
-          const fileLoc = t.path ? ` [${t.path}:${t.line || 1}]` : '';
-          const snippet = t.comments && t.comments[0] ? t.comments[0].body.split('\n')[0].slice(0, 80) : '';
-          console.log(`  - [${status}] Thread ${t.id}${fileLoc}: ${snippet}`);
-        }
       } else if (options.subcommand === 'resolve-thread') {
         console.log(`\n[sdw-ship-pr] Resolved thread ${options.threadId} on PR #${options.pr}:`);
         console.log(`  Status: ${result.resolved ? 'Resolved' : 'Pending'}`);
@@ -1709,16 +2103,17 @@ if (require.main === module) {
           console.log(`  PR URL:       ${result.pullRequest.url}`);
         }
       }
-      const hasActivePr = Boolean(result && result.pullRequest && (result.pullRequest.url || result.pullRequest.number));
-      const ok = options.subcommand === 'check-status'
-        ? Boolean(result && result.allPassed === true)
-        : Boolean(result && (result.success !== false || (hasActivePr && result.shipStatus === 'review_pending')) && result.resolved !== false);
       process.exit(ok ? 0 : 1);
     })
     .catch(err => {
       console.error(`\n[sdw-ship-pr] Error: ${err.message}`);
       if (options.json) {
-        process.stdout.write(JSON.stringify({ success: false, error: err.message }, null, 2) + '\n');
+        // AC8: the failure report keeps the resolved `issueLink`; only failures
+        // raised before a report exists fall back to the bare error payload.
+        const failureReport = err.report && typeof err.report === 'object'
+          ? { ...err.report, success: false, error: err.message }
+          : { success: false, error: err.message };
+        process.stdout.write(JSON.stringify(failureReport, null, 2) + '\n');
       }
       process.exit(1);
     });
@@ -1729,12 +2124,19 @@ module.exports = {
   parseArgs,
   loadConfig,
   locateStateFile,
+  resolvePrePrDiscovery,
+  discoverPrepareObligations,
+  evaluateRunStateGate,
   cmdListThreads,
+  formatThreadsReport,
   cmdResolveThread,
   cmdCheckStatus,
   listBranchCommits,
   listBranchFiles,
   getSpecTitle,
+  resolveIssueLink,
+  stripClosingKeywordLines,
+  appendClosingKeyword,
   buildPrTitle,
   buildPrBody,
   buildDefaultFixerCommand,
