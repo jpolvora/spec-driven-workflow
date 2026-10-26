@@ -38,6 +38,26 @@ test('sdw-config: loadConfig parses {projectRoot} tokens and provides defaults',
   }
 });
 
+test('sdw-config: loadConfig fails fast on the removed flat build and test commands', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-cfg-legacy-'));
+  try {
+    const sdwDir = path.join(tmpDir, '.sdw');
+    fs.mkdirSync(sdwDir, { recursive: true });
+    const cfgPath = path.join(sdwDir, 'config.json');
+
+    fs.writeFileSync(cfgPath, JSON.stringify({ runAllTests: true, testCommand: 'pytest -q' }, null, 2), 'utf8');
+    assert.throws(() => sdwConfig.loadConfig(tmpDir), /verification\.testCommand/);
+
+    fs.writeFileSync(cfgPath, JSON.stringify({ requiredBuild: true, buildCommand: 'make' }, null, 2), 'utf8');
+    assert.throws(() => sdwConfig.loadConfig(tmpDir), /verification\.buildCommand/);
+
+    fs.writeFileSync(cfgPath, JSON.stringify({ runAllTests: true, verification: { testCommand: 'pytest -q' } }, null, 2), 'utf8');
+    assert.equal(sdwConfig.loadConfig(tmpDir).verification.testCommand, 'pytest -q');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test('sdw-config: validateConfigSchema verifies valid and rejects invalid types/bounds', () => {
   // Valid config
   const valid = sdwConfig.validateConfigSchema({

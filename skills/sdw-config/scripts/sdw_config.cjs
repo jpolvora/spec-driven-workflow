@@ -967,6 +967,15 @@ function loadConfig(targetRoot, options = {}) {
     }
   }
 
+  // verification.* is the single command source: a legacy flat key that reached
+  // loadConfig would be ignored by every gate and the run would silently fall
+  // back to the built-in default, so it fails fast instead.
+  for (const legacy of ['buildCommand', 'testCommand']) {
+    if (rawConfig && Object.prototype.hasOwnProperty.call(rawConfig, legacy)) {
+      throw new Error(`Property "${legacy}" was replaced by "verification.${legacy}". Update ${normalizePath(configFile)}.`);
+    }
+  }
+
   const configuredSkillsRoot = rawConfig && typeof rawConfig.skillsRoot === 'string' && rawConfig.skillsRoot.trim()
     ? normalizePath(path.resolve(root, rawConfig.skillsRoot.trim().replace(/\{projectRoot\}/g, normalizedRoot)))
     : undefined;
