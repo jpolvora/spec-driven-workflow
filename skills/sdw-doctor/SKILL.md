@@ -19,7 +19,7 @@ Checks that the SDW installation is complete and that the consuming workspace is
 ## Subcommands
 
 - `check`: Runs the installation and workspace audit (default).
-- `test`: Runs a fake specification through `sdw-orch run --sandbox` and verifies every step completes.
+- `test`: Runs a fake specification through `sdw-run run --sandbox` and verifies every step completes.
 - `doctor`: Alias for `check`.
 
 ## Installation Modes

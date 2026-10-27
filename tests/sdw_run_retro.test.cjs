@@ -8,19 +8,19 @@ const path = require('path');
 const { execSync, spawnSync } = require('child_process');
 
 const sdwConfig = require('../skills/sdw-config/scripts/sdw_config.cjs');
-const sdwOrch = require('../skills/sdw-orch/scripts/sdw_orch.cjs');
-const stateManager = require('../skills/sdw-orch/scripts/state_manager.cjs');
+const sdwRun = require('../skills/sdw-run/scripts/sdw_run.cjs');
+const stateManager = require('../skills/sdw-run/scripts/state_manager.cjs');
 
 // Spec 027: wire the deterministic judge stub for runs past Step 4.
 require('./fixtures/judge_env.cjs').installJudgeEnv();
 
 const REPO_ROOT = path.resolve(__dirname, '..');
-const ORCH = path.join(REPO_ROOT, 'skills', 'sdw-orch', 'scripts', 'sdw_orch.cjs');
+const RUN_SCRIPT = path.join(REPO_ROOT, 'skills', 'sdw-run', 'scripts', 'sdw_run.cjs');
 
 const IMPLEMENTATION = `node -e "const fs = require('fs'); fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({ taskId: process.env.SDW_TASK_ID, acIds: ['AC1'], filesChanged: ['package.json'], summary: 'retro hook fixture' })); const p = JSON.parse(fs.readFileSync('package.json', 'utf8')); p.retroHook = true; fs.writeFileSync('package.json', JSON.stringify(p, null, 2));"`;
 
 function makeProject(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-orch-retro-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-run-retro-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   execSync('git init', { cwd: root, stdio: 'ignore' });
   execSync('git config user.name "SDW Retro Hook Tester"', { cwd: root, stdio: 'ignore' });
@@ -93,7 +93,7 @@ function patchConfig(root, patch) {
 }
 
 function runCompletion(root, slug) {
-  return sdwOrch.cmdRun({
+  return sdwRun.cmdRun({
     root,
     specPath: `.sdw/specs/${slug}.md`,
     skipReview: true,
@@ -129,7 +129,7 @@ function stateFiles(root) {
 
 function writeOpenState(root, runId, slug, status = 'paused') {
   const state = {
-    orchestrator: 'sdw-orch',
+    orchestrator: 'sdw-run',
     runId,
     specSlug: slug,
     specPath: `.sdw/specs/${slug}.md`,
@@ -216,7 +216,7 @@ test('AC4: run refuses an open run for the same specification and writes no stat
   writeOpenState(root, 'run-open-guard', slug);
   const before = stateFiles(root);
 
-  const result = spawnSync(process.execPath, [ORCH, 'run', `.sdw/specs/${slug}.md`, '--root', root], {
+  const result = spawnSync(process.execPath, [RUN_SCRIPT, 'run', `.sdw/specs/${slug}.md`, '--root', root], {
     cwd: root,
     encoding: 'utf8'
   });
@@ -236,7 +236,7 @@ test('AC4: --new-run bypasses the start guard intentionally', (t) => {
   writeOpenState(root, 'run-open-guard', slug);
 
   const result = spawnSync(process.execPath, [
-    ORCH, 'run', `.sdw/specs/${slug}.md`, '--root', root, '--new-run', '--unattended'
+    RUN_SCRIPT, 'run', `.sdw/specs/${slug}.md`, '--root', root, '--new-run', '--unattended'
   ], { cwd: root, encoding: 'utf8' });
 
   assert.equal(result.status, 4, `${result.stdout}\n${result.stderr}`);

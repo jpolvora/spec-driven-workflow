@@ -1,21 +1,17 @@
 ---
-name: sdw-orch
+name: sdw-run
 description: End-to-end workflow orchestrator that coordinates spec execution, subagent dispatch, review loops, and delivery.
 version: 0.2.0
 invocation_names:
-  - sdw-orch
-  - sdw-orch run
-  - sdw-orch implement
-  - sdw-orch resume
-  - sdw-orch status
-  - sdw-orchestrator
-  - orch
-  - orch run
-  - orch implement
+  - sdw-run
+  - sdw-run run
+  - sdw-run implement
+  - sdw-run resume
+  - sdw-run status
 ---
-# sdw-orch
+# sdw-run
 
-> When this skill is loaded, output "sdw-orch loaded."
+> When this skill is loaded, output "sdw-run loaded."
 
 Orchestrates spec execution from input requirement to delivery commit, automated code review, and pull request.
 
@@ -39,7 +35,7 @@ Orchestrates spec execution from input requirement to delivery commit, automated
 
 ## One Specification Per Run
 
-`sdw-orch` executes exactly one specification. A queue of specifications belongs to [`sdw-batch`](../sdw-batch/SKILL.md), which delegates each item to `sdw-orch run <spec>` and waits for it to finish. `sdw-batch` never refines: it skips specs already recorded as delivered, and refinement is always an explicit single-spec `sdw-orch run <spec> --second-pass` call.
+`sdw-run` executes exactly one specification. A queue of specifications belongs to [`sdw-batch`](../sdw-batch/SKILL.md), which delegates each item to `sdw-run run <spec>` and waits for it to finish. `sdw-batch` never refines: it skips specs already recorded as delivered, and refinement is always an explicit single-spec `sdw-run run <spec> --second-pass` call.
 
 ## Second Pass (`--second-pass`)
 
@@ -60,7 +56,7 @@ Orchestrates spec execution from input requirement to delivery commit, automated
 
 1. **Spec Ingestion & Derivation**
    Resolve project root and create isolated run state in `.sdw/state/{runId}.state.json`. If `useFeatureBranches: true`, activate feature branch (`feature/{specSlug}`); dirty trees are allowed and never block execution. If the spec is human-friendly, derive an agentic spec; if already formatted, skip derivation.
-   - Run: `node skills/sdw-orch/scripts/sdw_orch.cjs run <specPath> [options]`
+   - Run: `node skills/sdw-run/scripts/sdw_run.cjs run <specPath> [options]`
    - Done when: Run state exists on disk, branch is active, and derivation status recorded.
 
 2. **Conduct Refinement Round**
@@ -73,13 +69,13 @@ Orchestrates spec execution from input requirement to delivery commit, automated
 
 4. **Implementation Execution (Sequential Subagent Dispatch)**
    In `subagent` mode (default), dispatch exactly one ready DAG task and pause with exit code 4. Each brief carries the `sdw-rules` simplicity constraints (minimum code, surgical scope, no unrequested features). For each envelope: spawn one subagent that reads the prompt file and executes it as written, wait for its report, then submit `task finish`. If the worker reports a non-`success` status or never returns, run `task abandon --reason` and dispatch again. In `command` mode, execute the configured subprocess in topological DAG order. Worktrees are command-mode only; subagent mode uses the primary tree with dispatch-baseline corroboration. Every accepted `task finish` immediately saves the task as one scoped commit of its `filesChanged` (message `task({specSlug}): {taskId}`) plus the checkpoint tag `sdw-checkpoint-{runId}-{taskId}`, so a crash or reset between tasks loses nothing; `--no-task-checkpoint` opts out and `--second-pass` keeps its single `refine(...)` delivery commit. Once every task is accepted, run build and test verification gates.
-   - Run: `node skills/sdw-orch/scripts/sdw_orch.cjs task next --run-id <runId>`
+   - Run: `node skills/sdw-run/scripts/sdw_run.cjs task next --run-id <runId>`
    - Done when: Every DAG task has accepted evidence, corroborated against its dispatch baseline and saved as a checkpoint commit plus tag, and build/test gates pass.
    - Exit codes: `4` dispatch pause (normal), `1` failure.
 
 5. **Evaluate Conformance Score (LLM judge)**
    Score conformance with an LLM judge fenced to the acceptance criteria plus the generated diff — never transcripts. Per-criterion verdicts drive the score (`round(verified / total * 10)`); `scoring.judgeCriticity` sets strictness. When `scoring.judgeCommand` is unset, the current agent model judges: Step 5 writes `step-5-judge.prompt.md`, pauses with exit code 5, and accepts a verdict through `score submit`. Zero criteria, an unavailable judge, or a malformed verdict fails closed at 0/10. Below `scoreMin` (default 8/10) triggers the re-implementation loop (exit code 2).
-   - Run: `node skills/sdw-orch/scripts/sdw_orch.cjs score submit --run-id <runId> --verdict <path>`
+   - Run: `node skills/sdw-run/scripts/sdw_run.cjs score submit --run-id <runId> --verdict <path>`
    - Done when: The judge verdict covers every criterion and the derived score meets the threshold, with the scoring artifact `{slug}-step-5.md` persisted.
 
 6. **Delivery Commit & Security Gate**

@@ -254,23 +254,23 @@ test('Finding IDs follow numeric file:line:rule order (line 9 before line 10)', 
 });
 
 test('AC12, AC13 & AC14: Orchestrator Step 7 delegates to sdw-code-review as sole authority', () => {
-  const orchSkill = fs.readFileSync(path.join(REPO_ROOT, 'skills', 'sdw-orch', 'SKILL.md'), 'utf8');
-  assert.ok(orchSkill.includes('sdw-code-review'), 'SKILL.md Step 7 references sdw-code-review');
-  assert.ok(orchSkill.includes('sole code review authority') || orchSkill.includes('sole review authority'), 'sole authority stated');
+  const runSkill = fs.readFileSync(path.join(REPO_ROOT, 'skills', 'sdw-run', 'SKILL.md'), 'utf8');
+  assert.ok(runSkill.includes('sdw-code-review'), 'SKILL.md Step 7 references sdw-code-review');
+  assert.ok(runSkill.includes('sole code review authority') || runSkill.includes('sole review authority'), 'sole authority stated');
 
-  const protocol = fs.readFileSync(path.join(REPO_ROOT, 'skills', 'sdw-orch', 'references', 'orchestrator_protocol.md'), 'utf8');
+  const protocol = fs.readFileSync(path.join(REPO_ROOT, 'skills', 'sdw-run', 'references', 'orchestrator_protocol.md'), 'utf8');
   assert.ok(protocol.includes('sdw-code-review'), 'protocol references delegation');
   assert.ok(protocol.includes('sdw_code_review.cjs'), 'protocol names CLI runner');
 
-  const orchCode = fs.readFileSync(path.join(REPO_ROOT, 'skills', 'sdw-orch', 'scripts', 'sdw_orch.cjs'), 'utf8');
-  assert.ok(orchCode.includes('sdw-code-review/scripts/sdw_code_review.cjs'), 'orchestrator delegates via CLI');
-  assert.ok(orchCode.includes('Delegated Review') || orchCode.includes('Delegated Code Review'), 'delegation logging');
-  assert.ok(!orchCode.includes("require('./review_runner.cjs')"), 'duplicated internal review removed from orchestrator');
+  const runCode = fs.readFileSync(path.join(REPO_ROOT, 'skills', 'sdw-run', 'scripts', 'sdw_run.cjs'), 'utf8');
+  assert.ok(runCode.includes('sdw-code-review/scripts/sdw_code_review.cjs'), 'orchestrator delegates via CLI');
+  assert.ok(runCode.includes('Delegated Review') || runCode.includes('Delegated Code Review'), 'delegation logging');
+  assert.ok(!runCode.includes("require('./review_runner.cjs')"), 'duplicated internal review removed from orchestrator');
 
-  const wrapper = fs.readFileSync(path.join(REPO_ROOT, 'skills', 'sdw-orch', 'scripts', 'review_runner.cjs'), 'utf8');
+  const wrapper = fs.readFileSync(path.join(REPO_ROOT, 'skills', 'sdw-run', 'scripts', 'review_runner.cjs'), 'utf8');
   assert.ok(wrapper.includes('sdw-code-review'), 'legacy runner delegates to sdw-code-review');
 
-  const dagCode = fs.readFileSync(path.join(REPO_ROOT, 'skills', 'sdw-orch', 'scripts', 'dag_planner.cjs'), 'utf8');
+  const dagCode = fs.readFileSync(path.join(REPO_ROOT, 'skills', 'sdw-run', 'scripts', 'dag_planner.cjs'), 'utf8');
   assert.ok(dagCode.includes('sdw-code-review/scripts/sdw_code_review.cjs'), 'DAG fallback targets new skill');
 });
 

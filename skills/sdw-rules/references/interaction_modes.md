@@ -23,7 +23,7 @@ The protocol must be understandable by the least capable model in the least capa
 | 2 | **Explicit, clear, non-destructive action** — imperative order naming the target and the change | Execute. No plan prompt. |
 | 3 | **Destructive or irreversible action** — delete, move, overwrite, bulk edit, publish, force-push, reset | **Confirm first**, unless the user explicitly ordered that exact action. |
 | 4 | **Ambiguous, underspecified, or opinion request** — "can you improve…", "what about…", "make it better" | Investigate read-only → present a plan → **wait for explicit confirmation** → execute. |
-| 5 | **Invoked skill or command with a clear contract** — `/sdw-spec new`, `sdw-orch run`, a documented CLI | Follow the skill's own instructions **unattended**. Do not re-ask what the skill already defines. Stop only on an uncovered destructive step or a decision gap the skill does not resolve. |
+| 5 | **Invoked skill or command with a clear contract** — `/sdw-spec new`, `sdw-run run`, a documented CLI | Follow the skill's own instructions **unattended**. Do not re-ask what the skill already defines. Stop only on an uncovered destructive step or a decision gap the skill does not resolve. |
 
 If two rows apply, the safer row wins: destructive + explicit → confirm; ambiguous + non-destructive → plan.
 
@@ -88,7 +88,7 @@ When in doubt, treat the action as destructive. The cost of one question is lowe
 
 ## 7. Unattended workflows
 
-Some skills are designed to run almost fully unattended (`sdw-orch` runs, batch queues, `sdw-ship-pr` convergence, CI workflows).
+Some skills are designed to run almost fully unattended (`sdw-run` runs, batch queues, `sdw-ship-pr` convergence, CI workflows).
 
 - The **skill's instructions are the approved plan.** The user authorized the workflow by invoking it; do not re-ask at every step.
 - The skill must state its own destructive gates (delivery commits, pushes, PR creation, merges). If it is silent and a step is destructive, **stop and ask**.
@@ -101,7 +101,7 @@ Some skills are designed to run almost fully unattended (`sdw-orch` runs, batch 
 
 - One decision per question; mutually exclusive options; a recommended default first.
 - Name the consequence of each option in one clause.
-- Prefer concrete artifacts ("rename `--dry-run` to `--plan` in `sdw_orch.cjs` and its help") over abstractions.
+- Prefer concrete artifacts ("rename `--dry-run` to `--plan` in `sdw_run.cjs` and its help") over abstractions.
 - If the host lacks a question tool, print numbered options and wait for the reply; never assume the answer.
 
 ---

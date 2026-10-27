@@ -19,7 +19,7 @@ Spec-Driven Workflow is **opinionated**: the words below mean what this project 
 | **Deferred spec** | A registered spec the maintainer does not intend to implement now. Deferral is expressed in prose or in the spec's Notes; it is not a lifecycle status. | *Parked*, *backlog idea*, *tracked but not scheduled*. Not "cancelled". |
 | **Registry status** | The lifecycle value in the registry row. Supported values are `pending` (authored, not delivered), `completed` (implemented, verified, PR prepared), and `archived` (retired). | *Index status*, *lifecycle state*. Not a priority, not an authorization, and not the spec header status. |
 | **Spec status** | The `status:` value in a spec's YAML frontmatter: `draft` (needs refinement), `awaiting-approval` (grilled, awaiting sign-off), `ready-to-implement` (approved, may be ordered), `implemented` (delivered), `abandoned` (dropped but kept). | *Header status*, *authoring status*. Not the registry status and never an implementation authorization. |
-| **Archived spec** | A completed spec retired from active development. It stays on disk and in the registry but `sdw-orch run` refuses it unless overridden. | *Retired*. Not deleted and not "done twice". |
+| **Archived spec** | A completed spec retired from active development. It stays on disk and in the registry but `sdw-run run` refuses it unless overridden. | *Retired*. Not deleted and not "done twice". |
 | **Acceptance Criterion (AC)** | One atomic, testable requirement written in EARS form (`AC1`, `AC2`, …). The AC list is the contract the orchestrator scores and the reviewer checks. | *AC*, *criterion*, *requirement*. Not an "acceptance test" (the test is the evidence, the AC is the promise). |
 | **EARS** | Easy Approach to Requirements Syntax: the five allowed sentence patterns for ACs — ubiquitous, event-driven, state-driven, optional-feature, unwanted-behavior. | *EARS syntax*. Not plain prose requirements. |
 | **Definition of Ready (DoR)** | A table stating what must be true before the spec can be executed, with a verification method per item. | *DoR*, *readiness gates*. Not a Definition of Done. |
@@ -35,7 +35,7 @@ Spec-Driven Workflow is **opinionated**: the words below mean what this project 
 
 | Term | SDW meaning | Also called / not to be confused with |
 |---|---|---|
-| **Orchestrator (`sdw-orch`)** | The skill and CLI that drives a spec through the 8-step pipeline using deterministic state transitions. | *Orch*, *pipeline runner*. Not an autonomous agent that decides on its own to start. |
+| **Orchestrator (`sdw-run`)** | The skill and CLI that drives a spec through the 8-step pipeline using deterministic state transitions. | *Pipeline runner*. Not an autonomous agent that decides on its own to start. |
 | **Run** | One orchestrated execution of one specification, identified by `run-<timestamp>-<slug>` and persisted in `.sdw/state/<runId>.state.json`. | *Execution*, *session*. Not a chat conversation. |
 | **Step** | One of the eight fixed pipeline stages: 1 derivation, 2 refinement, 3 DAG generation, 4 implementation, 5 scoring, 6 delivery commit, 7 code review, 8 PR preparation. | *Stage*, *phase*. Not a task. |
 | **Refinement (grilling)** | Step 2's decision-tree walk that surfaces gaps (input bounds, failure recovery, persistence) and either resolves them with defaults or asks the user. | *Grilling*, *gap analysis*, *blueprint*. Not code review. |

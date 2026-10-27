@@ -19,7 +19,7 @@
 ## 2. Repository-Development Rules (this repository only)
 
 1. **Skills Source of Truth (`skills/`):**
-   - The [`skills/`](skills/) directory contains the canonical source for all skills in development (e.g., `skills/sdw-config/`, `skills/sdw-orch/`).
+   - The [`skills/`](skills/) directory contains the canonical source for all skills in development (e.g., `skills/sdw-config/`, `skills/sdw-run/`).
    - When creating, editing, or updating skills, **`skills/` is the exclusive directory source of truth**.
    - Packaging/installation target: deployment reads from `skills/` and installs to `{projectRoot}/.agents/skills/` in consumer projects.
 
@@ -33,8 +33,8 @@
    - This is a deliberate phase policy; the maintainer will change it when compatibility matters.
 
 4. **Version Control Execution Protocol:**
-   - **`sdw-orch` runs:** delivery commits in Step 6 and the push in Step 8 (or `--push`) are **pre-authorized** as part of the delivery lifecycle.
-   - **Ad-hoc requests:** outside `sdw-orch`, never run `git commit` or `git push` unless the user explicitly requested it; leave changes in the working tree and report them.
+   - **`sdw-run` runs:** delivery commits in Step 6 and the push in Step 8 (or `--push`) are **pre-authorized** as part of the delivery lifecycle.
+   - **Ad-hoc requests:** outside `sdw-run`, never run `git commit` or `git push` unless the user explicitly requested it; leave changes in the working tree and report them.
 
 5. **Product Skills Are Self-Contained (one-way dependency):**
    - Nothing under `skills/` may require, load, or assume `.agents/skills/` or repository-root documents (`AGENTS.md`, `README.md`, `GLOSSARY.md`, `FEATURES.md`). Those belong to the development harness, not to the shipped product.
@@ -54,7 +54,7 @@ When authoring or modifying skills under `skills/<skill-name>/`, adhere to the 3
 - **Tier 2: `references/*.md`** — schemas, examples, edge cases, and vocabulary, loaded on demand.
 - **Tier 3: `scripts/*.cjs`** — deterministic validators/parsers/scaffolders with pass/fail exit codes.
 
-`sdw-spec`, `sdw-orch`, and every other skill except `sdw-rules` must reference `sdw-rules`; `sdw-rules doctor` enforces it.
+`sdw-spec`, `sdw-run`, and every other skill except `sdw-rules` must reference `sdw-rules`; `sdw-rules doctor` enforces it.
 
 ---
 
@@ -64,7 +64,7 @@ When authoring or modifying skills under `skills/<skill-name>/`, adhere to the 3
 |---|---|
 | Product rules, planning-before-change, authorization modes, simplicity, verification, guarantees | [`skills/sdw-rules/SKILL.md`](skills/sdw-rules/SKILL.md) + [`references/interaction_modes.md`](skills/sdw-rules/references/interaction_modes.md) + [`references/product_guarantees.md`](skills/sdw-rules/references/product_guarantees.md) |
 | Specification schema, EARS patterns, required sections | [`skills/sdw-spec/references/spec_standard.md`](skills/sdw-spec/references/spec_standard.md); validate with `node skills/sdw-spec/scripts/validate_spec.cjs --mode=authoring <specFile>` |
-| Run state, 8-step state machine, context fencing, dispatch, worktrees, sandbox | [`skills/sdw-orch/references/orchestrator_protocol.md`](skills/sdw-orch/references/orchestrator_protocol.md) |
+| Run state, 8-step state machine, context fencing, dispatch, worktrees, sandbox | [`skills/sdw-run/references/orchestrator_protocol.md`](skills/sdw-run/references/orchestrator_protocol.md) |
 | Findings intake schema, scoring rubric, remediation scope, fixer report | [`skills/sdw-fixer/references/fixer_protocol.md`](skills/sdw-fixer/references/fixer_protocol.md) |
 | Memory entry kinds, backend routing (ws-memo vault by default; select per user via `memory.backends`), consolidation, write safety | [`skills/sdw-memory/references/memory_protocol.md`](skills/sdw-memory/references/memory_protocol.md) |
 | Vocabulary and redefined terms | [`GLOSSARY.md`](GLOSSARY.md) |
@@ -109,9 +109,9 @@ Instructions and skills specific to this development environment come from [`.ag
 At session start, or when receiving task instructions, inspect and apply [`skills/sdw-router/SKILL.md`](skills/sdw-router/SKILL.md).
 
 - Configuration/environment inquiries → `sdw-config`.
-- Spec authoring, formatting, validation, indexing → `sdw-spec`. **Authoring/registration never triggers `sdw-orch`.**
-- Spec implementation, orchestration, delivery → `sdw-orch`, only on an explicit implementation order (see `sdw-rules`). `sdw-orch` executes exactly one specification.
-- Multiple specifications / a spec queue → `sdw-batch`, which loops single `sdw-orch` runs.
+- Spec authoring, formatting, validation, indexing → `sdw-spec`. **Authoring/registration never triggers `sdw-run`.**
+- Spec implementation, orchestration, delivery → `sdw-run`, only on an explicit implementation order (see `sdw-rules`). `sdw-run` executes exactly one specification.
+- Multiple specifications / a spec queue → `sdw-batch`, which loops single `sdw-run` runs.
 - General conversational or non-SDW coding → pass through without interception.
 
 ---
@@ -129,7 +129,7 @@ At session start, or when receiving task instructions, inspect and apply [`skill
 
 ## 8. PR Checklist (feature branches)
 
-[`sdw-ship-pr`](skills/sdw-ship-pr/SKILL.md) owns this routine; `sdw-orch` Step 8 delegates to it. Pre-PR gates are defined in [`ship_protocol.md`](skills/sdw-ship-pr/references/ship_protocol.md) § 1 and in [spec 00050](.sdw/specs/00050-sdw-ship-pr-native-pre-pr-enforcement-ga.md) (pending: run-state evidence and discovered prepare obligations), never restated here.
+[`sdw-ship-pr`](skills/sdw-ship-pr/SKILL.md) owns this routine; `sdw-run` Step 8 delegates to it. Pre-PR gates are defined in [`ship_protocol.md`](skills/sdw-ship-pr/references/ship_protocol.md) § 1 and in [spec 00050](.sdw/specs/00050-sdw-ship-pr-native-pre-pr-enforcement-ga.md) (pending: run-state evidence and discovered prepare obligations), never restated here.
 
 1. Branch `feature/<spec-slug>` from `develop`. Stage only your delivery, by path, with a `feat|fix|chore|test|docs(<spec-slug>): <intent>` subject.
 2. Ship with `node skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs --spec <slug> --push --poll-pr`, adding `--run-id <runId>` when shipping an orchestrator run. It runs the gates, publishes the branch, creates or reuses the pull request, and converges review threads.

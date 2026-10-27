@@ -8,8 +8,8 @@ const os = require('os');
 const { execSync } = require('child_process');
 
 const sdwConfig = require('../skills/sdw-config/scripts/sdw_config.cjs');
-const sdwOrch = require('../skills/sdw-orch/scripts/sdw_orch.cjs');
-const evidenceValidator = require('../skills/sdw-orch/scripts/evidence_validator.cjs');
+const sdwRun = require('../skills/sdw-run/scripts/sdw_run.cjs');
+const evidenceValidator = require('../skills/sdw-run/scripts/evidence_validator.cjs');
 
 // Spec 027: wire the deterministic judge stub for unattended runs past Step 4.
 require('./fixtures/judge_env.cjs').installJudgeEnv();
@@ -81,7 +81,7 @@ test('scoped commits: dirty tree never blocks execution', () => {
     fs.writeFileSync(path.join(tmpDir, 'unrelated.txt'), 'do not touch', 'utf8');
     fs.appendFileSync(path.join(tmpDir, 'README.md'), '\n# unrelated local edit\n');
 
-    const code = sdwOrch.cmdRun({
+    const code = sdwRun.cmdRun({
       specPath,
       root: tmpDir,
       minScore: 0,
@@ -101,7 +101,7 @@ test('scoped commits: delivery stages only evidence files, leaves unrelated dirt
     fs.writeFileSync(path.join(tmpDir, 'unrelated.txt'), 'do not commit', 'utf8');
     fs.appendFileSync(path.join(tmpDir, 'README.md'), '\n# unrelated edit\n');
 
-    const code = sdwOrch.cmdRun({
+    const code = sdwRun.cmdRun({
       specPath,
       root: tmpDir,
       minScore: 0,
@@ -138,7 +138,7 @@ test('scoped commits: collectDeliveryFiles tracks evidence plus index only', () 
         }
       }
     };
-    const files = sdwOrch.collectDeliveryFiles(tmpDir, 'scoped-spec', fakeState);
+    const files = sdwRun.collectDeliveryFiles(tmpDir, 'scoped-spec', fakeState);
     assert.ok(files.includes('tracked.txt'), 'Includes completed evidence files');
     assert.ok(files.includes('unrelated.txt'), 'Includes all completed evidence entries verbatim');
     assert.ok(!files.includes('should-ignore.txt'), 'Excludes pending task files');
@@ -154,7 +154,7 @@ test('scoped commits: stageAndCommitOnly leaves unrelated changes behind', () =>
   try {
     fs.writeFileSync(path.join(tmpDir, 'keep.txt'), 'keep me dirty', 'utf8');
     fs.appendFileSync(path.join(tmpDir, 'tracked.txt'), '\n# scoped change\n');
-    const res = sdwOrch.stageAndCommitOnly(tmpDir, ['tracked.txt'], 'feat(scoped): scoped commit');
+    const res = sdwRun.stageAndCommitOnly(tmpDir, ['tracked.txt'], 'feat(scoped): scoped commit');
     assert.strictEqual(res.committed, true);
     const status = execSync('git status --porcelain', { cwd: tmpDir, encoding: 'utf8' }).trim();
     assert.ok(status.includes('keep.txt'), 'Unrelated file left uncommitted');
@@ -180,7 +180,7 @@ test('scoped commits: evidence accepts git-tracked deletions', () => {
     }, { expectedTaskId: 'task-1', specAcs: ['AC1'], projectRoot: tmpDir });
     assert.strictEqual(validation.valid, true, 'Git-tracked deletion must validate');
 
-    const res = sdwOrch.stageAndCommitOnly(tmpDir, ['doomed.txt'], 'feat(scoped): delete doomed');
+    const res = sdwRun.stageAndCommitOnly(tmpDir, ['doomed.txt'], 'feat(scoped): delete doomed');
     assert.strictEqual(res.committed, true, 'Deletion must commit');
     assert.strictEqual(fs.existsSync(doomed), false);
   } finally {

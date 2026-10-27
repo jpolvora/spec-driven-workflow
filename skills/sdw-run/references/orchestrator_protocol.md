@@ -1,6 +1,6 @@
-# sdw-orch Orchestrator Protocol & Architecture Reference
+# sdw-run Orchestrator Protocol & Architecture Reference
 
-This reference details the internal lifecycle and contracts of the `sdw-orch` orchestrator.
+This reference details the internal lifecycle and contracts of the `sdw-run` orchestrator.
 
 ## 1. Run State Lifecycle (`.sdw/state/{runId}.state.json`)
 
@@ -8,7 +8,7 @@ Each execution session is completely isolated within a dedicated JSON state file
 
 ```json
 {
-  "orchestrator": "sdw-orch",
+  "orchestrator": "sdw-run",
   "runId": "run-1729300000-feature",
   "specSlug": "feature",
   "specPath": ".sdw/specs/feature.spec.md",
@@ -75,7 +75,7 @@ Each execution session is completely isolated within a dedicated JSON state file
 
 ## 3. Batch Execution Lives in sdw-batch
 
-`sdw-orch` executes exactly one specification per run. Specification queues are owned by [`sdw-batch`](../../sdw-batch/SKILL.md), which creates `.sdw/state/batch-{batchId}.json`, invokes `sdw-orch run <spec>` for each item, waits for the exit code, and advances. Manifest schema, pause/resume continuity, and failure policy: [`sdw-batch/references/batch_protocol.md`](../../sdw-batch/references/batch_protocol.md).
+`sdw-run` executes exactly one specification per run. Specification queues are owned by [`sdw-batch`](../../sdw-batch/SKILL.md), which creates `.sdw/state/batch-{batchId}.json`, invokes `sdw-run run <spec>` for each item, waits for the exit code, and advances. Manifest schema, pause/resume continuity, and failure policy: [`sdw-batch/references/batch_protocol.md`](../../sdw-batch/references/batch_protocol.md).
 
 ## 4. Branch & Worktree Strategy Protocol
 
@@ -104,8 +104,8 @@ Configurable feature branch activation and per-task isolated git worktrees:
 Intermediate outputs of human-auditable steps (2, 3, 5) are persisted as human-readable Markdown files:
 
 ### Directory Layout & Filename Convention
-- **Directory:** `{stateDir}/{slug}/{runId}/` (e.g. `.sdw/state/00014-sdw-orch-step-artifacts-persistence/run-1792400000000-00014-sdw-orch-step-artifacts-pe/`)
-- **Naming:** `{slug}-step-{N}.md` (e.g. `00014-sdw-orch-step-artifacts-persistence-step-2.md`, `...-step-3.md`, `...-step-5.md`)
+- **Directory:** `{stateDir}/{slug}/{runId}/` (e.g. `.sdw/state/00014-sdw-run-step-artifacts-persistence/run-1792400000000-00014-sdw-run-step-artifacts-pe/`)
+- **Naming:** `{slug}-step-{N}.md` (e.g. `00014-sdw-run-step-artifacts-persistence-step-2.md`, `...-step-3.md`, `...-step-5.md`)
 - **State Linkage:** Run state records `state.artifactsDir` and `state.steps[N].artifact` with forward slashes relative to project root.
 
 ### Scope & In-Scope Steps
@@ -137,21 +137,21 @@ Step 4 turns each DAG task into a dispatched worker. Exactly one task is in flig
   - Corroborates task changes and evidence on zero exit status; creates no dispatch state.
 
 ### Target-File Resolution (Step 3)
-- Resolution order: the Step 2 blueprint `targetFiles`, an explicit `targetFiles` option, the paths the specification names in backticks plus its `New files` declaration, then a known real-file bucket named by the skill it describes (`orch`, `config`, `router`, `spec`).
+- Resolution order: the Step 2 blueprint `targetFiles`, an explicit `targetFiles` option, the paths the specification names in backticks plus its `New files` declaration, then a known real-file bucket named by the skill it describes (`run`, `config`, `router`, `spec`).
 - A bucket is accepted only when every file it names exists in the target repository. A missing bucket file refuses the plan: `DAG plan refused (missing-target-file)` names the rule and the missing paths, Step 3 records `failed`, and no task is dispatched.
 - No target path is ever synthesized from the slug. A specification that names no path and declares no new file plans no file fence and records the warning instead.
 
 ### Dispatch Commands
-- **Dispatch:** `node skills/sdw-orch/scripts/sdw_orch.cjs task next --run-id <runId> [--json]`
+- **Dispatch:** `node skills/sdw-run/scripts/sdw_run.cjs task next --run-id <runId> [--json]`
   - Rejects a second dispatch while one is in flight, naming the active task.
   - Rejects dispatch when every pending task is blocked, naming the missing dependency.
   - Reports exhaustion (and prints the `resume` command) once every task is `completed`.
 - **Envelope:** `runId`, `specSlug`, `taskId`, `title`, `status`, `sequence`, `promptFile`, `promptBytes`, `evidenceFile`, `specPath`, `workingDir`, `acIds`, `dependencies`, `subagentBrief`, `finishCommand`.
-- **Abandon:** `node skills/sdw-orch/scripts/sdw_orch.cjs task abandon --run-id <runId> --task <taskId> --reason "<why>"`
+- **Abandon:** `node skills/sdw-run/scripts/sdw_run.cjs task abandon --run-id <runId> --task <taskId> --reason "<why>"`
   - Returns the task to `pending`, appends to `steps["4"].dispatch.abandonments`, clears the active dispatch.
 
 ### Task Finish Subcommand
-- **Command:** `node skills/sdw-orch/scripts/sdw_orch.cjs task finish --run-id <runId> --task <taskId> --evidence <evidencePath>`
+- **Command:** `node skills/sdw-run/scripts/sdw_run.cjs task finish --run-id <runId> --task <taskId> --evidence <evidencePath>`
 - **Dispatch Gate:** Only the dispatched task may be finished; anything else is rejected with code 1 naming the active task.
 - **Validation Rules:**
   - `taskId`: Must match target DAG task.
@@ -202,7 +202,7 @@ Prohibitions carried by every prompt: no `git commit`/`push`/`branch`/`checkout`
 - The static evidence-count formula is gone. Scoring is delegated to an LLM judge invoked with a fenced context: the acceptance criteria plus the generated diff, never transcripts.
 - **Judge resolution:** `scoring.judgeCommand` when configured (env `SDW_JUDGE_COMMAND` as fallback); otherwise the current agent model instance judges and submits.
 - **Agent path:** Step 5 writes `step-5-judge.prompt.md`, sets `awaiting_judgment`, and exits with code `5`. The host judge writes `step-5-judge.verdict.json` and runs:
-  `node skills/sdw-orch/scripts/sdw_orch.cjs score submit --run-id <runId> --verdict <path>`
+  `node skills/sdw-run/scripts/sdw_run.cjs score submit --run-id <runId> --verdict <path>`
 - **Verdict contract:** integer `score` 0–10 plus a `verdicts` array covering every criterion exactly once with `verified`/`failed` and non-empty `evidence`. The score is derived from the per-criterion verdicts (`round(verified / total * 10)`); a divergent reported score is recorded as `judge.scoreMismatch`.
 - **Criticity:** `scoring.judgeCriticity` = `permissive` | `strict` | `perfectionist` (default `strict`), quoted in the judge prompt with its rubric.
 - **Fail closed:** 0 criteria scores 0/10 without invoking the judge; an unavailable judge command, a missing verdict file, or a malformed verdict scores 0/10 with an actionable error and exit code 2.

@@ -197,7 +197,7 @@ function renderTaskPrompt(options) {
   prompt += `## Finish Command\n`;
   prompt += `Run this once the evidence file exists:\n`;
   prompt += `\`\`\`bash\n`;
-  prompt += `node "${normalizePath(path.join(__dirname, 'sdw_orch.cjs'))}" task finish --run-id ${runId} --task ${task.id} --evidence ${absolutePaths ? `"${evidenceDisplay}"` : evidenceFileRel}${absolutePaths ? ` --root "${normalizePath(root)}"` : ''}\n`;
+  prompt += `node "${normalizePath(path.join(__dirname, 'sdw_run.cjs'))}" task finish --run-id ${runId} --task ${task.id} --evidence ${absolutePaths ? `"${evidenceDisplay}"` : evidenceFileRel}${absolutePaths ? ` --root "${normalizePath(root)}"` : ''}\n`;
   prompt += `\`\`\`\n`;
 
   fs.writeFileSync(promptFileAbs, prompt, 'utf8');
@@ -451,7 +451,7 @@ function integrateTaskWorktree(options) {
     const delProc = spawnSync('git', ['branch', '-D', taskBranch], { cwd: root, stdio: 'ignore' });
     if (delProc.status !== 0) throw new Error('git branch delete failed');
   } catch (rmErr) {
-    console.warn(`[sdw-orch] Warning: Failed to cleanly remove worktree ${taskWorktreeRel}: ${rmErr.message}`);
+    console.warn(`[sdw-run] Warning: Failed to cleanly remove worktree ${taskWorktreeRel}: ${rmErr.message}`);
   }
 
   return {

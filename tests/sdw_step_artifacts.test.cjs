@@ -8,9 +8,9 @@ const os = require('os');
 const { execSync } = require('child_process');
 
 const sdwConfig = require('../skills/sdw-config/scripts/sdw_config.cjs');
-const sdwOrch = require('../skills/sdw-orch/scripts/sdw_orch.cjs');
-const stateManager = require('../skills/sdw-orch/scripts/state_manager.cjs');
-const artifactWriter = require('../skills/sdw-orch/scripts/artifact_writer.cjs');
+const sdwRun = require('../skills/sdw-run/scripts/sdw_run.cjs');
+const stateManager = require('../skills/sdw-run/scripts/state_manager.cjs');
+const artifactWriter = require('../skills/sdw-run/scripts/artifact_writer.cjs');
 
 // Spec 027: wire the deterministic judge stub for unattended runs past Step 4.
 require('./fixtures/judge_env.cjs').installJudgeEnv();
@@ -98,7 +98,7 @@ test('sdw-step-artifacts - AC1, AC2, AC3, AC4, AC5, AC6, AC7, AC12, AC13: Step 2
     const specPath = createDummySpec(repoRoot, slug);
     const runId = `run-${Date.now()}-${slug}`;
 
-    const res = sdwOrch.cmdRun({
+    const res = sdwRun.cmdRun({
       specPath,
       root: repoRoot,
       runId,

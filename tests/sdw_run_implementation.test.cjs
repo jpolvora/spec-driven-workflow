@@ -8,12 +8,12 @@ const os = require('os');
 const { execSync } = require('child_process');
 
 const sdwConfig = require('../skills/sdw-config/scripts/sdw_config.cjs');
-const sdwOrch = require('../skills/sdw-orch/scripts/sdw_orch.cjs');
-const stateManager = require('../skills/sdw-orch/scripts/state_manager.cjs');
-const dagPlanner = require('../skills/sdw-orch/scripts/dag_planner.cjs');
-const evidenceValidator = require('../skills/sdw-orch/scripts/evidence_validator.cjs');
-const implementationRunner = require('../skills/sdw-orch/scripts/implementation_runner.cjs');
-const scoreEvaluator = require('../skills/sdw-orch/scripts/score_evaluator.cjs');
+const sdwRun = require('../skills/sdw-run/scripts/sdw_run.cjs');
+const stateManager = require('../skills/sdw-run/scripts/state_manager.cjs');
+const dagPlanner = require('../skills/sdw-run/scripts/dag_planner.cjs');
+const evidenceValidator = require('../skills/sdw-run/scripts/evidence_validator.cjs');
+const implementationRunner = require('../skills/sdw-run/scripts/implementation_runner.cjs');
+const scoreEvaluator = require('../skills/sdw-run/scripts/score_evaluator.cjs');
 
 // Spec 027: wire the deterministic judge stub for unattended runs past Step 4.
 require('./fixtures/judge_env.cjs').installJudgeEnv();
@@ -105,7 +105,7 @@ test('Spec 028 AC1, AC2, AC4, AC5, AC14, AC15, AC29: subagent mode dispatches ex
   try {
     createTestSpec(tmpDir, 'dispatch-demo', 2);
 
-    const exitCode = sdwOrch.cmdRun({
+    const exitCode = sdwRun.cmdRun({
       root: tmpDir,
       specPath: '.sdw/specs/dispatch-demo.md',
       skipReview: true,
@@ -167,7 +167,7 @@ test('AC6, AC7, AC8, AC9: task finish subcommand validates evidence schema, reje
     createTestSpec(tmpDir, 'task-finish-demo', 2);
 
     // Run to step 4 handoff
-    sdwOrch.cmdRun({
+    sdwRun.cmdRun({
       root: tmpDir,
       specPath: '.sdw/specs/task-finish-demo.md',
       skipReview: true,
@@ -185,7 +185,7 @@ test('AC6, AC7, AC8, AC9: task finish subcommand validates evidence schema, reje
     const evPath1 = path.join(tmpDir, 'invalid1.json');
     fs.writeFileSync(evPath1, JSON.stringify(invalidEvidence1), 'utf8');
 
-    const code1 = sdwOrch.cmdTaskFinish({
+    const code1 = sdwRun.cmdTaskFinish({
       root: tmpDir,
       runId: state.runId,
       taskId,
@@ -203,7 +203,7 @@ test('AC6, AC7, AC8, AC9: task finish subcommand validates evidence schema, reje
     const evPath2 = path.join(tmpDir, 'invalid2.json');
     fs.writeFileSync(evPath2, JSON.stringify(invalidEvidence2), 'utf8');
 
-    const code2 = sdwOrch.cmdTaskFinish({
+    const code2 = sdwRun.cmdTaskFinish({
       root: tmpDir,
       runId: state.runId,
       taskId,
@@ -221,7 +221,7 @@ test('AC6, AC7, AC8, AC9: task finish subcommand validates evidence schema, reje
     const evPath3 = path.join(tmpDir, 'invalid3.json');
     fs.writeFileSync(evPath3, JSON.stringify(invalidEvidence3), 'utf8');
 
-    const code3 = sdwOrch.cmdTaskFinish({
+    const code3 = sdwRun.cmdTaskFinish({
       root: tmpDir,
       runId: state.runId,
       taskId,
@@ -244,7 +244,7 @@ slug: multi-dep
 - AC6: The system shall run sixth task.
 `);
 
-    sdwOrch.cmdRun({
+    sdwRun.cmdRun({
       root: tmpDir,
       specPath: '.sdw/specs/multi-dep.md',
       skipReview: true,
@@ -268,7 +268,7 @@ slug: multi-dep
       const depEvPath = path.join(tmpDir, 'dep-ev.json');
       fs.writeFileSync(depEvPath, JSON.stringify(depEvidence), 'utf8');
 
-      const depCode = sdwOrch.cmdTaskFinish({
+      const depCode = sdwRun.cmdTaskFinish({
         root: tmpDir,
         runId: multiState.runId,
         taskId: taskWithDeps.id,
@@ -379,7 +379,7 @@ test('AC17, AC18, AC19, AC20, AC21, AC22: Verification gates run build/test, rec
     };
     fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
 
-    const exitCode = sdwOrch.cmdRun({
+    const exitCode = sdwRun.cmdRun({
       root: tmpDir,
       specPath: '.sdw/specs/gate-spec.md',
       skipReview: true,
@@ -470,7 +470,7 @@ test('AC25: Step 6 delivery commit blocked if Step 4 is incomplete or tasks unac
     });
 
     // Attempt to resume from step 6 directly
-    const exitCode = sdwOrch.cmdResume({
+    const exitCode = sdwRun.cmdResume({
       root: tmpDir,
       runId: runState.runId
     });
@@ -498,7 +498,7 @@ test('AC26, AC27, AC28, AC29, AC30: Command mode token substitution, env allowli
     // Command writes out its env and tokens, generates valid evidence and updates package.json
     const cmdStr = `node -e "const fs = require('fs'); const info = { taskId: process.env.SDW_TASK_ID, promptFile: process.env.SDW_PROMPT_FILE, workingDir: process.env.SDW_WORKING_DIR, targetRoot: process.env.SDW_TARGET_ROOT }; fs.writeFileSync('${outLog.replace(/\\/g, '/')}', JSON.stringify(info)); const ev = { taskId: process.env.SDW_TASK_ID, acIds: ['AC1'], filesChanged: ['package.json'], summary: 'automated completion' }; fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify(ev)); const p = JSON.parse(fs.readFileSync('package.json', 'utf8')); p.commandDone = true; fs.writeFileSync('package.json', JSON.stringify(p, null, 2));"`;
 
-    const exitCode = sdwOrch.cmdRun({
+    const exitCode = sdwRun.cmdRun({
       root: tmpDir,
       specPath: '.sdw/specs/cmd-mode-spec.md',
       skipReview: true,
@@ -564,7 +564,7 @@ test('AC33, AC34, AC35, AC36: Config schema validates implementation/verificatio
     };
     stateManager.saveRunState(tmpDir, legacyState);
 
-    const resumeCode = sdwOrch.cmdResume({
+    const resumeCode = sdwRun.cmdResume({
       root: tmpDir,
       runId: legacyState.runId
     });
@@ -575,12 +575,12 @@ test('AC33, AC34, AC35, AC36: Config schema validates implementation/verificatio
   }
 });
 
-test('sdw-orch rejects unsafe specification slugs before shell execution', () => {
+test('sdw-run rejects unsafe specification slugs before shell execution', () => {
   const tmpDir = setupTestRepo();
   try {
     const specPath = path.join(tmpDir, '.sdw', 'specs', 'unsafe.md');
     fs.writeFileSync(specPath, '---\nslug: x$(touch pwned)\n---\n# Unsafe\n', 'utf8');
-    const code = sdwOrch.cmdRun({
+    const code = sdwRun.cmdRun({
       root: tmpDir,
       specPath,
       skipPr: true,
@@ -595,7 +595,7 @@ test('sdw-orch rejects unsafe specification slugs before shell execution', () =>
   }
 });
 
-test('sdw-orch rejects unchanged claimed files even when unrelated dirt exists', () => {
+test('sdw-run rejects unchanged claimed files even when unrelated dirt exists', () => {
   const tmpDir = setupTestRepo();
   try {
     fs.writeFileSync(path.join(tmpDir, 'unrelated-scratch.txt'), 'dirty', 'utf8');

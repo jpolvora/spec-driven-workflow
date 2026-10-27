@@ -7,10 +7,10 @@ const path = require('path');
 const os = require('os');
 const { execSync } = require('child_process');
 
-const stateManager = require('../skills/sdw-orch/scripts/state_manager.cjs');
-const dagPlanner = require('../skills/sdw-orch/scripts/dag_planner.cjs');
-const scoreEvaluator = require('../skills/sdw-orch/scripts/score_evaluator.cjs');
-const sdwOrch = require('../skills/sdw-orch/scripts/sdw_orch.cjs');
+const stateManager = require('../skills/sdw-run/scripts/state_manager.cjs');
+const dagPlanner = require('../skills/sdw-run/scripts/dag_planner.cjs');
+const scoreEvaluator = require('../skills/sdw-run/scripts/score_evaluator.cjs');
+const sdwRun = require('../skills/sdw-run/scripts/sdw_run.cjs');
 const { JUDGE_STUB, installJudgeEnv, clearJudgeEnv } = require('./fixtures/judge_env.cjs');
 
 const SPEC_BODY = `---
@@ -114,7 +114,7 @@ test('AC2, AC3 & AC5: Step 5 pauses awaiting judgment with a criteria-plus-diff 
   const tmpDir = setupRepo();
   try {
     clearJudgeEnv();
-    const exitCode = sdwOrch.cmdRun({
+    const exitCode = sdwRun.cmdRun({
       root: tmpDir,
       specPath: '.sdw/specs/score-spec.md',
       skipReview: true,
@@ -150,7 +150,7 @@ test('AC2, AC3 & AC5: Step 5 pauses awaiting judgment with a criteria-plus-diff 
 test('AC4 & AC6: a configured judge command runs with the requested criticity and its verdict is applied', () => {
   const tmpDir = setupRepo();
   try {
-    const exitCode = sdwOrch.cmdRun({
+    const exitCode = sdwRun.cmdRun({
       root: tmpDir,
       specPath: '.sdw/specs/score-spec.md',
       skipReview: true,
@@ -191,7 +191,7 @@ test('AC8: a specification without criteria scores 0 and never invokes the judge
     const marker = path.join(tmpDir, 'judge-was-invoked.txt');
     const command = `node -e "require('fs').writeFileSync('${marker.replace(/\\/g, '/')}', 'x')"`;
 
-    const exitCode = sdwOrch.cmdRun({
+    const exitCode = sdwRun.cmdRun({
       root: tmpDir,
       specPath: '.sdw/specs/score-spec.md',
       runId: runState.runId,
@@ -215,7 +215,7 @@ test('AC8: a specification without criteria scores 0 and never invokes the judge
 test('AC9: a below-threshold verdict triggers the re-implementation loop', () => {
   const tmpDir = setupRepo();
   try {
-    const exitCode = sdwOrch.cmdRun({
+    const exitCode = sdwRun.cmdRun({
       root: tmpDir,
       specPath: '.sdw/specs/score-spec.md',
       skipReview: true,
@@ -238,7 +238,7 @@ test('AC9: a below-threshold verdict triggers the re-implementation loop', () =>
 test('AC10: an unavailable or malformed judge fails closed with 0/10 and an actionable error', () => {
   const tmpDir = setupRepo();
   try {
-    const exitCode = sdwOrch.cmdRun({
+    const exitCode = sdwRun.cmdRun({
       root: tmpDir,
       specPath: '.sdw/specs/score-spec.md',
       skipReview: true,
@@ -257,7 +257,7 @@ test('AC10: an unavailable or malformed judge fails closed with 0/10 and an acti
 
   const malformedDir = setupRepo();
   try {
-    const exitCode = sdwOrch.cmdRun({
+    const exitCode = sdwRun.cmdRun({
       root: malformedDir,
       specPath: '.sdw/specs/score-spec.md',
       skipReview: true,
@@ -280,7 +280,7 @@ test('Score submit validates the verdict, records it, and unblocks resume', () =
   const tmpDir = setupRepo();
   try {
     clearJudgeEnv();
-    const runCode = sdwOrch.cmdRun({
+    const runCode = sdwRun.cmdRun({
       root: tmpDir,
       specPath: '.sdw/specs/score-spec.md',
       skipReview: true,
@@ -302,7 +302,7 @@ test('Score submit validates the verdict, records it, and unblocks resume', () =
       score: 5,
       verdicts: [{ id: 'AC99', verdict: 'verified', evidence: 'app.cjs:1' }]
     }));
-    const badSubmit = sdwOrch.cmdScoreSubmit({ root: tmpDir, runId: state.runId, verdictPath: verdictFile });
+    const badSubmit = sdwRun.cmdScoreSubmit({ root: tmpDir, runId: state.runId, verdictPath: verdictFile });
     assert.equal(badSubmit, 1, 'Unknown AC ids are rejected');
 
     // Non-integer score is rejected.
@@ -310,7 +310,7 @@ test('Score submit validates the verdict, records it, and unblocks resume', () =
       score: 9.5,
       verdicts: acIds.map(id => ({ id, verdict: 'verified', evidence: 'app.cjs:1' }))
     }));
-    const badScore = sdwOrch.cmdScoreSubmit({ root: tmpDir, runId: state.runId, verdictPath: verdictFile });
+    const badScore = sdwRun.cmdScoreSubmit({ root: tmpDir, runId: state.runId, verdictPath: verdictFile });
     assert.equal(badScore, 1, 'A non-integer score is rejected');
 
     // A complete verdict is accepted and unblocks the workflow.
@@ -318,7 +318,7 @@ test('Score submit validates the verdict, records it, and unblocks resume', () =
       score: 10,
       verdicts: acIds.map(id => ({ id, verdict: 'verified', evidence: 'app.cjs:1' }))
     }));
-    const goodSubmit = sdwOrch.cmdScoreSubmit({ root: tmpDir, runId: state.runId, verdictPath: verdictFile });
+    const goodSubmit = sdwRun.cmdScoreSubmit({ root: tmpDir, runId: state.runId, verdictPath: verdictFile });
     assert.equal(goodSubmit, 0, 'A valid verdict is accepted');
 
     const submitted = stateManager.loadRunState(tmpDir, state.runId);
@@ -326,7 +326,7 @@ test('Score submit validates the verdict, records it, and unblocks resume', () =
     assert.equal(submitted.score, 10);
     assert.equal(submitted.steps[5].output.judgeResolution, 'submitted');
 
-    const resumeCode = sdwOrch.cmdResume({
+    const resumeCode = sdwRun.cmdResume({
       root: tmpDir,
       runId: state.runId,
       skipReview: true,

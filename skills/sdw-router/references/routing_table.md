@@ -52,7 +52,7 @@ When evaluating a user turn, the router applies four strict precedence tiers:
   - `npx reinstall`, `broken install`, `check skills`
 - **Typical Prompts**:
   - "Check whether the SDW installation is complete"
-  - "Why is sdw-orch missing from my global install?"
+  - "Why is sdw-run missing from my global install?"
   - "Verify the workspace configuration and specs before running"
 
 ### Skill: `sdw-spec`
@@ -71,12 +71,12 @@ When evaluating a user turn, the router applies four strict precedence tiers:
   - "Sync index.specs.md with active on-disk specifications"
   - "Archive completed specification 001"
 
-### Skill: `sdw-orch`
+### Skill: `sdw-run`
 - **Domain**: End-to-end specification implementation, subagent DAG orchestration, conformance scoring, code review, and delivery push.
-- **Explicit Invocations**: `/sdw-orch`, `@sdw-orch`, `sdw-orch`, `/orch`, `@orch`, `orch`
+- **Explicit Invocations**: `/sdw-run`, `@sdw-run`, `sdw-run`
 - **Trigger Keywords**:
   - `orchestrate`, `orchestrator`, `implement spec`, `run spec`, `execute spec`, `workflow execution`
-  - `resume run`, `orch status`, `dag tasks`, `conformance score`, `delivery commit`
+  - `resume run`, `sdw-run status`, `dag tasks`, `conformance score`, `delivery commit`
   - `automated code review`, `review loop`, `remote push`, `pr preparation`
 - **Typical Prompts**:
   - "Start workflow to implement spec 00003-sdw-router-skill"
@@ -84,7 +84,7 @@ When evaluating a user turn, the router applies four strict precedence tiers:
   - "Check status of the current orchestrator execution"
 
 ### Skill: `sdw-batch`
-- **Domain**: Queue multiple specifications and run each one through the full `sdw-orch` single-spec pipeline in sequence.
+- **Domain**: Queue multiple specifications and run each one through the full `sdw-run` single-spec pipeline in sequence.
 - **Explicit Invocations**: `/sdw-batch`, `@sdw-batch`, `sdw-batch`, `/batch`, `@batch`, `batch`
 - **Trigger Keywords**:
   - `multiple specs`, `spec queue`, `implement all specs`, `batch`, `queue specs`, `run specs in sequence`
@@ -140,7 +140,7 @@ When a user prompt exhibits equal confidence across multiple candidate skills (e
 - **Example Prompt**:
   - Question: "Did you want to manage the specification or orchestrate its implementation?"
   - Options:
-    1. "(Recommended) Implement and orchestrate the spec using sdw-orch"
+    1. "(Recommended) Implement and orchestrate the spec using sdw-run"
     2. "Author or validate the specification using sdw-spec"
 
 ---
@@ -157,4 +157,4 @@ The router is designed to be completely unobtrusive:
 
 If an intent matches a skill whose directory does not exist or is unreadable on disk:
 - The router fails closed with an actionable error.
-- Example message: `[sdw-router] Error: Routed skill "sdw-orch" directory not found at "skills/sdw-orch", ".agents/skills/sdw-orch", or "$HOME/.agents/skills/sdw-orch". Run packaging installer to restore skills.`
+- Example message: `[sdw-router] Error: Routed skill "sdw-run" directory not found at "skills/sdw-run", ".agents/skills/sdw-run", or "$HOME/.agents/skills/sdw-run". Run packaging installer to restore skills.`

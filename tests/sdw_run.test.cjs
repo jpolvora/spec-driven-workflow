@@ -7,13 +7,13 @@ const path = require('path');
 const os = require('os');
 const { execSync } = require('child_process');
 
-const stateManager = require('../skills/sdw-orch/scripts/state_manager.cjs');
-const specDerivation = require('../skills/sdw-orch/scripts/spec_derivation.cjs');
-const specGrilling = require('../skills/sdw-orch/scripts/spec_grilling.cjs');
-const dagPlanner = require('../skills/sdw-orch/scripts/dag_planner.cjs');
-const scoreEvaluator = require('../skills/sdw-orch/scripts/score_evaluator.cjs');
-const reviewRunner = require('../skills/sdw-orch/scripts/review_runner.cjs');
-const sdwOrch = require('../skills/sdw-orch/scripts/sdw_orch.cjs');
+const stateManager = require('../skills/sdw-run/scripts/state_manager.cjs');
+const specDerivation = require('../skills/sdw-run/scripts/spec_derivation.cjs');
+const specGrilling = require('../skills/sdw-run/scripts/spec_grilling.cjs');
+const dagPlanner = require('../skills/sdw-run/scripts/dag_planner.cjs');
+const scoreEvaluator = require('../skills/sdw-run/scripts/score_evaluator.cjs');
+const reviewRunner = require('../skills/sdw-run/scripts/review_runner.cjs');
+const sdwRun = require('../skills/sdw-run/scripts/sdw_run.cjs');
 
 // Spec 027: wire the deterministic judge stub for unattended runs past Step 4.
 require('./fixtures/judge_env.cjs').installJudgeEnv();
@@ -37,7 +37,7 @@ test('AC1 & AC2: Run State Isolation & Resumption Lifecycle', async (t) => {
     });
 
     assert.ok(runState.runId.startsWith('run-'), 'Run ID should be generated');
-    assert.equal(runState.orchestrator, 'sdw-orch', 'Run state must record sdw-orch orchestrator');
+    assert.equal(runState.orchestrator, 'sdw-run', 'Run state must record sdw-run orchestrator');
     const statePath = stateManager.getStateFilePath(tmpDir, runState.runId);
     assert.ok(fs.existsSync(statePath), 'State file must exist on disk (AC1)');
 
@@ -251,7 +251,7 @@ slug: low-score
 `);
 
     // Running with minScore 8 against partial implementation (covering only 1 of 2 ACs = score 5) should exit with code 2 (loop trigger)
-    const exitCode = sdwOrch.cmdRun({
+    const exitCode = sdwRun.cmdRun({
       root: tmpDir,
       specPath: '.sdw/specs/low-score.md',
       minScore: 8,
@@ -311,7 +311,7 @@ slug: recovery
     assert.equal(resumptionStep, 4, 'Resumption starts at step 4');
 
     // Run resume
-    sdwOrch.cmdResume({
+    sdwRun.cmdResume({
       root: tmpDir,
       runId: runState.runId,
       skipReview: true,
@@ -337,7 +337,7 @@ test('Negative Scenario 3: User Cancellation at Grilling Gate', () => {
     fs.writeFileSync(specPath, `# Bare Specification without Dimensions
 Simple text without bounds, concurrency, or persistence notes.`);
 
-    const exitCode = sdwOrch.cmdRun({
+    const exitCode = sdwRun.cmdRun({
       root: tmpDir,
       specPath: '.sdw/specs/grill-abort.md',
       abortOnGaps: true
@@ -410,7 +410,7 @@ slug: legacy-feature
       errors: []
     }, null, 2), 'utf8');
 
-    const exitCode = sdwOrch.cmdResume({
+    const exitCode = sdwRun.cmdResume({
       root: tmpDir,
       runId: legacyRunId
     });
@@ -436,7 +436,7 @@ slug: push-feature
 `);
 
     // Execute run with --push when no remote is configured (handles local safely)
-    const exitCode = sdwOrch.cmdRun({
+    const exitCode = sdwRun.cmdRun({
       root: tmpDir,
       specPath: '.sdw/specs/push-feature.md',
       push: true,
@@ -458,7 +458,7 @@ slug: push-feature
 });
 
 test('AC13: Multi-spec run is rejected and names sdw-batch', () => {
-  const cliPath = path.resolve(__dirname, '../skills/sdw-orch/scripts/sdw_orch.cjs');
+  const cliPath = path.resolve(__dirname, '../skills/sdw-run/scripts/sdw_run.cjs');
   let failure = null;
   try {
     execSync(`node "${cliPath}" run a.md b.md`, { encoding: 'utf8', stdio: 'pipe' });
@@ -479,7 +479,7 @@ test('AC15: dry run prints the resolved branch plan without executing git', () =
   console.log = (msg) => { output += String(msg) + '\n'; };
   let code;
   try {
-    code = sdwOrch.printRunDryRunPlan({
+    code = sdwRun.printRunDryRunPlan({
       targetRoot: root,
       resolvedSpec: spec,
       specSlug: '00040-sdw-branching-strategy',
@@ -514,7 +514,7 @@ test('AC15: dry run prints the resolved branch plan without executing git', () =
   let sameLaneOutput = '';
   console.log = (msg) => { sameLaneOutput += String(msg) + '\n'; };
   try {
-    code = sdwOrch.printRunDryRunPlan({
+    code = sdwRun.printRunDryRunPlan({
       targetRoot: root,
       resolvedSpec: spec,
       specSlug: '00040-sdw-branching-strategy',
@@ -582,7 +582,7 @@ title: Branch State
     console.log = (msg) => { output += String(msg) + '\n'; };
     let code;
     try {
-      code = sdwOrch.cmdRun({
+      code = sdwRun.cmdRun({
         root: tmpDir,
         specPath: `.sdw/specs/${slug}.md`,
         runId,

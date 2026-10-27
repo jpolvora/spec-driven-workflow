@@ -433,7 +433,7 @@ const DEFAULT_SCHEMA = {
     },
     "sandboxDir": {
       "type": "string",
-      "description": "Path to the directory that holds sandbox clones created by sdw-orch --sandbox. Defaults to {projectRoot}/.sdw/sandbox; any other value must resolve outside the project root. Supports tokens {projectRoot}, {skillsRoot}, and {temp}.",
+      "description": "Path to the directory that holds sandbox clones created by sdw-run --sandbox. Defaults to {projectRoot}/.sdw/sandbox; any other value must resolve outside the project root. Supports tokens {projectRoot}, {skillsRoot}, and {temp}.",
       "default": "{projectRoot}/.sdw/sandbox"
     },
     "skillsRoot": {

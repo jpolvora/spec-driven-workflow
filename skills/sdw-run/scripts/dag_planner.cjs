@@ -10,18 +10,18 @@ const NO_TARGET_FILES_DECLARATION = 'name the implementation files in backticks,
 
 // The only remaining fallback: a known real-file bucket, named by the skill it
 // describes. A bucket file the repository lacks refuses the plan instead of
-// dispatching a slice that cannot exist. `implement` is sdw-orch's former name.
+// dispatching a slice that cannot exist.
 const FALLBACK_RULES = [
   {
-    rule: 'orch',
-    matches: (slug) => slug.includes('sdw-orch') || slug.includes('implement'),
+    rule: 'run',
+    matches: (slug) => slug.includes('sdw-run') || slug.includes('implement'),
     files: [
-      'skills/sdw-orch/scripts/sdw_orch.cjs',
-      'skills/sdw-orch/scripts/state_manager.cjs',
-      'skills/sdw-orch/scripts/spec_derivation.cjs',
-      'skills/sdw-orch/scripts/spec_grilling.cjs',
-      'skills/sdw-orch/scripts/dag_planner.cjs',
-      'skills/sdw-orch/scripts/score_evaluator.cjs',
+      'skills/sdw-run/scripts/sdw_run.cjs',
+      'skills/sdw-run/scripts/state_manager.cjs',
+      'skills/sdw-run/scripts/spec_derivation.cjs',
+      'skills/sdw-run/scripts/spec_grilling.cjs',
+      'skills/sdw-run/scripts/dag_planner.cjs',
+      'skills/sdw-run/scripts/score_evaluator.cjs',
       'skills/sdw-code-review/scripts/sdw_code_review.cjs'
     ]
   },

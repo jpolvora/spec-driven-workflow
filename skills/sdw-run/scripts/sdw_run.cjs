@@ -286,12 +286,12 @@ function followUpRootFlag(root) {
   }
 }
 
-function orchCommandPath() {
+function runCommandPath() {
   return __filename.replace(/\\/g, '/');
 }
 
 // Spec 00037 AC15 / spec 00045 AC1-AC3: a successful delivery records the exact
-// retro command. `retro.enabled` decides whether sdw-orch also runs it.
+// retro command. `retro.enabled` decides whether sdw-run also runs it.
 function retroScriptPath(targetRoot) {
   return resolveSkillScript(targetRoot, 'sdw-retro', path.join('scripts', 'retro.cjs'))
     || path.resolve(__dirname, '../../sdw-retro/scripts/retro.cjs');
@@ -882,23 +882,23 @@ function printRunDryRunPlan(context) {
   }
 
   if (!valid) {
-    console.error(`[sdw-orch dry-run] Specification validation failed: ${normalizePath(path.relative(targetRoot, resolvedSpec))}`);
+    console.error(`[sdw-run dry-run] Specification validation failed: ${normalizePath(path.relative(targetRoot, resolvedSpec))}`);
     for (const error of errors) {
       console.error(`  ${error.ac ? `${error.ac}: ` : ''}${error.message}`);
     }
     return 1;
   }
 
-  console.log(`[sdw-orch dry-run] Specification: ${normalizePath(path.relative(targetRoot, resolvedSpec))} (${specSlug})`);
-  console.log(`[sdw-orch dry-run] Target root: ${normalizePath(targetRoot)}`);
-  console.log(`[sdw-orch dry-run] Settings: scoreMin=${settings.scoreMin}, pushDelivery=${settings.pushDelivery}, scmProvider=${settings.scmProvider}, useFeatureBranches=${settings.useFeatureBranches}, useWorktrees=${settings.useWorktrees}, branching=${settings.branching}`);
-  console.log(`[sdw-orch dry-run] Strategy: ${branchPlan.strategy}`);
-  console.log(`[sdw-orch dry-run] Start lane: ${branchPlan.startLane} (update: ${branchPlan.update ? 'yes' : 'no'})`);
-  console.log(`[sdw-orch dry-run] Feature branch: ${branchPlan.featureBranch}`);
-  console.log(`[sdw-orch dry-run] Pull request target: ${branchPlan.pullRequestTarget}`);
-  console.log(`[sdw-orch dry-run] After merge: ${branchPlan.afterMerge}`);
-  console.log(`[sdw-orch dry-run] Steps: ${steps.join(' -> ')}`);
-  console.log('[sdw-orch dry-run] No steps executed (--dry-run).');
+  console.log(`[sdw-run dry-run] Specification: ${normalizePath(path.relative(targetRoot, resolvedSpec))} (${specSlug})`);
+  console.log(`[sdw-run dry-run] Target root: ${normalizePath(targetRoot)}`);
+  console.log(`[sdw-run dry-run] Settings: scoreMin=${settings.scoreMin}, pushDelivery=${settings.pushDelivery}, scmProvider=${settings.scmProvider}, useFeatureBranches=${settings.useFeatureBranches}, useWorktrees=${settings.useWorktrees}, branching=${settings.branching}`);
+  console.log(`[sdw-run dry-run] Strategy: ${branchPlan.strategy}`);
+  console.log(`[sdw-run dry-run] Start lane: ${branchPlan.startLane} (update: ${branchPlan.update ? 'yes' : 'no'})`);
+  console.log(`[sdw-run dry-run] Feature branch: ${branchPlan.featureBranch}`);
+  console.log(`[sdw-run dry-run] Pull request target: ${branchPlan.pullRequestTarget}`);
+  console.log(`[sdw-run dry-run] After merge: ${branchPlan.afterMerge}`);
+  console.log(`[sdw-run dry-run] Steps: ${steps.join(' -> ')}`);
+  console.log('[sdw-run dry-run] No steps executed (--dry-run).');
   return 0;
 }
 
@@ -925,12 +925,12 @@ function cmdRun(options) {
   let sandboxMeta = null;
 
   if (options.dryRun && options.sandbox) {
-    console.error('[sdw-orch] Error: --dry-run and --sandbox are mutually exclusive: --dry-run prints a plan only, --sandbox executes the pipeline in an isolated clone.');
+    console.error('[sdw-run] Error: --dry-run and --sandbox are mutually exclusive: --dry-run prints a plan only, --sandbox executes the pipeline in an isolated clone.');
     options._runResult = { error: '--dry-run and --sandbox are mutually exclusive' };
     return 1;
   }
   if (options.sandbox && options.push) {
-    console.error('[sdw-orch] Error: --sandbox and --push are mutually exclusive: a sandbox run never pushes.');
+    console.error('[sdw-run] Error: --sandbox and --push are mutually exclusive: a sandbox run never pushes.');
     options._runResult = { error: '--sandbox and --push are mutually exclusive' };
     return 1;
   }
@@ -976,7 +976,7 @@ function cmdRun(options) {
   try {
     assertSafeSlug(specSlug);
   } catch (slugErr) {
-    console.error(`[sdw-orch] ${slugErr.message}`);
+    console.error(`[sdw-run] ${slugErr.message}`);
     options._runResult = { error: slugErr.message };
     return 1;
   }
@@ -990,7 +990,7 @@ function cmdRun(options) {
     }
     branching = sdwConfig.resolveBranching(config);
   } catch (branchConfigErr) {
-    console.error(`[sdw-orch] ${branchConfigErr.message}`);
+    console.error(`[sdw-run] ${branchConfigErr.message}`);
     options._runResult = { error: branchConfigErr.message };
     return 1;
   }
@@ -1030,8 +1030,8 @@ function cmdRun(options) {
     const openRuns = findOpenRunsForSpec(stateDir, specSlug);
     if (openRuns.length > 0) {
       const existing = openRuns[0];
-      const message = `Specification "${specSlug}" already has an open run "${existing.runId}" (status: ${existing.status}). Continue it with: node "${normalizePath(orchCommandPath())}" resume --run-id ${existing.runId}. Pass --new-run to start a new run intentionally.`;
-      console.error(`[sdw-orch] Blocked: ${message}`);
+      const message = `Specification "${specSlug}" already has an open run "${existing.runId}" (status: ${existing.status}). Continue it with: node "${normalizePath(runCommandPath())}" resume --run-id ${existing.runId}. Pass --new-run to start a new run intentionally.`;
+      console.error(`[sdw-run] Blocked: ${message}`);
       options._runResult = { error: message };
       return 1;
     }
@@ -1045,7 +1045,7 @@ function cmdRun(options) {
     try {
       requestedSandboxDir = resolveSandboxDir(config, sourceRoot);
     } catch (dirErr) {
-      console.error(`[sdw-orch] ${dirErr.message}`);
+      console.error(`[sdw-run] ${dirErr.message}`);
       options._runResult = { error: dirErr.message };
       return 1;
     }
@@ -1058,7 +1058,7 @@ function cmdRun(options) {
         sandboxDir: requestedSandboxDir
       });
     } catch (sandboxErr) {
-      console.error(`[sdw-orch] Sandbox creation failed: ${sandboxErr.message}`);
+      console.error(`[sdw-run] Sandbox creation failed: ${sandboxErr.message}`);
       options._runResult = { error: sandboxErr.message };
       return 1;
     }
@@ -1088,7 +1088,7 @@ function cmdRun(options) {
           registryStatus = entry.status;
           // AC25: While a specification is marked archived, prevent execution unless override flag
           if (entry.status === 'archived' && !options.force && !options.allowArchived) {
-            console.error(`[sdw-orch] Blocked: Specification "${specSlug}" is marked "archived" in index.specs.md. Execution prohibited unless --force or --allow-archived is provided.`);
+            console.error(`[sdw-run] Blocked: Specification "${specSlug}" is marked "archived" in index.specs.md. Execution prohibited unless --force or --allow-archived is provided.`);
             options._runResult = { error: `Specification "${specSlug}" is marked "archived" in index.specs.md` };
             return 1;
           }
@@ -1107,12 +1107,12 @@ function cmdRun(options) {
     const priorDelivery = findPriorDeliveryCommit(targetRoot, specSlug);
     const implemented = registryStatus === 'completed' || registryStatus === 'archived' || Boolean(priorDelivery);
     if (!implemented) {
-      console.error(`[sdw-orch] Blocked: --second-pass refines an already implemented specification, but "${specSlug}" is not recorded as completed in index.specs.md and has no completed run.`);
+      console.error(`[sdw-run] Blocked: --second-pass refines an already implemented specification, but "${specSlug}" is not recorded as completed in index.specs.md and has no completed run.`);
       options._runResult = { error: `Specification "${specSlug}" is not implemented yet; run it without --second-pass first` };
       return 1;
     }
     refineBaseCommit = priorDelivery || null;
-    console.log(`[sdw-orch] Second pass mode: refining the delivered implementation${refineBaseCommit ? ` (base ${refineBaseCommit})` : ''}.`);
+    console.log(`[sdw-run] Second pass mode: refining the delivered implementation${refineBaseCommit ? ` (base ${refineBaseCommit})` : ''}.`);
   }
 
   // Resolve feature branches and worktrees settings (AC1, AC2, AC21)
@@ -1354,8 +1354,8 @@ function cmdRun(options) {
     state = stateManager.saveRunState(targetRoot, state);
   }
 
-  console.log(`[sdw-orch] Run "${state.runId}" active at step ${startStep}/8.`);
-  console.log(`[sdw-orch] State file: ${stateManager.getStateFilePath(targetRoot, state.runId)}`);
+  console.log(`[sdw-run] Run "${state.runId}" active at step ${startStep}/8.`);
+  console.log(`[sdw-run] State file: ${stateManager.getStateFilePath(targetRoot, state.runId)}`);
 
   let effectiveSpecContent = rawSpecContent;
 
@@ -1770,7 +1770,7 @@ function cmdRun(options) {
       state.status = 'completed';
       state.currentStep = 8;
       state = stateManager.saveRunState(targetRoot, state);
-      console.log(`[sdw-orch] Second pass finished with no code change. Report: ${refineReport || '(not written)'}`);
+      console.log(`[sdw-run] Second pass finished with no code change. Report: ${refineReport || '(not written)'}`);
       options._runResult = { runId: state.runId, status: 'completed', refineOutcome: 'no-change', report: refineReport };
       return 0;
     }
@@ -1929,7 +1929,7 @@ function cmdRun(options) {
         console.log(`  Prompt:  ${judgePaths.promptFileRel}`);
         console.log(`  Verdict: ${judgePaths.verdictFileRel}`);
         console.log(`\nJudge each criterion against the diff, write the verdict JSON, then submit it with:`);
-        console.log(`  node "${orchCommandPath()}" score submit --run-id ${state.runId} --verdict <verdictFile>`);
+        console.log(`  node "${runCommandPath()}" score submit --run-id ${state.runId} --verdict <verdictFile>`);
         options._runResult = {
           runId: state.runId,
           status: 'awaiting_judgment',
@@ -2173,7 +2173,7 @@ function cmdRun(options) {
       });
       state.refineReport = refineReport;
       state = stateManager.saveRunState(targetRoot, state);
-      console.log(`[sdw-orch] Second pass produced commit ${commitSha}. Report: ${refineReport || '(not written)'}`);
+      console.log(`[sdw-run] Second pass produced commit ${commitSha}. Report: ${refineReport || '(not written)'}`);
     }
   }
 
@@ -2518,7 +2518,7 @@ function cmdRun(options) {
     // Delegate PR delivery, SCM submission, and review convergence to sdw-ship-pr (AC12, AC13)
     if (hasShipPr) {
       try {
-        console.log(`[sdw-orch Step 8] Delegating delivery to sdw-ship-pr...`);
+        console.log(`[sdw-run Step 8] Delegating delivery to sdw-ship-pr...`);
         // argv form: specSlug/runId/paths are never interpreted by a shell.
         const shipArgs = [
           shipPrScript,
@@ -2554,7 +2554,7 @@ function cmdRun(options) {
             shipResult = JSON.parse(trimmed);
           }
         } catch (e) {
-          console.warn(`[sdw-orch Step 8] Note: Failed to parse sdw-ship-pr JSON output: ${e.message}`);
+          console.warn(`[sdw-run Step 8] Note: Failed to parse sdw-ship-pr JSON output: ${e.message}`);
         }
 
         if (shipResult) {
@@ -2568,7 +2568,7 @@ function cmdRun(options) {
             throw new Error(shipResult.error || 'sdw-ship-pr reported delivery failure');
           }
           if (hasActivePr && shipResult.shipStatus === 'review_pending') {
-            console.log(`[sdw-orch Step 8] Active pull request #${shipResult.pullRequest.number || ''} is in review / awaiting approval (${shipResult.pullRequest.url || ''}).`);
+            console.log(`[sdw-run Step 8] Active pull request #${shipResult.pullRequest.number || ''} is in review / awaiting approval (${shipResult.pullRequest.url || ''}).`);
           }
           if (shipResult.pullRequest) {
             state.pullRequest = shipResult.pullRequest;
@@ -2587,7 +2587,7 @@ function cmdRun(options) {
           prPayload.reviewConvergence = shipResult.reviewConvergence;
         }
       } catch (shipErr) {
-        console.error(`[sdw-orch Step 8] Delivery failed: ${shipErr.message}`);
+        console.error(`[sdw-run Step 8] Delivery failed: ${shipErr.message}`);
         state.status = 'failed';
         state = stateManager.updateStepState(targetRoot, state.runId, 8, 'failed', { error: shipErr.message });
         stateManager.recordError(targetRoot, state.runId, 8, shipErr.message);
@@ -2618,20 +2618,20 @@ function cmdRun(options) {
   const refineNothingToPush = refineMode && state.deliveryCommitCreated === false;
   if (shouldPush && !state.pushedBranch && !refineNothingToPush) {
     if (!isGitRepo(targetRoot)) {
-      console.log(`[sdw-orch] Remote push skipped: not a git repository.`);
+      console.log(`[sdw-run] Remote push skipped: not a git repository.`);
     } else {
       try {
         const remotes = execSync('git remote', { cwd: targetRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
         const currentBranch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: targetRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
         if (remotes && currentBranch && currentBranch !== 'HEAD') {
-          console.log(`[sdw-orch] Pushing delivery branch to origin/${currentBranch}...`);
+          console.log(`[sdw-run] Pushing delivery branch to origin/${currentBranch}...`);
           git(targetRoot, ['push', 'origin', currentBranch], { stdio: 'inherit' });
           state.pushedBranch = currentBranch;
         } else if (!remotes) {
-          console.log(`[sdw-orch] Remote push skipped: no git remote configured.`);
+          console.log(`[sdw-run] Remote push skipped: no git remote configured.`);
         }
       } catch (pushErr) {
-        console.error(`[sdw-orch] Warning: git push failed: ${pushErr.message}`);
+        console.error(`[sdw-run] Warning: git push failed: ${pushErr.message}`);
         if (!state.errors) state.errors = [];
         state.errors.push({ step: 8, timestamp: new Date().toISOString(), error: `git push failed: ${pushErr.message}` });
       }
@@ -2644,7 +2644,7 @@ function cmdRun(options) {
   state.currentStep = 8;
   state.retroCommand = retroCommandFor(targetRoot, state.runId);
   state = stateManager.saveRunState(targetRoot, state);
-  console.log(`\n[sdw-orch] Workflow completed successfully for run "${state.runId}".`);
+  console.log(`\n[sdw-run] Workflow completed successfully for run "${state.runId}".`);
 
   // Spec 00045 AC1-AC3: execute the retrospective when retro.enabled is true,
   // record its outcome on state.retro, and keep the completed delivery even
@@ -2731,7 +2731,7 @@ function dispatchNextTask(context) {
       ok: false,
       exhausted: true,
       state,
-      reason: `All ${dagTasks.length} DAG task(s) are completed. Continue with: node "${orchCommandPath()}" resume --run-id ${state.runId}${followUpRootFlag(targetRoot)}`
+      reason: `All ${dagTasks.length} DAG task(s) are completed. Continue with: node "${runCommandPath()}" resume --run-id ${state.runId}${followUpRootFlag(targetRoot)}`
     };
   }
 
@@ -2804,7 +2804,7 @@ function dispatchNextTask(context) {
     acIds: ready.coveredAcs || [],
     dependencies: ready.dependencies || [],
     subagentBrief: `Spawn one subagent for this task only. Give it: read ${sandboxed ? `"${displayPrompt}"` : displayPrompt} and execute it exactly as written, then report back per its report contract.${sandboxed ? ` Run every command with cwd "${displayWorkingDir}".` : ''}`,
-    finishCommand: `node "${orchCommandPath()}" task finish --run-id ${state.runId} --task ${ready.id} --evidence ${evidenceArg}${rootFlag}`
+    finishCommand: `node "${runCommandPath()}" task finish --run-id ${state.runId} --task ${ready.id} --evidence ${evidenceArg}${rootFlag}`
   };
 
   return { ok: true, state, envelope, sequence: dispatch.sequence };
@@ -2833,28 +2833,28 @@ function cmdTaskNext(options) {
   try {
     state = options.runId ? stateManager.loadRunState(targetRoot, options.runId) : stateManager.findLatestRunState(targetRoot);
   } catch (err) {
-    console.error(`[sdw-orch task next] ${err.message}`);
+    console.error(`[sdw-run task next] ${err.message}`);
     return 1;
   }
   if (!state) {
-    console.error('[sdw-orch task next] No run state found. Start a run first.');
+    console.error('[sdw-run task next] No run state found. Start a run first.');
     return 1;
   }
   if (!state.steps || !state.steps[4]) {
-    console.error(`[sdw-orch task next] Run "${state.runId}" has not reached Step 4 yet.`);
+    console.error(`[sdw-run task next] Run "${state.runId}" has not reached Step 4 yet.`);
     return 1;
   }
 
   const dispatchConfig = loadProjectConfig(targetRoot, options);
   const dispatchMode = options.implementationMode || (dispatchConfig.implementation && dispatchConfig.implementation.mode) || 'subagent';
   if (dispatchMode !== 'subagent') {
-    console.error(`[sdw-orch task next] Dispatch requires implementation.mode "subagent" (current: "${dispatchMode}").`);
+    console.error(`[sdw-run task next] Dispatch requires implementation.mode "subagent" (current: "${dispatchMode}").`);
     return 1;
   }
 
   const specAcs = readSpecAcsForState(targetRoot, state);
   if (specAcs.length === 0) {
-    console.error(`[sdw-orch task next] Specification "${state.specPath}" is unreadable or declares no acceptance criteria.`);
+    console.error(`[sdw-run task next] Specification "${state.specPath}" is unreadable or declares no acceptance criteria.`);
     return 1;
   }
 
@@ -2869,11 +2869,11 @@ function cmdTaskNext(options) {
   });
 
   if (result.exhausted) {
-    console.log(`[sdw-orch task next] ${result.reason}`);
+    console.log(`[sdw-run task next] ${result.reason}`);
     return 0;
   }
   if (!result.ok) {
-    console.error(`[sdw-orch task next] ${result.reason}`);
+    console.error(`[sdw-run task next] ${result.reason}`);
     return 1;
   }
 
@@ -2888,38 +2888,38 @@ function cmdTaskAbandon(options) {
   try {
     state = options.runId ? stateManager.loadRunState(targetRoot, options.runId) : stateManager.findLatestRunState(targetRoot);
   } catch (err) {
-    console.error(`[sdw-orch task abandon] ${err.message}`);
+    console.error(`[sdw-run task abandon] ${err.message}`);
     return 1;
   }
   if (!state) {
-    console.error('[sdw-orch task abandon] No run state found.');
+    console.error('[sdw-run task abandon] No run state found.');
     return 1;
   }
 
   const taskId = options.taskId;
   if (!taskId) {
-    console.error('[sdw-orch task abandon] Task ID is required (--task <taskId>).');
+    console.error('[sdw-run task abandon] Task ID is required (--task <taskId>).');
     return 1;
   }
   const reason = options.reason || options.abandonReason;
   if (!reason || String(reason).trim().length === 0) {
-    console.error('[sdw-orch task abandon] A reason is required (--reason "<text>").');
+    console.error('[sdw-run task abandon] A reason is required (--reason "<text>").');
     return 1;
   }
 
   const step4 = state.steps && state.steps[4];
   if (!step4) {
-    console.error(`[sdw-orch task abandon] Run "${state.runId}" has not reached Step 4.`);
+    console.error(`[sdw-run task abandon] Run "${state.runId}" has not reached Step 4.`);
     return 1;
   }
 
   const dispatch = getDispatchRecord(state);
   if (!dispatch.activeTaskId) {
-    console.error('[sdw-orch task abandon] No task is currently dispatched.');
+    console.error('[sdw-run task abandon] No task is currently dispatched.');
     return 1;
   }
   if (dispatch.activeTaskId !== taskId) {
-    console.error(`[sdw-orch task abandon] Task "${taskId}" is not the dispatched task. Active task: "${dispatch.activeTaskId}".`);
+    console.error(`[sdw-run task abandon] Task "${taskId}" is not the dispatched task. Active task: "${dispatch.activeTaskId}".`);
     return 1;
   }
 
@@ -2934,9 +2934,9 @@ function cmdTaskAbandon(options) {
   state.status = 'paused';
   stateManager.saveRunState(targetRoot, state);
 
-  console.log(`[sdw-orch task abandon] ${taskId} returned to pending (reason: ${String(reason).trim()}).`);
+  console.log(`[sdw-run task abandon] ${taskId} returned to pending (reason: ${String(reason).trim()}).`);
   console.log(`Dispatch it again with:`);
-  console.log(`  node "${orchCommandPath()}" task next --run-id ${state.runId}${followUpRootFlag(targetRoot)}`);
+  console.log(`  node "${runCommandPath()}" task next --run-id ${state.runId}${followUpRootFlag(targetRoot)}`);
   return 0;
 }
 
@@ -2996,7 +2996,7 @@ function cmdTaskFinish(options) {
   if (dispatch.activeTaskId !== taskId) {
     console.error(dispatch.activeTaskId
       ? `Error: Task "${taskId}" is not the dispatched task. Active task: "${dispatch.activeTaskId}". Finish or abandon "${dispatch.activeTaskId}" first.`
-      : `Error: No task is currently dispatched. Dispatch one with: node "${orchCommandPath()}" task next --run-id ${state.runId}${followUpRootFlag(targetRoot)}`);
+      : `Error: No task is currently dispatched. Dispatch one with: node "${runCommandPath()}" task next --run-id ${state.runId}${followUpRootFlag(targetRoot)}`);
     return 1;
   }
 
@@ -3027,7 +3027,7 @@ function cmdTaskFinish(options) {
       console.error(`Error: Refusing to checkpoint task "${taskId}": ${reason}. The task stays dispatched and no commit was created.`);
       console.error(`Resume the run on its feature branch, then retry:`);
       console.error(`  git switch ${expectedBranch}`);
-      console.error(`  node "${orchCommandPath()}" task finish --run-id ${state.runId} --task ${taskId} --evidence ${evidenceArg}${followUpRootFlag(targetRoot)}`);
+      console.error(`  node "${runCommandPath()}" task finish --run-id ${state.runId} --task ${taskId} --evidence ${evidenceArg}${followUpRootFlag(targetRoot)}`);
       return 1;
     }
   }
@@ -3179,7 +3179,7 @@ function cmdTaskFinish(options) {
       commitSha = checkpoint.commitSha || commitSha;
       checkpointTag = checkpoint.tag;
       if (checkpoint.tagError) {
-        console.warn(`[sdw-orch task finish] Warning: checkpoint tag for "${taskId}" was not created: ${checkpoint.tagError}. The saved commit already covers the work.`);
+        console.warn(`[sdw-run task finish] Warning: checkpoint tag for "${taskId}" was not created: ${checkpoint.tagError}. The saved commit already covers the work.`);
       }
     } catch (cpErr) {
       // Only a failed commit reaches this branch: the work is still uncommitted, so
@@ -3212,7 +3212,7 @@ function cmdTaskFinish(options) {
   completedTaskIds.add(taskId);
   state = stateManager.saveRunState(targetRoot, state);
 
-  console.log(`[sdw-orch task finish] Task "${taskId}" successfully accepted.`);
+  console.log(`[sdw-run task finish] Task "${taskId}" successfully accepted.`);
   console.log(`  Covered ACs:   ${evidenceData.acIds.join(', ')}`);
   console.log(`  Files Changed: ${evidenceData.filesChanged.join(', ')}`);
   if (commitSha) {
@@ -3228,7 +3228,7 @@ function cmdTaskFinish(options) {
     console.log(`\nRemaining tasks to dispatch (${remainingTasks.length}):`);
     remainingTasks.forEach(t => console.log(`  - [${t.id}] ${t.title}`));
     console.log(`\nDispatch the next task with:`);
-    console.log(`  node "${orchCommandPath()}" task next --run-id ${state.runId}${followUpRootFlag(targetRoot)}`);
+    console.log(`  node "${runCommandPath()}" task next --run-id ${state.runId}${followUpRootFlag(targetRoot)}`);
   } else {
     console.log(`\nAll ${dagTasks.length} DAG tasks have completed!`);
     // Run verification gates (AC17, AC18, AC19)
@@ -3250,7 +3250,7 @@ function cmdTaskFinish(options) {
       gates: state.steps[4].gates
     });
     console.log(`Step 4 completed successfully! Proceed to Step 5 by running:`);
-    console.log(`  node "${orchCommandPath()}" resume --run-id ${state.runId}${followUpRootFlag(targetRoot)}`);
+    console.log(`  node "${runCommandPath()}" resume --run-id ${state.runId}${followUpRootFlag(targetRoot)}`);
   }
 
   options._finishResult = { runId: state.runId, taskId, status: 'completed' };
@@ -3276,9 +3276,9 @@ function cmdResume(options) {
     }
   }
 
-  // Reject obsolete run state files created before sdw-orch migration
-  if (!state.orchestrator || state.orchestrator !== 'sdw-orch') {
-    console.error(`Error: Run state "${state.runId}" is obsolete or incompatible with sdw-orch (orchestrator: "${state.orchestrator || 'legacy'}"). Resuming legacy run states is unsupported.`);
+  // Reject obsolete run state files created before sdw-run migration
+  if (!state.orchestrator || state.orchestrator !== 'sdw-run') {
+    console.error(`Error: Run state "${state.runId}" is obsolete or incompatible with sdw-run (orchestrator: "${state.orchestrator || 'legacy'}"). Resuming legacy run states is unsupported.`);
     return 1;
   }
 
@@ -3311,7 +3311,7 @@ function cmdResume(options) {
       const resumeConfig = loadProjectConfig(targetRoot, options);
       const implMode = options.implementationMode || (resumeConfig.implementation && resumeConfig.implementation.mode) || 'subagent';
       if (implMode === 'command') {
-        console.log(`[sdw-orch resume] Command mode detected; re-entering Step 4 to dispatch the configured command.`);
+        console.log(`[sdw-run resume] Command mode detected; re-entering Step 4 to dispatch the configured command.`);
         return cmdRun({
           ...options,
           specPath: state.specPath,
@@ -3342,37 +3342,37 @@ function cmdResume(options) {
             acIds: activeRecord.coveredAcs || activeTask.coveredAcs || [],
             dependencies: activeRecord.dependencies || activeTask.dependencies || [],
             subagentBrief: `Spawn one subagent for this task only. Give it: read ${activeRecord.promptPath} and execute it exactly as written, then report back per its report contract.`,
-            finishCommand: `node "${orchCommandPath()}" task finish --run-id ${state.runId} --task ${dispatch.activeTaskId} --evidence ${sandbox.readMarker(targetRoot) ? `"${activeRecord.evidencePath}"` : activeRecord.evidencePath}${sandbox.readMarker(targetRoot) ? ` --root "${normalizePath(targetRoot)}"` : ''}`
+            finishCommand: `node "${runCommandPath()}" task finish --run-id ${state.runId} --task ${dispatch.activeTaskId} --evidence ${sandbox.readMarker(targetRoot) ? `"${activeRecord.evidencePath}"` : activeRecord.evidencePath}${sandbox.readMarker(targetRoot) ? ` --root "${normalizePath(targetRoot)}"` : ''}`
           };
           printDispatchEnvelope(envelope, state, options);
-          console.log(`\n[sdw-orch resume] Task "${dispatch.activeTaskId}" is still in flight. If that worker is gone, release it with:`);
-          console.log(`  node "${orchCommandPath()}" task abandon --run-id ${state.runId} --task ${dispatch.activeTaskId} --reason "<why>"${followUpRootFlag(targetRoot)}`);
+          console.log(`\n[sdw-run resume] Task "${dispatch.activeTaskId}" is still in flight. If that worker is gone, release it with:`);
+          console.log(`  node "${runCommandPath()}" task abandon --run-id ${state.runId} --task ${dispatch.activeTaskId} --reason "<why>"${followUpRootFlag(targetRoot)}`);
           return 4;
         }
 
         // AC32: no dispatch in flight: refuse the gates and hand out the next task.
-        console.error(`[sdw-orch resume] Cannot advance past Step 4: ${incompleteTasks.length} task(s) remain incomplete:`);
+        console.error(`[sdw-run resume] Cannot advance past Step 4: ${incompleteTasks.length} task(s) remain incomplete:`);
         dagTasks.forEach(t => {
           const isDone = completedTasks.includes(t.id);
           console.log(`  [${isDone ? 'COMPLETED' : 'PENDING'}] ${t.id}: ${t.title}`);
         });
         console.error(`\nDispatch the next task with:`);
-        console.error(`  node "${orchCommandPath()}" task next --run-id ${state.runId}${followUpRootFlag(targetRoot)}`);
+        console.error(`  node "${runCommandPath()}" task next --run-id ${state.runId}${followUpRootFlag(targetRoot)}`);
         return 4;
       }
 
-      console.error(`[sdw-orch resume] Cannot advance past Step 4: ${incompleteTasks.length} task(s) remain incomplete.`);
+      console.error(`[sdw-run resume] Cannot advance past Step 4: ${incompleteTasks.length} task(s) remain incomplete.`);
       return 4;
     }
 
     // All tasks completed. Execute build and test verification gates (AC20)
     const config = loadProjectConfig(targetRoot, options);
-    console.log(`[sdw-orch resume] All ${dagTasks.length} DAG task(s) completed. Running verification gates...`);
+    console.log(`[sdw-run resume] All ${dagTasks.length} DAG task(s) completed. Running verification gates...`);
     const gateResults = runVerificationGates(targetRoot, config, { ...options, runId: state.runId, slug: state.specSlug });
     state.steps[4].gates = gateResults.gates;
 
     if (!gateResults.passed) {
-      console.error(`[sdw-orch resume] Verification gates failed. Step 4 remains incomplete.`);
+      console.error(`[sdw-run resume] Verification gates failed. Step 4 remains incomplete.`);
       state.steps[4].status = 'failed';
       state.status = 'failed';
       stateManager.saveRunState(targetRoot, state);
@@ -3386,12 +3386,12 @@ function cmdResume(options) {
     });
     state.status = 'in_progress';
     state = stateManager.saveRunState(targetRoot, state);
-    console.log(`[sdw-orch resume] Step 4 completed. Advancing to Step 5 (Conformance Scoring).`);
+    console.log(`[sdw-run resume] Step 4 completed. Advancing to Step 5 (Conformance Scoring).`);
     resumptionStep = stateManager.getResumptionStep(state);
   }
 
-  console.log(`[sdw-orch resume] Restoring session state for run "${state.runId}".`);
-  console.log(`[sdw-orch resume] Resuming from step ${resumptionStep}/${state.totalSteps} (steps 1-${resumptionStep - 1} already resolved).`);
+  console.log(`[sdw-run resume] Restoring session state for run "${state.runId}".`);
+  console.log(`[sdw-run resume] Resuming from step ${resumptionStep}/${state.totalSteps} (steps 1-${resumptionStep - 1} already resolved).`);
 
   return cmdRun({
     ...options,
@@ -3501,7 +3501,7 @@ function cmdScoreSubmit(options) {
   const scoringStep = state.steps && state.steps[5];
   const scoringStatus = scoringStep ? scoringStep.status : 'pending';
   if (!['awaiting_judgment', 'judged', 'reimplementation_needed', 'in_progress'].includes(scoringStatus)) {
-    console.error(`[sdw-orch score submit] Run "${state.runId}" is not awaiting a judge verdict (Step 5 status: "${scoringStatus}").`);
+    console.error(`[sdw-run score submit] Run "${state.runId}" is not awaiting a judge verdict (Step 5 status: "${scoringStatus}").`);
     return 1;
   }
 
@@ -3567,20 +3567,20 @@ function cmdScoreSubmit(options) {
   state.status = report.passed ? 'paused' : 'failed';
   stateManager.saveRunState(targetRoot, state);
 
-  console.log(`[sdw-orch score submit] Score: ${report.score}/10 (Required: ${minScore}/10). Passed: ${report.passed}`);
+  console.log(`[sdw-run score submit] Score: ${report.score}/10 (Required: ${minScore}/10). Passed: ${report.passed}`);
   console.log(`  Verified ACs: ${report.verifiedCount}/${report.totalAcs}`);
   console.log(`  Failing ACs:  ${report.failingCount}/${report.totalAcs}`);
   if (report.judge.scoreMismatch) {
-    console.warn(`[sdw-orch score submit] Warning: the judge reported ${report.judge.reportedScore}/10 while its per-criterion verdicts yield ${report.score}/10; the verdicts are authoritative.`);
+    console.warn(`[sdw-run score submit] Warning: the judge reported ${report.judge.reportedScore}/10 while its per-criterion verdicts yield ${report.score}/10; the verdicts are authoritative.`);
   }
 
   if (report.passed) {
     console.log(`\nContinue the workflow with:`);
-    console.log(`  node "${orchCommandPath()}" resume --run-id ${state.runId}${followUpRootFlag(targetRoot)}`);
+    console.log(`  node "${runCommandPath()}" resume --run-id ${state.runId}${followUpRootFlag(targetRoot)}`);
     return 0;
   }
 
-  console.error(`[sdw-orch score submit] Conformance below threshold. Address the failing criteria, then re-run or re-judge.`);
+  console.error(`[sdw-run score submit] Conformance below threshold. Address the failing criteria, then re-run or re-judge.`);
   return 2;
 }
 
@@ -3652,7 +3652,7 @@ function cmdSandbox(options) {
 }
 
 function showHelp() {
-  console.log(`Usage: node sdw_orch.cjs <subcommand> [specPath] [options]
+  console.log(`Usage: node sdw_run.cjs <subcommand> [specPath] [options]
 
 Subcommands:
   run <specPath>         Execute the orchestration workflow for one specification
@@ -3705,6 +3705,8 @@ Options:
 `);
 }
 
+const RETIRED_INVOCATION = /^(?:sdw[-_]?orch|orch|sdw[-_]?orchestrator)$/i;
+
 function main() {
   const args = process.argv.slice(2);
   const options = parseArgs(args);
@@ -3718,7 +3720,7 @@ function main() {
   switch (options.subcommand) {
     case 'run':
       if (options.specPaths && options.specPaths.length > 1) {
-        console.error('[sdw-orch] Error: "run" executes exactly one specification. Use "sdw-batch run <spec...>" for a queue of specifications.');
+        console.error('[sdw-run] Error: "run" executes exactly one specification. Use "sdw-batch run <spec...>" for a queue of specifications.');
         code = 1;
       } else {
         code = cmdRun(options);
@@ -3746,7 +3748,11 @@ function main() {
       code = cmdSandbox(options);
       break;
     default:
-      console.error(`Unknown subcommand: "${options.subcommand}". Run with --help for usage.`);
+      if (RETIRED_INVOCATION.test(options.subcommand)) {
+        console.error(`Error: "${options.subcommand}" is the retired name of "sdw-run". Use: node "${runCommandPath()}" <command> [specPath] [options]`);
+      } else {
+        console.error(`Unknown subcommand: "${options.subcommand}". Run with --help for usage.`);
+      }
       code = 1;
       break;
   }

@@ -1,14 +1,14 @@
 # sdw-batch Protocol Reference
 
-`sdw-batch` is a queue around `sdw-orch`. It owns ordering, pause bookkeeping, and reporting; it owns no implementation step.
+`sdw-batch` is a queue around `sdw-run`. It owns ordering, pause bookkeeping, and reporting; it owns no implementation step.
 
 ## 1. Delegation Contract
 
 For each queue item, `sdw-batch` runs one of:
 
 ```bash
-node skills/sdw-orch/scripts/sdw_orch.cjs run <specPath> --run-id <runId> --unattended --root <projectRoot>
-node skills/sdw-orch/scripts/sdw_orch.cjs resume --run-id <runId> --root <projectRoot>
+node skills/sdw-run/scripts/sdw_run.cjs run <specPath> --run-id <runId> --unattended --root <projectRoot>
+node skills/sdw-run/scripts/sdw_run.cjs resume --run-id <runId> --root <projectRoot>
 ```
 
 The child process inherits stdio and is awaited. Its exit code is the queue decision:
@@ -80,7 +80,7 @@ Item fields: `retroFollowUp` records the follow-up outcome of a completed item; 
 
 Before an item is delegated, `sdw-batch` reads the specification registry (`{specsDir}/index.specs.md`) and skips every spec recorded as `completed` or `archived`, recording the queue item as `already_implemented` with a `skipReason`. The check runs when the manifest is created and again per item before delegation, so a spec completed since the batch started (or during a resume) is never implemented twice. A registry that cannot be read warns and never blocks the queue.
 
-A batch never refines a delivered specification. Refinement is an explicit single-spec call: `sdw-orch run <specPath> --second-pass` (alias `--refine`).
+A batch never refines a delivered specification. Refinement is an explicit single-spec call: `sdw-run run <specPath> --second-pass` (alias `--refine`).
 
 ## 3. Retro Follow-Up
 
@@ -111,7 +111,7 @@ A failed specification creation is recorded as `{ candidateId, error }` in `fail
 
 - Resume skips items that are `completed` or `already_implemented`; neither is delegated again.
 - Resume starts at the first item that is not `completed`.
-- If the item records a `runId` whose state is `paused` or `in_progress`, delegate `sdw-orch resume` with that exact id (never a new run).
+- If the item records a `runId` whose state is `paused` or `in_progress`, delegate `sdw-run resume` with that exact id (never a new run).
 - If the recorded state is already `completed`, reconcile the item (copy delivery commit and branch) and advance without re-executing.
 - If the state file is missing, delegate a fresh `run` with a new run id.
 - The manifest policy (`continueOnError`, `syncIndex`) is preserved unless the resuming invocation overrides it.
@@ -130,7 +130,7 @@ After completion, halt, or pause, `sdw-batch` prints one table: index, slug, sta
 ## 7. Boundaries
 
 - No parallel execution: one delegated run at a time.
-- No direct calls to individual `sdw-orch` steps; the CLI is the only interface.
+- No direct calls to individual `sdw-run` steps; the CLI is the only interface.
 - No worker dispatch: the host agent spawns subagents for dispatched tasks.
 - No duplicated review, scoring, or commit logic.
 - No direct specification authoring: follow-up drafts go through `sdw-spec`, and no follow-up is created from a follow-up item.

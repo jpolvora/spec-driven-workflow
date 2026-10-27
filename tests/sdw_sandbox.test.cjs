@@ -7,9 +7,9 @@ const path = require('path');
 const os = require('os');
 const { execSync, execFileSync } = require('child_process');
 
-const sandbox = require('../skills/sdw-orch/scripts/sandbox.cjs');
-const sdwOrch = require('../skills/sdw-orch/scripts/sdw_orch.cjs');
-const implementationRunner = require('../skills/sdw-orch/scripts/implementation_runner.cjs');
+const sandbox = require('../skills/sdw-run/scripts/sandbox.cjs');
+const sdwRun = require('../skills/sdw-run/scripts/sdw_run.cjs');
+const implementationRunner = require('../skills/sdw-run/scripts/implementation_runner.cjs');
 const sdwConfig = require('../skills/sdw-config/scripts/sdw_config.cjs');
 
 function createRepo(options = {}) {
@@ -291,9 +291,9 @@ test('AC21-AC24: list, clean, and unknown ids', () => {
 test('AC4/AC32: conflicting --dry-run/--sandbox and --sandbox/--push are rejected', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-conflict-'));
   try {
-    const dry = sdwOrch.cmdRun({ subcommand: 'run', specPath: 'x.md', root: dir, dryRun: true, sandbox: true });
+    const dry = sdwRun.cmdRun({ subcommand: 'run', specPath: 'x.md', root: dir, dryRun: true, sandbox: true });
     assert.equal(dry, 1);
-    const push = sdwOrch.cmdRun({ subcommand: 'run', specPath: 'x.md', root: dir, sandbox: true, push: true });
+    const push = sdwRun.cmdRun({ subcommand: 'run', specPath: 'x.md', root: dir, sandbox: true, push: true });
     assert.equal(push, 1);
     assert.equal(fs.existsSync(path.join(dir, '.sdw', 'sandbox')), false, 'no sandbox created on conflict');
   } finally {
@@ -303,11 +303,13 @@ test('AC4/AC32: conflicting --dry-run/--sandbox and --sandbox/--push are rejecte
 
 test('AC1-AC3: plan-only dry run prints the plan and returns 0', () => {
   const root = path.resolve(__dirname, '..');
-  const spec = path.join(root, '.sdw', 'specs', '00029-sdw-orch-sandboxed-execution.md');
-  const code = sdwOrch.printRunDryRunPlan({
+  const specDir = path.join(root, '.sdw', 'specs');
+  const specFile = fs.readdirSync(specDir).find((name) => name.startsWith('00029-') && name.endsWith('.md'));
+  const spec = path.join(specDir, specFile);
+  const code = sdwRun.printRunDryRunPlan({
     targetRoot: root,
     resolvedSpec: spec,
-    specSlug: '00029-sdw-orch-sandboxed-execution',
+    specSlug: specFile.replace(/\.md$/, ''),
     config: { scoreMin: 8, pushDelivery: true, scmProvider: 'github' },
     options: {}
   });
@@ -319,7 +321,7 @@ test('AC42: dry run fails closed when the validator cannot run', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-plan-'));
   try {
     const missing = path.join(dir, 'missing-spec.md');
-    const code = sdwOrch.printRunDryRunPlan({
+    const code = sdwRun.printRunDryRunPlan({
       targetRoot: root,
       resolvedSpec: missing,
       specSlug: 'missing',
@@ -358,7 +360,7 @@ test('AC44: any config load inside a sandbox clone inherits isolation', () => {
     }, null, 2));
 
     const options = {};
-    const config = sdwOrch.loadProjectConfig(meta.absoluteRoot, options);
+    const config = sdwRun.loadProjectConfig(meta.absoluteRoot, options);
     assert.equal(config.pushDelivery, false, 'push forced off');
     assert.equal(config.scmProvider, 'none', 'SCM forced off');
     assert.equal(config.scmCodeReviewEnabled, false);

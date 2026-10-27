@@ -1,6 +1,6 @@
 ---
 name: sdw-retro
-description: Retrospective over a completed sdw-orch run, automatic when retro.enabled is true, reporting evidence-bound friction signals, transcript command slips, and improvement candidates.
+description: Retrospective over a completed sdw-run run, automatic when retro.enabled is true, reporting evidence-bound friction signals, transcript command slips, and improvement candidates.
 version: 0.3.0
 invocation_names:
   - sdw-retro
@@ -10,7 +10,7 @@ invocation_names:
 
 > When this skill is loaded, output "sdw-retro loaded."
 
-Reviews one `sdw-orch` run after delivery. It reads the run state file, the step
+Reviews one `sdw-run` run after delivery. It reads the run state file, the step
 artifacts that state declares, and the transcript the finder resolves or the
 operator explicitly names. It reports deterministic friction signals and leaves
 every improvement judgment to an explicit operator decision.
@@ -19,8 +19,8 @@ every improvement judgment to an explicit operator decision.
 
 ## Behavior
 
-- `sdw-orch` runs this skill automatically for a completed run when `retro.enabled` is `true` and records the outcome in `state.retro`; a retro failure never changes the completed status or the exit code.
-- When `retro.enabled` is `false` or absent, `sdw-orch` prints the advisory command only; the operator starts the retro.
+- `sdw-run` runs this skill automatically for a completed run when `retro.enabled` is `true` and records the outcome in `state.retro`; a retro failure never changes the completed status or the exit code.
+- When `retro.enabled` is `false` or absent, `sdw-run` prints the advisory command only; the operator starts the retro.
 - Inputs are the run state file, the step artifacts it declares, and the transcripts named by `retro.transcripts` or `--transcript`, nothing else.
 - Unconfigured host transcripts, session logs, and agent chat logs stay excluded from the analyzer and are reported as excluded inputs.
 - Configured transcripts are scanned line by line; the report cites path and line numbers only and never copies transcript line bodies.
@@ -34,12 +34,12 @@ every improvement judgment to an explicit operator decision.
 ## Signals
 
 - `leftover_run`: a sibling run state of the same specification never reached a terminal status. Names the run id, status, and age.
-- `repeated_run_invocation`: one transcript contains more than one `sdw-orch ... run` invocation for the same `--spec` with no `resume` between them. Names the file and line numbers.
+- `repeated_run_invocation`: one transcript contains more than one `sdw-run ... run` invocation for the same `--spec` with no `resume` between them. Names the file and line numbers.
 - `transcript_unreadable`: a named transcript path does not exist, cannot be read, or is not decodable text. Names the file and reason; the command still exits `0`.
 
 ## Start Guard
 
-`sdw-orch run` refuses to start when the same specification already has a run that is neither `completed` nor `failed`. It names the open run id, points to `resume --run-id <runId>`, and exits non-zero; `--new-run` overrides for an intentional restart. Repeating `run` instead of `resume` is the slip `repeated_run_invocation` reports.
+`sdw-run run` refuses to start when the same specification already has a run that is neither `completed` nor `failed`. It names the open run id, points to `resume --run-id <runId>`, and exits non-zero; `--new-run` overrides for an intentional restart. Repeating `run` instead of `resume` is the slip `repeated_run_invocation` reports.
 
 ## Steps
 

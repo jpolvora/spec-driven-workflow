@@ -17,7 +17,7 @@ const EXPECTED_SKILLS = [
   'sdw-doctor',
   'sdw-fixer',
   'sdw-memory',
-  'sdw-orch',
+  'sdw-run',
   'sdw-retro',
   'sdw-router',
   'sdw-rules',
@@ -26,7 +26,7 @@ const EXPECTED_SKILLS = [
   'sdw-spec'
 ];
 
-const CORE_SKILLS = ['sdw-config', 'sdw-orch', 'sdw-router', 'sdw-rules', 'sdw-spec'];
+const CORE_SKILLS = ['sdw-config', 'sdw-run', 'sdw-router', 'sdw-rules', 'sdw-spec'];
 
 const SKILL_LINE_LIMIT = 120;
 const RULES_LINE_LIMIT = 80;
@@ -563,7 +563,7 @@ specDate: 2026-10-21
 ---
 # Specification — Doctor Smoke
 ## Description
-Minimal specification used by sdw-doctor to exercise the full sdw-orch pipeline in a sandbox.
+Minimal specification used by sdw-doctor to exercise the full sdw-run pipeline in a sandbox.
 ### Design Intent
 Prove that the installed skills can plan, implement, score, deliver, review, and prepare a PR without external services.
 ## Acceptance Criteria
@@ -584,7 +584,7 @@ Generated automatically by sdw-doctor test; safe to delete.
 | Spec valid | Authoring validation passes | validate_spec.cjs |
 ## Validation & Observation Notes
 ### Telemetry & Observable Signals
-- sdw-orch exits 0 and the run state reaches completed.
+- sdw-run exits 0 and the run state reaches completed.
 ### Negative & Failing Test Scenarios
 - A missing skill or invalid config makes the smoke test exit 1.
 `, 'utf8');
@@ -625,8 +625,8 @@ fs.writeFileSync(process.env.SDW_JUDGE_VERDICT, JSON.stringify({ score: 10, verd
       return base;
     }
 
-    const orchScript = path.join(projectDir, '.agents', 'skills', 'sdw-orch', 'scripts', 'sdw_orch.cjs');
-    const proc = spawnSync(process.execPath, [orchScript, 'run', '.sdw/specs/00001-doctor-smoke.md', '--sandbox', '--root', projectDir], {
+    const runScript = path.join(projectDir, '.agents', 'skills', 'sdw-run', 'scripts', 'sdw_run.cjs');
+    const proc = spawnSync(process.execPath, [runScript, 'run', '.sdw/specs/00001-doctor-smoke.md', '--sandbox', '--root', projectDir], {
       cwd: projectDir,
       encoding: 'utf8',
       timeout: options.timeoutMs || 180000,
@@ -720,7 +720,7 @@ Checks an SDW installation and the consuming workspace.
 
 Subcommands:
   check            Audit skills, references, scripts, workspace config, registry, and specs (default)
-  test             Run a fake specification through sdw-orch in a sandbox and verify every step
+  test             Run a fake specification through sdw-run in a sandbox and verify every step
 
 Modes:
   upstream         Canonical repository: audits skills/ and the .sdw/ template in place
