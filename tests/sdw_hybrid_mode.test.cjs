@@ -9,7 +9,7 @@ const { execSync, spawnSync } = require('child_process');
 
 const sdwConfig = require('../skills/sdw-config/scripts/sdw_config.cjs');
 const sdwRouter = require('../skills/sdw-router/scripts/sdw_router.cjs');
-const sdwOrch = require('../skills/sdw-orch/scripts/sdw_orch.cjs');
+const sdwRun = require('../skills/sdw-run/scripts/sdw_run.cjs');
 
 function createTempDir(prefix = 'sdw-hybrid-test-') {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -308,7 +308,7 @@ test('AC9: Missing skills directory aborts execution with exit code 1', () => {
   }
 });
 
-test('AC10: sdw-orch dynamic script resolution locates helper scripts via resolved skillsRoot', () => {
+test('AC10: sdw-run dynamic script resolution locates helper scripts via resolved skillsRoot', () => {
   const tmpProject = createTempDir('sdw-ac10-proj-');
   const tmpGlobal = createTempDir('sdw-ac10-global-');
   try {
@@ -328,12 +328,12 @@ test('AC10: sdw-orch dynamic script resolution locates helper scripts via resolv
     assert.equal(info.skillsRoot, globalSkills.replace(/\\/g, '/'));
     assert.equal(info.mode, 'global');
 
-    // Verify scripts resolve via sdw-orch's resolveSkillScript helper
-    const crScript = sdwOrch.resolveSkillScript(tmpProject, 'sdw-code-review', path.join('scripts', 'sdw_code_review.cjs'), {
+    // Verify scripts resolve via sdw-run's resolveSkillScript helper
+    const crScript = sdwRun.resolveSkillScript(tmpProject, 'sdw-code-review', path.join('scripts', 'sdw_code_review.cjs'), {
       homeDir: tmpGlobal,
       ignoreCaller: true
     });
-    const shipScript = sdwOrch.resolveSkillScript(tmpProject, 'sdw-ship-pr', path.join('scripts', 'sdw_ship_pr.cjs'), {
+    const shipScript = sdwRun.resolveSkillScript(tmpProject, 'sdw-ship-pr', path.join('scripts', 'sdw_ship_pr.cjs'), {
       homeDir: tmpGlobal,
       ignoreCaller: true
     });

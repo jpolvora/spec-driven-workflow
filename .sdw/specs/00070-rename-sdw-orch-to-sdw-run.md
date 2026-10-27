@@ -3,7 +3,7 @@ id: null
 slug: 00070-rename-sdw-orch-to-sdw-run
 title: "Rename the sdw-orch skill to sdw-run"
 source: local
-status: draft
+status: implemented
 specDate: 2026-10-27
 priority: high
 value: "Names the skill after the act it performs and matches the vocabulary the product already uses (run, runId, run state, resume), dropping an abbreviation that is trivially mistyped and decoded only by insiders"
@@ -15,7 +15,7 @@ effort: L
 
 The skill that drives one specification through the 8-step pipeline is named `sdw-orch`, a contraction of "orchestrator". Everything around it already speaks in runs: `run` is the entry subcommand, `--run-id` and `runId` identify an execution, the state file is `.sdw/state/{runId}.state.json`, `resume` continues a run, and `.sdw/sandbox/{runId}/` holds its clone. The skill folder and its entry script are the only surfaces that say "orch".
 
-The rename is mechanical but wide: 64 live files and 511 occurrences of `sdw-orch`, `sdw_orch`, or `sdwOrch`, of which 242 are in tests. It touches the skill directory, the entry script, module require paths, invocation names, log prefixes, error messages, the router routing table, the doctor expected-skill lists, batch delegation, the DAG fallback bucket, config schema descriptions, the package entry, root documentation, and seven test file names. Historical specifications (43 files, 318 occurrences) and the changelog (2) keep the old name because they record what was true when they were written.
+The rename is mechanical but wide: 64 live files and 511 matching lines (613 mentions) of `sdw-orch`, `sdw_orch`, or `sdwOrch`, of which 242 lines are in tests. It touches the skill directory, the entry script, module require paths, invocation names, log prefixes, error messages, the router routing table, the doctor expected-skill lists, batch delegation, the DAG fallback bucket, config schema descriptions, the package entry, root documentation, and seven test file names. Historical specifications (43 files, 318 occurrences) and the changelog (2) keep the old name because they record what was true when they were written.
 
 ### Design Intent
 
@@ -40,9 +40,9 @@ A tool name should describe what a user does with it. `sdw-run` reads as the act
 
 ## Notes
 
-### Live Surface Inventory (64 files, 511 occurrences)
+### Live Surface Inventory (64 files, 511 matching lines)
 
-| Area | Files | Occurrences | Action |
+| Area | Files | Lines | Action |
 |---|---|---|---|
 | The skill itself | 8 | 111 | `git mv` the directory, rename the entry script, rewrite prefixes and messages |
 | Delegating skills | 23 | 88 | Replace the skill name and the script path |

@@ -24,9 +24,9 @@ SDW standardizes how developers specify, refine, implement, review, and ship fea
 
 ---
 
-## 2. The Core Workflow Orchestrator: `sdw-orch`
+## 2. The Core Workflow Orchestrator: `sdw-run`
 
-At the center of SDW is the **`sdw-orch`** orchestrator skill. It coordinates the feature delivery lifecycle end-to-end, managing a dedicated run state file (`.sdw/state/{runId}.state.json`) that enables pause, inspection, resume, and seamless data handoffs across subagents.
+At the center of SDW is the **`sdw-run`** orchestrator skill. It coordinates the feature delivery lifecycle end-to-end, managing a dedicated run state file (`.sdw/state/{runId}.state.json`) that enables pause, inspection, resume, and seamless data handoffs across subagents.
 
 ```mermaid
 flowchart TD
@@ -66,7 +66,7 @@ flowchart TD
    - Dispatches exactly one DAG task at a time: `task next` emits a self-sufficient brief (verbatim criteria, scope fence, prohibitions, dependency context, honest evidence template, report contract) and the host agent runs one worker per envelope. `command` mode instead runs a configured subprocess per task with token substitution and environment sanitization.
    - Enforces single-flight ordering — a second dispatch, or a `task finish` for any task but the dispatched one, is rejected — and releases a lost worker's task with `task abandon --reason`.
    - Corroborates each task against a baseline captured at dispatch (dirty paths plus content hashes), so edits inherited from an earlier task never satisfy the evidence gate. `command` mode still isolates multi-task plans in sequential git worktrees branching from primary `HEAD`.
-   - Requires task completion via `sdw-orch task finish` with schema-validated evidence, including a required `status` where only `success` is accepted.
+   - Requires task completion via `sdw-run task finish` with schema-validated evidence, including a required `status` where only `success` is accepted.
    - Executes build and test verification gates (`verification.buildCommand`, `verification.testCommand`) once all tasks are accepted.
 
 5. **LLM-Judge Conformance Scoring**
@@ -121,13 +121,13 @@ spec-driven-workflow/
 │   │   └── traps.md              # Central anti-regression trap log
 │   └── worktrees/                # Ephemeral per-task git worktrees for isolated subagents
 ├── skills/                       # Canonical source of truth for all skills
-│   ├── sdw-batch/                # Multi-spec queue delegating to single sdw-orch runs
+│   ├── sdw-batch/                # Multi-spec queue delegating to single sdw-run runs
 │   ├── sdw-code-review/          # Standalone deep working-tree review & fix planning
 │   ├── sdw-config/               # Project configuration & verification skill
 │   ├── sdw-doctor/               # Installation & workspace health checker
 │   ├── sdw-fixer/                # Shared findings intake, scoring & surgical remediation
 │   ├── sdw-memory/               # Central knowledge wrapper (query, record, consolidate, classify)
-│   ├── sdw-orch/                 # End-to-end workflow orchestrator skill
+│   ├── sdw-run/                 # End-to-end workflow orchestrator skill
 │   ├── sdw-router/               # Always-autoloaded entrypoint and skill router
 │   ├── sdw-rules/                # Shared behavioral rules, simplicity & anti-overengineering
 │   ├── sdw-security-checks/      # Pre-commit secrets and credentials leak scanner
@@ -139,8 +139,8 @@ spec-driven-workflow/
 │   ├── sdw_code_review.test.cjs
 │   ├── sdw_config.test.cjs
 │   ├── sdw_github_actions.test.cjs
-│   ├── sdw_orch.test.cjs
-│   ├── sdw_orch_implementation.test.cjs
+│   ├── sdw_run.test.cjs
+│   ├── sdw_run_implementation.test.cjs
 │   ├── sdw_refinement_gates.test.cjs
 │   ├── sdw_router.test.cjs
 │   ├── sdw_rules.test.cjs
@@ -180,8 +180,8 @@ Expected: `12` discoverable skills — the 11 `sdw-*` skills plus `ws-memo`:
 | `sdw-config` | Initializes and verifies the `.sdw/` workspace (`init`, `check`, `parse`) |
 | `sdw-doctor` | Installation and workspace health checker (upstream, local, global, hybrid) |
 | `sdw-spec` | Spec authoring, grilling, EARS validation, index sync |
-| `sdw-orch` | End-to-end 8-step delivery workflow for one specification (spec → DAG → implement → review → PR) |
-| `sdw-batch` | Queues multiple specifications and delegates each one to `sdw-orch` as a single run |
+| `sdw-run` | End-to-end 8-step delivery workflow for one specification (spec → DAG → implement → review → PR) |
+| `sdw-batch` | Queues multiple specifications and delegates each one to `sdw-run` as a single run |
 | `sdw-rules` | Shared simplicity / anti-overengineering rules |
 | `sdw-security-checks` | Pre-commit secrets and credentials leak gate |
 | `sdw-code-review` | Standalone working-tree review and fix planning (also Step 7 delegation) |
@@ -192,7 +192,7 @@ Expected: `12` discoverable skills — the 11 `sdw-*` skills plus `ws-memo`:
 ### Copy-paste: install all SDW skills (recommended)
 
 ```bash
-npx skills add jpolvora/spec-driven-workflow --skill sdw-router --skill sdw-config --skill sdw-doctor --skill sdw-spec --skill sdw-orch --skill sdw-batch --skill sdw-rules --skill sdw-security-checks --skill sdw-code-review --skill sdw-fixer --skill sdw-memory --skill sdw-ship-pr -y
+npx skills add jpolvora/spec-driven-workflow --skill sdw-router --skill sdw-config --skill sdw-doctor --skill sdw-spec --skill sdw-run --skill sdw-batch --skill sdw-rules --skill sdw-security-checks --skill sdw-code-review --skill sdw-fixer --skill sdw-memory --skill sdw-ship-pr -y
 ```
 
 One-liner alternative (installs everything discoverable, including `ws-memo`):
@@ -212,17 +212,17 @@ npx skills add jpolvora/spec-driven-workflow
 ```bash
 # Project scope (default): installs to ./.agents/skills/, commit with your project
 # Global scope: available across all projects on the machine
-npx skills add jpolvora/spec-driven-workflow --skill sdw-router --skill sdw-config --skill sdw-doctor --skill sdw-spec --skill sdw-orch --skill sdw-batch --skill sdw-rules --skill sdw-security-checks --skill sdw-code-review --skill sdw-fixer --skill sdw-memory --skill sdw-ship-pr -g -y
+npx skills add jpolvora/spec-driven-workflow --skill sdw-router --skill sdw-config --skill sdw-doctor --skill sdw-spec --skill sdw-run --skill sdw-batch --skill sdw-rules --skill sdw-security-checks --skill sdw-code-review --skill sdw-fixer --skill sdw-memory --skill sdw-ship-pr -g -y
 
 # Target specific agents (default is auto-detected agents; use '*' for all agents)
-npx skills add jpolvora/spec-driven-workflow --skill sdw-orch -a opencode -y
-npx skills add jpolvora/spec-driven-workflow --skill sdw-orch --skill sdw-spec -a claude-code -a cursor -y
+npx skills add jpolvora/spec-driven-workflow --skill sdw-run -a opencode -y
+npx skills add jpolvora/spec-driven-workflow --skill sdw-run --skill sdw-spec -a claude-code -a cursor -y
 
 # Verify, update, remove
 npx skills list
 npx skills check
 npx skills update
-npx skills remove sdw-orch
+npx skills remove sdw-run
 ```
 
 ### Global install (`$HOME/.agents/skills`)
@@ -238,7 +238,7 @@ npx skills add jpolvora/spec-driven-workflow -g --all
 - Subset (global, non-interactive):
 
 ```bash
-npx skills add jpolvora/spec-driven-workflow -g -s sdw-spec,sdw-orch -y
+npx skills add jpolvora/spec-driven-workflow -g -s sdw-spec,sdw-run -y
 ```
 
 - Verify:
@@ -250,11 +250,11 @@ npx skills list -g
 Installed layout (project scope under `<projectRoot>/.agents/skills/`, global scope under `$HOME/.agents/skills/`; OpenCode / Cursor / Codex share `.agents/skills/`; Claude Code also links under `.claude/skills/`):
 
 ```text
-<projectRoot>/.agents/skills/sdw-orch/SKILL.md
+<projectRoot>/.agents/skills/sdw-run/SKILL.md
 <projectRoot>/.agents/skills/sdw-spec/SKILL.md
 ...
 <projectRoot>/skills-lock.json
-# global equivalent: $HOME/.agents/skills/sdw-orch/SKILL.md, ...
+# global equivalent: $HOME/.agents/skills/sdw-run/SKILL.md, ...
 ```
 
 ### After install: initialize the workspace
@@ -345,41 +345,41 @@ node skills/sdw-spec/scripts/sdw_spec.cjs list
 
 Grilling is the optional round-based interview that closes spec gaps before implementation; when a draft spans several domains, `sdw-spec` recommends splitting it by feature first. Protocol: `skills/sdw-spec/references/grilling.md`.
 
-### Using `sdw-orch` (Workflow Orchestrator)
+### Using `sdw-run` (Workflow Orchestrator)
 
-The `sdw-orch` skill executes the end-to-end 8-step delivery workflow:
+The `sdw-run` skill executes the end-to-end 8-step delivery workflow:
 
 ```bash
 # Execute the full delivery pipeline for a specification
-node skills/sdw-orch/scripts/sdw_orch.cjs run .sdw/specs/<spec-name>.md [--push]
+node skills/sdw-run/scripts/sdw_run.cjs run .sdw/specs/<spec-name>.md [--push]
 
 # Queue several specifications; each one runs as its own single-spec pipeline
 node skills/sdw-batch/scripts/sdw_batch.cjs run <spec1.md> <spec2.md> ... [--continue-on-error]
 
 # Validate a spec and print the execution plan without executing anything
-node skills/sdw-orch/scripts/sdw_orch.cjs run .sdw/specs/<spec-name>.md --dry-run
+node skills/sdw-run/scripts/sdw_run.cjs run .sdw/specs/<spec-name>.md --dry-run
 
 # Refine an already delivered spec: fill gaps/drift, simplify, report, commit only on change
-node skills/sdw-orch/scripts/sdw_orch.cjs run .sdw/specs/<spec-name>.md --second-pass
+node skills/sdw-run/scripts/sdw_run.cjs run .sdw/specs/<spec-name>.md --second-pass
 
 # Execute the whole pipeline in an isolated local clone (no push, no PR)
-node skills/sdw-orch/scripts/sdw_orch.cjs run .sdw/specs/<spec-name>.md --sandbox
-node skills/sdw-orch/scripts/sdw_orch.cjs sandbox list
-node skills/sdw-orch/scripts/sdw_orch.cjs sandbox report --run-id <runId>
-node skills/sdw-orch/scripts/sdw_orch.cjs sandbox clean --run-id <runId>
+node skills/sdw-run/scripts/sdw_run.cjs run .sdw/specs/<spec-name>.md --sandbox
+node skills/sdw-run/scripts/sdw_run.cjs sandbox list
+node skills/sdw-run/scripts/sdw_run.cjs sandbox report --run-id <runId>
+node skills/sdw-run/scripts/sdw_run.cjs sandbox clean --run-id <runId>
 
 # Resume an interrupted single-spec run
-node skills/sdw-orch/scripts/sdw_orch.cjs resume [--run-id <runId>]
+node skills/sdw-run/scripts/sdw_run.cjs resume [--run-id <runId>]
 
 # Inspect status of active execution
-node skills/sdw-orch/scripts/sdw_orch.cjs status
+node skills/sdw-run/scripts/sdw_run.cjs status
 ```
 
-Skill-level aliases `sdw-orch implement`, `orch run`, and `orch implement` resolve to the same pipeline through `sdw-router`; `run` stays the canonical CLI subcommand.
+`run` is the canonical CLI subcommand. The `sdw-run` skill is invoked explicitly as `/sdw-run`, `@sdw-run`, or bare `sdw-run` through `sdw-router`.
 
 ### Using `sdw-batch` (Specification Queue)
 
-`sdw-batch` is a loop around the single-spec pipeline. Each queued specification runs through the complete `sdw-orch` lifecycle (implementation, scoring, delivery commit, review, PR, convergence) before the next one starts:
+`sdw-batch` is a loop around the single-spec pipeline. Each queued specification runs through the complete `sdw-run` lifecycle (implementation, scoring, delivery commit, review, PR, convergence) before the next one starts:
 
 ```bash
 # Queue specifications; each runs as an independent single-spec pipeline
@@ -394,7 +394,7 @@ node skills/sdw-batch/scripts/sdw_batch.cjs status [batchId]
 
 Queue state lives in `.sdw/state/batch-{batchId}.json`. Dispatch (`4`) and judgment (`5`) pauses stop the loop; the host agent drives the paused run and then resumes the queue. Specifications already recorded as `completed` or `archived` in `index.specs.md` are skipped, so a queue never re-implements delivered work.
 
-A batch never refines a delivered specification. Refinement is an explicit single-spec call: `sdw-orch run <spec> --second-pass` (alias `--refine`) audits what was delivered, fills acceptance criteria that are missing or drifted from the spec, applies clear simplifications, always writes a `{slug}-refine.md` report, commits only when the pass changed code, and reaches `sdw-ship-pr` only when that commit exists.
+A batch never refines a delivered specification. Refinement is an explicit single-spec call: `sdw-run run <spec> --second-pass` (alias `--refine`) audits what was delivered, fills acceptance criteria that are missing or drifted from the spec, applies clear simplifications, always writes a `{slug}-refine.md` report, commits only when the pass changed code, and reaches `sdw-ship-pr` only when that commit exists.
 
 ### Using `sdw-security-checks` (Secrets & Credentials Gate)
 
@@ -431,7 +431,7 @@ node skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs --head develop --push --poll-pr
 
 ### Using `sdw-code-review` (Deep Review & Fix Planning)
 
-The `sdw-code-review` skill deeply analyzes committed and uncommitted working-tree changes against an auto-detected base branch, and doubles as the `sdw-orch` Step 7 delegation target:
+The `sdw-code-review` skill deeply analyzes committed and uncommitted working-tree changes against an auto-detected base branch, and doubles as the `sdw-run` Step 7 delegation target:
 
 ```bash
 # Review working tree and HEAD diffs (auto-detected base), write Markdown fix plan

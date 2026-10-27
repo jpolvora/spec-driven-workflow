@@ -155,15 +155,15 @@ const INTENT_RULES = {
     secondaryKeywords: ['new spec', 'import spec', 'list specs', 'sync specs', 'validate spec', 'archive spec', 'formatting', 'acceptance criteria', 'format spec', 'grill me', 'refine spec', 'spec status', 'awaiting-approval'],
     recommendedOption: 'Author, grill, validate, or synchronize specifications using sdw-spec'
   },
-  'sdw-orch': {
-    primaryKeywords: ['orch', 'orchestrator', 'orchestration', 'implement spec', 'run spec', 'execute spec', 'specification implementation', 'workflow execution'],
+  'sdw-run': {
+    primaryKeywords: ['orchestrator', 'orchestration', 'implement spec', 'run spec', 'execute spec', 'specification implementation', 'workflow execution'],
     secondaryKeywords: ['workflow', 'implement', 'implementation', 'execute', 'execution', 'resumption', 'resume', 'status', 'dag', 'conformance', 'delivery commit', 'automated review', 'pull request', 'push'],
-    recommendedOption: 'Orchestrate end-to-end implementation and delivery using sdw-orch'
+    recommendedOption: 'Orchestrate end-to-end implementation and delivery using sdw-run'
   },
   'sdw-batch': {
     primaryKeywords: ['multiple specs', 'multiple specifications', 'spec queue', 'specification queue', 'all specs', 'implement all specs', 'queue specs', 'run specs in sequence'],
     secondaryKeywords: ['batch', 'multi-spec', 'resume batch', 'batch status', 'sequential delivery', 'specs in sequence'],
-    recommendedOption: 'Queue specifications through single sdw-orch runs using sdw-batch'
+    recommendedOption: 'Queue specifications through single sdw-run runs using sdw-batch'
   },
   'sdw-rules': {
     primaryKeywords: ['sdw-rules', 'shared rules', 'engineering principles', 'simplicity first', 'scope enclosure', 'anti-overengineering'],
@@ -215,7 +215,7 @@ function routePrompt(prompt, options) {
   const lower = normalized.toLowerCase();
 
   // 1. Explicit Invocation Check (AC6)
-  // Check for patterns like /sdw-config, @sdw-spec, sdw-orch, /orch, @orch
+  // Check for patterns like /sdw-config, @sdw-spec, sdw-run
   for (const skill of availableSkills) {
     const explicitPatterns = [
       new RegExp(`(?:^|\\s)[/@]?${skill.name}\\b`, 'i'),
@@ -272,7 +272,7 @@ function routePrompt(prompt, options) {
     }
   }
 
-  const knownExplicitSkills = ['sdw-config', 'sdw-doctor', 'sdw-spec', 'sdw-orch', 'sdw-router', 'sdw-rules', 'sdw-security-checks', 'sdw-ship-pr', 'sdw-code-review', 'sdw-fixer'];
+  const knownExplicitSkills = ['sdw-config', 'sdw-doctor', 'sdw-spec', 'sdw-run', 'sdw-router', 'sdw-rules', 'sdw-security-checks', 'sdw-ship-pr', 'sdw-code-review', 'sdw-fixer'];
   for (const s of knownExplicitSkills) {
     if (new RegExp(`(?:^|\\s)[/@]?${s}\\b`, 'i').test(lower)) {
       // It was explicitly requested but might be missing on disk
@@ -290,7 +290,7 @@ function routePrompt(prompt, options) {
     }
   }
 
-  // Multi-specification requests belong to sdw-batch; sdw-orch runs exactly one spec.
+  // Multi-specification requests belong to sdw-batch; sdw-run runs exactly one spec.
   const multiSpecRequest =
     /\b(?:multiple|several)\s+(?:specs?|specifications?)\b/.test(lower) ||
     /\b(?:specs?|specifications?)\s+queue\b/.test(lower) ||
@@ -345,10 +345,10 @@ function routePrompt(prompt, options) {
   // 4. Ambiguity Resolution on Tied Confidence (AC7)
   if (topCandidates.length > 1) {
     // Determine recommended default
-    // If orch and spec are tied, orch is recommended for implementation
+    // If sdw-run and sdw-spec are tied, sdw-run is recommended for implementation
     let recommendedDefault = topCandidates[0][0];
-    if (topCandidates.some(c => c[0] === 'sdw-orch')) {
-      recommendedDefault = 'sdw-orch';
+    if (topCandidates.some(c => c[0] === 'sdw-run')) {
+      recommendedDefault = 'sdw-run';
     }
 
     const optionsList = topCandidates.map(([name]) => {
@@ -405,7 +405,7 @@ function doctorCheck(options) {
   const skills = scanSkills({ root, ...options });
   const issues = [];
 
-  const expectedSkills = ['sdw-config', 'sdw-spec', 'sdw-orch', 'sdw-router'];
+  const expectedSkills = ['sdw-config', 'sdw-spec', 'sdw-run', 'sdw-router'];
 
   if (skills.length === 0) {
     issues.push({

@@ -8,8 +8,8 @@ const os = require('os');
 const { execSync } = require('child_process');
 
 const sdwConfig = require('../skills/sdw-config/scripts/sdw_config.cjs');
-const sdwOrch = require('../skills/sdw-orch/scripts/sdw_orch.cjs');
-const stateManager = require('../skills/sdw-orch/scripts/state_manager.cjs');
+const sdwRun = require('../skills/sdw-run/scripts/sdw_run.cjs');
+const stateManager = require('../skills/sdw-run/scripts/state_manager.cjs');
 
 // Spec 027: wire the deterministic judge stub for unattended runs past Step 4.
 require('./fixtures/judge_env.cjs').installJudgeEnv();
@@ -83,7 +83,7 @@ None
   return specPath;
 }
 
-test('sdw-orch branch & worktree - AC1..AC4: Configuration defaults, schema and validation', () => {
+test('sdw-run branch & worktree - AC1..AC4: Configuration defaults, schema and validation', () => {
   assert.strictEqual(sdwConfig.DEFAULT_CONFIG.useWorktrees, false);
   assert.strictEqual(sdwConfig.DEFAULT_CONFIG.useFeatureBranches, false);
 
@@ -111,7 +111,7 @@ test('sdw-orch branch & worktree - AC1..AC4: Configuration defaults, schema and 
   assert.ok(invalidBranches.errors.some(e => e.includes('useFeatureBranches') && e.includes('must be a boolean')));
 });
 
-test('sdw-orch branch & worktree - AC18: .gitignore and directory-structure.md documentation', () => {
+test('sdw-run branch & worktree - AC18: .gitignore and directory-structure.md documentation', () => {
   const rootGitignore = fs.readFileSync(path.resolve(__dirname, '../.gitignore'), 'utf8');
   assert.ok(rootGitignore.includes('.sdw/worktrees/'), '.gitignore must ignore .sdw/worktrees/');
 
@@ -119,13 +119,13 @@ test('sdw-orch branch & worktree - AC18: .gitignore and directory-structure.md d
   assert.ok(dirDoc.includes('worktrees/'), 'directory-structure.md must document worktrees/');
 });
 
-test('sdw-orch branch & worktree - AC5: Default execution stays on current branch', () => {
+test('sdw-run branch & worktree - AC5: Default execution stays on current branch', () => {
   const tmpDir = setupTestRepo();
   try {
     const specPath = createDummySpec(tmpDir, '00001-default-branch');
     const curBranchBefore = execSync('git rev-parse --abbrev-ref HEAD', { cwd: tmpDir, encoding: 'utf8' }).trim();
 
-    const code = sdwOrch.cmdRun({
+    const code = sdwRun.cmdRun({
       specPath,
       root: tmpDir,
       minScore: 0,
@@ -141,7 +141,7 @@ test('sdw-orch branch & worktree - AC5: Default execution stays on current branc
   }
 });
 
-test('sdw-orch branch & worktree - AC6, AC8, AC9, AC10: Feature branch creation, reuse, and state recording', () => {
+test('sdw-run branch & worktree - AC6, AC8, AC9, AC10: Feature branch creation, reuse, and state recording', () => {
   const tmpDir = setupTestRepo();
   try {
     const slug = '00002-feature-branch-test';
@@ -156,7 +156,7 @@ test('sdw-orch branch & worktree - AC6, AC8, AC9, AC10: Feature branch creation,
 
     // Initial run - creates feature/{slug}
     const runId = `run-${Date.now()}-${slug}`;
-    const code = sdwOrch.cmdRun({
+    const code = sdwRun.cmdRun({
       specPath,
       root: tmpDir,
       runId,
@@ -188,7 +188,7 @@ test('sdw-orch branch & worktree - AC6, AC8, AC9, AC10: Feature branch creation,
       skipReview: true,
       skipPr: true
     };
-    const code2 = sdwOrch.cmdRun(opts2);
+    const code2 = sdwRun.cmdRun(opts2);
     if (code2 !== 0) {
       console.error('Test 4 Run 2 failed with runResult:', opts2._runResult);
     }
@@ -200,7 +200,7 @@ test('sdw-orch branch & worktree - AC6, AC8, AC9, AC10: Feature branch creation,
   }
 });
 
-test('sdw-orch branch & worktree - AC7: Dirty tree never blocks; delivery commits only tracked spec files', () => {
+test('sdw-run branch & worktree - AC7: Dirty tree never blocks; delivery commits only tracked spec files', () => {
   const tmpDir = setupTestRepo();
   try {
     const slug = '00003-dirty-tree-test';
@@ -209,7 +209,7 @@ test('sdw-orch branch & worktree - AC7: Dirty tree never blocks; delivery commit
     // Unrelated dirty file must be left alone by scoped commits
     fs.writeFileSync(path.join(tmpDir, 'dirty.txt'), 'uncommitted changes', 'utf8');
 
-    const code = sdwOrch.cmdRun({
+    const code = sdwRun.cmdRun({
       specPath,
       root: tmpDir,
       featureBranch: true,
@@ -230,14 +230,14 @@ test('sdw-orch branch & worktree - AC7: Dirty tree never blocks; delivery commit
   }
 });
 
-test('sdw-orch branch & worktree - AC13: Single low-complexity task skips worktree creation', () => {
+test('sdw-run branch & worktree - AC13: Single low-complexity task skips worktree creation', () => {
   const tmpDir = setupTestRepo();
   try {
     const slug = '00004-single-low-skip';
     const specPath = createDummySpec(tmpDir, slug, 'simple', 1);
 
     const runId = `run-${Date.now()}-${slug}`;
-    const code = sdwOrch.cmdRun({
+    const code = sdwRun.cmdRun({
       specPath,
       root: tmpDir,
       runId,
@@ -256,7 +256,7 @@ test('sdw-orch branch & worktree - AC13: Single low-complexity task skips worktr
   }
 });
 
-test('sdw-orch branch & worktree - AC12, AC14, AC15, AC17: Multi-task worktree lifecycle and cherry-pick integration', () => {
+test('sdw-run branch & worktree - AC12, AC14, AC15, AC17: Multi-task worktree lifecycle and cherry-pick integration', () => {
   const tmpDir = setupTestRepo();
   try {
     const slug = '00005-multi-worktree-test';
@@ -265,7 +265,7 @@ test('sdw-orch branch & worktree - AC12, AC14, AC15, AC17: Multi-task worktree l
     execSync('git add -A && git commit -m "add multi-task spec"', { cwd: tmpDir, stdio: 'ignore' });
 
     const runId = `run-${Date.now()}-${slug}`;
-    const code = sdwOrch.cmdRun({
+    const code = sdwRun.cmdRun({
       specPath,
       root: tmpDir,
       runId,
@@ -293,7 +293,7 @@ test('sdw-orch branch & worktree - AC12, AC14, AC15, AC17: Multi-task worktree l
   }
 });
 
-test('sdw-orch branch & worktree - AC21: Runtime overrides (--no-worktrees, --no-feature-branch)', () => {
+test('sdw-run branch & worktree - AC21: Runtime overrides (--no-worktrees, --no-feature-branch)', () => {
   const tmpDir = setupTestRepo();
   try {
     const slug = '00006-overrides-test';
@@ -310,7 +310,7 @@ test('sdw-orch branch & worktree - AC21: Runtime overrides (--no-worktrees, --no
     const curBranchBefore = execSync('git rev-parse --abbrev-ref HEAD', { cwd: tmpDir, encoding: 'utf8' }).trim();
     const runId = `run-${Date.now()}-${slug}`;
 
-    const code = sdwOrch.cmdRun({
+    const code = sdwRun.cmdRun({
       specPath,
       root: tmpDir,
       runId,
@@ -336,7 +336,7 @@ test('sdw-orch branch & worktree - AC21: Runtime overrides (--no-worktrees, --no
   }
 });
 
-test('sdw-orch branch & worktree - AC22: status subcommand displays branch and worktrees', () => {
+test('sdw-run branch & worktree - AC22: status subcommand displays branch and worktrees', () => {
   const tmpDir = setupTestRepo();
   try {
     const slug = '00007-status-test';
@@ -344,7 +344,7 @@ test('sdw-orch branch & worktree - AC22: status subcommand displays branch and w
     execSync('git add -A && git commit -m "add test spec"', { cwd: tmpDir, stdio: 'ignore' });
 
     const runId = `run-${Date.now()}-${slug}`;
-    sdwOrch.cmdRun({
+    sdwRun.cmdRun({
       specPath,
       root: tmpDir,
       runId,
@@ -358,7 +358,7 @@ test('sdw-orch branch & worktree - AC22: status subcommand displays branch and w
     const origLog = console.log;
     console.log = (msg) => { output += msg + '\n'; };
     try {
-      const statusCode = sdwOrch.cmdStatus({ root: tmpDir, runId });
+      const statusCode = sdwRun.cmdStatus({ root: tmpDir, runId });
       assert.strictEqual(statusCode, 0);
     } finally {
       console.log = origLog;
@@ -372,7 +372,7 @@ test('sdw-orch branch & worktree - AC22: status subcommand displays branch and w
   }
 });
 
-test('sdw-orch branch & worktree - branching AC6: feature branch starts from the work branch', () => {
+test('sdw-run branch & worktree - branching AC6: feature branch starts from the work branch', () => {
   const tmpDir = setupTestRepo();
   try {
     const slug = '00008-work-branch-start';
@@ -401,7 +401,7 @@ test('sdw-orch branch & worktree - branching AC6: feature branch starts from the
     fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
 
     const runId = `run-${Date.now()}-${slug}`;
-    const code = sdwOrch.cmdRun({
+    const code = sdwRun.cmdRun({
       specPath,
       root: tmpDir,
       runId,
@@ -424,7 +424,7 @@ test('sdw-orch branch & worktree - branching AC6: feature branch starts from the
   }
 });
 
-test('sdw-orch branch & worktree - branching AC7: updateWorkBranch fetches and fast-forwards the work branch', () => {
+test('sdw-run branch & worktree - branching AC7: updateWorkBranch fetches and fast-forwards the work branch', () => {
   const tmpDir = setupTestRepo();
   const remoteDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-bw-remote-'));
   try {
@@ -451,7 +451,7 @@ test('sdw-orch branch & worktree - branching AC7: updateWorkBranch fetches and f
     fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
 
     const runId = `run-${Date.now()}-${slug}`;
-    const code = sdwOrch.cmdRun({
+    const code = sdwRun.cmdRun({
       specPath,
       root: tmpDir,
       runId,
@@ -472,7 +472,7 @@ test('sdw-orch branch & worktree - branching AC7: updateWorkBranch fetches and f
   }
 });
 
-test('sdw-orch branch & worktree - branching AC7 gitflow: same-lane update fast-forwards the checked-out work branch', () => {
+test('sdw-run branch & worktree - branching AC7 gitflow: same-lane update fast-forwards the checked-out work branch', () => {
   const tmpDir = setupTestRepo();
   const remoteDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-bw-remote-'));
   try {
@@ -502,7 +502,7 @@ test('sdw-orch branch & worktree - branching AC7 gitflow: same-lane update fast-
     fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
 
     const runId = `run-${Date.now()}-${slug}`;
-    const code = sdwOrch.cmdRun({
+    const code = sdwRun.cmdRun({
       specPath,
       root: tmpDir,
       runId,
@@ -523,7 +523,7 @@ test('sdw-orch branch & worktree - branching AC7 gitflow: same-lane update fast-
   }
 });
 
-test('sdw-orch branch & worktree - branching auto: the github preset resolves origin/HEAD into both lanes', () => {
+test('sdw-run branch & worktree - branching auto: the github preset resolves origin/HEAD into both lanes', () => {
   const tmpDir = setupTestRepo();
   const remoteDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-bw-remote-'));
   try {
@@ -547,7 +547,7 @@ test('sdw-orch branch & worktree - branching auto: the github preset resolves or
     fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
 
     const runId = `run-${Date.now()}-${slug}`;
-    const code = sdwOrch.cmdRun({ specPath, root: tmpDir, runId, minScore: 0, skipReview: true, skipPr: true });
+    const code = sdwRun.cmdRun({ specPath, root: tmpDir, runId, minScore: 0, skipReview: true, skipPr: true });
     assert.strictEqual(code, 0);
 
     const state = stateManager.loadRunState(tmpDir, runId);
@@ -561,7 +561,7 @@ test('sdw-orch branch & worktree - branching auto: the github preset resolves or
   }
 });
 
-test('sdw-orch branch & worktree - branching AC7: a distinct work lane that is checked out updates in place', () => {
+test('sdw-run branch & worktree - branching AC7: a distinct work lane that is checked out updates in place', () => {
   const tmpDir = setupTestRepo();
   const remoteDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-bw-remote-'));
   try {
@@ -592,7 +592,7 @@ test('sdw-orch branch & worktree - branching AC7: a distinct work lane that is c
     fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
 
     const runId = `run-${Date.now()}-${slug}`;
-    const code = sdwOrch.cmdRun({ specPath, root: tmpDir, runId, minScore: 0, skipReview: true, skipPr: true });
+    const code = sdwRun.cmdRun({ specPath, root: tmpDir, runId, minScore: 0, skipReview: true, skipPr: true });
     assert.strictEqual(code, 0, 'A checked-out work lane must not block the fetch');
 
     const updatedWorkHead = execSync('git rev-parse develop', { cwd: tmpDir, encoding: 'utf8' }).trim();
@@ -605,7 +605,7 @@ test('sdw-orch branch & worktree - branching AC7: a distinct work lane that is c
   }
 });
 
-test('sdw-orch branch & worktree - branching dirty tree: a conflicting work lane never blocks activation', () => {
+test('sdw-run branch & worktree - branching dirty tree: a conflicting work lane never blocks activation', () => {
   const tmpDir = setupTestRepo();
   const remoteDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-bw-remote-'));
   try {
@@ -631,7 +631,7 @@ test('sdw-orch branch & worktree - branching dirty tree: a conflicting work lane
     fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
 
     const runId = `run-${Date.now()}-${slug}`;
-    const code = sdwOrch.cmdRun({ specPath, root: tmpDir, runId, minScore: 0, skipReview: true, skipPr: true });
+    const code = sdwRun.cmdRun({ specPath, root: tmpDir, runId, minScore: 0, skipReview: true, skipPr: true });
     assert.strictEqual(code, 0, 'A dirty tree must never halt activation');
 
     const featureBase = execSync(`git merge-base feature/${slug} ${defaultBranch}`, { cwd: tmpDir, encoding: 'utf8' }).trim();
@@ -643,7 +643,7 @@ test('sdw-orch branch & worktree - branching dirty tree: a conflicting work lane
   }
 });
 
-test('sdw-orch branch & worktree - branching AC8: work-branch update failure exits 1 before creating the feature branch', () => {
+test('sdw-run branch & worktree - branching AC8: work-branch update failure exits 1 before creating the feature branch', () => {
   const tmpDir = setupTestRepo();
   try {
     const slug = '00010-work-branch-update-failure';
@@ -664,7 +664,7 @@ test('sdw-orch branch & worktree - branching AC8: work-branch update failure exi
     const statusBefore = execSync('git status --porcelain', { cwd: tmpDir, encoding: 'utf8' }).trim();
     const runId = `run-${Date.now()}-${slug}`;
     const opts = { specPath, root: tmpDir, runId, minScore: 0, skipReview: true, skipPr: true };
-    const code = sdwOrch.cmdRun(opts);
+    const code = sdwRun.cmdRun(opts);
     assert.strictEqual(code, 1, 'Must fail when the work branch cannot be updated');
 
     let featureExists = true;
@@ -682,7 +682,7 @@ test('sdw-orch branch & worktree - branching AC8: work-branch update failure exi
   }
 });
 
-test('sdw-orch branch & worktree - branching reuse: resuming on the feature branch never checks out, fetches, or fast-forwards', () => {
+test('sdw-run branch & worktree - branching reuse: resuming on the feature branch never checks out, fetches, or fast-forwards', () => {
   const tmpDir = setupTestRepo();
   try {
     const slug = '00011-reuse-safety';
@@ -706,7 +706,7 @@ test('sdw-orch branch & worktree - branching reuse: resuming on the feature bran
     const runId = `run-${Date.now()}-${slug}`;
     let code;
     try {
-      code = sdwOrch.cmdRun({ specPath, root: tmpDir, runId, minScore: 0, skipReview: true, skipPr: true });
+      code = sdwRun.cmdRun({ specPath, root: tmpDir, runId, minScore: 0, skipReview: true, skipPr: true });
     } finally {
       console.log = origLog;
     }

@@ -7,7 +7,7 @@ const path = require('path');
 const { execSync } = require('child_process');
 
 const sdwRules = require('../skills/sdw-rules/scripts/sdw_rules.cjs');
-const reviewRunner = require('../skills/sdw-orch/scripts/review_runner.cjs');
+const reviewRunner = require('../skills/sdw-run/scripts/review_runner.cjs');
 
 // Keep vault writes hermetic: log-trap tests must hit the local traps file,
 // never the real ws-memo vault.

@@ -8,10 +8,10 @@ const os = require('os');
 const { execSync } = require('child_process');
 
 const sdwConfig = require('../skills/sdw-config/scripts/sdw_config.cjs');
-const sdwOrch = require('../skills/sdw-orch/scripts/sdw_orch.cjs');
-const stateManager = require('../skills/sdw-orch/scripts/state_manager.cjs');
-const specGrilling = require('../skills/sdw-orch/scripts/spec_grilling.cjs');
-const dagPlanner = require('../skills/sdw-orch/scripts/dag_planner.cjs');
+const sdwRun = require('../skills/sdw-run/scripts/sdw_run.cjs');
+const stateManager = require('../skills/sdw-run/scripts/state_manager.cjs');
+const specGrilling = require('../skills/sdw-run/scripts/spec_grilling.cjs');
+const dagPlanner = require('../skills/sdw-run/scripts/dag_planner.cjs');
 
 // Spec 027: wire the deterministic judge stub for unattended runs past Step 4.
 require('./fixtures/judge_env.cjs').installJudgeEnv();
@@ -119,7 +119,7 @@ test('sdw-refinement-gates - AC1, AC2: Step 2 Refinement naming and structured b
 
     // Execute run through orchestrator
     const runId = `run-${Date.now()}-test-refine`;
-    const res = sdwOrch.cmdRun({
+    const res = sdwRun.cmdRun({
       specPath,
       root: repoRoot,
       runId,
@@ -246,7 +246,7 @@ test('sdw-refinement-gates - AC5, AC6: Step 8 executes buildCommand and testComm
 
     const specPath = createDummySpec(repoRoot, 'test-build-test');
     const runId = `run-${Date.now()}-test-build-test`;
-    const res = sdwOrch.cmdRun({
+    const res = sdwRun.cmdRun({
       specPath,
       root: repoRoot,
       runId,
@@ -278,7 +278,7 @@ test('sdw-refinement-gates - AC7, AC14: Step 8 skips build/test when false and e
 
     const specPath = createDummySpec(repoRoot, 'test-skip-gates');
     const runId = `run-${Date.now()}-test-skip-gates`;
-    const res = sdwOrch.cmdRun({
+    const res = sdwRun.cmdRun({
       specPath,
       root: repoRoot,
       runId,
@@ -312,7 +312,7 @@ test('sdw-refinement-gates - AC8, AC10: Failed build/test triggers fix loop and 
 
     const specPath = createDummySpec(repoRoot, 'test-build-fail');
     const runId = `run-${Date.now()}-test-build-fail`;
-    const res = sdwOrch.cmdRun({
+    const res = sdwRun.cmdRun({
       specPath,
       root: repoRoot,
       runId,
@@ -350,7 +350,7 @@ test('sdw-refinement-gates - AC8: Successful automated fix resolves test failure
     const runId = `run-${Date.now()}-test-fix-success`;
     let fixerCalled = 0;
 
-    const res = sdwOrch.cmdRun({
+    const res = sdwRun.cmdRun({
       specPath,
       root: repoRoot,
       runId,
@@ -392,7 +392,7 @@ test('sdw-refinement-gates - AC9: Secret leak check rejects fix commit if automa
 
     const specPath = createDummySpec(repoRoot, 'test-fix-leak');
     const runId = `run-${Date.now()}-test-fix-leak`;
-    const res = sdwOrch.cmdRun({
+    const res = sdwRun.cmdRun({
       specPath,
       root: repoRoot,
       runId,
@@ -428,7 +428,7 @@ test('sdw-refinement-gates - AC11, AC12: Project pre-PR commands stage changes, 
 
     const specPath = createDummySpec(repoRoot, 'test-pre-pr');
     const runId = `run-${Date.now()}-test-pre-pr`;
-    const res = sdwOrch.cmdRun({
+    const res = sdwRun.cmdRun({
       specPath,
       root: repoRoot,
       runId,

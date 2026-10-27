@@ -60,7 +60,7 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
         "enabled": {
           "type": "boolean",
           "default": false,
-          "description": "When true, sdw-orch runs sdw-retro for the completed run and records the outcome in state.retro. When false or absent, it prints the advisory retro command only."
+          "description": "When true, sdw-run runs sdw-retro for the completed run and records the outcome in state.retro. When false or absent, it prints the advisory retro command only."
         },
         "followUp": {
           "type": "string",
@@ -78,7 +78,7 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
             "type": "string"
           },
           "default": [],
-          "description": "Explicit transcript files the retrospective scans line by line for sdw-orch command signatures. Supports the {projectRoot} token; project-relative paths stay inside the project root. Empty by default: transcripts are never discovered."
+          "description": "Explicit transcript files the retrospective scans line by line for sdw-run command signatures. Supports the {projectRoot} token; project-relative paths stay inside the project root. Empty by default: transcripts are never discovered."
         }
       },
       "additionalProperties": false
@@ -110,7 +110,7 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
     },
     "sandboxDir": {
       "type": "string",
-      "description": "Path to the directory that holds sandbox clones created by sdw-orch --sandbox. Defaults to {projectRoot}/.sdw/sandbox; any other value must resolve outside the project root. Supports tokens {projectRoot}, {skillsRoot}, and {temp}.",
+      "description": "Path to the directory that holds sandbox clones created by sdw-run --sandbox. Defaults to {projectRoot}/.sdw/sandbox; any other value must resolve outside the project root. Supports tokens {projectRoot}, {skillsRoot}, and {temp}.",
       "default": "{projectRoot}/.sdw/sandbox"
     },
     "skillsRoot": {
@@ -264,9 +264,9 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
 | `scoring.judgeEffort` | `string \| null` | `null` | Judge reasoning-effort hint passed to the judge command or host agent |
 | `scoring.judgeApiEndpoint` | `string \| null` | `null` | Judge API endpoint passed to the judge command or host agent |
 | `scoring.judgeCriticity` | `string` | `"strict"` | Judge strictness: `permissive`, `strict`, or `perfectionist` |
-| `retro.enabled` | `boolean` | `false` | Run `sdw-retro` automatically when a run reaches `completed` and record the outcome in `state.retro` (status, report paths, error). When `false` or absent, sdw-orch prints the advisory retro command only. This repository enables it. |
+| `retro.enabled` | `boolean` | `false` | Run `sdw-retro` automatically when a run reaches `completed` and record the outcome in `state.retro` (status, report paths, error). When `false` or absent, sdw-run prints the advisory retro command only. This repository enables it. |
 | `retro.followUp` | `string` | `"queue"` | `sdw-batch` policy for a completed item's retrospective candidates: `queue` creates one draft specification per `critical`/`high` candidate and appends it after the remaining queue items; `record` writes `.sdw/state/batch-{batchId}.followups.md` and creates no specification; `none` reads no report. Follow-up items record `followUpDepth: 1`; their candidates are summarized but never queued. |
-| `retro.transcripts` | `string[]` | `[]` | Explicit transcript files the retrospective scans line by line for `sdw-orch run` and `resume` signatures; each is listed under report inputs with its line count. Supports `{projectRoot}`; empty by default, so transcripts are never discovered. A missing path produces a `transcript_unreadable` signal and the retro still exits `0`. |
+| `retro.transcripts` | `string[]` | `[]` | Explicit transcript files the retrospective scans line by line for `sdw-run run` and `resume` signatures; each is listed under report inputs with its line count. Supports `{projectRoot}`; empty by default, so transcripts are never discovered. A missing path produces a `transcript_unreadable` signal and the retro still exits `0`. |
 | `implementation.mode` | `string` | `"subagent"` | Step 4 mode: `subagent` (sequential host-dispatched workers) or `command` (automated subprocess per task). `handoff` was replaced by `subagent` |
 | `implementation.command` | `string \| null` | `null` | Required when `implementation.mode` is `command`; supports `{taskId}`, `{promptFile}`, `{evidenceFile}`, `{workingDir}`, `{targetRoot}`, `{slug}` |
 | `implementation.timeoutMs` | `integer` | `1800000` | Per-task execution timeout for `command` mode |
@@ -275,7 +275,7 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
 | `changelogEnabled` | `boolean` | `true` | Enable appending delivery records to the project changelog; `false` skips the append with exit `0` and writes nothing |
 | `changelogFile` | `string` | `"{projectRoot}/CHANGELOG.md"` | Changelog path; supports `{projectRoot}` and must resolve inside the project root |
 | `stateDir` | `string` | `"{projectRoot}/.sdw/state"` | Path to isolated execution run state directory (supports `{projectRoot}` and `{skillsRoot}`) |
-| `sandboxDir` | `string` | `"{projectRoot}/.sdw/sandbox"` | Root directory for `sdw-orch --sandbox` clones; each run creates `{sandboxDir}/{runId}/repo`. Supports `{projectRoot}`, `{skillsRoot}`, and `{temp}` (OS temp directory). A custom value must resolve **outside** the project root; only the default may live inside it |
+| `sandboxDir` | `string` | `"{projectRoot}/.sdw/sandbox"` | Root directory for `sdw-run --sandbox` clones; each run creates `{sandboxDir}/{runId}/repo`. Supports `{projectRoot}`, `{skillsRoot}`, and `{temp}` (OS temp directory). A custom value must resolve **outside** the project root; only the default may live inside it |
 | `skillsRoot` | `string` | — | Path to the active skills directory (supports `{projectRoot}` and `{skillsRoot}`) |
 | `autoResolveGaps` | `boolean` | `true` | Whether to auto-apply recommended grilling defaults when non-interactive |
 | `securityChecksEnabled` | `boolean` | `false` | Enable pre-commit secrets and credentials leak scanning |

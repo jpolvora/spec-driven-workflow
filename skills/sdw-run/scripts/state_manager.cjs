@@ -79,7 +79,7 @@ function createRunState(options) {
   const artifactsRelDir = getArtifactsRelDir(targetRoot, specSlug, runId);
 
   const state = {
-    orchestrator: 'sdw-orch',
+    orchestrator: 'sdw-run',
     runId,
     specSlug,
     specPath,

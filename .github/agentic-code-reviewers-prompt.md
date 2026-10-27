@@ -8,7 +8,7 @@ Report only findings that change behavior. Maximum 6 findings per review.
 2. **Acceptance criterion violated:** the diff contradicts an `ACn` entry or `## Notes` constraint in `.sdw/specs/`.
 3. **Secret exposure:** a credential, token, API key, or private key is committed.
 4. **Runtime dependency or harness coupling:** a packaged skill helper (`skills/*/scripts/*.cjs`) adds a non-stdlib dependency (npm package, Python) or depends on a specific agent harness/vendor API.
-5. **Unrequested version control mutation:** `git commit` or `git push` outside an authorized `sdw-orch` run.
+5. **Unrequested version control mutation:** `git commit` or `git push` outside an authorized `sdw-run` run.
 
 ## Do not report
 

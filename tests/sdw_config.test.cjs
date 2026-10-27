@@ -7,8 +7,8 @@ const path = require('path');
 const os = require('os');
 
 const sdwConfig = require('../skills/sdw-config/scripts/sdw_config.cjs');
-const stateManager = require('../skills/sdw-orch/scripts/state_manager.cjs');
-const sdwOrch = require('../skills/sdw-orch/scripts/sdw_orch.cjs');
+const stateManager = require('../skills/sdw-run/scripts/state_manager.cjs');
+const sdwRun = require('../skills/sdw-run/scripts/sdw_run.cjs');
 
 // Spec 027: wire the deterministic judge stub for unattended runs past Step 4.
 require('./fixtures/judge_env.cjs').installJudgeEnv();
@@ -147,7 +147,7 @@ test('sdw-config: cmdCheck fails when config violates schema bounds', () => {
   }
 });
 
-test('sdw-orch reads custom config values from .sdw/config.json', () => {
+test('sdw-run reads custom config values from .sdw/config.json', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-readcfg-test-'));
   try {
     sdwConfig.cmdInit({ root: tmpDir });
@@ -178,8 +178,8 @@ slug: feature
 - AC1: The orchestrator shall test custom score.
 `);
 
-    // Verify sdw-orch detects the spec in specsDir even when passed as relative name
-    const runCode = sdwOrch.cmdRun({
+    // Verify sdw-run detects the spec in specsDir even when passed as relative name
+    const runCode = sdwRun.cmdRun({
       root: tmpDir,
       specPath: 'feature.md', // Relative name resolved via config.specsDir
       skipReview: true,

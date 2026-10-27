@@ -1,15 +1,15 @@
 # Retro Protocol
 
-`sdw-retro` is a review of one `sdw-orch` run. It turns the run's own record
+`sdw-retro` is a review of one `sdw-run` run. It turns the run's own record
 and the transcripts the operator explicitly names into deterministic friction
 signals and leaves every improvement judgment to an explicit operator decision.
 It never changes project code and never writes memory records.
 
-`sdw-orch` starts the review automatically when a run reaches `completed` and
+`sdw-run` starts the review automatically when a run reaches `completed` and
 `retro.enabled` is `true`. The orchestrator records the outcome in
 `state.retro`; a non-zero retro exit or a missing report is recorded and never
 turns the completed delivery into a failed run. When `retro.enabled` is `false`
-or absent, `sdw-orch` prints the advisory retro command and does not run it.
+or absent, `sdw-run` prints the advisory retro command and does not run it.
 
 ## Invocation
 
@@ -128,7 +128,7 @@ Signals are read from the state object, never invented from prose.
 | `unresolvedThreads` | `steps.8.output.reviewConvergence` | Active, resolved, and pending threads with locators. |
 | `missingArtifacts` | declared artifact paths | Present only when a declared path is absent. |
 | `leftover_run` | sibling `*.state.json` files with the same `specSlug` | Sibling runs that never reached `completed` or `failed`, with run id, status, and age. |
-| `repeated_run_invocation` | configured transcripts | Two `sdw-orch ... run` invocations for the same `--spec` in one transcript with no `resume` between them. Adjacent lines carrying the same command excerpt count once. Cites the file and both line numbers; never copies line bodies. |
+| `repeated_run_invocation` | configured transcripts | Two `sdw-run ... run` invocations for the same `--spec` in one transcript with no `resume` between them. Adjacent lines carrying the same command excerpt count once. Cites the file and both line numbers; never copies line bodies. |
 | `transcript_unreadable` | named transcripts | A named transcript path that does not exist, cannot be read, or is not decodable text, with `not-found`, `read-error`, or `not-text`. The command still exits `0`. |
 
 The state stores only the latest gate record, so a repaired gate can appear as
@@ -137,11 +137,11 @@ it does not infer unrecorded repairs.
 
 Transcript scanning is line-based and format-agnostic: plain text and JSONL
 lines match the same command signature. A line counts as an orchestrator
-invocation only when the executable (`sdw-orch` or the `sdw_orch.cjs` script)
+invocation only when the executable (`sdw-run` or the `sdw_run.cjs` script)
 is immediately followed by the `run` or `resume` command word. An optional
 closing quote, preceded by any run of JSON escape backslashes, may sit between
 them, so a tool-call line such as
-`"command":"node \".../sdw_orch.cjs\" run --spec ..."` matches. A line that
+`"command":"node \".../sdw_run.cjs\" run --spec ..."` matches. A line that
 names the executable and uses the word `run` in a separate clause is prose and
 is not an invocation. Only a `--spec` that follows the command word is read;
 the specification is its basename with the `.md` suffix removed. Surrounding
@@ -218,10 +218,10 @@ repository modification.
 - The run writes only the two report files. It does not edit source, specs, or
   memory, and it does not run git.
 - `.sdw/state/` is git-ignored, so a retro run leaves the working tree unchanged.
-- `sdw-orch` starts one review automatically when `retro.enabled` is `true`;
+- `sdw-run` starts one review automatically when `retro.enabled` is `true`;
   otherwise the operator runs the command. A retro failure never changes the
   run status or the orchestrator exit code.
-- `sdw-orch run` refuses to start a second run while the same specification has
+- `sdw-run run` refuses to start a second run while the same specification has
   a run that is neither `completed` nor `failed`; it names the open run id and
   directs the operator to `resume --run-id <runId>`. `--new-run` overrides the
   guard for an intentional restart.

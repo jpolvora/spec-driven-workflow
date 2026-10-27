@@ -30,7 +30,7 @@ This repository uses Spec-Driven Workflow for spec management, configuration, an
 - **Routing Protocol:**
   - Route configuration and environment inquiries to `sdw-config`.
   - Route specification authoring, formatting, validation, and indexing to `sdw-spec`.
-  - Route specification implementation, orchestration, and delivery commits to `sdw-orch`.
+  - Route specification implementation, orchestration, and delivery commits to `sdw-run`.
   - Route deep working-tree code review, fix planning, and slash commands (`/sdw-code-review`) to `sdw-code-review`.
   - Pass through general conversational or non-SDW code editing tasks without interception.
 ```
@@ -74,5 +74,5 @@ To verify that the router is functioning in your consumer project:
    ```
    Expected output:
    ```
-   [sdw-router] Matched intent -> sdw-orch (confidence: 1.0)
+   [sdw-router] Matched intent -> sdw-run (confidence: 1.0)
    ```

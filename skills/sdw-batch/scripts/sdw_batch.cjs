@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 'use strict';
 
-// sdw-batch CLI: loop a specification list through sdw-orch single runs.
+// sdw-batch CLI: loop a specification list through sdw-run single runs.
 
 const queue = require('./batch_queue.cjs');
 
 const USAGE = `Usage: node sdw_batch.cjs <subcommand> [specPath...] [options]
 
 Subcommands:
-  run <specPath...>       Execute each specification as an independent sdw-orch single run
+  run <specPath...>       Execute each specification as an independent sdw-run single run
   resume [batchId]        Continue a paused batch from its first non-completed item
   status [batchId]        Show batch progress
   help                    Show this help

@@ -11,8 +11,8 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-const specGrilling = require('../skills/sdw-orch/scripts/spec_grilling.cjs');
-const dagPlanner = require('../skills/sdw-orch/scripts/dag_planner.cjs');
+const specGrilling = require('../skills/sdw-run/scripts/spec_grilling.cjs');
+const dagPlanner = require('../skills/sdw-run/scripts/dag_planner.cjs');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 

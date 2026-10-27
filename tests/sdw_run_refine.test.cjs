@@ -10,8 +10,8 @@ const path = require('path');
 const os = require('os');
 const { execSync } = require('child_process');
 
-const stateManager = require('../skills/sdw-orch/scripts/state_manager.cjs');
-const sdwOrch = require('../skills/sdw-orch/scripts/sdw_orch.cjs');
+const stateManager = require('../skills/sdw-run/scripts/state_manager.cjs');
+const sdwRun = require('../skills/sdw-run/scripts/sdw_run.cjs');
 const { installJudgeEnv } = require('./fixtures/judge_env.cjs');
 
 installJudgeEnv();
@@ -69,7 +69,7 @@ function setupRepo(options = {}) {
 }
 
 function startSecondPass(root) {
-  return sdwOrch.cmdRun({
+  return sdwRun.cmdRun({
     root,
     specPath: '.sdw/specs/refine-demo.md',
     refineMode: true,
@@ -91,7 +91,7 @@ function finishRefineTask(root, filesChanged, summary) {
   };
   const evidencePath = path.join(root, `${taskId}.evidence.json`);
   fs.writeFileSync(evidencePath, JSON.stringify(evidence, null, 2), 'utf8');
-  const code = sdwOrch.cmdTaskFinish({ root, runId: state.runId, taskId, evidencePath });
+  const code = sdwRun.cmdTaskFinish({ root, runId: state.runId, taskId, evidencePath });
   return { code, state, taskId };
 }
 
@@ -106,7 +106,7 @@ function headSha(root) {
 test('refine: refuses a specification that was never implemented', () => {
   const root = setupRepo({ registryStatus: 'pending' });
   try {
-    const code = sdwOrch.cmdRun({
+    const code = sdwRun.cmdRun({
       root,
       specPath: '.sdw/specs/refine-demo.md',
       refineMode: true,
@@ -135,7 +135,7 @@ test('refine: skipped grilling, one refine task, and a no-change pass ships noth
     const { code } = finishRefineTask(root, [], 'No change: considered the duplicated guard and skipped it; behaviour already minimal.');
     assert.equal(code, 0, 'task finish accepts an empty filesChanged in second-pass mode');
 
-    const resumeCode = sdwOrch.cmdResume({ root, runId: state.runId, skipReview: true });
+    const resumeCode = sdwRun.cmdResume({ root, runId: state.runId, skipReview: true });
     assert.equal(resumeCode, 0, 'a no-change refinement completes successfully');
 
     state = stateManager.loadRunState(root, state.runId);
@@ -182,7 +182,7 @@ test('refine: a real change is scored, committed as refine(...), and shipped', (
     const { code } = finishRefineTask(root, ['app.cjs'], 'Applied simplification: collapsed two guards into one; skipped renaming the helper.');
     assert.equal(code, 0, 'a changed refinement is accepted');
 
-    const resumeCode = sdwOrch.cmdResume({ root, runId: state.runId, skipReview: true });
+    const resumeCode = sdwRun.cmdResume({ root, runId: state.runId, skipReview: true });
     assert.equal(resumeCode, 0, 'the changed refinement completes');
 
     const after = stateManager.loadRunState(root, state.runId);
@@ -205,7 +205,7 @@ test('refine: resume keeps second-pass mode after the dispatch pause', () => {
     assert.equal(startSecondPass(root), 4);
     const state = stateManager.findLatestRunState(root);
 
-    const resumeCode = sdwOrch.cmdResume({ root, runId: state.runId, skipReview: true });
+    const resumeCode = sdwRun.cmdResume({ root, runId: state.runId, skipReview: true });
     assert.equal(resumeCode, 4, 'an in-flight refinement re-emits the dispatch pause');
     const reloaded = stateManager.loadRunState(root, state.runId);
     assert.equal(reloaded.refineMode, true, 'resume never downgrades the run to a normal implementation');

@@ -41,7 +41,7 @@ uncommitted working-tree changes against an auto-detected base branch, applying
    - Done when: Helper exits `0` (no `critical`/`warning`) or `1` (blocking or invalid input).
 
 3. **Triage Report & Delegate**
-   Read Markdown report as executable fix plan. Under `sdw-orch` Step 7, dispatch
+   Read Markdown report as executable fix plan. Under `sdw-run` Step 7, dispatch
    subagent or CLI runner and inspect JSON (`passed`, `errorCount`,
    `warningCount`, `suggestionCount`, `findings`) to advance, fix, or pause.
    - Done when: Blocking findings are `0` or fix ceiling reached with residual recorded.

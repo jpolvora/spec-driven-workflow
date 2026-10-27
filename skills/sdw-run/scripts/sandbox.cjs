@@ -201,7 +201,7 @@ function createSandbox(options = {}) {
   const sandboxDir = getSandboxDir(sourceRoot, runId, options.sandboxDir);
   if (fs.existsSync(sandboxDir)) {
     const relativeDir = normalizePath(path.relative(sourceRoot, sandboxDir));
-    throw new Error(`Sandbox target already exists at ${relativeDir}. Run "node skills/sdw-orch/scripts/sdw_orch.cjs sandbox clean --run-id ${runId}" before starting a new run (or delete the directory manually).`);
+    throw new Error(`Sandbox target already exists at ${relativeDir}. Run "node skills/sdw-run/scripts/sdw_run.cjs sandbox clean --run-id ${runId}" before starting a new run (or delete the directory manually).`);
   }
 
   const baselineDirty = isDirty(sourceRoot);
@@ -441,7 +441,7 @@ function renderReport(sourceRoot, metadata) {
   lines.push('## Remove');
   lines.push('');
   lines.push('```bash');
-  lines.push(`node skills/sdw-orch/scripts/sdw_orch.cjs sandbox clean --run-id ${metadata.runId}`);
+  lines.push(`node skills/sdw-run/scripts/sdw_run.cjs sandbox clean --run-id ${metadata.runId}`);
   lines.push('```');
 
   return lines.join('\n') + '\n';

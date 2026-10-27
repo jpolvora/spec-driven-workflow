@@ -11,8 +11,8 @@ const path = require('path');
 const os = require('os');
 const { execSync } = require('child_process');
 
-const stateManager = require('../skills/sdw-orch/scripts/state_manager.cjs');
-const sdwOrch = require('../skills/sdw-orch/scripts/sdw_orch.cjs');
+const stateManager = require('../skills/sdw-run/scripts/state_manager.cjs');
+const sdwRun = require('../skills/sdw-run/scripts/sdw_run.cjs');
 
 require('./fixtures/judge_env.cjs').installJudgeEnv();
 
@@ -55,7 +55,7 @@ function setupFeatureBranchRun() {
     JSON.stringify({ useFeatureBranches: true }, null, 2),
     'utf8'
   );
-  assert.equal(sdwOrch.cmdRun({
+  assert.equal(sdwRun.cmdRun({
     root,
     specPath: '.sdw/specs/dispatch-demo.md',
     skipReview: true,
@@ -97,7 +97,7 @@ function finishCapturingErrors(options) {
   const originalError = console.error;
   console.error = (...args) => messages.push(args.join(' '));
   try {
-    return { code: sdwOrch.cmdTaskFinish(options), output: messages.join('\n') };
+    return { code: sdwRun.cmdTaskFinish(options), output: messages.join('\n') };
   } finally {
     console.error = originalError;
   }
@@ -111,7 +111,7 @@ test('00063 AC1 & AC4: task finish checkpoints on the run feature branch', () =>
       'the checkout is on the run feature branch');
 
     const evidencePath = submitEvidence(root, taskId);
-    assert.equal(sdwOrch.cmdTaskFinish({ root, runId: state.runId, taskId, evidencePath }), 0,
+    assert.equal(sdwRun.cmdTaskFinish({ root, runId: state.runId, taskId, evidencePath }), 0,
       'a matching branch accepts the task and commits the checkpoint');
 
     const record = stateManager.loadRunState(root, state.runId).steps[4].tasks[taskId];
@@ -153,7 +153,7 @@ test('00063 AC1-AC3 & AC4: task finish refuses a checkpoint on another branch an
 
     // The remedy: back on the run branch the same submission is accepted.
     execSync(`git switch -q ${featureBranch}`, { cwd: root, stdio: 'ignore' });
-    assert.equal(sdwOrch.cmdTaskFinish({ root, runId: state.runId, taskId, evidencePath }), 0,
+    assert.equal(sdwRun.cmdTaskFinish({ root, runId: state.runId, taskId, evidencePath }), 0,
       'retrying on the run feature branch accepts the task');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -185,7 +185,7 @@ test('00063 AC2-AC4: task finish refuses a checkpoint on a detached HEAD', () =>
     assert.ok(record.branchGuard.reason.includes(featureBranch), 'the refusal reason names the run branch');
 
     execSync(`git switch -q ${featureBranch}`, { cwd: root, stdio: 'ignore' });
-    assert.equal(sdwOrch.cmdTaskFinish({ root, runId: state.runId, taskId, evidencePath }), 0,
+    assert.equal(sdwRun.cmdTaskFinish({ root, runId: state.runId, taskId, evidencePath }), 0,
       'the task is accepted once the run branch is checked out');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

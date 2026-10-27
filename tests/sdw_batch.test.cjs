@@ -1,6 +1,6 @@
 'use strict';
 
-// sdw-batch queue contract: delegation to single sdw-orch runs, pause/resume
+// sdw-batch queue contract: delegation to single sdw-run runs, pause/resume
 // continuity, completed-run reconciliation, failure policy, and summary output.
 
 const test = require('node:test');

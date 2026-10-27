@@ -42,7 +42,7 @@ points past the artifact's last line is rejected with `invalid-evidence-ref`.
 next. A direct `skills/` edit is never proposed: it is rejected with
 `skills-requires-spec`, and the rejection names the specification route
 (`author a specification under .sdw/specs/ with sdw-spec and implement it
-through sdw-orch`). A target naming a non-`skills/` path such as
+through sdw-run`). A target naming a non-`skills/` path such as
 `.sdw/specs/<slug>.md` is accepted.
 
 ## Severity

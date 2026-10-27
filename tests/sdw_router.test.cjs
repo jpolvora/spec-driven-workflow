@@ -59,17 +59,17 @@ test('AC4: Route specification authoring, formatting, listing, and archiving to 
   }
 });
 
-test('AC5: Route specification implementation, orchestration, and resumption to sdw-orch', () => {
+test('AC5: Route specification implementation, orchestration, and resumption to sdw-run', () => {
   const prompts = [
     'Start workflow to implement spec 00003-sdw-router-skill',
     'Resume orchestrator execution for run-1792396125490',
-    'Check orch status and conformance score of active delivery'
+    'Check sdw-run status and conformance score of active delivery'
   ];
 
   for (const p of prompts) {
     const res = sdwRouter.routePrompt(p);
     assert.equal(res.matched, true, `Should match prompt: "${p}"`);
-    assert.equal(res.targetSkill, 'sdw-orch', `Expected sdw-orch for prompt: "${p}"`);
+    assert.equal(res.targetSkill, 'sdw-run', `Expected sdw-run for prompt: "${p}"`);
   }
 });
 
@@ -77,8 +77,8 @@ test('AC6: Explicit skill invocations honored directly', () => {
   const testCases = [
     { prompt: '/sdw-config check', expected: 'sdw-config' },
     { prompt: '@sdw-spec new "Create user profile"', expected: 'sdw-spec' },
-    { prompt: '/sdw-orch run .sdw/specs/003.md', expected: 'sdw-orch' },
-    { prompt: '/orch status', expected: 'sdw-orch' }
+    { prompt: '/sdw-run run .sdw/specs/003.md', expected: 'sdw-run' },
+    { prompt: '/sdw-run status', expected: 'sdw-run' }
   ];
 
   for (const tc of testCases) {
