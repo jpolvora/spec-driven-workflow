@@ -1,6 +1,6 @@
 ---
 name: sdw-spec
-description: Specification lifecycle, authoring, synchronization, and formatting manager integrated with sdw-orch.
+description: Specification lifecycle, authoring, synchronization, and formatting manager integrated with sdw-run.
 version: 0.1.0
 invocation_names:
   - sdw-spec

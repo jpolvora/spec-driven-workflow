@@ -9,7 +9,7 @@ const { execSync } = require('child_process');
 
 const secChecks = require('../skills/sdw-security-checks/scripts/sdw_security_checks.cjs');
 const sdwConfig = require('../skills/sdw-config/scripts/sdw_config.cjs');
-const sdwOrch = require('../skills/sdw-orch/scripts/sdw_orch.cjs');
+const sdwRun = require('../skills/sdw-run/scripts/sdw_run.cjs');
 
 // Spec 027: wire the deterministic judge stub for unattended runs past Step 4.
 require('./fixtures/judge_env.cjs').installJudgeEnv();
@@ -205,8 +205,8 @@ test('sdw-security-checks - AC18: .gitignore advisories', () => {
   }
 });
 
-test('sdw-security-checks - AC6, AC8, AC12: sdw-orch security gate enforcement & bypass', () => {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-orch-sec-'));
+test('sdw-security-checks - AC6, AC8, AC12: sdw-run security gate enforcement & bypass', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-run-sec-'));
   try {
     execSync('git init', { cwd: tmpDir, stdio: 'ignore' });
     execSync('git config user.name "Test"', { cwd: tmpDir, stdio: 'ignore' });
@@ -267,7 +267,7 @@ None
     execSync('git add leak.js', { cwd: tmpDir, stdio: 'ignore' });
 
     // Run orchestrator - must be BLOCKED by security gate (AC8)
-    const runBlockedCode = sdwOrch.cmdRun({
+    const runBlockedCode = sdwRun.cmdRun({
       specPath,
       root: tmpDir,
       minScore: 0,
@@ -277,7 +277,7 @@ None
     assert.strictEqual(runBlockedCode, 1, 'Must be blocked with exit code 1');
 
     // Run with --skip-security - must bypass gate and succeed (AC12)
-    const runBypassCode = sdwOrch.cmdRun({
+    const runBypassCode = sdwRun.cmdRun({
       specPath,
       root: tmpDir,
       minScore: 0,

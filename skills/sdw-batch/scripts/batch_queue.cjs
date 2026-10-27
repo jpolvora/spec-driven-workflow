@@ -1,7 +1,7 @@
 'use strict';
 
 // sdw-batch queue: iterates a specification list and delegates each item to
-// sdw-orch as one independent single-specification run. This module owns the
+// sdw-run as one independent single-specification run. This module owns the
 // manifest and the loop; it never duplicates orchestrator step logic.
 
 const fs = require('fs');
@@ -9,7 +9,7 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 // Batch delegation is unattended and never passes --abort-on-gaps, so the only
-// pause codes sdw-orch can return here are dispatch (4) and judgment (5).
+// pause codes sdw-run can return here are dispatch (4) and judgment (5).
 const PAUSE_STATUS = {
   4: 'awaiting_implementation',
   5: 'awaiting_judgment'
@@ -480,7 +480,7 @@ function triggerSpecSync(config) {
 }
 
 function orchestratorScript() {
-  return path.resolve(__dirname, '..', '..', 'sdw-orch', 'scripts', 'sdw_orch.cjs');
+  return path.resolve(__dirname, '..', '..', 'sdw-run', 'scripts', 'sdw_run.cjs');
 }
 
 function invokeOrchestrator({ config, runId, specPath, resume }) {
@@ -551,7 +551,7 @@ function printSummary(manifest, options = {}) {
 
 function finishFailure(manifest, config, item, exitCode, message, options, continueOnError) {
   item.status = 'failed';
-  item.error = message || `sdw-orch exited with code ${exitCode}`;
+  item.error = message || `sdw-run exited with code ${exitCode}`;
   saveManifest(config, manifest);
   if (!continueOnError) {
     manifest.status = 'halted';
@@ -597,7 +597,7 @@ function executeQueue(manifest, config, options) {
     item.status = 'in_progress';
     saveManifest(config, manifest);
 
-    say(options, `\n[sdw-batch] [${item.index + 1}/${manifest.total}] Delegating ${item.slug} to sdw-orch (single run)`);
+    say(options, `\n[sdw-batch] [${item.index + 1}/${manifest.total}] Delegating ${item.slug} to sdw-run (single run)`);
     const started = Date.now();
     const prior = readRunState(config, item.runId);
     const resumable = prior && (prior.status === 'paused' || prior.status === 'in_progress');
@@ -652,7 +652,7 @@ function executeQueue(manifest, config, options) {
       item.error = null;
       manifest.status = 'paused';
       saveManifest(config, manifest);
-      say(options, `\n[sdw-batch] "${item.slug}" paused with ${item.status} (sdw-orch exit code ${exitCode}).`);
+      say(options, `\n[sdw-batch] "${item.slug}" paused with ${item.status} (sdw-run exit code ${exitCode}).`);
       say(options, `[sdw-batch] Continue that run, then resume the queue with: sdw-batch resume ${manifest.batchId}`);
       printSummary(manifest, options);
       return exitCode;

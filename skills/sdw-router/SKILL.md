@@ -28,11 +28,11 @@ Always-autoloaded entrypoint and traffic controller routing agent tasks across a
 | Project configuration, environment check, `.sdw/config.json`, dry-run | `sdw-config` | Workspace initialization and settings management |
 | Spec authoring, grilling, EARS formatting, PRD index, validation, sync, archiving | `sdw-spec` | Specification lifecycle and quality gates |
 | Installation health, missing skill, hybrid/global install check, workspace doctor | `sdw-doctor` | Read-only installation and workspace audit |
-| Spec implementation, orchestration, DAG tasks, scoring, review, PR | `sdw-orch` | End-to-end implementation and delivery pipeline for one specification |
-| Multiple specifications, spec queue, batch, sequential delivery | `sdw-batch` | Loops a specification list through single `sdw-orch` runs |
+| Spec implementation, orchestration, DAG tasks, scoring, review, PR | `sdw-run` | End-to-end implementation and delivery pipeline for one specification |
+| Multiple specifications, spec queue, batch, sequential delivery | `sdw-batch` | Loops a specification list through single `sdw-run` runs |
 | Behavioral rules, simplicity, YAGNI, anti-overengineering, trap log | `sdw-rules` | Shared engineering principles, simplicity, and traps |
 | Secret scanning, credentials leak check, pre-commit leak gate | `sdw-security-checks` | Pre-commit secrets and credentials leak scanner |
-| Deep working-tree code review, review fix planning, code-review | `sdw-code-review` | Standalone review, executable fix plans, and orch Step 7 delegation |
+| Deep working-tree code review, review fix planning, code-review | `sdw-code-review` | Standalone review, executable fix plans, and `sdw-run` Step 7 delegation |
 | Unrecognized or general coding / conversation | *(Pass-through)* | Allows standard agent execution without intercepting |
 
 **Rules:** apply [`sdw-rules`](../sdw-rules/SKILL.md) — planning, authorization, and scope — before routing or dispatching anything.
@@ -54,7 +54,7 @@ Always-autoloaded entrypoint and traffic controller routing agent tasks across a
    - Done when: Target skill is determined or pass-through signal is returned.
 
 3. **Dispatch Target Skill**
-   Load and invoke the selected skill (`sdw-config`, `sdw-spec`, `sdw-orch`, or `sdw-code-review`) with the user's intent.
+   Load and invoke the selected skill (`sdw-config`, `sdw-spec`, `sdw-run`, or `sdw-code-review`) with the user's intent.
    - Done when: Target skill execution is initiated.
 
 ## References

@@ -18,7 +18,7 @@ Deterministic reference for the audit run by `sdw_doctor.cjs`. Every check is re
 
 | Code | Level | Check |
 |---|---|---|
-| `skill-missing` | error | Every expected skill folder exists (`sdw-batch`, `sdw-changelog`, `sdw-code-review`, `sdw-config`, `sdw-doctor`, `sdw-fixer`, `sdw-memory`, `sdw-orch`, `sdw-retro`, `sdw-router`, `sdw-rules`, `sdw-security-checks`, `sdw-ship-pr`, `sdw-spec`). |
+| `skill-missing` | error | Every expected skill folder exists (`sdw-batch`, `sdw-changelog`, `sdw-code-review`, `sdw-config`, `sdw-doctor`, `sdw-fixer`, `sdw-memory`, `sdw-run`, `sdw-retro`, `sdw-router`, `sdw-rules`, `sdw-security-checks`, `sdw-ship-pr`, `sdw-spec`). |
 | `skill-entry-missing` | error | `SKILL.md` exists in the skill folder. |
 | `skill-frontmatter` | error | YAML frontmatter parses. |
 | `skill-frontmatter-key` | error | `name`, `description`, `version`, and `invocation_names` are present. |
@@ -31,7 +31,7 @@ Deterministic reference for the audit run by `sdw_doctor.cjs`. Every check is re
 | `skill-script-dependency` | error | No `require` of an external module (Node built-ins only). |
 | `global-root-missing` | error | The global skills root exists when it is the resolved root. |
 | `global-skills-missing` | error | At least one SDW skill exists globally. |
-| `global-skill-missing` | error | Core skills present globally (`sdw-config`, `sdw-orch`, `sdw-router`, `sdw-rules`, `sdw-spec`). |
+| `global-skill-missing` | error | Core skills present globally (`sdw-config`, `sdw-run`, `sdw-router`, `sdw-rules`, `sdw-spec`). |
 | `global-skill-unreadable` | error | Every global skill has a readable `SKILL.md`. |
 | `global-skill-frontmatter` | warning | Global `SKILL.md` frontmatter contains `name` and `version`. |
 
@@ -70,7 +70,7 @@ The smoke test proves the installation can execute the real pipeline:
 1. Resolve the skills root with the same detection order as `check`.
 2. Create a temp project, copy the skills into `.agents/skills/`, and write a minimal `.sdw/` workspace plus `00001-doctor-smoke.md` (one AC).
 3. Configure `implementation.mode: command` with a worker that writes `status: success` evidence and a changed file, a local judge stub that verifies every AC, a trivial verification command, and push/SCM/worktrees/feature branches disabled.
-4. `git init`, commit the baseline, then run `sdw-orch run .sdw/specs/00001-doctor-smoke.md --sandbox`.
+4. `git init`, commit the baseline, then run `sdw-run run .sdw/specs/00001-doctor-smoke.md --sandbox`.
 5. Read the sandbox run state and require exit `0`, `status: completed`, and steps 1-8 `completed` or `skipped`.
 
 Failure capture:
@@ -99,7 +99,7 @@ Failure capture:
   "globalRoot": "/home/user/.agents/skills",
   "presentSkills": ["sdw-config", "..."],
   "expectedSkills": ["sdw-code-review", "..."],
-  "findings": [{ "level": "error", "code": "skill-missing", "subject": "sdw-orch", "message": "..." }],
+  "findings": [{ "level": "error", "code": "skill-missing", "subject": "sdw-run", "message": "..." }],
   "errors": 0,
   "warnings": 0,
   "remediation": []
@@ -111,4 +111,4 @@ Failure capture:
 - No repair, install, or update.
 - No network calls.
 - No security audit; use `sdw-security-checks` for secrets.
-- No SCM, PR, or delivery validation; use `sdw-orch status` or `sdw-ship-pr`.
+- No SCM, PR, or delivery validation; use `sdw-run status` or `sdw-ship-pr`.

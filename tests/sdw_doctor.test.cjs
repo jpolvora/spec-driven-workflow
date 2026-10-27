@@ -169,11 +169,11 @@ test('sdw-doctor: missing skill is an error with reinstall advice', () => {
   const { root, home } = tempDirs();
   try {
     makeInstall(path.join(root, '.agents', 'skills'));
-    fs.rmSync(path.join(root, '.agents', 'skills', 'sdw-orch', 'SKILL.md'));
+    fs.rmSync(path.join(root, '.agents', 'skills', 'sdw-run', 'SKILL.md'));
     makeWorkspace(root);
     const result = runDoctor({ root, homeDir: home });
     assert.equal(result.ok, false);
-    assert.ok(result.findings.some(f => f.code === 'skill-missing' && f.subject === 'sdw-orch'));
+    assert.ok(result.findings.some(f => f.code === 'skill-missing' && f.subject === 'sdw-run'));
     assert.ok(result.remediation.some(line => line.includes('npx skills add')));
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

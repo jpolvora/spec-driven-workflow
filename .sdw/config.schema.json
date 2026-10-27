@@ -88,7 +88,7 @@
         "enabled": {
           "type": "boolean",
           "default": false,
-          "description": "When true, sdw-orch runs sdw-retro for the completed run and records the outcome in state.retro. When false or absent, it prints the advisory retro command only."
+          "description": "When true, sdw-run runs sdw-retro for the completed run and records the outcome in state.retro. When false or absent, it prints the advisory retro command only."
         },
         "followUp": {
           "type": "string",
@@ -106,7 +106,7 @@
             "type": "string"
           },
           "default": [],
-          "description": "Explicit transcript files the retrospective scans line by line for sdw-orch command signatures. Supports the {projectRoot} token; project-relative paths stay inside the project root. Empty by default: transcripts are never discovered."
+          "description": "Explicit transcript files the retrospective scans line by line for sdw-run command signatures. Supports the {projectRoot} token; project-relative paths stay inside the project root. Empty by default: transcripts are never discovered."
         }
       },
       "additionalProperties": false
@@ -138,7 +138,7 @@
     },
     "sandboxDir": {
       "type": "string",
-      "description": "Path to the directory that holds sandbox clones created by sdw-orch --sandbox. Defaults to {projectRoot}/.sdw/sandbox; any other value must resolve outside the project root. Supports tokens {projectRoot}, {skillsRoot}, and {temp}.",
+      "description": "Path to the directory that holds sandbox clones created by sdw-run --sandbox. Defaults to {projectRoot}/.sdw/sandbox; any other value must resolve outside the project root. Supports tokens {projectRoot}, {skillsRoot}, and {temp}.",
       "default": "{projectRoot}/.sdw/sandbox"
     },
     "skillsRoot": {

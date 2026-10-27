@@ -67,6 +67,7 @@ Central repository index tracking specification lifecycle states, metadata, and 
 | 00059 | 00059-sdw-ship-pr-review-thread-fidelity | SDW Review Thread Fidelity — Full Thread Content in list-threads and the Fixer Input | completed | local | 2026-10-23 | PASS | - |
 | 00063 | 00063-orchestrator-checkpoint-commits-must-ver | Orchestrator checkpoint commits must verify the run branch | completed | local | 2026-10-23 | PASS | - |
 | 00069 | 00069-dag-planning-must-not-invent-target-files | DAG planning must not invent target files | completed | local | 2026-10-24 | PASS | - |
+| 00070 | 00070-rename-sdw-orch-to-sdw-run | Rename the sdw-orch skill to sdw-run | completed | local | 2026-10-27 | PASS | - |
 
 ## Lean-Core Cut (2026-10-25)
 

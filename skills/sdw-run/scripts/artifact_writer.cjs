@@ -32,7 +32,7 @@ function writeArtifactSafely(targetRoot, runId, stepNum, filePath, content) {
     console.log(`[Step ${stepNum}: Artifact] Persisted artifact to ${relPath}`);
     return relPath;
   } catch (err) {
-    console.warn(`[sdw-orch] Warning: Failed to persist step ${stepNum} artifact: ${err.message}`);
+    console.warn(`[sdw-run] Warning: Failed to persist step ${stepNum} artifact: ${err.message}`);
     try {
       stateManager.recordWarning(root, runId, stepNum, `Artifact persistence warning: Failed to persist step ${stepNum} artifact: ${err.message}`);
     } catch (e) {}
@@ -97,7 +97,7 @@ function writeStep2Artifact(options) {
 
     return writeArtifactSafely(targetRoot, runId, 2, filePath, md);
   } catch (err) {
-    console.warn(`[sdw-orch] Warning: Failed to persist step 2 artifact: ${err.message}`);
+    console.warn(`[sdw-run] Warning: Failed to persist step 2 artifact: ${err.message}`);
     stateManager.recordWarning(targetRoot, runId, 2, `Artifact persistence warning: ${err.message}`);
     return null;
   }
@@ -151,7 +151,7 @@ function writeStep3Artifact(options) {
 
     return writeArtifactSafely(targetRoot, runId, 3, filePath, md);
   } catch (err) {
-    console.warn(`[sdw-orch] Warning: Failed to persist step 3 artifact: ${err.message}`);
+    console.warn(`[sdw-run] Warning: Failed to persist step 3 artifact: ${err.message}`);
     stateManager.recordWarning(targetRoot, runId, 3, `Artifact persistence warning: ${err.message}`);
     return null;
   }
@@ -241,7 +241,7 @@ function writeStep5Artifact(options) {
 
     return writeArtifactSafely(targetRoot, runId, 5, filePath, md);
   } catch (err) {
-    console.warn(`[sdw-orch] Warning: Failed to persist step 5 artifact: ${err.message}`);
+    console.warn(`[sdw-run] Warning: Failed to persist step 5 artifact: ${err.message}`);
     stateManager.recordWarning(targetRoot, runId, 5, `Artifact persistence warning: ${err.message}`);
     return null;
   }
@@ -275,7 +275,7 @@ function writeRefineReport(options) {
     md += criteria.length > 0 ? criteria.map(id => `- ${id}\n`).join('') : '- (none recorded)\n';
     return writeArtifactSafely(targetRoot, runId, 6, filePath, md);
   } catch (err) {
-    console.warn(`[sdw-orch] Warning: Failed to persist refinement report: ${err.message}`);
+    console.warn(`[sdw-run] Warning: Failed to persist refinement report: ${err.message}`);
     return null;
   }
 }

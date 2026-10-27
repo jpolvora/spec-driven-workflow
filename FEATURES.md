@@ -30,7 +30,7 @@
 
 - **Ultra-Lean Context Footprint:** Tier 1 `SKILL.md` stays strictly under 120 lines, activating instantly upon session intake with zero prompt bloat.
 - **Dual-Location Discovery:** Automatically discovers available skills in both active development environments (`skills/`) and portable consumer installations (`.agents/skills/`).
-- **Intent-Driven Dispatch:** High-precision semantic keyword mapping analyzes user intent and routes execution seamlessly to `sdw-config`, `sdw-spec`, or `sdw-orch`.
+- **Intent-Driven Dispatch:** High-precision semantic keyword mapping analyzes user intent and routes execution seamlessly to `sdw-config`, `sdw-spec`, or `sdw-run`.
 - **Direct Invocation Support:** Honors explicit invocations (`/sdw-*`, `@sdw-*`) immediately with priority over heuristic scoring.
 - **Tied-Confidence Disambiguation:** When prompts contain conflicting or equally weighted terms, the router initiates a structured clarification gate with pre-computed options and a recommended default.
 - **Passive Non-Interference:** Generic coding prompts (e.g. styling, refactorings, script tweaks) pass through cleanly without interception.
@@ -55,7 +55,7 @@
 
 ---
 
-### 3. 🎯 `sdw-orch` — Autonomous End-to-End Delivery Orchestrator
+### 3. 🎯 `sdw-run` — Autonomous End-to-End Delivery Orchestrator
 
 *Coordinating autonomous agent pipelines from initial spec ingestion to verified delivery git commits and pull requests.*
 
@@ -109,7 +109,7 @@
 
 *End-to-end PR shipping, pre-PR requirement checks, remote publishing, and automated review convergence.*
 
-- **Standalone & Delegated Invocation:** Directly invokable standalone (`node skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs` / `/sdw-ship-pr`) with dedicated subcommands (`ship`, `list-threads`, `resolve-thread`, `check-status`), or delegated by `sdw-orch` Step 8.
+- **Standalone & Delegated Invocation:** Directly invokable standalone (`node skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs` / `/sdw-ship-pr`) with dedicated subcommands (`ship`, `list-threads`, `resolve-thread`, `check-status`), or delegated by `sdw-run` Step 8.
 - **Pre-PR Quality Verification Gates:** Evaluates `prePrInstructions`, `prePrCommand`, `requiredBuild`, `runAllTests`, and `securityChecksEnabled` from `.sdw/config.json`.
 - **Remote Branch Publishing:** Synchronizes the active branch to remote origin (`pushDelivery: true` or `--push`).
 - **Unified SCM PR Creation & Idempotency:** Agnostically creates or reuses open PRs for GitHub and Azure DevOps, or cleanly bypasses remote submission when `scmProvider: "none"`.
@@ -168,7 +168,7 @@
   - `sdw_code_review.test.cjs`: Standalone execution, base auto-detection, report generation, surgical auto-fix, dry-run simulation, orchestrator delegation, router registration, and fail-closed negatives.
   - `sdw_config.test.cjs`: Configuration parsing, schema validation, token expansion, and initialization gates.
   - `sdw_spec.test.cjs`: Index bootstrapping, EARS validation, synthesis, SCM provider contract, state synchronization, and archival quality gates.
-  - `sdw_orch.test.cjs`: State machine transitions, derivation, grilling decision trees, DAG decomposition, scoring gates, code review auto-fixing, remote push publishing, and unattended multi-spec batch queue execution.
+  - `sdw_run.test.cjs`: State machine transitions, derivation, grilling decision trees, DAG decomposition, scoring gates, code review auto-fixing, remote push publishing, and unattended multi-spec batch queue execution.
   - `sdw_ship_pr.test.cjs`: Standalone PR shipping, dry-run simulation, pre-PR requirement checks, review convergence with summary comments, and orchestrator delegation.
   - `sdw_refinement_gates.test.cjs`: Step 2 Refinement state machine naming, technical blueprint ingestion into Step 3, config schema validation, build and test quality gates, automated fix retry loops, and pre-PR lifecycle hooks.
   - `sdw_step_artifacts.test.cjs`: Intermediate step artifact persistence (steps 2, 3, 5), directory isolation (`.sdw/state/{slug}/{runId}/`), run state linkage, deterministic overwrite on re-execution, and resilient failure handling.
@@ -200,14 +200,14 @@
 
 ### 12. 🔍 `sdw-code-review` — Standalone Deep Review, Fix Planning & Orchestrator Delegation
 
-*Lean, harness-agnostic working-tree code reviewer that doubles as the `sdw-orch` Step 7 authority.*
+*Lean, harness-agnostic working-tree code reviewer that doubles as the `sdw-run` Step 7 authority.*
 
-- **Standalone & User-Invocable:** Directly runnable at any time (`node skills/sdw-code-review/scripts/sdw_code_review.cjs run|fix|doctor` / `/sdw-code-review`), or dispatched as a subagent/CLI runner under `sdw-orch` Step 7.
+- **Standalone & User-Invocable:** Directly runnable at any time (`node skills/sdw-code-review/scripts/sdw_code_review.cjs run|fix|doctor` / `/sdw-code-review`), or dispatched as a subagent/CLI runner under `sdw-run` Step 7.
 - **Auto-Detected Base & Full-Tree Scope:** Resolves the comparison target via explicit `--base`, `branching.integrationBranch`, config `baseBranch`, tracking remotes (`origin/main|master`), local branches, merge-base, or initial commit; inspects committed (`base..HEAD`) plus uncommitted (staged, unstaged, untracked) diffs.
 - **Principle-Grounded Rules:** Enforces simplicity first (YAGNI, surgical scope, no speculative generality) and syntax hygiene (active `debugger`, unresolved TODOs, committed secrets, sensitive filenames) with Fowler-baseline smells (oversized diffs).
 - **Executable Report Contract:** Emits a Markdown fix plan (header, findings table, detailed hunks, ordered checklist) plus structured JSON (`passed`, `errorCount`, `warningCount`, `suggestionCount`, `findings` with stable `CR-001` IDs, severity, `file:line`, rule, and fix prescription).
 - **Surgical Auto-Fix & Dry-Run:** Applies minimal fixes (debugger removal) up to the iteration ceiling (default 3); `--dry-run` reports planned fixes without touching disk; blocking residuals exit non-zero.
-- **Orchestrator Delegation:** `sdw-orch` Step 7 holds no duplicated review logic — it dispatches the CLI, parses JSON, gates fix commits through `sdw-security-checks`, and persists `{slug}-step-7.md`.
+- **Orchestrator Delegation:** `sdw-run` Step 7 holds no duplicated review logic — it dispatches the CLI, parses JSON, gates fix commits through `sdw-security-checks`, and persists `{slug}-step-7.md`.
 
 ### 13. 🩺 `sdw-doctor` — Installation & Workspace Health Checker
 
@@ -218,7 +218,7 @@
 - **Workspace Validation:** `.sdw/config.json` against the schema, `.sdw/config.schema.json`, `.sdw/directory-structure.md`, registry rows versus spec files, and authoring-mode validation of every specification.
 - **Global Quick Check:** In hybrid and global modes, verifies the global installation exposes every core skill with a readable manifest.
 - **Remediate and Stop:** Installation errors print `npx skills add ...` / `npx skills update`; config errors print `sdw-config init` / `check`; spec errors print `sdw-spec sync` / `validate`; any error halts with exit `1`. Upstream mode never suggests `npx`.
-- **Sandbox Smoke Test (`test`):** Generates a throwaway project with a one-AC fake specification, commits it, and runs `sdw-orch run --sandbox` end to end. Passes only when all eight steps resolve and the run state completes; failures capture structured errors, print suggested fixes, and can open an upstream GitHub issue with `--open-issue`.
+- **Sandbox Smoke Test (`test`):** Generates a throwaway project with a one-AC fake specification, commits it, and runs `sdw-run run --sandbox` end to end. Passes only when all eight steps resolve and the run state completes; failures capture structured errors, print suggested fixes, and can open an upstream GitHub issue with `--open-issue`.
 - **Structured Output:** `--json` emits mode, roots, present and expected skills, findings with stable codes, and the remediation array for CI.
 
 ---
@@ -232,7 +232,7 @@
 - **Context Before Edit:** Sweeps defect-class siblings (cap 50 hits), then consults defect-class knowledge through the central `sdw-memory` wrapper (traps table, memory files, ws-memo vault), recording `sourcesConsulted` per finding.
 - **Surgical Edits Only:** Deterministic trivial patches land at finding lines and verified sibling lines; everything else is reported as `skipped` with path and reason for agent reasoning. `--dry-run` mutates nothing.
 - **Structured Report & Learning:** Emits `{ batchId, fixed, skipped, learned, verification, reportPath }`, registers one deduplicated knowledge entry per fixed defect class via `sdw-memory`, and keeps reviewer and fixer separate (never self-approves).
-- **Wired Into Delivery:** `sdw-ship-pr` delegates active review threads to the fixer when `reviewFixCommand` is unset, and `sdw-orch` Step 7 keeps using `sdw-code-review` for detection.
+- **Wired Into Delivery:** `sdw-ship-pr` delegates active review threads to the fixer when `reviewFixCommand` is unset, and `sdw-run` Step 7 keeps using `sdw-code-review` for detection.
 
 ### 15. 🧠 `sdw-memory` — Central Knowledge Wrapper with Pluggable Backends
 
@@ -251,9 +251,9 @@
 
 *One pipeline, repeated. Each queued specification runs exactly as if it were the only specification.*
 
-- **Loop, Not a Second State Machine:** `sdw-batch run <spec...>` delegates each item to `sdw-orch run <spec>` and waits for the exit code; implementation, scoring, delivery commit, review, PR, and convergence stay in `sdw-orch`.
+- **Loop, Not a Second State Machine:** `sdw-batch run <spec...>` delegates each item to `sdw-run run <spec>` and waits for the exit code; implementation, scoring, delivery commit, review, PR, and convergence stay in `sdw-run`.
 - **Queue Manifest:** `.sdw/state/batch-{batchId}.json` records per-item status, run id, delivery commit, duration, and error; `status` reports progress.
-- **Pause/Resume Continuity:** exit `4`/`5` pauses the queue with the item's run id; `resume` continues that exact run through `sdw-orch resume --run-id`, and an already-completed run is reconciled without re-execution.
+- **Pause/Resume Continuity:** exit `4`/`5` pauses the queue with the item's run id; `resume` continues that exact run through `sdw-run resume --run-id`, and an already-completed run is reconciled without re-execution.
 - **Failure Policy:** halts by default; `--continue-on-error` records the failure and advances.
 - **Sequential and Non-Invasive:** one delegated run at a time; the batch prints a per-item summary and never edits code itself.
 

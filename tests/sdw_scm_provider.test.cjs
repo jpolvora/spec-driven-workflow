@@ -8,8 +8,8 @@ const os = require('os');
 const { execSync } = require('child_process');
 
 const sdwConfig = require('../skills/sdw-config/scripts/sdw_config.cjs');
-const sdwOrch = require('../skills/sdw-orch/scripts/sdw_orch.cjs');
-const stateManager = require('../skills/sdw-orch/scripts/state_manager.cjs');
+const sdwRun = require('../skills/sdw-run/scripts/sdw_run.cjs');
+const stateManager = require('../skills/sdw-run/scripts/state_manager.cjs');
 const { resolveScmProvider, checkScmCapability, createScmProvider } = require('../skills/sdw-spec/scripts/scm_provider_contract.cjs');
 const { importRemoteSpec } = require('../skills/sdw-spec/scripts/spec_creator.cjs');
 
@@ -318,7 +318,7 @@ None
     fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
 
     const runId = `run-${Date.now()}-${slug}`;
-    const code = sdwOrch.cmdRun({
+    const code = sdwRun.cmdRun({
       specPath,
       root: tmpDir,
       runId,

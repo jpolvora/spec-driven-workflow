@@ -1,6 +1,6 @@
 # SDW Security Checks Integration Contract
 
-Technical contract between `sdw-security-checks` scanner and the `sdw-orch` orchestrator lifecycle.
+Technical contract between `sdw-security-checks` scanner and the `sdw-run` orchestrator lifecycle.
 
 ## CLI Invocation Signature
 

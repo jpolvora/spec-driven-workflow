@@ -7,8 +7,8 @@ const path = require('path');
 const os = require('os');
 const { execSync } = require('child_process');
 
-const stateManager = require('../skills/sdw-orch/scripts/state_manager.cjs');
-const sdwOrch = require('../skills/sdw-orch/scripts/sdw_orch.cjs');
+const stateManager = require('../skills/sdw-run/scripts/state_manager.cjs');
+const sdwRun = require('../skills/sdw-run/scripts/sdw_run.cjs');
 const sdwConfig = require('../skills/sdw-config/scripts/sdw_config.cjs');
 const { installJudgeEnv } = require('./fixtures/judge_env.cjs');
 
@@ -47,7 +47,7 @@ function setupRepo(options = {}) {
 }
 
 function pauseAtDispatch(root) {
-  return sdwOrch.cmdRun({
+  return sdwRun.cmdRun({
     root,
     specPath: '.sdw/specs/dispatch-demo.md',
     skipReview: true,
@@ -88,17 +88,17 @@ test('AC4-AC8: task next dispatches one ready task, refuses a concurrent dispatc
     assert.ok(firstTask);
 
     // A second dispatch while one is in flight is refused and names the active task.
-    const second = sdwOrch.cmdTaskNext({ root, runId: state.runId });
+    const second = sdwRun.cmdTaskNext({ root, runId: state.runId });
     assert.equal(second, 1, 'A second dispatch is rejected');
 
     // Finish the first task, then the next dispatch works and increments the sequence.
     const { evidencePath } = submitEvidence(root, firstTask);
-    assert.equal(sdwOrch.cmdTaskFinish({ root, runId: state.runId, taskId: firstTask, evidencePath }), 0);
+    assert.equal(sdwRun.cmdTaskFinish({ root, runId: state.runId, taskId: firstTask, evidencePath }), 0);
 
     const afterFirst = stateManager.loadRunState(root, state.runId);
     assert.equal(afterFirst.steps[4].dispatch.activeTaskId, null, 'Accepting a task clears the dispatch');
 
-    const nextCode = sdwOrch.cmdTaskNext({ root, runId: state.runId });
+    const nextCode = sdwRun.cmdTaskNext({ root, runId: state.runId });
     assert.equal(nextCode, 0, 'The next ready task dispatches once the previous one is accepted');
 
     const afterSecond = stateManager.loadRunState(root, state.runId);
@@ -106,10 +106,10 @@ test('AC4-AC8: task next dispatches one ready task, refuses a concurrent dispatc
 
     const nextTask = afterSecond.steps[4].dispatch.activeTaskId;
     const secondEvidence = submitEvidence(root, nextTask);
-    assert.equal(sdwOrch.cmdTaskFinish({ root, runId: state.runId, taskId: nextTask, evidencePath: secondEvidence.evidencePath }), 0);
+    assert.equal(sdwRun.cmdTaskFinish({ root, runId: state.runId, taskId: nextTask, evidencePath: secondEvidence.evidencePath }), 0);
 
     // Every task is accepted: dispatching again reports exhaustion, not an error.
-    const exhausted = sdwOrch.cmdTaskNext({ root, runId: state.runId });
+    const exhausted = sdwRun.cmdTaskNext({ root, runId: state.runId });
     assert.equal(exhausted, 0, 'Exhaustion is not an error');
     const finished = stateManager.loadRunState(root, state.runId);
     assert.equal(finished.steps[4].status, 'completed', 'Accepting the final task completes Step 4');
@@ -127,7 +127,7 @@ test('AC3: each accepted task is saved by one scoped commit plus one checkpoint 
     const firstTask = state.steps[4].dispatch.activeTaskId;
 
     const firstEvidence = submitEvidence(root, firstTask);
-    assert.equal(sdwOrch.cmdTaskFinish({ root, runId: state.runId, taskId: firstTask, evidencePath: firstEvidence.evidencePath }), 0);
+    assert.equal(sdwRun.cmdTaskFinish({ root, runId: state.runId, taskId: firstTask, evidencePath: firstEvidence.evidencePath }), 0);
 
     const afterFirst = stateManager.loadRunState(root, state.runId);
     const firstCommit = afterFirst.steps[4].tasks[firstTask].commitSha;
@@ -137,8 +137,8 @@ test('AC3: each accepted task is saved by one scoped commit plus one checkpoint 
     assert.match(gitOut(root, `show ${firstTag}:app.cjs`), new RegExp(`// ${firstTask} work`), 'the tag holds the accepted file content');
 
     // Kill between tasks: a later process resumes from disk state and dispenses the next task.
-    assert.equal(sdwOrch.cmdResume({ root, runId: state.runId, skipReview: true, skipPr: true }), 4, 'resume re-enters Step 4 between tasks');
-    assert.equal(sdwOrch.cmdTaskNext({ root, runId: state.runId }), 0, 'the next task dispatches after the checkpoint');
+    assert.equal(sdwRun.cmdResume({ root, runId: state.runId, skipReview: true, skipPr: true }), 4, 'resume re-enters Step 4 between tasks');
+    assert.equal(sdwRun.cmdTaskNext({ root, runId: state.runId }), 0, 'the next task dispatches after the checkpoint');
     const secondTask = stateManager.loadRunState(root, state.runId).steps[4].dispatch.activeTaskId;
 
     // A reset loses the working tree content; the checkpoint tag restores it.
@@ -148,7 +148,7 @@ test('AC3: each accepted task is saved by one scoped commit plus one checkpoint 
     assert.match(fs.readFileSync(path.join(root, 'app.cjs'), 'utf8'), new RegExp(`// ${firstTask} work`), 'the tag recovers the file content');
 
     const secondEvidence = submitEvidence(root, secondTask);
-    assert.equal(sdwOrch.cmdTaskFinish({ root, runId: state.runId, taskId: secondTask, evidencePath: secondEvidence.evidencePath }), 0);
+    assert.equal(sdwRun.cmdTaskFinish({ root, runId: state.runId, taskId: secondTask, evidencePath: secondEvidence.evidencePath }), 0);
 
     const afterSecond = stateManager.loadRunState(root, state.runId);
     assert.equal(gitOut(root, `rev-parse sdw-checkpoint-${state.runId}-${secondTask}`), afterSecond.steps[4].tasks[secondTask].commitSha);
@@ -159,7 +159,7 @@ test('AC3: each accepted task is saved by one scoped commit plus one checkpoint 
     );
 
     // Final delivery state stays authoritative: Step 6 records the accepted history.
-    assert.equal(sdwOrch.cmdResume({ root, runId: state.runId, skipReview: true, skipPr: true }), 0, 'the run completes after the last checkpoint');
+    assert.equal(sdwRun.cmdResume({ root, runId: state.runId, skipReview: true, skipPr: true }), 0, 'the run completes after the last checkpoint');
     const completed = stateManager.loadRunState(root, state.runId);
     assert.equal(completed.status, 'completed');
     assert.equal(completed.steps[6].status, 'completed', 'Step 6 remains the delivery state');
@@ -178,7 +178,7 @@ test('AC3: --no-task-checkpoint leaves the accepted task uncommitted and untagge
     const head = gitOut(root, 'rev-parse HEAD');
 
     const { evidencePath } = submitEvidence(root, taskId);
-    assert.equal(sdwOrch.cmdTaskFinish({ root, runId: state.runId, taskId, evidencePath, noTaskCheckpoint: true }), 0);
+    assert.equal(sdwRun.cmdTaskFinish({ root, runId: state.runId, taskId, evidencePath, noTaskCheckpoint: true }), 0);
 
     const after = stateManager.loadRunState(root, state.runId);
     assert.equal(after.steps[4].tasks[taskId].commitSha, head, 'no checkpoint commit is created');
@@ -213,7 +213,7 @@ test('AC3: the checkpoint refuses to save a task whose files fail the pre-commit
     const evidencePath = path.join(root, 'secret.evidence.json');
     fs.writeFileSync(evidencePath, JSON.stringify(evidence, null, 2), 'utf8');
 
-    assert.notEqual(sdwOrch.cmdTaskFinish({ root, runId: state.runId, taskId, evidencePath }), 0, 'The security gate rejects the task');
+    assert.notEqual(sdwRun.cmdTaskFinish({ root, runId: state.runId, taskId, evidencePath }), 0, 'The security gate rejects the task');
     assert.equal(gitOut(root, 'rev-parse HEAD'), head, 'No checkpoint commit is created');
     assert.equal(gitOut(root, 'tag --list'), '', 'No checkpoint tag is created');
 
@@ -251,7 +251,7 @@ test('AC3: worktree mode rejects a leaking task before the cherry-pick reaches H
     const evidencePath = path.join(root, 'leak.evidence.json');
     fs.writeFileSync(evidencePath, JSON.stringify(evidence, null, 2), 'utf8');
 
-    assert.notEqual(sdwOrch.cmdTaskFinish({ root, runId: state.runId, taskId, evidencePath }), 0, 'The gate rejects the task');
+    assert.notEqual(sdwRun.cmdTaskFinish({ root, runId: state.runId, taskId, evidencePath }), 0, 'The gate rejects the task');
     assert.equal(gitOut(root, 'rev-parse HEAD'), head, 'Nothing is cherry-picked into the primary tree');
     assert.equal(gitOut(root, 'log --format=%s -1'), 'baseline', 'HEAD is still the baseline commit');
 
@@ -285,7 +285,7 @@ test('AC3: worktree mode tags the integrated primary-tree commit, not the worktr
     const evidencePath = path.join(root, 'worktree.evidence.json');
     fs.writeFileSync(evidencePath, JSON.stringify(evidence, null, 2), 'utf8');
 
-    assert.equal(sdwOrch.cmdTaskFinish({ root, runId: state.runId, taskId, evidencePath }), 0, 'The integrated task is accepted');
+    assert.equal(sdwRun.cmdTaskFinish({ root, runId: state.runId, taskId, evidencePath }), 0, 'The integrated task is accepted');
 
     const after = stateManager.loadRunState(root, state.runId);
     const record = after.steps[4].tasks[taskId];
@@ -326,7 +326,7 @@ test('AC3: worktree mode accepts the task when the checkpoint tag cannot be crea
     fs.mkdirSync(tagRef, { recursive: true });
     fs.writeFileSync(path.join(tagRef, 'junk'), 'x', 'utf8');
 
-    assert.equal(sdwOrch.cmdTaskFinish({ root, runId: state.runId, taskId, evidencePath }), 0, 'The integrated task is still accepted');
+    assert.equal(sdwRun.cmdTaskFinish({ root, runId: state.runId, taskId, evidencePath }), 0, 'The integrated task is still accepted');
 
     const after = stateManager.loadRunState(root, state.runId);
     const record = after.steps[4].tasks[taskId];
@@ -350,7 +350,7 @@ test('AC3: primary-tree mode accepts the task when the checkpoint tag cannot be 
     fs.writeFileSync(path.join(tagRef, 'junk'), 'x', 'utf8');
 
     const { evidencePath } = submitEvidence(root, taskId);
-    assert.equal(sdwOrch.cmdTaskFinish({ root, runId: state.runId, taskId, evidencePath }), 0, 'The committed task is still accepted');
+    assert.equal(sdwRun.cmdTaskFinish({ root, runId: state.runId, taskId, evidencePath }), 0, 'The committed task is still accepted');
 
     const after = stateManager.loadRunState(root, state.runId);
     const record = after.steps[4].tasks[taskId];
@@ -372,7 +372,7 @@ test('AC9-AC10: task finish rejects a non-dispatched task and names the active o
     const otherTask = state.dagTasks.map(task => task.id).find(id => id !== activeTask);
 
     const { evidencePath } = submitEvidence(root, otherTask);
-    const code = sdwOrch.cmdTaskFinish({ root, runId: state.runId, taskId: otherTask, evidencePath });
+    const code = sdwRun.cmdTaskFinish({ root, runId: state.runId, taskId: otherTask, evidencePath });
     assert.equal(code, 1, 'Out-of-order completion is rejected');
 
     const unchanged = stateManager.loadRunState(root, state.runId);
@@ -391,15 +391,15 @@ test('AC11-AC13, AC24: task abandon returns the task to pending and the re-dispa
     const taskId = state.steps[4].dispatch.activeTaskId;
 
     // Abandoning with no reason is rejected.
-    assert.equal(sdwOrch.cmdTaskAbandon({ root, runId: state.runId, taskId }), 1, 'A reason is required');
+    assert.equal(sdwRun.cmdTaskAbandon({ root, runId: state.runId, taskId }), 1, 'A reason is required');
 
     // Abandoning a task that is not dispatched is rejected.
     const otherTask = state.dagTasks.map(task => task.id).find(id => id !== taskId);
-    assert.equal(sdwOrch.cmdTaskAbandon({ root, runId: state.runId, taskId: otherTask, reason: 'nope' }), 1);
+    assert.equal(sdwRun.cmdTaskAbandon({ root, runId: state.runId, taskId: otherTask, reason: 'nope' }), 1);
 
     // Leave partial work in the tree, then abandon properly.
     fs.appendFileSync(path.join(root, 'app.cjs'), '// partial work\n');
-    assert.equal(sdwOrch.cmdTaskAbandon({ root, runId: state.runId, taskId, reason: 'worker context lost' }), 0);
+    assert.equal(sdwRun.cmdTaskAbandon({ root, runId: state.runId, taskId, reason: 'worker context lost' }), 0);
 
     const abandoned = stateManager.loadRunState(root, state.runId);
     assert.equal(abandoned.steps[4].tasks[taskId].status, 'pending', 'The task returns to the queue');
@@ -408,7 +408,7 @@ test('AC11-AC13, AC24: task abandon returns the task to pending and the re-dispa
     assert.equal(abandoned.steps[4].dispatch.abandonments[0].reason, 'worker context lost');
 
     // Re-dispatch carries the partial progress context.
-    assert.equal(sdwOrch.cmdTaskNext({ root, runId: state.runId }), 0);
+    assert.equal(sdwRun.cmdTaskNext({ root, runId: state.runId }), 0);
     const redispatched = stateManager.loadRunState(root, state.runId);
     assert.equal(redispatched.steps[4].dispatch.sequence, 2, 'The sequence increments on re-dispatch');
     const promptPath = path.resolve(root, redispatched.steps[4].tasks[taskId].promptPath);
@@ -438,11 +438,11 @@ test('AC25-AC26: evidence status is required and only success is accepted', () =
       tests: [],
       summary: 'no status field'
     }), 'utf8');
-    assert.equal(sdwOrch.cmdTaskFinish({ root, runId: state.runId, taskId, evidencePath: noStatus }), 1, 'Missing status is rejected (AC25)');
+    assert.equal(sdwRun.cmdTaskFinish({ root, runId: state.runId, taskId, evidencePath: noStatus }), 1, 'Missing status is rejected (AC25)');
 
     // A non-success status is rejected and quoted.
     const { evidencePath } = submitEvidence(root, taskId, { status: 'partial' });
-    assert.equal(sdwOrch.cmdTaskFinish({ root, runId: state.runId, taskId, evidencePath }), 1, 'Only success is accepted (AC26)');
+    assert.equal(sdwRun.cmdTaskFinish({ root, runId: state.runId, taskId, evidencePath }), 1, 'Only success is accepted (AC26)');
 
     const stillDispatched = stateManager.loadRunState(root, state.runId);
     assert.equal(stillDispatched.steps[4].dispatch.activeTaskId, taskId, 'The task stays in flight');
@@ -470,11 +470,11 @@ test('AC27: evidence claiming only pre-dispatch edits is rejected', () => {
       summary: 'claims inherited edits'
     }), 'utf8');
 
-    assert.equal(sdwOrch.cmdTaskFinish({ root, runId: state.runId, taskId, evidencePath }), 1, 'Stale edits never corroborate a task (AC27)');
+    assert.equal(sdwRun.cmdTaskFinish({ root, runId: state.runId, taskId, evidencePath }), 1, 'Stale edits never corroborate a task (AC27)');
 
     // Touching the file after dispatch makes it acceptable.
     const fresh = submitEvidence(root, taskId);
-    assert.equal(sdwOrch.cmdTaskFinish({ root, runId: state.runId, taskId, evidencePath: fresh.evidencePath }), 0, 'Post-dispatch edits corroborate (AC27)');
+    assert.equal(sdwRun.cmdTaskFinish({ root, runId: state.runId, taskId, evidencePath: fresh.evidencePath }), 0, 'Post-dispatch edits corroborate (AC27)');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -498,7 +498,7 @@ test('AC28: a non-git workspace corroborates changes by existence only', () => {
       summary: 'non-git workspace'
     }), 'utf8');
 
-    assert.equal(sdwOrch.cmdTaskFinish({ root, runId: state.runId, taskId, evidencePath }), 0, 'Existence is enough without git (AC28)');
+    assert.equal(sdwRun.cmdTaskFinish({ root, runId: state.runId, taskId, evidencePath }), 0, 'Existence is enough without git (AC28)');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -512,19 +512,19 @@ test('AC31-AC32, AC37: resume re-emits the in-flight envelope, otherwise points 
     const taskId = state.steps[4].dispatch.activeTaskId;
 
     // AC31: resume with an active dispatch re-emits the envelope and pauses again.
-    assert.equal(sdwOrch.cmdResume({ root, runId: state.runId, skipReview: true, skipPr: true }), 4, 'Resume pauses while a task is in flight');
+    assert.equal(sdwRun.cmdResume({ root, runId: state.runId, skipReview: true, skipPr: true }), 4, 'Resume pauses while a task is in flight');
     const afterResume = stateManager.loadRunState(root, state.runId);
     assert.equal(afterResume.steps[4].dispatch.activeTaskId, taskId, 'The in-flight task is unchanged');
 
     // AC32: after abandoning, resume refuses the gates and points at task next.
-    assert.equal(sdwOrch.cmdTaskAbandon({ root, runId: state.runId, taskId, reason: 'test' }), 0);
-    assert.equal(sdwOrch.cmdResume({ root, runId: state.runId, skipReview: true, skipPr: true }), 4, 'Resume refuses to advance with incomplete tasks');
+    assert.equal(sdwRun.cmdTaskAbandon({ root, runId: state.runId, taskId, reason: 'test' }), 0);
+    assert.equal(sdwRun.cmdResume({ root, runId: state.runId, skipReview: true, skipPr: true }), 4, 'Resume refuses to advance with incomplete tasks');
     const notAdvanced = stateManager.loadRunState(root, state.runId);
     assert.equal(notAdvanced.steps[4].status, 'awaiting_implementation', 'Step 4 stays incomplete');
     assert.equal(notAdvanced.steps[4].gates.build, undefined, 'No build gate ran');
 
     // AC37: status exposes the dispatch state.
-    assert.equal(sdwOrch.cmdStatus({ root, runId: state.runId }), 0);
+    assert.equal(sdwRun.cmdStatus({ root, runId: state.runId }), 0);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -555,7 +555,7 @@ test('AC38: command mode creates no dispatch state', () => {
       "  acIds: ['AC1','AC2','AC3','AC4','AC5','AC6'], filesChanged: ['app.cjs'], tests: [], summary: 'command mode'",
       '}));'
     ].join(' ');
-    const code = sdwOrch.cmdRun({
+    const code = sdwRun.cmdRun({
       root,
       specPath: '.sdw/specs/dispatch-demo.md',
       skipReview: true,

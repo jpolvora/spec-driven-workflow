@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 
-// retro.cjs — retrospective over a completed sdw-orch run, invoked manually or
-// by sdw-orch when `retro.enabled` is true.
+// retro.cjs — retrospective over a completed sdw-run run, invoked manually or
+// by sdw-run when `retro.enabled` is true.
 //
 // Inputs are the run state file, the step artifacts that state declares, and
 // the transcript files explicitly named by `retro.transcripts` or
@@ -263,7 +263,7 @@ function decodeTranscriptContent(buffer) {
 // by the `run` or `resume` command word, allowing a closing quote (and the
 // backslashes that escape it inside JSON) between them. A line that mentions
 // the executable and the word `run` in separate clauses is prose.
-const ORCHESTRATOR_INVOCATION = /(?:sdw-orch\b|sdw_orch\.cjs)\\*["']?\s+(resume|run)\b/i;
+const ORCHESTRATOR_INVOCATION = /(?:sdw-run\b|sdw_run\.cjs)\\*["']?\s+(resume|run)\b/i;
 
 // Spec 00048 AC3: the `--spec` value may be wrapped in quotes or backticks,
 // escaped as a JSON string, and followed by punctuation. Strip the wrappers
@@ -779,7 +779,7 @@ function renderMarkdown(report) {
       lines.push(`- \`${item.path}\`: transcript unreadable (${item.reason}). Its content was not read.`);
     }
     for (const item of signals.repeated_run_invocation) {
-      lines.push(`- \`${item.path}\` lines ${item.lines.join(' and ')}: two \`sdw-orch run\` invocations for \`${item.specification}\` with no \`resume\` between them.`);
+      lines.push(`- \`${item.path}\` lines ${item.lines.join(' and ')}: two \`sdw-run run\` invocations for \`${item.specification}\` with no \`resume\` between them.`);
     }
   }
   lines.push('');

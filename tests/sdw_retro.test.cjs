@@ -11,8 +11,8 @@ const { execSync, spawnSync } = require('child_process');
 
 const retro = require('../skills/sdw-retro/scripts/retro.cjs');
 const sdwConfig = require('../skills/sdw-config/scripts/sdw_config.cjs');
-const sdwOrch = require('../skills/sdw-orch/scripts/sdw_orch.cjs');
-const stateManager = require('../skills/sdw-orch/scripts/state_manager.cjs');
+const sdwRun = require('../skills/sdw-run/scripts/sdw_run.cjs');
+const stateManager = require('../skills/sdw-run/scripts/state_manager.cjs');
 
 // Spec 027: run the deterministic judge stub when an orchestration fixture
 // completes past Step 4.
@@ -38,7 +38,7 @@ function makeState(options) {
   const slug = options.slug;
   const artifactsDir = `.sdw/state/${slug}/${runId}`;
   const state = {
-    orchestrator: 'sdw-orch',
+    orchestrator: 'sdw-run',
     runId,
     specSlug: slug,
     status: options.status || 'completed',
@@ -265,7 +265,7 @@ test('AC7: every candidate record carries id, title, severity, category, evidenc
     severity: 'high',
     category: 'automated-check',
     evidence: { artifact: '.sdw/state/run-1.state.json', ref: '#steps.8.output' },
-    proposedChange: { target: 'skills/sdw-orch/scripts/sdw_orch.cjs' }
+    proposedChange: { target: 'skills/sdw-run/scripts/sdw_run.cjs' }
   };
   assert.equal(retro.validateCandidate(candidate).valid, true);
 
@@ -307,7 +307,7 @@ test('AC8: severity and category are restricted to the allowed values', () => {
     severity: 'medium',
     category: 'reviewer-standard',
     evidence: { artifact: '.sdw/state/run-1.state.json', ref: '#steps.7.output' },
-    proposedChange: { target: 'skills/sdw-orch/SKILL.md' }
+    proposedChange: { target: 'skills/sdw-run/SKILL.md' }
   };
   for (const severity of retro.SEVERITIES) {
     assert.equal(retro.validateCandidate({ ...base, severity }).valid, true, `${severity} is accepted`);
@@ -362,7 +362,7 @@ test('AC1: the sdw-retro skill references sdw-rules and follows the Tier 1 layou
 
 // ---------------------------------------------------------------------------
 // Spec 00037 AC9-AC15: candidate validation, working-tree preservation, and
-// the sdw-orch completion hook.
+// the sdw-run completion hook.
 // ---------------------------------------------------------------------------
 
 function writeCandidatesFile(root, payload, name = 'candidates.json') {
@@ -465,7 +465,7 @@ test('AC9 & AC11: missing fields, unresolvable artifacts, and skills/ edits carr
   });
   const skillsEdit = candidateFixture({
     id: 'RETRO-SKILLS',
-    proposedChange: { target: 'skills/sdw-orch/scripts/sdw_orch.cjs' }
+    proposedChange: { target: 'skills/sdw-run/scripts/sdw_run.cjs' }
   });
   const badRef = candidateFixture({
     id: 'RETRO-BADREF',
@@ -642,9 +642,9 @@ test('AC6: a configured transcript is read, listed with its line count, and scan
   writeDefaultArtifacts(root, state);
   const transcriptPath = 'transcripts/session-00500.txt';
   writeArtifact(root, transcriptPath, [
-    'operator: node skills/sdw-orch/scripts/sdw_orch.cjs run --spec .sdw/specs/00500-transcript.md',
+    'operator: node skills/sdw-run/scripts/sdw_run.cjs run --spec .sdw/specs/00500-transcript.md',
     'assistant: dispatched task-1',
-    'operator: node skills/sdw-orch/scripts/sdw_orch.cjs resume --run-id run-5000-transcript'
+    'operator: node skills/sdw-run/scripts/sdw_run.cjs resume --run-id run-5000-transcript'
   ].join('\n'));
   writeRetroConfig(root, { enabled: false, transcripts: [transcriptPath] });
 
@@ -679,9 +679,9 @@ test('AC7: repeated run invocations with no resume cite file and line numbers on
   writeDefaultArtifacts(root, state);
   const transcriptPath = 'transcripts/session-00510.txt';
   writeArtifact(root, transcriptPath, [
-    'operator: node skills/sdw-orch/scripts/sdw_orch.cjs run --spec .sdw/specs/00510-repeated.md # BODY-MARKER-A',
+    'operator: node skills/sdw-run/scripts/sdw_run.cjs run --spec .sdw/specs/00510-repeated.md # BODY-MARKER-A',
     'assistant: task-1 accepted',
-    'operator: node skills/sdw-orch/scripts/sdw_orch.cjs run --spec .sdw/specs/00510-repeated.md # BODY-MARKER-B'
+    'operator: node skills/sdw-run/scripts/sdw_run.cjs run --spec .sdw/specs/00510-repeated.md # BODY-MARKER-B'
   ].join('\n'));
   writeRetroConfig(root, { enabled: false, transcripts: [transcriptPath] });
 
@@ -693,7 +693,7 @@ test('AC7: repeated run invocations with no resume cite file and line numbers on
   ]);
   assert.equal(JSON.stringify(report).includes('BODY-MARKER'), false, 'transcript bodies never enter the JSON report');
   assert.equal(
-    JSON.stringify(report.signals.repeated_run_invocation).includes('sdw-orch'),
+    JSON.stringify(report.signals.repeated_run_invocation).includes('sdw-run'),
     false,
     'the signal cites no command text'
   );
@@ -701,7 +701,7 @@ test('AC7: repeated run invocations with no resume cite file and line numbers on
   const markdown = fs.readFileSync(path.join(root, report.outputs.markdown), 'utf8');
   assert.equal(markdown.includes('BODY-MARKER'), false, 'transcript bodies never enter the Markdown report');
   assert.ok(markdown.includes(`\`${transcriptPath}\` lines 1 and 3`));
-  assert.match(markdown, /two `sdw-orch run` invocations for `00510-repeated` with no `resume` between them/);
+  assert.match(markdown, /two `sdw-run run` invocations for `00510-repeated` with no `resume` between them/);
 });
 
 test('AC7: a resume between run invocations prevents the signal', (t) => {
@@ -711,9 +711,9 @@ test('AC7: a resume between run invocations prevents the signal', (t) => {
   writeDefaultArtifacts(root, state);
   const transcriptPath = 'transcripts/session-00520.txt';
   writeArtifact(root, transcriptPath, [
-    'operator: node skills/sdw-orch/scripts/sdw_orch.cjs run --spec .sdw/specs/00520-resumed.md',
-    'operator: node skills/sdw-orch/scripts/sdw_orch.cjs resume --run-id run-5200-resumed',
-    'operator: node skills/sdw-orch/scripts/sdw_orch.cjs run --spec .sdw/specs/00520-resumed.md'
+    'operator: node skills/sdw-run/scripts/sdw_run.cjs run --spec .sdw/specs/00520-resumed.md',
+    'operator: node skills/sdw-run/scripts/sdw_run.cjs resume --run-id run-5200-resumed',
+    'operator: node skills/sdw-run/scripts/sdw_run.cjs run --spec .sdw/specs/00520-resumed.md'
   ].join('\n'));
   writeRetroConfig(root, { enabled: false, transcripts: [transcriptPath] });
 
@@ -753,7 +753,7 @@ test('00047 AC2: a zstd transcript is decoded frame by frame, not only its first
   writeState(root, state);
   writeDefaultArtifacts(root, state);
   const transcriptPath = 'transcripts/session-00540.jsonl.zstd';
-  const runLine = 'node skills/sdw-orch/scripts/sdw_orch.cjs run --spec .sdw/specs/00540-zstd.md';
+  const runLine = 'node skills/sdw-run/scripts/sdw_run.cjs run --spec .sdw/specs/00540-zstd.md';
   const frameOne = zlib.zstdCompressSync(Buffer.from([
     `operator: ${runLine}`,
     'assistant: task-2 dispatched',
@@ -863,10 +863,10 @@ test('00048 AC1 & AC2: a quoted command inside a JSON message and prose naming b
   writeState(root, state);
   writeDefaultArtifacts(root, state);
   const transcriptPath = 'transcripts/session-00570.txt';
-  const quoted = 'task-2 complete: the scan (`sdw-orch`/`sdw_orch.cjs` + `run`/`resume` command word) ran on two `run --spec .sdw/specs/00570-precision.md` lines; never run git commit.';
+  const quoted = 'task-2 complete: the scan (`sdw-run`/`sdw_run.cjs` + `run`/`resume` command word) ran on two `run --spec .sdw/specs/00570-precision.md` lines; never run git commit.';
   writeArtifact(root, transcriptPath, [
     `{"type":"agent/inbox/spliced","data":{"inserted":[{"type":"text","text":${JSON.stringify(quoted)}}]}}`,
-    'assistant: before you run the suite, read skills/sdw-orch/scripts/sdw_orch.cjs and the --spec .sdw/specs/00570-precision.md` note.',
+    'assistant: before you run the suite, read skills/sdw-run/scripts/sdw_run.cjs and the --spec .sdw/specs/00570-precision.md` note.',
     `{"type":"user/message","data":{"content":[{"type":"text","text":${JSON.stringify(quoted)}}]}}`
   ].join('\n'));
   writeRetroConfig(root, { enabled: false, transcripts: [transcriptPath] });
@@ -886,11 +886,11 @@ test('00048 AC1 & AC2: escaped-quote tool calls are detected, and a separated du
   writeState(root, state);
   writeDefaultArtifacts(root, state);
   const transcriptPath = 'transcripts/session-00571.jsonl';
-  const commandLine = '{"command":"node \\"L:/x/skills/sdw-orch/scripts/sdw_orch.cjs\\" run --spec .sdw/specs/00571-escaping.md --root ."}';
+  const commandLine = '{"command":"node \\"L:/x/skills/sdw-run/scripts/sdw_run.cjs\\" run --spec .sdw/specs/00571-escaping.md --root ."}';
   writeArtifact(root, transcriptPath, [
     commandLine,
     '{"type":"tool/result","data":"exit 0"}',
-    'operator: sdw-orch run --spec .sdw/specs/00571-escaping.md'
+    'operator: sdw-run run --spec .sdw/specs/00571-escaping.md'
   ].join('\n'));
   writeRetroConfig(root, { enabled: false, transcripts: [transcriptPath] });
 
@@ -912,9 +912,9 @@ test('00048 AC3: quotes, backticks, and trailing punctuation are stripped from t
   writeDefaultArtifacts(root, state);
   const transcriptPath = 'transcripts/session-00572.txt';
   writeArtifact(root, transcriptPath, [
-    'operator: node skills/sdw-orch/scripts/sdw_orch.cjs run --spec .sdw/specs/00572-spec.md`,',
+    'operator: node skills/sdw-run/scripts/sdw_run.cjs run --spec .sdw/specs/00572-spec.md`,',
     'assistant: task-1 accepted',
-    'operator: node skills/sdw-orch/scripts/sdw_orch.cjs run --spec "00572-spec.md"'
+    'operator: node skills/sdw-run/scripts/sdw_run.cjs run --spec "00572-spec.md"'
   ].join('\n'));
   writeRetroConfig(root, { enabled: false, transcripts: [transcriptPath] });
 
@@ -935,7 +935,7 @@ test('00048 AC4: a call echoed by its result in another envelope is one invocati
   writeDefaultArtifacts(root, state);
   const transcriptPath = 'transcripts/session-00573.jsonl';
   const callId = 'call_fixture_00573';
-  const command = 'node "L:/x/skills/sdw-orch/scripts/sdw_orch.cjs" run --spec .sdw/specs/00573-echo.md';
+  const command = 'node "L:/x/skills/sdw-run/scripts/sdw_run.cjs" run --spec .sdw/specs/00573-echo.md';
   const issued = JSON.stringify({
     type: 'assistant/message',
     data: {
@@ -971,7 +971,7 @@ test('00048 AC4: a command recorded three times in a row is still one invocation
   writeState(root, state);
   writeDefaultArtifacts(root, state);
   const transcriptPath = 'transcripts/session-00576.txt';
-  const commandLine = 'operator: node skills/sdw-orch/scripts/sdw_orch.cjs run --spec .sdw/specs/00576-chain.md';
+  const commandLine = 'operator: node skills/sdw-run/scripts/sdw_run.cjs run --spec .sdw/specs/00576-chain.md';
   writeArtifact(root, transcriptPath, [commandLine, commandLine, commandLine].join('\n'));
   writeRetroConfig(root, { enabled: false, transcripts: [transcriptPath] });
 
@@ -991,7 +991,7 @@ test('00048 AC4: identical commands separated by another event still report both
   writeState(root, state);
   writeDefaultArtifacts(root, state);
   const transcriptPath = 'transcripts/session-00574.txt';
-  const commandLine = 'operator: node skills/sdw-orch/scripts/sdw_orch.cjs run --spec .sdw/specs/00574-separated.md';
+  const commandLine = 'operator: node skills/sdw-run/scripts/sdw_run.cjs run --spec .sdw/specs/00574-separated.md';
   writeArtifact(root, transcriptPath, [commandLine, 'assistant: task-1 accepted', commandLine].join('\n'));
   writeRetroConfig(root, { enabled: false, transcripts: [transcriptPath] });
 
@@ -1013,8 +1013,8 @@ test('00048 AC4: adjacent matching lines with different text still report both l
   writeDefaultArtifacts(root, state);
   const transcriptPath = 'transcripts/session-00575.txt';
   writeArtifact(root, transcriptPath, [
-    'operator: node skills/sdw-orch/scripts/sdw_orch.cjs run --spec .sdw/specs/00575-adjacent.md',
-    'operator: node skills/sdw-orch/scripts/sdw_orch.cjs run --spec specs/00575-adjacent.md --new-run'
+    'operator: node skills/sdw-run/scripts/sdw_run.cjs run --spec .sdw/specs/00575-adjacent.md',
+    'operator: node skills/sdw-run/scripts/sdw_run.cjs run --spec specs/00575-adjacent.md --new-run'
   ].join('\n'));
   writeRetroConfig(root, { enabled: false, transcripts: [transcriptPath] });
 
@@ -1030,14 +1030,14 @@ test('00048 AC4: adjacent matching lines with different text still report both l
 });
 
 function makeOrchProject(t) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-retro-orch-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-retro-run-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   execSync('git init', { cwd: dir, stdio: 'ignore' });
   execSync('git config user.name "SDW Retro Tester"', { cwd: dir, stdio: 'ignore' });
   execSync('git config user.email "retro@sdw.org"', { cwd: dir, stdio: 'ignore' });
   sdwConfig.cmdInit({ root: dir, force: true });
   fs.writeFileSync(path.join(dir, '.gitignore'), '.sdw/state/*\n!.sdw/state/.gitkeep\n.sdw/worktrees/\n', 'utf8');
-  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'retro-orch-fixture', version: '1.0.0' }, null, 2), 'utf8');
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'retro-run-fixture', version: '1.0.0' }, null, 2), 'utf8');
   execSync('git add -A', { cwd: dir, stdio: 'ignore' });
   execSync('git commit -m "initial commit"', { cwd: dir, stdio: 'ignore' });
   return dir;
@@ -1094,7 +1094,7 @@ None.
   fs.writeFileSync(path.join(specsDir, `${slug}.md`), content, 'utf8');
 }
 
-test('AC14 & AC15: a successful sdw-orch run records the exact retro command without running it', (t) => {
+test('AC14 & AC15: a successful sdw-run run records the exact retro command without running it', (t) => {
   const root = makeOrchProject(t);
   const slug = 'retro-hook-fixture';
   writeOrchSpec(root, slug);
@@ -1106,7 +1106,7 @@ test('AC14 & AC15: a successful sdw-orch run records the exact retro command wit
   console.log = (...args) => { logs.push(args.join(' ')); };
   let exitCode;
   try {
-    exitCode = sdwOrch.cmdRun({
+    exitCode = sdwRun.cmdRun({
       root,
       specPath: `.sdw/specs/${slug}.md`,
       skipReview: true,

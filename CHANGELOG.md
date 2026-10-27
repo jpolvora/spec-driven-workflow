@@ -13,3 +13,7 @@
 - **Prompt**: Collapse the duplicate buildCommand/testCommand config keys to verification.*
 - **Done**: Removed the flat keys from both schemas, config defaults, validation and every gate; sdw-orch and sdw-ship-pr now read erification.buildCommand and erification.testCommand only; loadConfig throws on a legacy flat key naming the replacement; config spec, orchestrator protocol and FEATURES updated
 - **Result**: Promoted in PR #76 (merge a992a76, review thread on the silent legacy-key fallback fixed in d89af6d); suite 443/443
+### [2026-10-27 09:48] Agent: deepseek-v4.1-flash
+- **Prompt**: Rename the sdw-orch skill to sdw-run
+- **Done**: Moved the skill to skills/sdw-run with the sdw_run.cjs entry script, rewrote 63 live files (610 mentions), dropped the orch, sdw-orchestrator, and implement aliases, moved the DAG fallback bucket to run, updated router, doctor, batch, config schema descriptions, docs, and directory structure, renamed 7 test files, and added a guard test that fails on any live reference to the retired name
+- **Result**: Merged in PR #78 (merge 60ca9fa, delivery commit bc169a4, review converged with 0 threads); suite 446/446 in 51s, both doctors PASS
