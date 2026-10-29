@@ -2155,11 +2155,18 @@ function cmdRun(options) {
       // turns a no-change pass into a commit.
       if (!refineMode) {
         const headerOk = syncSpecHeaderImplemented(targetRoot, specSlug, resolveOptions);
-        if (headerOk) {
-          console.log(`[Step 6: Delivery Commit] Specification header synced to implemented.`);
-        } else {
-          console.warn(`[Step 6: Delivery Commit] Warning: specification header sync did not confirm implemented; continuing with registry sync.`);
+        if (!headerOk) {
+          // Spec 00071 AC1: a delivery must never ship a registry row of completed
+          // against a header that still reads ready-to-implement, so a failed header
+          // sync blocks the commit instead of degrading to a warning.
+          console.error(`[Step 6: Delivery Commit] Blocked: specification header sync to implemented failed.`);
+          state = stateManager.updateStepState(targetRoot, state.runId, 6, 'header_sync_failed');
+          state.status = 'failed';
+          recordBlockedGate(targetRoot, state, 'header-sync', { step: 6, detail: 'Specification header could not be synced to implemented' });
+          options._runResult = { runId: state.runId, status: 'failed', error: 'Blocked: specification header sync failed' };
+          return 1;
         }
+        console.log(`[Step 6: Delivery Commit] Specification header synced to implemented.`);
         if (specIndex) {
           try {
             specIndex.updateSpecStatus(specSlug, 'completed', { root: targetRoot });
