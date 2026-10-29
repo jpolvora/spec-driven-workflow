@@ -2178,9 +2178,34 @@ function cmdRun(options) {
         }
         console.log(`[Step 6: Delivery Commit] Specification header synced to implemented.`);
         if (specIndex) {
+          // A workspace with no registry, or with no row for this slug, has
+          // nothing to synchronise, so it must not block a delivery that never
+          // had a registry row. Only a row that exists but refuses to move to
+          // completed is a gate failure.
+          let registryOk = true;
           try {
-            specIndex.updateSpecStatus(specSlug, 'completed', { root: targetRoot });
-          } catch (e) {}
+            const { exists, entries } = specIndex.readIndex({ root: targetRoot });
+            const target = String(specSlug).trim();
+            const hasRow = Boolean(exists) && entries.some(
+              e => e.slug === target || e.prefix === target || target.includes(e.slug)
+            );
+            if (hasRow) {
+              registryOk = Boolean(specIndex.updateSpecStatus(specSlug, 'completed', { root: targetRoot }));
+            }
+          } catch (e) {
+            registryOk = false;
+          }
+          if (!registryOk) {
+            // Spec 00071 AC1: a header that reads implemented must never ship
+            // beside a registry row that is still pending, so an unset row
+            // blocks the commit exactly like a failed header sync.
+            console.error(`[Step 6: Delivery Commit] Blocked: registry row could not be set to completed.`);
+            state = stateManager.updateStepState(targetRoot, state.runId, 6, 'registry_sync_failed');
+            state.status = 'failed';
+            recordBlockedGate(targetRoot, state, 'registry-sync', { step: 6, detail: 'Registry row could not be set to completed' });
+            options._runResult = { runId: state.runId, status: 'failed', error: 'Blocked: registry row sync failed' };
+            return 1;
+          }
         }
       }
 
