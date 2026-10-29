@@ -27,6 +27,15 @@ All specifications are prefixed with a 5-digit zero-padded integer (`00001`, `00
 - Initial prefix defaults to `00001` if no numbered files exist.
 - Both the file name (`{specsDir}/NNNNN-{slug}.md`) and frontmatter `slug` incorporate the prefix.
 
+### Spec revisions
+
+- The prefix and base slug are stable for the life of a specification.
+- Revisions insert a `vNN` marker after the prefix: `00036-my-feature.md` (v00), then `00036-v01-my-feature.md`, `00036-v02-my-feature.md`.
+- The original v00 file stays untouched when a revision is written.
+- Older revisions stay on disk as history and remain valid spec files.
+- `index.specs.md` points to the latest revision only (one row per prefix+slug group).
+- `sdw-spec update` writes a new revision by default and only overwrites the latest file in place with an explicit overwrite flag (`--force`).
+
 ## 3. Required Section Hierarchy
 
 A valid specification must contain the following section hierarchy in order:
