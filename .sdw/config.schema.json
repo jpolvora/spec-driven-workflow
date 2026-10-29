@@ -17,6 +17,23 @@
       "description": "Path to the directory containing feature specifications. Supports tokens {projectRoot} and {skillsRoot}.",
       "default": "{projectRoot}/.sdw/specs"
     },
+    "automation": {
+      "type": "object",
+      "description": "Opt-in autonomous delivery. When both flags are true, Step 8 ships, converges, and merges in the same invocation; any failing gate still blocks delivery.",
+      "properties": {
+        "autoShip": {
+          "type": "boolean",
+          "description": "Allow Step 8 to push and poll the pull request without an operator round trip.",
+          "default": false
+        },
+        "autoMerge": {
+          "type": "boolean",
+          "description": "Allow Step 8 to merge the pull request once every gate and review thread is clear.",
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    },
     "scoreMin": {
       "type": "integer",
       "description": "Minimum conformance score (0-10) required before creating delivery commits.",

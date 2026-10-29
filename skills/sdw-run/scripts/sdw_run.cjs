@@ -3343,7 +3343,9 @@ function cmdTaskFinish(options) {
     state.steps[4].gates = gateResults.gates;
     if (!gateResults.passed) {
       console.error(`Verification gates failed.`);
-      state = stateManager.loadRunState(targetRoot, state.runId) || state;
+      // The gate map was assigned after the reload above; reloading again here
+      // would discard it, so the state object is used as-is (recordBlockedGate
+      // writes without reloading).
       state.steps[4].status = 'failed';
       state.status = 'failed';
       // Spec 00071 AC4: fail closed — record the blocking gate, never ship.
@@ -3474,11 +3476,13 @@ function cmdResume(options) {
     const config = loadProjectConfig(targetRoot, options);
     console.log(`[sdw-run resume] All ${dagTasks.length} DAG task(s) completed. Running verification gates...`);
     const gateResults = runVerificationGates(targetRoot, config, { ...options, runId: state.runId, slug: state.specSlug });
+    // runVerificationGates records failures through stateManager.recordError, which reloads and
+    // writes the state file. Reload before assigning gates so the map is not discarded.
+    state = stateManager.loadRunState(targetRoot, state.runId) || state;
     state.steps[4].gates = gateResults.gates;
 
     if (!gateResults.passed) {
       console.error(`[sdw-run resume] Verification gates failed. Step 4 remains incomplete.`);
-      state = stateManager.loadRunState(targetRoot, state.runId) || state;
       state.steps[4].status = 'failed';
       state.status = 'failed';
       // Spec 00071 AC4: fail closed — record the blocking gate, never ship.
