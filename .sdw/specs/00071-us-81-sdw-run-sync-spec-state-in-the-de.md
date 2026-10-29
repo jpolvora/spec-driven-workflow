@@ -3,7 +3,7 @@ id: "81"
 slug: 00071-us-81-sdw-run-sync-spec-state-in-the-de
 title: "sdw-run: sync spec state in the delivery commit, then ship/converge/merge autonomously on success"
 source: github
-status: ready-to-implement
+status: implemented
 specDate: 2026-10-29
 ---
 # Specification — sdw-run: sync spec state in the delivery commit, then ship/converge/merge autonomously on success

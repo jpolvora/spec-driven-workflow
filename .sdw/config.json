@@ -12,6 +12,10 @@
   },
   "scmCodeReviewEnabled": true,
   "pushDelivery": true,
+  "automation": {
+    "autoShip": true,
+    "autoMerge": true
+  },
   "changelogEnabled": true,
   "changelogFile": "{projectRoot}/CHANGELOG.md",
   "stateDir": "{projectRoot}/.sdw/state",

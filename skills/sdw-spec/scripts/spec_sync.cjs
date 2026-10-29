@@ -2,7 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { resolvePaths, readIndex, writeIndex, scanSpecsDir, findSpecGroupFiles, specGroupKey, parseSpecFilename } = require('./spec_index.cjs');
+const { resolvePaths, readIndex, writeIndex, scanSpecsDir, findSpecGroupFiles, specGroupKey, parseSpecFilename, parseFrontmatter } = require('./spec_index.cjs');
 const { validateFile } = require('./validate_spec.cjs');
 
 function loadRunStates(stateDir) {
@@ -228,5 +228,59 @@ function syncIndex(options = {}) {
 
 module.exports = {
   loadRunStates,
-  syncIndex
+  syncIndex,
+  checkHeaderRegistryDivergence
 };
+
+// Spec 00071 AC6: report a header-vs-registry status divergence WITHOUT
+// mutating either file. Read-only: uses only readdir/readFileSync, never
+// writeIndex or the spec status writer. A `delivered` header (`implemented`)
+// must pair with a delivered registry row (`completed`/`archived`) and vice
+// versa. Returns a report object; callers print it and exit non-zero when
+// `diverged` is true. Throws a descriptive error for invalid input or when
+// the specification or its registry row cannot be found.
+function checkHeaderRegistryDivergence(slugOrPrefix, options = {}) {
+  const target = String(slugOrPrefix || '').trim();
+  if (!target) {
+    throw new Error('checkHeaderRegistryDivergence requires a non-empty specification slug or prefix.');
+  }
+  const { specsDir } = resolvePaths(options.root);
+  const group = findSpecGroupFiles(specsDir, target);
+  if (!group || group.files.length === 0) {
+    throw new Error(`Specification "${target}" not found on disk under ${specsDir}.`);
+  }
+  const latest = group.files[group.files.length - 1];
+  const content = fs.readFileSync(latest.fullPath, 'utf8');
+  const fm = parseFrontmatter(content);
+  const headerStatus = fm.status ? String(fm.status).trim() : null;
+  if (!headerStatus) {
+    throw new Error(`Specification file "${latest.filename}" has no "status" frontmatter; cannot compare against the registry.`);
+  }
+
+  const { entries } = readIndex(options);
+  const entry = entries.find(e => e.slug === latest.slug)
+    || entries.find(e => e.prefix === latest.prefix && latest.prefix)
+    || entries.find(e => e.slug === target || e.prefix === target);
+  if (!entry) {
+    return {
+      slug: latest.slug,
+      headerStatus,
+      registryStatus: null,
+      diverged: true,
+      message: `Divergence for "${latest.slug}": header status is "${headerStatus}" but no registry row exists in index.specs.md.`
+    };
+  }
+
+  const headerDelivered = headerStatus === 'implemented';
+  const registryDelivered = entry.status === 'completed' || entry.status === 'archived';
+  const diverged = headerDelivered !== registryDelivered;
+  return {
+    slug: entry.slug,
+    headerStatus,
+    registryStatus: entry.status,
+    diverged,
+    message: diverged
+      ? `Divergence for "${entry.slug}": header status is "${headerStatus}" but registry status is "${entry.status}".`
+      : `In sync for "${entry.slug}": header status "${headerStatus}" matches registry status "${entry.status}".`
+  };
+}
