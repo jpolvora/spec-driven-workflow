@@ -167,11 +167,55 @@ function readIndex(options = {}) {
   };
 }
 
+function readTrailingBlock(indexPath) {
+  // Spec 00071 AC5: the registry writer owns the header, status definitions,
+  // and specification table only. Everything after the last table row is
+  // foreign (hand-written notes such as a Lean-Core cut list) and must be
+  // carried over byte-for-byte on rewrite. Returns '' when there is no
+  // foreign content. Read-only: never writes.
+  try {
+    if (!indexPath || !fs.existsSync(indexPath)) return '';
+    const content = fs.readFileSync(indexPath, 'utf8');
+    const lines = content.split('\n');
+    // Anchor on the owned specification table: it opens with the Prefix/Slug
+    // header row and its rows are contiguous. Scanning stops at the first
+    // non-table, non-blank line so a foreign markdown table further down is
+    // never mistaken for an owned row.
+    let lastRow = -1;
+    let inTable = false;
+    for (let i = 0; i < lines.length; i++) {
+      const t = lines[i].trim();
+      if (!inTable) {
+        if (/^\|/.test(t) && /prefix/i.test(t) && /slug/i.test(t)) inTable = true;
+        continue;
+      }
+      if (/^\|.*\|\s*$/.test(t)) {
+        lastRow = i;
+        continue;
+      }
+      if (t === '') continue;
+      break;
+    }
+    if (lastRow === -1) {
+      // No recognizable owned table: nothing foreign can be identified.
+      return '';
+    }
+    const trailing = lines.slice(lastRow + 1).join('\n');
+    if (!trailing.trim()) return '';
+    return trailing;
+  } catch (e) {
+    return '';
+  }
+}
+
 function writeIndex(entries, options = {}) {
   const { indexPath, specsDir } = resolvePaths(options.root);
   if (!fs.existsSync(specsDir)) {
     fs.mkdirSync(specsDir, { recursive: true });
   }
+
+  // Spec 00071 AC5: preserve foreign trailing sections across rewrites.
+  const trailing = readTrailingBlock(indexPath);
 
   // Sort entries deterministically by prefix
   entries.sort((a, b) => {
@@ -202,7 +246,7 @@ function writeIndex(entries, options = {}) {
     md += `| ${prefix} | ${slug} | ${title} | ${status} | ${source} | ${specDate} | ${validation} | ${archival} |\n`;
   }
 
-  fs.writeFileSync(indexPath, md, 'utf8');
+  fs.writeFileSync(indexPath, trailing ? `${md}${trailing}` : md, 'utf8');
   return entries;
 }
 
@@ -399,6 +443,7 @@ module.exports = {
   latestGroupFile,
   readIndex,
   writeIndex,
+  readTrailingBlock,
   scanSpecsDir,
   initIndex,
   listIndex,
