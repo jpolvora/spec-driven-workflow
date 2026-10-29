@@ -221,3 +221,25 @@ test('00071 AC6: spec_check CLI exits 2 on divergence, 0 in sync, 1 on bad input
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('00071 AC4: a delivered run clears the stale blockedGate marker', () => {
+  const root = makeRoot();
+  const runId = 'run-clear-blocked-gate';
+  const slug = '00099-gate-clear';
+  try {
+    let state = seedRunState(root, runId, slug);
+    state = sdwRun.recordBlockedGate(root, state, 'convergence', { step: 8, detail: 'did not converge' });
+    assert.equal(state.blockedGate.gate, 'convergence');
+
+    const cleared = sdwRun.clearBlockedGate(root, state);
+    assert.equal(cleared.blockedGate, undefined, 'blockedGate must be removed on success');
+
+    const onDisk = stateManager.loadRunState(root, runId);
+    assert.equal(onDisk.blockedGate, undefined, 'the cleared marker must be persisted');
+
+    // Idempotent: a clean state is returned untouched, without throwing.
+    assert.equal(sdwRun.clearBlockedGate(root, onDisk).blockedGate, undefined);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

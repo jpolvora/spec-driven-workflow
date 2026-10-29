@@ -523,6 +523,16 @@ function recordBlockedGate(targetRoot, state, gate, detail) {
   return state;
 }
 
+// Spec 00071 AC4: blockedGate describes the CURRENT run state, not its history.
+// A run that was blocked and later delivered must not keep reporting a blocking
+// gate, so the marker is cleared on the success path.
+function clearBlockedGate(targetRoot, state) {
+  if (!state || state.blockedGate === undefined) return state;
+  delete state.blockedGate;
+  stateManager.saveRunState(targetRoot, state);
+  return state;
+}
+
 // Spec 00071 AC1: write the specification header status `implemented` before
 // the delivery commit, reusing the sdw-spec status machinery (never hand-
 // editing YAML). Runs the sibling sdw-spec CLI in-process via spawn so the
@@ -2707,6 +2717,8 @@ function cmdRun(options) {
     }
 
     state = stateManager.updateStepState(targetRoot, state.runId, 8, 'completed', prPayload);
+    // Spec 00071 AC4: a delivered run must not keep a stale blockedGate marker.
+    state = clearBlockedGate(targetRoot, state);
 
     // Mark spec as completed in index.specs.md after successful delivery (AC24)
     if (specIndex) {
@@ -3904,6 +3916,7 @@ module.exports = {
   isAutonomousDelivery,
   failedDeliveryGates,
   recordBlockedGate,
+  clearBlockedGate,
   syncSpecHeaderImplemented,
   stageAndCommitOnly,
   getStatusFiles,
