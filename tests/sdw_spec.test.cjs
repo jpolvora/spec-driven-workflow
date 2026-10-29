@@ -683,3 +683,28 @@ test('Spec revisions: update --force overwrites latest in place, rejects unknown
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('Spec revisions: update --force preserves the registry lifecycle and title', () => {
+  const { tmpDir } = setupTestWorkspace();
+  try {
+    const created = createNewSpec('Force preserves row', { root: tmpDir });
+    const { entries } = readIndex({ root: tmpDir });
+    const row = entries.find(e => e.prefix === created.prefix);
+    row.status = 'completed';
+    row.title = 'Human authored title';
+    row.source = 'github';
+    row.specDate = '2026-01-02';
+    writeIndex(entries, { root: tmpDir });
+
+    createSpecRevision(created.slug, { root: tmpDir, force: true });
+
+    const after = readIndex({ root: tmpDir }).entries.find(e => e.prefix === created.prefix);
+    assert.equal(after.status, 'completed', '--force must not reset a completed row to pending');
+    assert.equal(after.title, 'Human authored title', '--force must not replace the title with the slug');
+    assert.equal(after.source, 'github', '--force must keep the source');
+    assert.equal(after.specDate, '2026-01-02', '--force must keep the spec date');
+    assert.equal(after.validation, 'PASS', '--force refreshes validation');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

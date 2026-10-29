@@ -245,11 +245,23 @@ function createSpecRevision(key, options = {}) {
     } catch (e) {
       validation = 'FAIL';
     }
+    // An in-place overwrite must refresh only the validation state and the
+    // latest-file pointer. Lifecycle and descriptive fields (title, status,
+    // source, specDate, archivalDate) belong to the registry row and are
+    // carried over untouched, otherwise `--force` would silently reset a
+    // completed row to pending and replace its title with the slug.
+    const { entries } = readIndex(options);
+    const existing = entries.find(e => e.prefix === group.prefix || e.slug === latest.slug) || {};
+    const preserved = {};
+    for (const key of ['title', 'status', 'source', 'specDate', 'archivalDate']) {
+      if (existing[key] !== undefined && existing[key] !== null && existing[key] !== '') {
+        preserved[key] = existing[key];
+      }
+    }
     registerSpec({
       prefix: group.prefix,
       slug: latest.slug,
-      title: latest.slug,
-      status: 'pending',
+      ...preserved,
       validation
     }, options);
     return {
