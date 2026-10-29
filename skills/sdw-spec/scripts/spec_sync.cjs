@@ -2,7 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { resolvePaths, readIndex, writeIndex, scanSpecsDir } = require('./spec_index.cjs');
+const { resolvePaths, readIndex, writeIndex, scanSpecsDir, findSpecGroupFiles, specGroupKey, parseSpecFilename } = require('./spec_index.cjs');
 const { validateFile } = require('./validate_spec.cjs');
 
 function loadRunStates(stateDir) {
@@ -49,24 +49,39 @@ function syncIndex(options = {}) {
   }
 
   const runStates = loadRunStates(stateDir);
-  const onDiskSpecs = new Map();
-
-  if (fs.existsSync(specsDir)) {
-    const files = fs.readdirSync(specsDir).filter(f => f.endsWith('.md') && f !== 'index.specs.md');
-    for (const f of files) {
-      const fullPath = path.join(specsDir, f);
-      const baseSlug = path.basename(f, '.md');
-      onDiskSpecs.set(baseSlug, { file: f, fullPath });
-    }
-  }
 
   const transitions = [];
   const trackedSlugs = new Set();
 
+  // Group all on-disk files (originals + vNN revisions) so history files
+  // never gain their own index row: the row always points at the latest.
+  const diskGroups = new Map();
+  if (fs.existsSync(specsDir)) {
+    const files = fs.readdirSync(specsDir).filter(f => f.endsWith('.md') && f !== 'index.specs.md');
+    for (const f of files) {
+      const parsed = parseSpecFilename(f);
+      const key = parsed ? specGroupKey(parsed) : `raw:${f}`;
+      if (!diskGroups.has(key)) diskGroups.set(key, []);
+      diskGroups.get(key).push({ file: f, parsed });
+    }
+    for (const members of diskGroups.values()) {
+      members.sort((a, b) => (a.parsed ? a.parsed.version : 0) - (b.parsed ? b.parsed.version : 0));
+    }
+  }
+  const groupLatest = (entry) => {
+    const group = findSpecGroupFiles(specsDir, entry.slug) || findSpecGroupFiles(specsDir, entry.prefix);
+    if (!group || group.files.length === 0) return null;
+    return group.files[group.files.length - 1];
+  };
+
   // 1. Reconcile existing tracked index entries
   for (const entry of entries) {
     trackedSlugs.add(entry.slug);
-    const diskInfo = onDiskSpecs.get(entry.slug);
+    const eParsed = parseSpecFilename(`${entry.slug || ''}.md`);
+    if (eParsed) trackedSlugs.add(specGroupKey(eParsed));
+    if (entry.prefix) trackedSlugs.add(entry.prefix);
+    const latest = groupLatest(entry);
+    const diskInfo = latest ? { file: latest.filename, fullPath: latest.fullPath } : null;
 
     // Check disk existence (AC22)
     if (!diskInfo) {
@@ -81,6 +96,17 @@ function syncIndex(options = {}) {
         entry.validation = 'MISSING';
       }
     } else {
+      // Repoint a tracked row at the newest on-disk revision of its group.
+      if (latest.slug !== entry.slug) {
+        transitions.push({
+          slug: entry.slug,
+          field: 'slug',
+          from: entry.slug,
+          to: latest.slug,
+          reason: `Newer versioned revision on disk (${latest.filename})`
+        });
+        entry.slug = latest.slug;
+      }
       // Re-evaluate validation health
       try {
         const valRes = validateFile(diskInfo.fullPath, { mode: 'authoring' });
@@ -136,14 +162,21 @@ function syncIndex(options = {}) {
     }
   }
 
-  // 2. Discover untracked specification files in specsDir (AC20)
-  for (const [diskSlug, diskInfo] of onDiskSpecs.entries()) {
-    if (!trackedSlugs.has(diskSlug)) {
-      const content = fs.readFileSync(diskInfo.fullPath, 'utf8');
-      const prefixMatch = diskInfo.file.match(/^(\d{5})-/);
+  // 2. Discover untracked specification files in specsDir (AC20).
+  // One row per version group, always pointing at the latest revision;
+  // older revisions on disk are history and gain no row of their own.
+  for (const [groupKey, members] of diskGroups.entries()) {
+    const latestMember = members[members.length - 1];
+    const latestSlug = latestMember.parsed ? latestMember.parsed.slug : latestMember.file.replace(/\.md$/, '');
+    const tracked = trackedSlugs.has(latestSlug) || trackedSlugs.has(groupKey) ||
+      members.some(m => trackedSlugs.has(m.parsed ? m.parsed.slug : m.file.replace(/\.md$/, '')));
+    if (!tracked) {
+      const latestPath = path.join(specsDir, latestMember.file);
+      const content = fs.readFileSync(latestPath, 'utf8');
+      const prefixMatch = latestMember.file.match(/^(\d{5})-/);
       const prefix = prefixMatch ? prefixMatch[1] : '';
       const titleMatch = content.match(/^#+\s+(?:Specification\s*[-—]\s*)?(.+)$/m);
-      const title = titleMatch ? titleMatch[1].trim() : diskSlug;
+      const title = titleMatch ? titleMatch[1].trim() : latestSlug;
       const sourceMatch = content.match(/source:\s*([^\r\n]+)/);
       const source = sourceMatch ? sourceMatch[1].trim() : 'local';
       const dateMatch = content.match(/specDate:\s*([^\r\n]+)/);
@@ -151,7 +184,7 @@ function syncIndex(options = {}) {
 
       let validation = 'PASS';
       try {
-        const valRes = validateFile(diskInfo.fullPath, { mode: 'authoring' });
+        const valRes = validateFile(latestPath, { mode: 'authoring' });
         validation = valRes.ok ? 'PASS' : 'FAIL';
       } catch (e) {
         validation = 'FAIL';
@@ -159,7 +192,7 @@ function syncIndex(options = {}) {
 
       const newEntry = {
         prefix,
-        slug: diskSlug,
+        slug: latestSlug,
         title,
         status: 'pending',
         source,
@@ -170,7 +203,7 @@ function syncIndex(options = {}) {
 
       entries.push(newEntry);
       transitions.push({
-        slug: diskSlug,
+        slug: latestSlug,
         field: 'entry',
         from: null,
         to: 'pending',
