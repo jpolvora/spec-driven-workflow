@@ -313,6 +313,10 @@ const DEFAULT_CONFIG = {
   },
   scmCodeReviewEnabled: false,
   pushDelivery: false,
+  automation: {
+    autoShip: false,
+    autoMerge: false
+  },
   changelogEnabled: true,
   changelogFile: '{projectRoot}/CHANGELOG.md',
   stateDir: '{projectRoot}/.sdw/state',
@@ -360,6 +364,23 @@ const DEFAULT_SCHEMA = {
       "type": "string",
       "description": "Path to the directory containing feature specifications. Supports tokens {projectRoot} and {skillsRoot}.",
       "default": "{projectRoot}/.sdw/specs"
+    },
+    "automation": {
+      "type": "object",
+      "description": "Opt-in autonomous delivery. When both flags are true, Step 8 ships, converges, and merges in the same invocation; any failing gate still blocks delivery.",
+      "properties": {
+        "autoShip": {
+          "type": "boolean",
+          "description": "Allow Step 8 to push and poll the pull request without an operator round trip.",
+          "default": false
+        },
+        "autoMerge": {
+          "type": "boolean",
+          "description": "Allow Step 8 to merge the pull request once every gate and review thread is clear.",
+          "default": false
+        }
+      },
+      "additionalProperties": false
     },
     "scoreMin": {
       "type": "integer",

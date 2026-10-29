@@ -17,3 +17,7 @@
 - **Prompt**: Rename the sdw-orch skill to sdw-run
 - **Done**: Moved the skill to skills/sdw-run with the sdw_run.cjs entry script, rewrote 63 live files (610 mentions), dropped the orch, sdw-orchestrator, and implement aliases, moved the DAG fallback bucket to run, updated router, doctor, batch, config schema descriptions, docs, and directory structure, renamed 7 test files, and added a guard test that fails on any live reference to the retired name
 - **Result**: Merged in PR #78 (merge 60ca9fa, delivery commit bc169a4, review converged with 0 threads); suite 446/446 in 51s, both doctors PASS
+### [2026-10-27 14:32] Agent: deepseek-v4.1-flash
+- **Prompt**: Promote develop to master
+- **Done**: Merged origin/master back into develop to clear the out-of-date block, shipped develop to master through PR #79, waited out the two queued test runs after the skill's own merge attempt was refused by branch policy, then merged and fast-forwarded develop to the result
+- **Result**: master = 397a3ed = develop, tree diff 0 lines; checks promotion-guard, test (two runs), and review all passed; suite 446/446 in 59.5s

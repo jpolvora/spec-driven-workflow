@@ -8,6 +8,28 @@ const PLACEHOLDER = /^(?:tbd|todo|placeholder|\?+|[-–—.]{1,3}|\.{3}|n\/?a)$/
 
 const SPEC_STATUSES = ['draft', 'awaiting-approval', 'ready-to-implement', 'implemented', 'abandoned'];
 
+// Spec filenames: `00036-slug.md` (original) or `00036-v01-slug.md`,
+// `00036-v02-slug.md`, ... (versioned revisions). Both forms are valid;
+// the sync/index layer resolves the latest revision per prefix+slug group.
+const SPEC_FILENAME_RE = /^(\d{5})(?:-v(\d{2}))?-(.+)\.md$/;
+
+function parseSpecFilename(filename) {
+  const base = String(filename || '').split('/').pop();
+  const m = base.match(SPEC_FILENAME_RE);
+  if (!m) return null;
+  return {
+    prefix: m[1],
+    version: m[2] ? parseInt(m[2], 10) : 0,
+    baseSlug: m[3],
+    slug: base.replace(/\.md$/, ''),
+    filename: base
+  };
+}
+
+function isSpecFilename(filename) {
+  return parseSpecFilename(filename) !== null;
+}
+
 const EARS_PATTERNS = [
   { name: 'ubiquitous', re: /^the\s+.+\s+shall\s+.+/i },
   { name: 'event-driven', re: /^when\s+.+,\s*the\s+.+\s+shall\s+.+/i },
@@ -409,6 +431,9 @@ if (require.main === module) {
 module.exports = {
   EARS_PATTERNS,
   SPEC_STATUSES,
+  SPEC_FILENAME_RE,
+  parseSpecFilename,
+  isSpecFilename,
   earsViolation,
   validate,
   validateFile,

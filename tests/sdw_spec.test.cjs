@@ -7,8 +7,8 @@ const path = require('path');
 const os = require('os');
 
 const { initIndex, readIndex, writeIndex, listIndex, archiveSpec, updateSpecStatus } = require('../skills/sdw-spec/scripts/spec_index.cjs');
-const { getNextPrefix, createNewSpec, importRemoteSpec, toEarsCriterion } = require('../skills/sdw-spec/scripts/spec_creator.cjs');
-const { validate, validateFile } = require('../skills/sdw-spec/scripts/validate_spec.cjs');
+const { getNextPrefix, createNewSpec, createSpecRevision, importRemoteSpec, toEarsCriterion } = require('../skills/sdw-spec/scripts/spec_creator.cjs');
+const { validate, validateFile, parseSpecFilename, isSpecFilename } = require('../skills/sdw-spec/scripts/validate_spec.cjs');
 const { syncIndex } = require('../skills/sdw-spec/scripts/spec_sync.cjs');
 const { ScmProvider, createScmProvider } = require('../skills/sdw-spec/scripts/scm_provider_contract.cjs');
 const sdwRun = require('../skills/sdw-run/scripts/sdw_run.cjs');
@@ -625,4 +625,86 @@ test('Spec grilling reference is present and linked', () => {
   assert.ok(skill.includes('references/grilling.md'), 'SKILL.md links the grilling reference');
   assert.ok(skill.includes('awaiting-approval'), 'SKILL.md documents the status transition');
   assert.ok(fs.existsSync(path.join(root, 'skills', 'sdw-spec', 'references', 'grilling.md')));
+});
+
+test('Spec revisions: versioned filenames parse (v00 base, vNN markers)', () => {
+  const base = parseSpecFilename('00036-my-feature.md');
+  assert.equal(base.prefix, '00036');
+  assert.equal(base.version, 0);
+  assert.equal(base.baseSlug, 'my-feature');
+
+  const v1 = parseSpecFilename('00036-v01-my-feature.md');
+  assert.equal(v1.prefix, '00036');
+  assert.equal(v1.version, 1);
+  assert.equal(v1.baseSlug, 'my-feature');
+
+  const v2 = parseSpecFilename('00036-v02-my-feature.md');
+  assert.equal(v2.version, 2);
+
+  assert.ok(isSpecFilename('00036-v01-my-feature.md'), 'versioned filename accepted');
+  assert.equal(parseSpecFilename('not-a-spec.md'), null, 'invalid filename rejected');
+});
+
+test('Spec revisions: update writes a new revision, original untouched, index tracks latest', () => {
+  const { tmpDir, specsDir } = setupTestWorkspace();
+  try {
+    const created = createNewSpec('Revision demo feature', { root: tmpDir });
+    const originalContent = fs.readFileSync(created.filePath, 'utf8');
+
+    const revised = createSpecRevision(created.slug, { root: tmpDir });
+    assert.match(path.basename(revised.filePath), /^000\d+-v01-.*\.md$/, 'revision inserts v01 after prefix');
+    assert.ok(fs.existsSync(created.filePath), 'original v00 file stays on disk');
+    assert.equal(fs.readFileSync(created.filePath, 'utf8'), originalContent, 'original content untouched');
+    assert.ok(fs.existsSync(revised.filePath), 'new revision file written');
+    assert.match(fs.readFileSync(revised.filePath, 'utf8'), new RegExp(`^slug: ${revised.slug}$`, 'm'), 'revision frontmatter repointed');
+
+    syncIndex({ root: tmpDir });
+    const { entries } = readIndex({ root: tmpDir });
+    const group = entries.filter(e => e.prefix === revised.prefix);
+    assert.equal(group.length, 1, 'one index row per prefix+slug group');
+    assert.equal(group[0].slug, revised.slug, 'index row points at the latest revision');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('Spec revisions: update --force overwrites latest in place, rejects unknown keys', () => {
+  const { tmpDir, specsDir } = setupTestWorkspace();
+  try {
+    const created = createNewSpec('Force revision demo', { root: tmpDir });
+    const before = fs.readdirSync(specsDir).sort();
+
+    const forced = createSpecRevision(created.slug, { root: tmpDir, force: true });
+    assert.equal(forced.overwritten, true);
+    assert.deepEqual(fs.readdirSync(specsDir).sort(), before, 'no new file written with --force');
+
+    assert.throws(() => createSpecRevision('no-such-spec', { root: tmpDir }), /not found/i, 'unknown key rejected with descriptive error');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('Spec revisions: update --force preserves the registry lifecycle and title', () => {
+  const { tmpDir } = setupTestWorkspace();
+  try {
+    const created = createNewSpec('Force preserves row', { root: tmpDir });
+    const { entries } = readIndex({ root: tmpDir });
+    const row = entries.find(e => e.prefix === created.prefix);
+    row.status = 'completed';
+    row.title = 'Human authored title';
+    row.source = 'github';
+    row.specDate = '2026-01-02';
+    writeIndex(entries, { root: tmpDir });
+
+    createSpecRevision(created.slug, { root: tmpDir, force: true });
+
+    const after = readIndex({ root: tmpDir }).entries.find(e => e.prefix === created.prefix);
+    assert.equal(after.status, 'completed', '--force must not reset a completed row to pending');
+    assert.equal(after.title, 'Human authored title', '--force must not replace the title with the slug');
+    assert.equal(after.source, 'github', '--force must keep the source');
+    assert.equal(after.specDate, '2026-01-02', '--force must keep the spec date');
+    assert.equal(after.validation, 'PASS', '--force refreshes validation');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });

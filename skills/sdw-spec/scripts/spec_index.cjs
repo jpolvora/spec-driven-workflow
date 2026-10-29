@@ -51,6 +51,70 @@ function parseFrontmatter(content) {
   return values;
 }
 
+// Versioned spec filenames: `00036-slug.md` (v00, the untouched original)
+// or `00036-v01-slug.md`, `00036-v02-slug.md`, ... (later revisions).
+const SPEC_FILENAME_RE = /^(\d{5})(?:-v(\d{2}))?-(.+)\.md$/;
+
+function parseSpecFilename(filename) {
+  const base = String(filename || '').split('/').pop();
+  const m = base.match(SPEC_FILENAME_RE);
+  if (!m) return null;
+  return {
+    prefix: m[1],
+    version: m[2] ? parseInt(m[2], 10) : 0,
+    baseSlug: m[3],
+    slug: base.replace(/\.md$/, ''),
+    filename: base
+  };
+}
+
+function specGroupKey(parsed) {
+  return `${parsed.prefix}-${parsed.baseSlug}`;
+}
+
+function versionedFilename(prefix, version, baseSlug) {
+  return `${prefix}-v${String(version).padStart(2, '0')}-${baseSlug}.md`;
+}
+
+// Every on-disk file in one spec group (original + revisions), oldest first.
+// `key` may be a prefix, full slug, base slug, group key, or filename.
+function findSpecGroupFiles(specsDir, key) {
+  if (!specsDir || !fs.existsSync(specsDir)) return null;
+  const target = String(key || '').trim();
+  if (!target) return null;
+  const files = fs.readdirSync(specsDir).filter(f => f.endsWith('.md') && f !== 'index.specs.md');
+  const parsed = files.map(f => ({ parsed: parseSpecFilename(f), file: f })).filter(x => x.parsed);
+  if (parsed.length === 0) return null;
+  let group = null;
+  const exact = parsed.find(x => x.parsed.slug === target || x.file === target);
+  if (exact) group = specGroupKey(exact.parsed);
+  if (!group) {
+    const byPrefix = parsed.filter(x => x.parsed.prefix === target);
+    if (byPrefix.length > 0) group = specGroupKey(byPrefix[0].parsed);
+  }
+  if (!group) {
+    const byBase = parsed.filter(x => x.parsed.baseSlug === target || specGroupKey(x.parsed) === target);
+    if (byBase.length > 0) group = specGroupKey(byBase[0].parsed);
+  }
+  if (!group) {
+    const loose = parsed.find(x => x.parsed.slug.includes(target) || target.includes(x.parsed.slug));
+    if (loose) group = specGroupKey(loose.parsed);
+  }
+  if (!group) return null;
+  const members = parsed
+    .filter(x => specGroupKey(x.parsed) === group)
+    .map(x => ({ ...x.parsed, fullPath: path.join(specsDir, x.file) }))
+    .sort((a, b) => a.version - b.version);
+  if (members.length === 0) return null;
+  return { key: group, prefix: members[0].prefix, baseSlug: members[0].baseSlug, files: members };
+}
+
+function latestGroupFile(specsDir, key) {
+  const group = findSpecGroupFiles(specsDir, key);
+  if (!group || group.files.length === 0) return null;
+  return group.files[group.files.length - 1];
+}
+
 function readIndex(options = {}) {
   const { indexPath, specsDir } = resolvePaths(options.root);
   if (!fs.existsSync(indexPath)) {
@@ -103,11 +167,57 @@ function readIndex(options = {}) {
   };
 }
 
+function readTrailingBlock(indexPath) {
+  // Spec 00071 AC5: the registry writer owns the header, status definitions,
+  // and specification table only. Everything after the last table row is
+  // foreign (hand-written notes such as a Lean-Core cut list) and must be
+  // carried over byte-for-byte on rewrite. Returns '' when there is no
+  // foreign content. Read-only: never writes.
+  try {
+    if (!indexPath || !fs.existsSync(indexPath)) return '';
+    const content = fs.readFileSync(indexPath, 'utf8');
+    const lines = content.split('\n');
+    // Anchor on the owned specification table: it opens with the Prefix/Slug
+    // header row and its rows are contiguous. Scanning stops at the first line
+    // that is not a table row, including a blank line, so a foreign markdown
+    // table further down is never mistaken for an owned row.
+    let lastRow = -1;
+    let inTable = false;
+    for (let i = 0; i < lines.length; i++) {
+      const t = lines[i].trim();
+      if (!inTable) {
+        if (/^\|/.test(t) && /prefix/i.test(t) && /slug/i.test(t)) inTable = true;
+        continue;
+      }
+      if (/^\|.*\|\s*$/.test(t)) {
+        lastRow = i;
+        continue;
+      }
+      // Owned rows are contiguous: a blank line or any other line ends the
+      // owned table, so a foreign table that follows it stays foreign and
+      // survives the rewrite.
+      break;
+    }
+    if (lastRow === -1) {
+      // No recognizable owned table: nothing foreign can be identified.
+      return '';
+    }
+    const trailing = lines.slice(lastRow + 1).join('\n');
+    if (!trailing.trim()) return '';
+    return trailing;
+  } catch (e) {
+    return '';
+  }
+}
+
 function writeIndex(entries, options = {}) {
   const { indexPath, specsDir } = resolvePaths(options.root);
   if (!fs.existsSync(specsDir)) {
     fs.mkdirSync(specsDir, { recursive: true });
   }
+
+  // Spec 00071 AC5: preserve foreign trailing sections across rewrites.
+  const trailing = readTrailingBlock(indexPath);
 
   // Sort entries deterministically by prefix
   entries.sort((a, b) => {
@@ -138,7 +248,7 @@ function writeIndex(entries, options = {}) {
     md += `| ${prefix} | ${slug} | ${title} | ${status} | ${source} | ${specDate} | ${validation} | ${archival} |\n`;
   }
 
-  fs.writeFileSync(indexPath, md, 'utf8');
+  fs.writeFileSync(indexPath, trailing ? `${md}${trailing}` : md, 'utf8');
   return entries;
 }
 
@@ -149,15 +259,27 @@ function scanSpecsDir(options = {}) {
   }
 
   const files = fs.readdirSync(specsDir).filter(f => f.endsWith('.md') && f !== 'index.specs.md');
+  // Group original + versioned revisions by prefix+slug; the index tracks
+  // only the latest file per group while history stays on disk.
+  const groups = new Map();
+  for (const f of files) {
+    const parsed = parseSpecFilename(f);
+    const key = parsed ? specGroupKey(parsed) : `raw:${f}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push({ file: f, parsed });
+  }
   const detected = [];
 
-  for (const f of files) {
-    const fullPath = path.join(specsDir, f);
+  for (const [, members] of groups) {
+    members.sort((a, b) => (a.parsed ? a.parsed.version : 0) - (b.parsed ? b.parsed.version : 0));
+    const latest = members[members.length - 1];
+    const fullPath = path.join(specsDir, latest.file);
     const content = fs.readFileSync(fullPath, 'utf8');
     const fm = parseFrontmatter(content);
-    const prefixMatch = f.match(/^(\d{5})-/);
-    const prefix = prefixMatch ? prefixMatch[1] : (fm.slug && fm.slug.match(/^(\d{5})-/) ? fm.slug.match(/^(\d{5})-/)[1] : '');
-    const slug = fm.slug || path.basename(f, '.md');
+    const prefix = latest.parsed ? latest.parsed.prefix
+      : (latest.file.match(/^(\d{5})-/) ? latest.file.match(/^(\d{5})-/)[1]
+        : (fm.slug && fm.slug.match(/^(\d{5})-/) ? fm.slug.match(/^(\d{5})-/)[1] : ''));
+    const slug = fm.slug || (latest.parsed ? latest.parsed.slug : path.basename(latest.file, '.md'));
     const title = fm.title || slug;
     const source = fm.source || 'local';
     const specDate = fm.specDate || '';
@@ -179,7 +301,9 @@ function scanSpecsDir(options = {}) {
       specDate,
       validation,
       archivalDate: null,
-      filename: f
+      filename: latest.file,
+      versions: members.length,
+      version: latest.parsed ? latest.parsed.version : 0
     });
   }
 
@@ -209,6 +333,18 @@ function listIndex(options = {}) {
     // If index.specs.md doesn't exist yet, scan directory directly
     list = scanSpecsDir(options);
   }
+
+  // Attach live revision counts so list groups by prefix+slug and shows
+  // the latest entry plus how many on-disk revisions it has.
+  try {
+    const { specsDir } = resolvePaths(options.root);
+    list = list.map(e => {
+      const group = findSpecGroupFiles(specsDir, e.slug) || findSpecGroupFiles(specsDir, e.prefix);
+      if (!group) return e;
+      const latest = group.files[group.files.length - 1];
+      return { ...e, versions: group.files.length, version: latest.version, filename: latest.filename };
+    });
+  } catch (err) {}
 
   if (options.status) {
     const targetStatus = String(options.status).toLowerCase().trim();
@@ -260,7 +396,22 @@ function updateSpecStatus(slugOrPrefix, newStatus, options = {}) {
 
 function registerSpec(meta, options = {}) {
   const { entries } = readIndex(options);
-  const existingIdx = entries.findIndex(e => e.slug === meta.slug || (meta.prefix && e.prefix === meta.prefix));
+  // Match by slug, by version-group (original + vNN revisions share one row
+  // that always points at the latest), or by numeric prefix.
+  const metaParsed = parseSpecFilename(`${meta.slug || ''}.md`);
+  const metaKey = metaParsed ? specGroupKey(metaParsed) : null;
+  const existingIdx = entries.findIndex(e => {
+    if (e.slug === meta.slug) return true;
+    if (metaKey) {
+      const eParsed = parseSpecFilename(`${e.slug || ''}.md`);
+      if (eParsed && specGroupKey(eParsed) === metaKey) return true;
+      if (e.filename) {
+        const fParsed = parseSpecFilename(e.filename);
+        if (fParsed && specGroupKey(fParsed) === metaKey) return true;
+      }
+    }
+    return Boolean(meta.prefix && e.prefix === meta.prefix);
+  });
 
   if (existingIdx >= 0) {
     entries[existingIdx] = {
@@ -286,8 +437,15 @@ function registerSpec(meta, options = {}) {
 
 module.exports = {
   resolvePaths,
+  parseFrontmatter,
+  parseSpecFilename,
+  specGroupKey,
+  versionedFilename,
+  findSpecGroupFiles,
+  latestGroupFile,
   readIndex,
   writeIndex,
+  readTrailingBlock,
   scanSpecsDir,
   initIndex,
   listIndex,

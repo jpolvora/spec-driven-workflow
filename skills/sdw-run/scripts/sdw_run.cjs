@@ -491,6 +491,74 @@ function checkpointTask(targetRoot, { specSlug, runId, taskId, files = [], commi
   return { commitSha: sha, tag, tagError: null };
 }
 
+function isAutonomousDelivery(config) {
+  const automation = config && config.automation;
+  if (!automation || typeof automation !== 'object') return false;
+  return automation.autoShip === true && automation.autoMerge === true;
+}
+
+// Spec 00071 AC4: fail closed. When any delivery gate fails, the orchestrator
+// must not attempt ship or merge and must record which gate blocked delivery
+// in the run state (state.blockedGate), a field the parent can read back.
+// Every gate-failure return path below records the gate before returning, and
+// all of those paths return before Step 8, so no ship or merge is attempted.
+function failedDeliveryGates(gates) {
+  return Object.keys(gates || {}).filter(g => !gates[g] || gates[g].status !== 'passed');
+}
+
+function recordBlockedGate(targetRoot, state, gate, detail) {
+  if (!gate || typeof gate !== 'string' || !gate.trim()) {
+    throw new Error('recordBlockedGate requires a non-empty gate name (e.g. "tests", "build", "security", "review", "conformance", "convergence").');
+  }
+  // Reload-free by design: callers pass the freshest state object (the return
+  // value of updateStepState, or of recordError where one was just recorded)
+  // so no in-memory mutation (score, gates, status) is ever lost.
+  state.blockedGate = {
+    gate: gate.trim(),
+    step: detail && detail.step !== undefined && detail.step !== null ? detail.step : null,
+    detail: detail && detail.detail !== undefined ? detail.detail : null,
+    at: new Date().toISOString()
+  };
+  stateManager.saveRunState(targetRoot, state);
+  return state;
+}
+
+// Spec 00071 AC4: blockedGate describes the CURRENT run state, not its history.
+// A run that was blocked and later delivered must not keep reporting a blocking
+// gate, so the marker is cleared on the success path.
+function clearBlockedGate(targetRoot, state) {
+  if (!state || state.blockedGate === undefined) return state;
+  delete state.blockedGate;
+  stateManager.saveRunState(targetRoot, state);
+  return state;
+}
+
+// Spec 00071 AC1: write the specification header status `implemented` before
+// the delivery commit, reusing the sdw-spec status machinery (never hand-
+// editing YAML). Runs the sibling sdw-spec CLI in-process via spawn so the
+// transition rules stay authoritative. Returns true when the header now reads
+// `implemented`. A refused transition is retried once with --force because a
+// delivered specification is implemented regardless of its prior authoring
+// state; a missing file or CLI is reported, never thrown.
+function syncSpecHeaderImplemented(targetRoot, specSlug, options = {}) {
+  const root = path.resolve(targetRoot);
+  try {
+    const scriptPath = resolveSkillScript(root, 'sdw-spec', path.join('scripts', 'sdw_spec.cjs'), options);
+    const cli = scriptPath && fs.existsSync(scriptPath)
+      ? scriptPath
+      : path.resolve(__dirname, '../../sdw-spec/scripts/sdw_spec.cjs');
+    if (!fs.existsSync(cli)) return false;
+    const run = (extra) => spawnSync(process.execPath, [
+      cli, 'status', specSlug, 'implemented', '--root', root, ...extra
+    ], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    let proc = run([]);
+    if (proc.status !== 0) proc = run(['--force']);
+    return proc.status === 0;
+  } catch (e) {
+    return false;
+  }
+}
+
 function collectDeliveryFiles(targetRoot, specSlug, state) {
   const files = new Set();
   const tasks = (state && state.steps && state.steps[4] && state.steps[4].tasks) || {};
@@ -1728,7 +1796,8 @@ function cmdRun(options) {
         state.steps[4].status = 'failed';
         state.steps[4].gates = gateResults.gates;
         state.status = 'failed';
-        stateManager.saveRunState(targetRoot, state);
+        // Spec 00071 AC4: fail closed — record the blocking gate, never ship.
+        recordBlockedGate(targetRoot, state, failedDeliveryGates(gateResults.gates)[0] || 'tests', { step: 4, detail: 'Step 4 verification gates failed' });
         return 1;
       }
       state.steps[4].gates = gateResults.gates;
@@ -1830,7 +1899,8 @@ function cmdRun(options) {
       state.score = 0;
       state.scoreIteration = (state.scoreIteration || 0) + 1;
       state.status = 'failed';
-      stateManager.saveRunState(targetRoot, state);
+      // Spec 00071 AC4: fail closed — record the conformance gate, never ship.
+      recordBlockedGate(targetRoot, state, 'conformance', { step: 5, detail: message });
       console.error(`[Step 5: Conformance Scoring] ${message}`);
       options._runResult = { runId: state.runId, status: 'failed', score: 0, error: message };
       return 2;
@@ -1988,7 +2058,8 @@ function cmdRun(options) {
       state.score = scoreReport.score;
       state.scoreIteration = (state.scoreIteration || 0) + 1;
       state.status = 'failed';
-      stateManager.saveRunState(targetRoot, state);
+      // Spec 00071 AC4: fail closed — record the conformance gate, never ship.
+      recordBlockedGate(targetRoot, state, 'conformance', { step: 5, detail: `Conformance score below threshold (${scoreReport.score} < ${effectiveMinScore})` });
       options._runResult = { runId: state.runId, status: 'failed', score: scoreReport.score, error: 'Conformance score below threshold' };
       return 2; // Exit code 2 indicates score failure / re-implementation needed
     }
@@ -2011,7 +2082,8 @@ function cmdRun(options) {
       console.error(`[Step 6: Delivery Commit] Blocked: cannot create delivery commit because Step 4 is not completed.`);
       state = stateManager.updateStepState(targetRoot, state.runId, 6, 'blocked_step4_incomplete');
       state.status = 'failed';
-      stateManager.saveRunState(targetRoot, state);
+      // Spec 00071 AC4: fail closed — record the blocking gate, never ship.
+      recordBlockedGate(targetRoot, state, 'implementation', { step: 6, detail: 'Blocked: Step 4 is not completed' });
       options._runResult = { runId: state.runId, status: 'failed', error: 'Blocked: Step 4 is not completed' };
       return 1;
     }
@@ -2023,7 +2095,8 @@ function cmdRun(options) {
       console.error(`[Step 6: Delivery Commit] Blocked: ${unacceptedTasks.length} task(s) are not accepted (${unacceptedTasks.map(t => t.id).join(', ')}).`);
       state = stateManager.updateStepState(targetRoot, state.runId, 6, 'blocked_tasks_incomplete');
       state.status = 'failed';
-      stateManager.saveRunState(targetRoot, state);
+      // Spec 00071 AC4: fail closed — record the blocking gate, never ship.
+      recordBlockedGate(targetRoot, state, 'implementation', { step: 6, detail: `Blocked: ${unacceptedTasks.length} task(s) are not accepted` });
       options._runResult = { runId: state.runId, status: 'failed', error: 'Blocked: Tasks not accepted' };
       return 1;
     }
@@ -2036,7 +2109,8 @@ function cmdRun(options) {
       console.error(`[Step 6: Delivery Commit] Blocked: required verification gate(s) failed (${failedGates.join(', ')}).`);
       state = stateManager.updateStepState(targetRoot, state.runId, 6, 'blocked_gates_failed');
       state.status = 'failed';
-      stateManager.saveRunState(targetRoot, state);
+      // Spec 00071 AC4: fail closed — record the blocking gate, never ship.
+      recordBlockedGate(targetRoot, state, failedGates[0], { step: 6, detail: `Required verification gate(s) failed: ${failedGates.join(', ')}` });
       options._runResult = { runId: state.runId, status: 'failed', error: 'Blocked: Gates failed' };
       return 1;
     }
@@ -2044,6 +2118,8 @@ function cmdRun(options) {
     // Quality gate: enforce score threshold before commit
     if (state.score !== null && state.score < effectiveMinScore) {
       console.error(`[Step 6: Delivery Commit] Blocked: cannot create delivery commit with failing conformance score (${state.score}/${effectiveMinScore}).`);
+      // Spec 00071 AC4: fail closed — record the conformance gate, never ship.
+      recordBlockedGate(targetRoot, state, 'conformance', { step: 6, detail: `Failing conformance score (${state.score}/${effectiveMinScore})` });
       return 2;
     }
 
@@ -2067,7 +2143,8 @@ function cmdRun(options) {
           console.error(`[Step 6: Security Gate] Commit blocked by security checks gate (exit code ${scanResult.exitCode}).`);
           state = stateManager.updateStepState(targetRoot, state.runId, 6, 'security_blocked', scanResult);
           state.status = 'failed';
-          stateManager.saveRunState(targetRoot, state);
+          // Spec 00071 AC4: fail closed — record the security gate, never ship.
+          recordBlockedGate(targetRoot, state, 'security', { step: 6, detail: `Pre-commit security checks gate blocked delivery (exit code ${scanResult.exitCode})` });
           options._runResult = { runId: state.runId, status: 'failed', error: 'Blocked by pre-commit security checks gate' };
           return scanResult.exitCode;
         }
@@ -2079,13 +2156,57 @@ function cmdRun(options) {
     let commitSha = null;
     let deliveryCommitCreated = false;
     try {
-      // Mark spec as completed in index.specs.md prior to staging delivery commit (AC24).
-      // A second pass never rewrites the index: the spec is already completed there, and
-      // rewriting it would manufacture a diff that turns a no-change pass into a commit.
-      if (specIndex && !refineMode) {
-        try {
-          specIndex.updateSpecStatus(specSlug, 'completed', { root: targetRoot });
-        } catch (e) {}
+      // Mark spec as completed in index.specs.md prior to staging delivery commit (AC24),
+      // plus the specification header as `implemented` (spec 00071 AC1). Both writes
+      // happen before collectDeliveryFiles so the single delivery commit carries the
+      // header change, the registry change, and the accepted implementation files
+      // together (spec 00071 AC2). A second pass never rewrites either: the spec is
+      // already completed there, and rewriting it would manufacture a diff that
+      // turns a no-change pass into a commit.
+      if (!refineMode) {
+        const headerOk = syncSpecHeaderImplemented(targetRoot, specSlug, resolveOptions);
+        if (!headerOk) {
+          // Spec 00071 AC1: a delivery must never ship a registry row of completed
+          // against a header that still reads ready-to-implement, so a failed header
+          // sync blocks the commit instead of degrading to a warning.
+          console.error(`[Step 6: Delivery Commit] Blocked: specification header sync to implemented failed.`);
+          state = stateManager.updateStepState(targetRoot, state.runId, 6, 'header_sync_failed');
+          state.status = 'failed';
+          recordBlockedGate(targetRoot, state, 'header-sync', { step: 6, detail: 'Specification header could not be synced to implemented' });
+          options._runResult = { runId: state.runId, status: 'failed', error: 'Blocked: specification header sync failed' };
+          return 1;
+        }
+        console.log(`[Step 6: Delivery Commit] Specification header synced to implemented.`);
+        if (specIndex) {
+          // A workspace with no registry, or with no row for this slug, has
+          // nothing to synchronise, so it must not block a delivery that never
+          // had a registry row. Only a row that exists but refuses to move to
+          // completed is a gate failure.
+          let registryOk = true;
+          try {
+            const { exists, entries } = specIndex.readIndex({ root: targetRoot });
+            const target = String(specSlug).trim();
+            const hasRow = Boolean(exists) && entries.some(
+              e => e.slug === target || e.prefix === target || target.includes(e.slug)
+            );
+            if (hasRow) {
+              registryOk = Boolean(specIndex.updateSpecStatus(specSlug, 'completed', { root: targetRoot }));
+            }
+          } catch (e) {
+            registryOk = false;
+          }
+          if (!registryOk) {
+            // Spec 00071 AC1: a header that reads implemented must never ship
+            // beside a registry row that is still pending, so an unset row
+            // blocks the commit exactly like a failed header sync.
+            console.error(`[Step 6: Delivery Commit] Blocked: registry row could not be set to completed.`);
+            state = stateManager.updateStepState(targetRoot, state.runId, 6, 'registry_sync_failed');
+            state.status = 'failed';
+            recordBlockedGate(targetRoot, state, 'registry-sync', { step: 6, detail: 'Registry row could not be set to completed' });
+            options._runResult = { runId: state.runId, status: 'failed', error: 'Blocked: registry row sync failed' };
+            return 1;
+          }
+        }
       }
 
       if (!isGitRepo(targetRoot)) {
@@ -2195,7 +2316,8 @@ function cmdRun(options) {
       console.error(`[Step 7: Delegated Review] ${msg}`);
       state = stateManager.updateStepState(targetRoot, state.runId, 7, 'review_failed', { error: msg });
       state.status = 'failed';
-      stateManager.saveRunState(targetRoot, state);
+      // Spec 00071 AC4: fail closed — record the review gate, never ship.
+      recordBlockedGate(targetRoot, state, 'review', { step: 7, detail: msg });
       options._runResult = { runId: state.runId, status: 'failed', error: msg };
       return 1;
     }
@@ -2257,7 +2379,8 @@ function cmdRun(options) {
       console.error(`[Step 7: Delegated Review] ${msg}`);
       state = stateManager.updateStepState(targetRoot, state.runId, 7, 'review_failed', { error: msg });
       state.status = 'failed';
-      stateManager.saveRunState(targetRoot, state);
+      // Spec 00071 AC4: fail closed — record the review gate, never ship.
+      recordBlockedGate(targetRoot, state, 'review', { step: 7, detail: msg });
       options._runResult = { runId: state.runId, status: 'failed', error: msg };
       return 1;
     }
@@ -2302,7 +2425,8 @@ function cmdRun(options) {
       console.error(`[Step 7: Delegated Review] Review loop halted with unresolved errors.`);
       state = stateManager.updateStepState(targetRoot, state.runId, 7, 'review_failed', reviewReport, null, artifactRel ? { artifact: artifactRel } : undefined);
       state.status = 'failed';
-      stateManager.saveRunState(targetRoot, state);
+      // Spec 00071 AC4: fail closed — record the review gate, never ship.
+      recordBlockedGate(targetRoot, state, 'review', { step: 7, detail: 'Unresolved code review findings' });
       options._runResult = { runId: state.runId, status: 'failed', error: 'Unresolved code review findings' };
       return 1;
     }
@@ -2348,8 +2472,9 @@ function cmdRun(options) {
               const secRes = runSecurityGate(targetRoot, { staged: false });
               if (secRes.exitCode !== 0) {
                 console.error(`[Step 8: Pre-PR Gate] Pre-PR changes rejected by security leak check.`);
-                state.status = 'failed';
-                stateManager.recordError(targetRoot, state.runId, 8, 'Pre-PR changes rejected by security leak check');
+                state = stateManager.recordError(targetRoot, state.runId, 8, 'Pre-PR changes rejected by security leak check');
+                // Spec 00071 AC4: fail closed — record the blocking gate, never ship or merge.
+                recordBlockedGate(targetRoot, state, 'security', { step: 8, detail: 'Pre-PR changes rejected by security leak check' });
                 return 1;
               }
             }
@@ -2359,8 +2484,9 @@ function cmdRun(options) {
           }
         } catch (err) {
           console.error(`[Step 8: Pre-PR Gate] Pre-PR command failed: ${err.message}`);
-          state.status = 'failed';
-          stateManager.recordError(targetRoot, state.runId, 8, `Pre-PR command failed: ${err.message}`);
+          state = stateManager.recordError(targetRoot, state.runId, 8, `Pre-PR command failed: ${err.message}`);
+          // Spec 00071 AC4: fail closed — record the blocking gate, never ship or merge.
+          recordBlockedGate(targetRoot, state, 'pre-pr', { step: 8, detail: `Pre-PR command failed: ${err.message}` });
           return 1;
         }
       }
@@ -2391,8 +2517,9 @@ function cmdRun(options) {
               buildAttempts++;
               if (buildAttempts > maxFixAttempts) {
                 console.error(`[Step 8: Pre-PR Verification] Build verification failed after ${maxFixAttempts} attempt(s). Halting.`);
-                state.status = 'failed';
-                stateManager.recordError(targetRoot, state.runId, 8, `Build verification failed after ${maxFixAttempts} attempt(s): ${buildErr.message}`);
+                state = stateManager.recordError(targetRoot, state.runId, 8, `Build verification failed after ${maxFixAttempts} attempt(s): ${buildErr.message}`);
+                // Spec 00071 AC4: fail closed — record the blocking gate, never ship or merge.
+                recordBlockedGate(targetRoot, state, 'build', { step: 8, detail: `Build verification failed after ${maxFixAttempts} attempt(s)` });
                 return 1;
               }
               console.log(`[Step 8: Pre-PR Verification] Build failed. Attempting automated surgical fix (attempt ${buildAttempts}/${maxFixAttempts})...`);
@@ -2406,8 +2533,9 @@ function cmdRun(options) {
                   const sec = runSecurityGate(targetRoot, { staged: false });
                   if (sec.exitCode !== 0) {
                     console.error(`[Step 8: Pre-PR Verification] Fix commit rejected: secret leak detected.`);
-                    state.status = 'failed';
-                    stateManager.recordError(targetRoot, state.runId, 8, 'Fix commit rejected: secret leak detected');
+                    state = stateManager.recordError(targetRoot, state.runId, 8, 'Fix commit rejected: secret leak detected');
+                    // Spec 00071 AC4: fail closed — record the blocking gate, never ship or merge.
+                    recordBlockedGate(targetRoot, state, 'security', { step: 8, detail: 'Fix commit rejected: secret leak detected' });
                     return 1;
                   }
                 }
@@ -2416,8 +2544,9 @@ function cmdRun(options) {
                 stateManager.saveRunState(targetRoot, state);
               } else {
                 console.error(`[Step 8: Pre-PR Verification] No automated fixes could be generated for build failure.`);
-                state.status = 'failed';
-                stateManager.recordError(targetRoot, state.runId, 8, `Build verification failed: ${buildErr.message}`);
+                state = stateManager.recordError(targetRoot, state.runId, 8, `Build verification failed: ${buildErr.message}`);
+                // Spec 00071 AC4: fail closed — record the blocking gate, never ship or merge.
+                recordBlockedGate(targetRoot, state, 'build', { step: 8, detail: 'No automated fixes could be generated for build failure' });
                 return 1;
               }
             }
@@ -2440,8 +2569,9 @@ function cmdRun(options) {
               testAttempts++;
               if (testAttempts > maxFixAttempts) {
                 console.error(`[Step 8: Pre-PR Verification] Test verification failed after ${maxFixAttempts} attempt(s). Halting.`);
-                state.status = 'failed';
-                stateManager.recordError(targetRoot, state.runId, 8, `Test verification failed after ${maxFixAttempts} attempt(s): ${testErr.message}`);
+                state = stateManager.recordError(targetRoot, state.runId, 8, `Test verification failed after ${maxFixAttempts} attempt(s): ${testErr.message}`);
+                // Spec 00071 AC4: fail closed — record the blocking gate, never ship or merge.
+                recordBlockedGate(targetRoot, state, 'tests', { step: 8, detail: `Test verification failed after ${maxFixAttempts} attempt(s)` });
                 return 1;
               }
               console.log(`[Step 8: Pre-PR Verification] Tests failed. Attempting automated surgical fix (attempt ${testAttempts}/${maxFixAttempts})...`);
@@ -2455,8 +2585,9 @@ function cmdRun(options) {
                   const sec = runSecurityGate(targetRoot, { staged: false });
                   if (sec.exitCode !== 0) {
                     console.error(`[Step 8: Pre-PR Verification] Fix commit rejected: secret leak detected.`);
-                    state.status = 'failed';
-                    stateManager.recordError(targetRoot, state.runId, 8, 'Fix commit rejected: secret leak detected');
+                    state = stateManager.recordError(targetRoot, state.runId, 8, 'Fix commit rejected: secret leak detected');
+                    // Spec 00071 AC4: fail closed — record the blocking gate, never ship or merge.
+                    recordBlockedGate(targetRoot, state, 'security', { step: 8, detail: 'Fix commit rejected: secret leak detected' });
                     return 1;
                   }
                 }
@@ -2465,8 +2596,9 @@ function cmdRun(options) {
                 stateManager.saveRunState(targetRoot, state);
               } else {
                 console.error(`[Step 8: Pre-PR Verification] No automated fixes could be generated for test failure.`);
-                state.status = 'failed';
-                stateManager.recordError(targetRoot, state.runId, 8, `Test verification failed: ${testErr.message}`);
+                state = stateManager.recordError(targetRoot, state.runId, 8, `Test verification failed: ${testErr.message}`);
+                // Spec 00071 AC4: fail closed — record the blocking gate, never ship or merge.
+                recordBlockedGate(targetRoot, state, 'tests', { step: 8, detail: 'No automated fixes could be generated for test failure' });
                 return 1;
               }
             }
@@ -2520,13 +2652,25 @@ function cmdRun(options) {
       try {
         console.log(`[sdw-run Step 8] Delegating delivery to sdw-ship-pr...`);
         // argv form: specSlug/runId/paths are never interpreted by a shell.
+        // Spec 00071 AC3: when .sdw/config.json enables autonomous delivery
+        // (automation.autoShip && automation.autoMerge, both defaulting to
+        // false), ship, converge, and merge ride in this same invocation.
+        // Otherwise the flags below are exactly the legacy behavior (no merge).
+        const autonomous = isAutonomousDelivery(config);
+        const wantPush = Boolean(options.push || config.pushDelivery || autonomous);
+        const wantPoll = Boolean(pollPr || autonomous);
+        const wantMerge = Boolean(autonomous);
+        if (autonomous) {
+          console.log(`[sdw-run Step 8] Autonomous delivery enabled: invoking sdw-ship-pr with --push --poll-pr --merge.`);
+        }
         const shipArgs = [
           shipPrScript,
           '--run-id', state.runId,
           '--spec', specSlug,
           '--root', targetRoot,
-          ...(options.push || config.pushDelivery ? ['--push'] : []),
-          ...(pollPr ? ['--poll-pr'] : []),
+          ...(wantPush ? ['--push'] : []),
+          ...(wantPoll ? ['--poll-pr'] : []),
+          ...(wantMerge ? ['--merge'] : []),
           ...(options.dryRun || options.sandbox || options._sandbox ? ['--dry-run'] : []),
           '--json'
         ];
@@ -2588,15 +2732,18 @@ function cmdRun(options) {
         }
       } catch (shipErr) {
         console.error(`[sdw-run Step 8] Delivery failed: ${shipErr.message}`);
-        state.status = 'failed';
         state = stateManager.updateStepState(targetRoot, state.runId, 8, 'failed', { error: shipErr.message });
-        stateManager.recordError(targetRoot, state.runId, 8, shipErr.message);
+        state = stateManager.recordError(targetRoot, state.runId, 8, shipErr.message);
+        // Spec 00071 AC4: fail closed — record the convergence gate, never merge.
+        recordBlockedGate(targetRoot, state, 'convergence', { step: 8, detail: shipErr.message });
         options._runResult = { runId: state.runId, status: 'failed', error: shipErr.message };
         return 1;
       }
     }
 
     state = stateManager.updateStepState(targetRoot, state.runId, 8, 'completed', prPayload);
+    // Spec 00071 AC4: a delivered run must not keep a stale blockedGate marker.
+    state = clearBlockedGate(targetRoot, state);
 
     // Mark spec as completed in index.specs.md after successful delivery (AC24)
     if (specIndex) {
@@ -3240,9 +3387,13 @@ function cmdTaskFinish(options) {
     state.steps[4].gates = gateResults.gates;
     if (!gateResults.passed) {
       console.error(`Verification gates failed.`);
+      // The gate map was assigned after the reload above; reloading again here
+      // would discard it, so the state object is used as-is (recordBlockedGate
+      // writes without reloading).
       state.steps[4].status = 'failed';
       state.status = 'failed';
-      stateManager.saveRunState(targetRoot, state);
+      // Spec 00071 AC4: fail closed — record the blocking gate, never ship.
+      recordBlockedGate(targetRoot, state, failedDeliveryGates(gateResults.gates)[0] || 'tests', { step: 4, detail: 'Step 4 verification gates failed' });
       return 1;
     }
     state = stateManager.updateStepState(targetRoot, state.runId, 4, 'completed', {
@@ -3369,13 +3520,17 @@ function cmdResume(options) {
     const config = loadProjectConfig(targetRoot, options);
     console.log(`[sdw-run resume] All ${dagTasks.length} DAG task(s) completed. Running verification gates...`);
     const gateResults = runVerificationGates(targetRoot, config, { ...options, runId: state.runId, slug: state.specSlug });
+    // runVerificationGates records failures through stateManager.recordError, which reloads and
+    // writes the state file. Reload before assigning gates so the map is not discarded.
+    state = stateManager.loadRunState(targetRoot, state.runId) || state;
     state.steps[4].gates = gateResults.gates;
 
     if (!gateResults.passed) {
       console.error(`[sdw-run resume] Verification gates failed. Step 4 remains incomplete.`);
       state.steps[4].status = 'failed';
       state.status = 'failed';
-      stateManager.saveRunState(targetRoot, state);
+      // Spec 00071 AC4: fail closed — record the blocking gate, never ship.
+      recordBlockedGate(targetRoot, state, failedDeliveryGates(gateResults.gates)[0] || 'tests', { step: 4, detail: 'Step 4 verification gates failed' });
       return 1;
     }
 
@@ -3783,6 +3938,11 @@ module.exports = {
   loadProjectConfig,
   resolveSpecPath,
   collectDeliveryFiles,
+  isAutonomousDelivery,
+  failedDeliveryGates,
+  recordBlockedGate,
+  clearBlockedGate,
+  syncSpecHeaderImplemented,
   stageAndCommitOnly,
   getStatusFiles,
   snapshotStats,

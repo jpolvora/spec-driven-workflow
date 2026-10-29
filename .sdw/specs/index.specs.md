@@ -51,7 +51,7 @@ Central repository index tracking specification lifecycle states, metadata, and 
 | 00038 | 00038-sdw-spec-drift-repair | SDW Spec Drift Repair | completed | local | 2026-10-21 | PASS | - |
 | 00039 | 00039-sdw-batch-skill | SDW Batch Skill — Multi-Spec Queue Delegating to Single sdw-orch Runs | completed | local | 2026-10-21 | PASS | - |
 | 00040 | 00040-sdw-branching-strategy | SDW Branching Strategy — Configurable Presets, Branch Lanes, and Post-Merge Sync | completed | local | 2026-10-21 | PASS | - |
-| 00041 | 00041-us-20-versioned-spec-files-for-creation | Versioned spec files for creation, editing, and drift repair | pending | github | 2026-10-21 | PASS | - |
+| 00041 | 00041-us-20-versioned-spec-files-for-creation | Versioned spec files for creation, editing, and drift repair | completed | github | 2026-10-21 | PASS | - |
 | 00042 | 00042-us-18-reduce-repeated-full-test-suite-r | Reduce repeated full test suite runs during task implementation | completed | github | 2026-10-21 | PASS | - |
 | 00043 | 00043-us-17-emphasize-step-number-progress-in | Emphasize step number progress in sdw-orch agent output | archived | github | 2026-10-21 | PASS | 2026-10-25 |
 | 00044 | 00044-us-16-add-gitattributes-and-per-task-sa | Add .gitattributes and per-task save in sdw-orch DAG | completed | github | 2026-10-21 | PASS | - |
@@ -68,6 +68,7 @@ Central repository index tracking specification lifecycle states, metadata, and 
 | 00063 | 00063-orchestrator-checkpoint-commits-must-ver | Orchestrator checkpoint commits must verify the run branch | completed | local | 2026-10-23 | PASS | - |
 | 00069 | 00069-dag-planning-must-not-invent-target-files | DAG planning must not invent target files | completed | local | 2026-10-24 | PASS | - |
 | 00070 | 00070-rename-sdw-orch-to-sdw-run | Rename the sdw-orch skill to sdw-run | completed | local | 2026-10-27 | PASS | - |
+| 00071 | 00071-us-81-sdw-run-sync-spec-state-in-the-de | sdw-run: sync spec state in the delivery commit, then ship/converge/merge autonomously on success | completed | github | 2026-10-29 | PASS | - |
 
 ## Lean-Core Cut (2026-10-25)
 

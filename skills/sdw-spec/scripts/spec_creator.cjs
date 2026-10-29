@@ -2,7 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { resolvePaths, registerSpec } = require('./spec_index.cjs');
+const { resolvePaths, registerSpec, readIndex, parseFrontmatter, findSpecGroupFiles, versionedFilename } = require('./spec_index.cjs');
 const { createScmProvider, resolveScmProvider, checkScmCapability } = require('./scm_provider_contract.cjs');
 const { validateFile } = require('./validate_spec.cjs');
 
@@ -226,6 +226,113 @@ function createNewSpec(inputText, options = {}) {
   };
 }
 
+// Write a new versioned revision (`000NN-vNN-slug.md`) for an existing spec.
+// The original file (and all prior revisions) stay untouched on disk; the
+// registry row is repointed at the new latest file. With `force`, the latest
+// file is overwritten in place instead of writing a new revision.
+function createSpecRevision(key, options = {}) {
+  const { specsDir } = resolvePaths(options.root);
+  const group = findSpecGroupFiles(specsDir, key);
+  if (!group) {
+    throw new Error(`Specification not found for "${key}". No matching spec file on disk.`);
+  }
+  const latest = group.files[group.files.length - 1];
+
+  if (options.force) {
+    let validation = 'PASS';
+    try {
+      validation = validateFile(latest.fullPath, { mode: 'authoring' }).ok ? 'PASS' : 'FAIL';
+    } catch (e) {
+      validation = 'FAIL';
+    }
+    // An in-place overwrite must refresh only the validation state and the
+    // latest-file pointer. Lifecycle and descriptive fields (title, status,
+    // source, specDate, archivalDate) belong to the registry row and are
+    // carried over untouched, otherwise `--force` would silently reset a
+    // completed row to pending and replace its title with the slug.
+    const { entries } = readIndex(options);
+    const existing = entries.find(e => e.prefix === group.prefix || e.slug === latest.slug) || {};
+    const preserved = {};
+    for (const key of ['title', 'status', 'source', 'specDate', 'archivalDate']) {
+      if (existing[key] !== undefined && existing[key] !== null && existing[key] !== '') {
+        preserved[key] = existing[key];
+      }
+    }
+    registerSpec({
+      prefix: group.prefix,
+      slug: latest.slug,
+      ...preserved,
+      validation
+    }, options);
+    return {
+      filePath: latest.fullPath,
+      prefix: group.prefix,
+      slug: latest.slug,
+      version: latest.version,
+      overwritten: true
+    };
+  }
+
+  const nextVersion = latest.version + 1;
+  const newFilename = versionedFilename(group.prefix, nextVersion, group.baseSlug);
+  const newSlug = newFilename.replace(/\.md$/, '');
+  const targetFile = path.join(specsDir, newFilename);
+  if (fs.existsSync(targetFile)) {
+    throw new Error(`Revision file already exists at ${targetFile}.`);
+  }
+
+  const latestContent = fs.readFileSync(latest.fullPath, 'utf8');
+  // Repoint the copied frontmatter at the new versioned slug so the index
+  // and validators resolve this file as the latest revision.
+  const revisedContent = latestContent.replace(
+    /^---\s*\n([\s\S]*?)\n---\s*\n?/,
+    (block, fmBody) => {
+      const nextBody = /^slug:\s*.*$/m.test(fmBody)
+        ? fmBody.replace(/^slug:\s*.*$/m, `slug: ${newSlug}`)
+        : `slug: ${newSlug}\n${fmBody}`;
+      return `---\n${nextBody}\n---\n`;
+    }
+  );
+  fs.writeFileSync(targetFile, revisedContent, 'utf8');
+
+  const fm = parseFrontmatter(revisedContent);
+  let validation = 'PASS';
+  try {
+    validation = validateFile(targetFile, { mode: 'authoring' }).ok ? 'PASS' : 'FAIL';
+  } catch (e) {
+    validation = 'FAIL';
+  }
+
+  // Preserve the lifecycle status already recorded for this spec group.
+  let status = 'pending';
+  try {
+    const { entries } = readIndex(options);
+    const existing = entries.find(e => e.slug === latest.slug || e.prefix === group.prefix);
+    if (existing && existing.status) status = existing.status;
+  } catch (e) {}
+
+  registerSpec({
+    prefix: group.prefix,
+    slug: newSlug,
+    title: fm.title || newSlug,
+    status,
+    source: fm.source || 'local',
+    specDate: fm.specDate || new Date().toISOString().slice(0, 10),
+    validation
+  }, options);
+
+  return {
+    filePath: targetFile,
+    prefix: group.prefix,
+    slug: newSlug,
+    title: fm.title || newSlug,
+    version: nextVersion,
+    baseSlug: group.baseSlug,
+    previousFile: latest.fullPath,
+    overwritten: false
+  };
+}
+
 async function importRemoteSpec(options = {}) {
   const { root, specsDir } = resolvePaths(options.root);
   if (!fs.existsSync(specsDir)) {
@@ -346,5 +453,6 @@ module.exports = {
   toEarsCriterion,
   synthesizeCanonicalSpec,
   createNewSpec,
+  createSpecRevision,
   importRemoteSpec
 };
