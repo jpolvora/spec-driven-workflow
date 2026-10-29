@@ -3,10 +3,9 @@ id: "20"
 slug: 00041-us-20-versioned-spec-files-for-creation
 title: "Versioned spec files for creation, editing, and drift repair"
 source: github
-status: draft
+status: ready-to-implement
 specDate: 2026-10-21
 ---
-
 # Specification — Versioned spec files for creation, editing, and drift repair
 
 ## Description
