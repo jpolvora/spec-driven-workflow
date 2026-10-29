@@ -1,5 +1,10 @@
 # Changelog
 
+### [2026-10-29 09:36] Agent: deepseek-v4.1-flash
+- **Prompt**: Promote develop to master
+- **Done**: Recorded the promotion of specs 00041 (versioned spec files) and 00071 (autonomous delivery state sync, issue #81) plus the registry and update --force repairs; convergence on the promotion PR fixed the --force lifecycle reset, the foreign-table absorption in readTrailingBlock, and the silent registry-row skip in Step 6, then merged through PR #83 and fast-forwarded develop to the result
+- **Result**: master = 16dac7d; checks promotion-guard, test, and review all passed; suite 464/464; no open review threads
+
 ### [2026-10-21 19:53] Agent: agent
 - **Prompt**: Run spec 044: add .gitattributes and per-task checkpoint save in sdw-orch DAG
 - **Done**: Added repo-root .gitattributes with text=auto and eol=lf pins, normalized the worktree to zero w/mixed, added a per-task scoped checkpoint commit plus sdw-checkpoint-{runId}-{taskId} tag on accepted task finish with --no-task-checkpoint opt-out, gated the save behind the pre-commit secret scan over the correct tree, and updated orchestrator_protocol.md, SKILL.md, and tests
