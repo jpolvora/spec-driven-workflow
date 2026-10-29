@@ -178,9 +178,9 @@ function readTrailingBlock(indexPath) {
     const content = fs.readFileSync(indexPath, 'utf8');
     const lines = content.split('\n');
     // Anchor on the owned specification table: it opens with the Prefix/Slug
-    // header row and its rows are contiguous. Scanning stops at the first
-    // non-table, non-blank line so a foreign markdown table further down is
-    // never mistaken for an owned row.
+    // header row and its rows are contiguous. Scanning stops at the first line
+    // that is not a table row, including a blank line, so a foreign markdown
+    // table further down is never mistaken for an owned row.
     let lastRow = -1;
     let inTable = false;
     for (let i = 0; i < lines.length; i++) {
@@ -193,7 +193,9 @@ function readTrailingBlock(indexPath) {
         lastRow = i;
         continue;
       }
-      if (t === '') continue;
+      // Owned rows are contiguous: a blank line or any other line ends the
+      // owned table, so a foreign table that follows it stays foreign and
+      // survives the rewrite.
       break;
     }
     if (lastRow === -1) {

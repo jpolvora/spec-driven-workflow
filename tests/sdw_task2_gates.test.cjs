@@ -243,3 +243,26 @@ test('00071 AC4: a delivered run clears the stale blockedGate marker', () => {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('00071 AC5: a foreign table after a blank line is not absorbed into the registry', () => {
+  const root = makeRoot();
+  try {
+    const specsDir = path.join(root, '.sdw', 'specs');
+    fs.mkdirSync(specsDir, { recursive: true });
+    const seed = [
+      { prefix: '00071', slug: '00071-ac5-table', title: 'Keep', status: 'pending', source: 'local', specDate: '2026-10-26', validation: 'PASS', archivalDate: null }
+    ];
+    specIndex.writeIndex(seed, { root });
+    const indexPath = path.join(specsDir, 'index.specs.md');
+    const foreign = '\n| Retired | Reason |\n|---|---|\n| 00070 | cut |\n';
+    fs.appendFileSync(indexPath, foreign, 'utf8');
+
+    specIndex.writeIndex([{ ...seed[0], status: 'completed' }], { root });
+    const after = fs.readFileSync(indexPath, 'utf8');
+    assert.ok(after.includes('| Retired | Reason |'), 'a foreign table must survive the rewrite');
+    assert.ok(after.includes('| 00070 | cut |'), 'foreign table rows must not be dropped');
+    assert.match(after, /\| 00071 \| 00071-ac5-table \| Keep \| completed \|/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
