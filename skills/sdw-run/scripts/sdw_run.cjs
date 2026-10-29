@@ -491,6 +491,38 @@ function checkpointTask(targetRoot, { specSlug, runId, taskId, files = [], commi
   return { commitSha: sha, tag, tagError: null };
 }
 
+function isAutonomousDelivery(config) {
+  const automation = config && config.automation;
+  if (!automation || typeof automation !== 'object') return false;
+  return automation.autoShip === true && automation.autoMerge === true;
+}
+
+// Spec 00071 AC1: write the specification header status `implemented` before
+// the delivery commit, reusing the sdw-spec status machinery (never hand-
+// editing YAML). Runs the sibling sdw-spec CLI in-process via spawn so the
+// transition rules stay authoritative. Returns true when the header now reads
+// `implemented`. A refused transition is retried once with --force because a
+// delivered specification is implemented regardless of its prior authoring
+// state; a missing file or CLI is reported, never thrown.
+function syncSpecHeaderImplemented(targetRoot, specSlug, options = {}) {
+  const root = path.resolve(targetRoot);
+  try {
+    const scriptPath = resolveSkillScript(root, 'sdw-spec', path.join('scripts', 'sdw_spec.cjs'), options);
+    const cli = scriptPath && fs.existsSync(scriptPath)
+      ? scriptPath
+      : path.resolve(__dirname, '../../sdw-spec/scripts/sdw_spec.cjs');
+    if (!fs.existsSync(cli)) return false;
+    const run = (extra) => spawnSync(process.execPath, [
+      cli, 'status', specSlug, 'implemented', '--root', root, ...extra
+    ], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    let proc = run([]);
+    if (proc.status !== 0) proc = run(['--force']);
+    return proc.status === 0;
+  } catch (e) {
+    return false;
+  }
+}
+
 function collectDeliveryFiles(targetRoot, specSlug, state) {
   const files = new Set();
   const tasks = (state && state.steps && state.steps[4] && state.steps[4].tasks) || {};
@@ -2079,13 +2111,25 @@ function cmdRun(options) {
     let commitSha = null;
     let deliveryCommitCreated = false;
     try {
-      // Mark spec as completed in index.specs.md prior to staging delivery commit (AC24).
-      // A second pass never rewrites the index: the spec is already completed there, and
-      // rewriting it would manufacture a diff that turns a no-change pass into a commit.
-      if (specIndex && !refineMode) {
-        try {
-          specIndex.updateSpecStatus(specSlug, 'completed', { root: targetRoot });
-        } catch (e) {}
+      // Mark spec as completed in index.specs.md prior to staging delivery commit (AC24),
+      // plus the specification header as `implemented` (spec 00071 AC1). Both writes
+      // happen before collectDeliveryFiles so the single delivery commit carries the
+      // header change, the registry change, and the accepted implementation files
+      // together (spec 00071 AC2). A second pass never rewrites either: the spec is
+      // already completed there, and rewriting it would manufacture a diff that
+      // turns a no-change pass into a commit.
+      if (!refineMode) {
+        const headerOk = syncSpecHeaderImplemented(targetRoot, specSlug, resolveOptions);
+        if (headerOk) {
+          console.log(`[Step 6: Delivery Commit] Specification header synced to implemented.`);
+        } else {
+          console.warn(`[Step 6: Delivery Commit] Warning: specification header sync did not confirm implemented; continuing with registry sync.`);
+        }
+        if (specIndex) {
+          try {
+            specIndex.updateSpecStatus(specSlug, 'completed', { root: targetRoot });
+          } catch (e) {}
+        }
       }
 
       if (!isGitRepo(targetRoot)) {
@@ -2520,13 +2564,25 @@ function cmdRun(options) {
       try {
         console.log(`[sdw-run Step 8] Delegating delivery to sdw-ship-pr...`);
         // argv form: specSlug/runId/paths are never interpreted by a shell.
+        // Spec 00071 AC3: when .sdw/config.json enables autonomous delivery
+        // (automation.autoShip && automation.autoMerge, both defaulting to
+        // false), ship, converge, and merge ride in this same invocation.
+        // Otherwise the flags below are exactly the legacy behavior (no merge).
+        const autonomous = isAutonomousDelivery(config);
+        const wantPush = Boolean(options.push || config.pushDelivery || autonomous);
+        const wantPoll = Boolean(pollPr || autonomous);
+        const wantMerge = Boolean(autonomous);
+        if (autonomous) {
+          console.log(`[sdw-run Step 8] Autonomous delivery enabled: invoking sdw-ship-pr with --push --poll-pr --merge.`);
+        }
         const shipArgs = [
           shipPrScript,
           '--run-id', state.runId,
           '--spec', specSlug,
           '--root', targetRoot,
-          ...(options.push || config.pushDelivery ? ['--push'] : []),
-          ...(pollPr ? ['--poll-pr'] : []),
+          ...(wantPush ? ['--push'] : []),
+          ...(wantPoll ? ['--poll-pr'] : []),
+          ...(wantMerge ? ['--merge'] : []),
           ...(options.dryRun || options.sandbox || options._sandbox ? ['--dry-run'] : []),
           '--json'
         ];
@@ -3783,6 +3839,8 @@ module.exports = {
   loadProjectConfig,
   resolveSpecPath,
   collectDeliveryFiles,
+  isAutonomousDelivery,
+  syncSpecHeaderImplemented,
   stageAndCommitOnly,
   getStatusFiles,
   snapshotStats,
