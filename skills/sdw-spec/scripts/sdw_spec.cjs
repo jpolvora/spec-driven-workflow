@@ -4,8 +4,8 @@
 const fs = require('fs');
 const path = require('path');
 
-const { initIndex, listIndex, archiveSpec, resolvePaths } = require('./spec_index.cjs');
-const { createNewSpec, importRemoteSpec } = require('./spec_creator.cjs');
+const { initIndex, listIndex, archiveSpec, resolvePaths, latestGroupFile } = require('./spec_index.cjs');
+const { createNewSpec, createSpecRevision, importRemoteSpec } = require('./spec_creator.cjs');
 const { syncIndex } = require('./spec_sync.cjs');
 const { validateFile, SPEC_STATUSES } = require('./validate_spec.cjs');
 
@@ -69,6 +69,7 @@ Subcommands:
   list                     Display registered specifications with status and validation health
   new <requirements>      Synthesize canonical specification with autoincremented numerical prefix
   import                   Import remote tracker item from GitHub or Azure DevOps
+  update <slug>            Write a new versioned revision (000NN-vNN-slug.md); original untouched
   sync                     Reconcile index.specs.md against on-disk files and orchestrator run states
   validate <specPath>      Validate frontmatter, section hierarchy, and strict EARS syntax
   status <slug> <status>   Change the spec header status with defined transitions
@@ -267,6 +268,35 @@ function cmdValidate(options) {
   }
 }
 
+function cmdUpdate(options) {
+  if (!options.target) {
+    console.error('Error: specification slug or prefix is required for "update" subcommand.');
+    return 1;
+  }
+
+  try {
+    const revised = createSpecRevision(options.target, options);
+    if (options.json) {
+      console.log(JSON.stringify({ status: 'ok', ...revised }, null, 2));
+    } else if (revised.overwritten) {
+      console.log(`[sdw-spec update] Overwrote ${path.basename(revised.filePath)} in place (--force); no new revision written.`);
+    } else {
+      console.log(`[sdw-spec update] Wrote new revision "${revised.slug}":`);
+      console.log(`  File:     ${revised.filePath}`);
+      console.log(`  Previous: ${revised.previousFile} (untouched)`);
+      console.log(`  Version:  v${String(revised.version).padStart(2, '0')}`);
+    }
+    return 0;
+  } catch (err) {
+    if (options.json) {
+      console.log(JSON.stringify({ status: 'error', error: err.message }, null, 2));
+    } else {
+      console.error(`[sdw-spec update] Error: ${err.message}`);
+    }
+    return 1;
+  }
+}
+
 function cmdArchive(options) {
   if (!options.target) {
     console.error('Error: specification slug or prefix is required for "archive" subcommand.');
@@ -296,6 +326,9 @@ function findSpecFile(specsDir, key) {
   const direct = path.join(specsDir, `${key}.md`);
   if (fs.existsSync(direct)) return direct;
   if (!fs.existsSync(specsDir)) return null;
+  // Prefer the latest revision of the version group (original + vNN files).
+  const latest = latestGroupFile(specsDir, key);
+  if (latest) return latest.fullPath;
   const files = fs.readdirSync(specsDir).filter(name => /^\d{5}-.*\.md$/.test(name));
   const match = files.find(name => {
     const base = name.replace(/\.md$/, '');
@@ -383,6 +416,9 @@ async function main() {
     case 'import':
       code = await cmdImport(options);
       break;
+    case 'update':
+      code = cmdUpdate(options);
+      break;
     case 'sync':
       code = cmdSync(options);
       break;
@@ -414,6 +450,7 @@ module.exports = {
   cmdList,
   cmdNew,
   cmdImport,
+  cmdUpdate,
   cmdSync,
   cmdValidate,
   cmdArchive,
