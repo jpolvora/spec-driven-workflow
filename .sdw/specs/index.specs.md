@@ -68,3 +68,25 @@ Central repository index tracking specification lifecycle states, metadata, and 
 | 00063 | 00063-orchestrator-checkpoint-commits-must-ver | Orchestrator checkpoint commits must verify the run branch | completed | local | 2026-10-23 | PASS | - |
 | 00069 | 00069-dag-planning-must-not-invent-target-files | DAG planning must not invent target files | completed | local | 2026-10-24 | PASS | - |
 | 00070 | 00070-rename-sdw-orch-to-sdw-run | Rename the sdw-orch skill to sdw-run | completed | local | 2026-10-27 | PASS | - |
+| 00071 | 00071-us-81-sdw-run-sync-spec-state-in-the-de | sdw-run: sync spec state in the delivery commit, then ship/converge/merge autonomously on success | pending | github | 2026-10-29 | PASS | - |
+
+## Lean-Core Cut (2026-10-25)
+
+The `develop` line was reset to `c7b56fa` (2026-10-22, PR #38). The specifications below are archived because their implementation is not part of the lean baseline; each document stays in the tree as a design record.
+
+| Spec | Reason |
+|---|---|
+| `00016` | Superseded by 00024, 00050, and 00051. |
+| `00017` | Hashed acceptance-criteria ledger: 2,543 lines of self-graded evidence with no consumer; the Step 5 verdict plus the Step 7 review gate cover the same ground. |
+| `00018` | Fresh-context verification and adversarial audit: 4,677 lines, and it was disabled in `.sdw/config.json` (`freshVerifyEnabled: false`). |
+| `00019` | Run lock and revision guard: 2,030 lines; resume, per-task checkpoints, and the branch guard (00063) remain. |
+| `00021` | Live monitor and telemetry stream: the event log was never read back. |
+| `00022` | Harness diagnostics and workflow simulation: no consumer. |
+| `00023` | Activity, standup, and explain reports: 2,926 lines, zero software delivered. |
+| `00030` | Micro-task DAG classifier: the lean planner keeps one or two tasks; the target-file guard (00069) remains. |
+| `00033` | Diagnostic run mode: the retrospective candidate list covers the same signal. |
+| `00043` | Step-number progress headers: cosmetic. |
+| `00052` | Fresh-subagent review isolation: already satisfied by the Step 7 delegation in `sdw-orch`. |
+| `00053` | Batch auto-merge: reverted with the batch merge wave; the queue loops single runs and leaves merges to the operator. |
+
+Not carried into this baseline: 00054, 00055, 00056, 00057, 00058, 00060, 00062, 00064, 00065, 00066, 00067, 00068, 00070, 00071 (delivered on `develop` after the cut point), and 00061, 00072, 00073, 00074, 00075 (drafts). The pre-cut state is preserved at tag `pre-cut-2026-10-25`.
