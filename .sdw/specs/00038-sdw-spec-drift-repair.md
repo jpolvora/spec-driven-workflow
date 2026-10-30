@@ -3,7 +3,7 @@ id: null
 slug: 00038-sdw-spec-drift-repair
 title: "SDW Spec Drift Repair"
 source: local
-status: ready-to-implement
+status: implemented
 specDate: 2026-10-21
 ---
 # Specification — SDW Spec Drift Repair
