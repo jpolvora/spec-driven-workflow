@@ -1,6 +1,6 @@
 'use strict';
 
-// Spec 00072 — priority ordering. Covers AC1..AC8 (task-1).
+// Spec 00072 — priority ordering. Covers AC1..AC15.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -9,11 +9,23 @@ const path = require('path');
 const os = require('os');
 const { execFileSync } = require('child_process');
 
-const { validate, normalizePriority } = require('../skills/sdw-spec/scripts/validate_spec.cjs');
+const { validate, validateFile, normalizePriority } = require('../skills/sdw-spec/scripts/validate_spec.cjs');
 const { initIndex, readIndex, registerSpec, writeIndex, listIndex } = require('../skills/sdw-spec/scripts/spec_index.cjs');
 const { syncIndex } = require('../skills/sdw-spec/scripts/spec_sync.cjs');
 
 const CLI = path.join(__dirname, '..', 'skills', 'sdw-spec', 'scripts', 'sdw_spec.cjs');
+const REPO_ROOT = path.join(__dirname, '..');
+
+// The four specifications that already carried `priority: high` before the
+// field was validated (AC13, AC14). Resolved from disk by prefix so the test
+// never spells the retired skill name that one of the slugs contains.
+const EXISTING_HIGH_PREFIXES = ['00059', '00063', '00069', '00070'];
+
+function existingHighSpecs() {
+  const specsDir = path.join(REPO_ROOT, '.sdw', 'specs');
+  return EXISTING_HIGH_PREFIXES.map((prefix) =>
+    fs.readdirSync(specsDir).find((name) => name.startsWith(`${prefix}-`) && name.endsWith('.md')));
+}
 
 function setupWorkspace() {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-spec-priority-'));
@@ -191,3 +203,93 @@ test('AC6, AC7 & AC8: --order=priority ranks high first, ties by prefix, and pri
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('AC9: without --order=priority the list columns and order are unchanged', () => {
+  const { tmpDir } = setupWorkspace();
+  try {
+    writeIndex([
+      { prefix: '00002', slug: '00002-beta', title: 'Beta', status: 'pending', priority: 'low', source: 'local', specDate: '2026-10-29', validation: 'PASS' },
+      { prefix: '00001', slug: '00001-alpha', title: 'Alpha', status: 'completed', priority: 'high', source: 'local', specDate: '2026-10-29', validation: 'PASS' }
+    ], { root: tmpDir });
+
+    const json = JSON.parse(execFileSync(process.execPath, [CLI, 'list', '--json', '--root', tmpDir], { encoding: 'utf8' }));
+    assert.deepEqual(json.map((item) => item.prefix), ['00001', '00002'], 'registry order preserved');
+    assert.ok(json.every((item) => !('rank' in item)), 'no rank field without the opt-in');
+
+    const text = execFileSync(process.execPath, [CLI, 'list', '--root', tmpDir], { encoding: 'utf8' });
+    const header = text.split('\n').find((line) => /^PREFIX\s/.test(line));
+    assert.match(header, /^PREFIX\s+\| SLUG\s+\| STATUS\s+\| HEALTH\s+\| TITLE$/);
+    assert.ok(!/RANK/.test(text), 'no RANK column without the opt-in');
+    assert.ok(!/PRIORITY/.test(header), 'no PRIORITY column without the opt-in');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('AC10: archived specifications sort after every non-archived row', () => {
+  const { tmpDir } = setupWorkspace();
+  try {
+    writeIndex([
+      { prefix: '00001', slug: '00001-archived-high', title: 'Archived High', status: 'archived', priority: 'high', source: 'local', specDate: '2026-10-29', validation: 'PASS', archivalDate: '2026-10-29' },
+      { prefix: '00009', slug: '00009-pending-low', title: 'Pending Low', status: 'pending', priority: 'low', source: 'local', specDate: '2026-10-29', validation: 'PASS' },
+      { prefix: '00005', slug: '00005-pending-medium', title: 'Pending Medium', status: 'pending', priority: 'medium', source: 'local', specDate: '2026-10-29', validation: 'PASS' }
+    ], { root: tmpDir });
+
+    const ordered = JSON.parse(execFileSync(process.execPath, [CLI, 'list', '--order=priority', '--json', '--root', tmpDir], { encoding: 'utf8' }));
+    assert.deepEqual(ordered.map((item) => item.prefix), ['00005', '00009', '00001']);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('AC13: the four existing high-priority specs validate unchanged', () => {
+  const specs = existingHighSpecs();
+  assert.equal(specs.filter(Boolean).length, EXISTING_HIGH_PREFIXES.length);
+  for (const filename of specs) {
+    const file = path.join(REPO_ROOT, '.sdw', 'specs', filename);
+    const result = validateFile(file, { mode: 'authoring' });
+    assert.equal(result.ok, true, `${filename}: ${JSON.stringify(result.errors)}`);
+    assert.match(fs.readFileSync(file, 'utf8'), /^priority: high$/m, `${filename} keeps its frontmatter`);
+  }
+});
+
+test('AC14: sync records high for the four specs without manual file edits', () => {
+  const { tmpDir, specsDir } = setupWorkspace();
+  const specs = existingHighSpecs();
+  try {
+    for (const filename of specs) {
+      fs.copyFileSync(path.join(REPO_ROOT, '.sdw', 'specs', filename), path.join(specsDir, filename));
+    }
+    syncIndex({ root: tmpDir });
+
+    const { entries } = readIndex({ root: tmpDir });
+    for (const filename of specs) {
+      const slug = filename.replace(/\.md$/, '');
+      const row = entries.find((entry) => entry.slug === slug);
+      assert.ok(row, `${filename} is tracked`);
+      assert.equal(row.priority, 'high', `${filename} priority projected from frontmatter`);
+    }
+
+    const raw = fs.readFileSync(path.join(specsDir, 'index.specs.md'), 'utf8');
+    const rows = raw.split('\n').filter((line) => /^\| 000(59|63|69|70) /.test(line));
+    assert.equal(rows.length, specs.length);
+    for (const row of rows) {
+      assert.equal(row.split('|').slice(1, -1).map((cell) => cell.trim())[4], 'high');
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('AC11, AC12 & AC15: the glossary defines priority and the standard states maintainer precedence', () => {
+  const glossary = fs.readFileSync(path.join(REPO_ROOT, 'GLOSSARY.md'), 'utf8');
+  assert.ok(!/no sprint, capacity, or priority model/.test(glossary), 'the no-priority-model claim is gone');
+  assert.ok(!/no priority or sprint semantics/.test(glossary), 'the redefinition table no longer denies priority');
+  assert.match(glossary, /\*\*Priority\*\* \| The optional frontmatter key/);
+  assert.match(glossary, /its `Priority` column ranks authored specs/);
+  assert.match(glossary, /Separate from the `priority` ranking column/);
+
+  const standard = fs.readFileSync(path.join(REPO_ROOT, 'skills', 'sdw-spec', 'references', 'spec_standard.md'), 'utf8');
+  assert.match(standard, /An explicit maintainer implementation order always overrides the computed priority order\./);
+});
+

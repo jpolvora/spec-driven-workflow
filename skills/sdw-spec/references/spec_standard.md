@@ -93,6 +93,8 @@ Allowed transitions: `draft` -> `awaiting-approval` -> `ready-to-implement` -> `
 
 The registry `Status` column stays the lifecycle value (`pending`, `completed`, `archived`). `sync` reconciles the registry only; it never rewrites the header.
 
+`priority` ranks authored work; it is not an implementation order. An explicit maintainer implementation order always overrides the computed priority order.
+
 ## 6. Focus, Splitting & Grilling
 
 - Default unit: **one feature per spec**.
