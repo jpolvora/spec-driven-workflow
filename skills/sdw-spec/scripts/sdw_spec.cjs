@@ -7,7 +7,7 @@ const path = require('path');
 const { initIndex, listIndex, archiveSpec, resolvePaths, latestGroupFile } = require('./spec_index.cjs');
 const { createNewSpec, createSpecRevision, importRemoteSpec } = require('./spec_creator.cjs');
 const { syncIndex } = require('./spec_sync.cjs');
-const { validateFile, SPEC_STATUSES } = require('./validate_spec.cjs');
+const { validateFile, SPEC_STATUSES, normalizePriority } = require('./validate_spec.cjs');
 
 const SPEC_STATUS_TRANSITIONS = {
   draft: ['awaiting-approval', 'abandoned'],
@@ -30,6 +30,7 @@ function parseArgs(args) {
     force: false,
     json: false,
     dryRun: false,
+    order: null,
     mode: 'authoring'
   };
 
@@ -39,6 +40,8 @@ function parseArgs(args) {
     if (arg === '--json') result.json = true;
     else if (arg === '--force') result.force = true;
     else if (arg === '--dry-run') result.dryRun = true;
+    else if (arg === '--order') result.order = args[++i];
+    else if (arg.startsWith('--order=')) result.order = arg.slice(8);
     else if (arg === '--root') result.root = args[++i];
     else if (arg.startsWith('--root=')) result.root = arg.slice(7);
     else if (arg === '--status') result.status = args[++i];
@@ -82,6 +85,7 @@ Spec statuses:
 Options:
   --root <path>            Target project workspace root directory
   --status <status>        Filter specifications by status (pending, completed, archived)
+  --order=priority         Order rows by priority rank (high, medium, low), archived last
   --provider <name>        SCM provider for import (github, azure-devops)
   --id <id>                Work item or issue ID for remote import
   --title <title>          Explicit title for newly synthesized specification
@@ -116,11 +120,29 @@ async function cmdInit(options) {
   }
 }
 
+const PRIORITY_SORT = { high: 0, medium: 1, low: 2 };
+
+// AC6, AC7, AC10: high -> medium -> low, numeric-prefix tie-break, and
+// archived rows last regardless of their priority.
+function orderByPriority(entries) {
+  return [...entries].sort((a, b) => {
+    const archivedA = a.status === 'archived' ? 1 : 0;
+    const archivedB = b.status === 'archived' ? 1 : 0;
+    if (archivedA !== archivedB) return archivedA - archivedB;
+    const rankA = PRIORITY_SORT[normalizePriority(a.priority)];
+    const rankB = PRIORITY_SORT[normalizePriority(b.priority)];
+    if (rankA !== rankB) return rankA - rankB;
+    return (parseInt(a.prefix, 10) || 0) - (parseInt(b.prefix, 10) || 0);
+  });
+}
+
 function cmdList(options) {
   try {
-    const list = listIndex(options);
+    const ordered = options.order === 'priority';
+    const list = ordered ? orderByPriority(listIndex(options)) : listIndex(options);
     if (options.json) {
-      console.log(JSON.stringify(list, null, 2));
+      const payload = ordered ? list.map((item, index) => ({ rank: index + 1, ...item })) : list;
+      console.log(JSON.stringify(payload, null, 2));
     } else {
       console.log(`[sdw-spec list] Registered specifications (${list.length}${options.status ? ` filtered by status="${options.status}"` : ''}):\n`);
       if (list.length === 0) {
@@ -130,14 +152,31 @@ function cmdList(options) {
         const sPad = Math.max(10, ...list.map(l => (l.slug || '').length));
         const stPad = 11;
         const vPad = 8;
-        console.log(`${'PREFIX'.padEnd(pPad)} | ${'SLUG'.padEnd(sPad)} | ${'STATUS'.padEnd(stPad)} | ${'HEALTH'.padEnd(vPad)} | TITLE`);
-        console.log(`${'-'.repeat(pPad)}-|-|${'-'.repeat(sPad)}-|-|${'-'.repeat(stPad)}-|-|${'-'.repeat(vPad)}-|-${'-'.repeat(30)}`);
-        for (const item of list) {
-          const pref = (item.prefix || '').padEnd(pPad);
-          const slug = (item.slug || '').padEnd(sPad);
-          const stat = (item.status || 'pending').padEnd(stPad);
-          const val = (item.validation || 'PASS').padEnd(vPad);
-          console.log(`${pref} | ${slug} | ${stat} | ${val} | ${item.title}`);
+        if (ordered) {
+          // AC8: the rank spells out each row's implement position.
+          const rPad = Math.max(4, String(list.length).length);
+          const prPad = 8;
+          console.log(`${'RANK'.padEnd(rPad)} | ${'PREFIX'.padEnd(pPad)} | ${'SLUG'.padEnd(sPad)} | ${'STATUS'.padEnd(stPad)} | ${'HEALTH'.padEnd(vPad)} | ${'PRIORITY'.padEnd(prPad)} | TITLE`);
+          console.log(`${'-'.repeat(rPad)}-|-${'-'.repeat(pPad)}-|-${'-'.repeat(sPad)}-|-${'-'.repeat(stPad)}-|-${'-'.repeat(vPad)}-|-${'-'.repeat(prPad)}-|${'-'.repeat(30)}`);
+          list.forEach((item, index) => {
+            const rank = String(index + 1).padEnd(rPad);
+            const pref = (item.prefix || '').padEnd(pPad);
+            const slug = (item.slug || '').padEnd(sPad);
+            const stat = (item.status || 'pending').padEnd(stPad);
+            const val = (item.validation || 'PASS').padEnd(vPad);
+            const prio = normalizePriority(item.priority).padEnd(prPad);
+            console.log(`${rank} | ${pref} | ${slug} | ${stat} | ${val} | ${prio} | ${item.title}`);
+          });
+        } else {
+          console.log(`${'PREFIX'.padEnd(pPad)} | ${'SLUG'.padEnd(sPad)} | ${'STATUS'.padEnd(stPad)} | ${'HEALTH'.padEnd(vPad)} | TITLE`);
+          console.log(`${'-'.repeat(pPad)}-|-|${'-'.repeat(sPad)}-|-|${'-'.repeat(stPad)}-|-|${'-'.repeat(vPad)}-|-${'-'.repeat(30)}`);
+          for (const item of list) {
+            const pref = (item.prefix || '').padEnd(pPad);
+            const slug = (item.slug || '').padEnd(sPad);
+            const stat = (item.status || 'pending').padEnd(stPad);
+            const val = (item.validation || 'PASS').padEnd(vPad);
+            console.log(`${pref} | ${slug} | ${stat} | ${val} | ${item.title}`);
+          }
         }
       }
     }

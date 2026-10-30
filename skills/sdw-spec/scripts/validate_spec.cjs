@@ -8,6 +8,16 @@ const PLACEHOLDER = /^(?:tbd|todo|placeholder|\?+|[-–—.]{1,3}|\.{3}|n\/?a)$/
 
 const SPEC_STATUSES = ['draft', 'awaiting-approval', 'ready-to-implement', 'implemented', 'abandoned'];
 
+// Optional frontmatter ranking. Absent values read as `medium` so every
+// specification authored before the field existed stays valid (AC1, AC2).
+const SPEC_PRIORITIES = ['high', 'medium', 'low'];
+const DEFAULT_PRIORITY = 'medium';
+
+function normalizePriority(value) {
+  const normalized = String(value === undefined || value === null ? '' : value).trim();
+  return SPEC_PRIORITIES.includes(normalized) ? normalized : DEFAULT_PRIORITY;
+}
+
 // Spec filenames: `00036-slug.md` (original) or `00036-v01-slug.md`,
 // `00036-v02-slug.md`, ... (versioned revisions). Both forms are valid;
 // the sync/index layer resolves the latest revision per prefix+slug group.
@@ -327,6 +337,10 @@ function validate(text, options) {
     if (['github', 'azure-devops'].includes(fm.source) && !/^### Prior Work Sweep\s*$/m.test(normalizedText)) {
       errors.push({ code: 'prior-work', message: 'Tracker specifications require ### Prior Work Sweep.' });
     }
+    // AC3: an unknown priority is rejected; absent is valid and reads as medium.
+    if (fm.priority !== undefined && fm.priority !== '' && !SPEC_PRIORITIES.includes(fm.priority)) {
+      errors.push({ code: 'priority', message: `priority must be one of: ${SPEC_PRIORITIES.join(', ')}.` });
+    }
   }
 
   for (const heading of ['## Description', '## Acceptance Criteria']) {
@@ -431,6 +445,9 @@ if (require.main === module) {
 module.exports = {
   EARS_PATTERNS,
   SPEC_STATUSES,
+  SPEC_PRIORITIES,
+  DEFAULT_PRIORITY,
+  normalizePriority,
   SPEC_FILENAME_RE,
   parseSpecFilename,
   isSpecFilename,

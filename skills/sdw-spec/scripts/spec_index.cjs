@@ -2,7 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { validateFile } = require('./validate_spec.cjs');
+const { validateFile, normalizePriority, DEFAULT_PRIORITY } = require('./validate_spec.cjs');
 
 function resolvePaths(projectRoot) {
   let root = projectRoot ? path.resolve(projectRoot) : process.cwd();
@@ -129,11 +129,17 @@ function readIndex(options = {}) {
   const lines = content.split('\n');
   const entries = [];
 
+  // Resolve cells by header name so the Priority column can be added without
+  // shifting every other field, and a legacy table without it still parses.
+  let columns = null;
   let inTable = false;
   for (const line of lines) {
     const trimmed = line.trim();
-    if (trimmed.startsWith('| Prefix |') || trimmed.startsWith('|Prefix|')) {
-      inTable = true;
+    if (!inTable) {
+      if (trimmed.startsWith('|') && /prefix/i.test(trimmed) && /slug/i.test(trimmed)) {
+        columns = trimmed.split('|').slice(1, -1).map(c => c.trim().toLowerCase());
+        inTable = true;
+      }
       continue;
     }
     if (inTable) {
@@ -146,15 +152,20 @@ function readIndex(options = {}) {
       }
       const cells = line.split('|').slice(1, -1).map(c => c.trim());
       if (cells.length >= 6) {
+        const pick = (name) => {
+          const at = columns ? columns.indexOf(name) : -1;
+          return at >= 0 ? (cells[at] || '') : '';
+        };
         entries.push({
-          prefix: cells[0] || '',
-          slug: cells[1] || '',
-          title: cells[2] || '',
-          status: cells[3] || 'pending',
-          source: cells[4] || 'local',
-          specDate: cells[5] || '',
-          validation: cells[6] || 'PASS',
-          archivalDate: cells[7] || null
+          prefix: pick('prefix'),
+          slug: pick('slug'),
+          title: pick('title'),
+          status: pick('status') || 'pending',
+          priority: normalizePriority(pick('priority')),
+          source: pick('source') || 'local',
+          specDate: pick('spec date'),
+          validation: pick('validation') || 'PASS',
+          archivalDate: pick('archival date') || null
         });
       }
     }
@@ -233,19 +244,20 @@ function writeIndex(entries, options = {}) {
   md += `- \`completed\`: Implementation, verification, and pull request preparation are complete.\n`;
   md += `- \`archived\`: Specification lifecycle is finished and retired from active development.\n\n`;
   md += `## Specifications\n\n`;
-  md += `| Prefix | Slug | Title | Status | Source | Spec Date | Validation | Archival Date |\n`;
-  md += `|---|---|---|---|---|---|---|---|\n`;
+  md += `| Prefix | Slug | Title | Status | Priority | Source | Spec Date | Validation | Archival Date |\n`;
+  md += `|---|---|---|---|---|---|---|---|---|\n`;
 
   for (const e of entries) {
     const prefix = e.prefix || '';
     const slug = e.slug || '';
     const title = (e.title || '').replace(/\|/g, '\\|');
     const status = e.status || 'pending';
+    const priority = normalizePriority(e.priority);
     const source = e.source || 'local';
     const specDate = e.specDate || '';
     const validation = e.validation || 'PASS';
     const archival = e.archivalDate || '-';
-    md += `| ${prefix} | ${slug} | ${title} | ${status} | ${source} | ${specDate} | ${validation} | ${archival} |\n`;
+    md += `| ${prefix} | ${slug} | ${title} | ${status} | ${priority} | ${source} | ${specDate} | ${validation} | ${archival} |\n`;
   }
 
   fs.writeFileSync(indexPath, trailing ? `${md}${trailing}` : md, 'utf8');
@@ -297,6 +309,7 @@ function scanSpecsDir(options = {}) {
       slug,
       title,
       status: 'pending',
+      priority: normalizePriority(fm.priority),
       source,
       specDate,
       validation,
@@ -394,8 +407,25 @@ function updateSpecStatus(slugOrPrefix, newStatus, options = {}) {
   return entry;
 }
 
+function priorityFromDisk(specsDir, slug, prefix) {
+  const group = findSpecGroupFiles(specsDir, slug) || (prefix ? findSpecGroupFiles(specsDir, prefix) : null);
+  if (!group || group.files.length === 0) return DEFAULT_PRIORITY;
+  const latest = group.files[group.files.length - 1];
+  try {
+    return normalizePriority(parseFrontmatter(fs.readFileSync(latest.fullPath, 'utf8')).priority);
+  } catch (e) {
+    return DEFAULT_PRIORITY;
+  }
+}
+
 function registerSpec(meta, options = {}) {
   const { entries } = readIndex(options);
+  const { specsDir } = resolvePaths(options.root);
+  // AC5: project the frontmatter priority. Callers that already read the
+  // frontmatter pass it; the rest fall back to the file on disk.
+  const priority = meta.priority !== undefined
+    ? normalizePriority(meta.priority)
+    : priorityFromDisk(specsDir, meta.slug, meta.prefix);
   // Match by slug, by version-group (original + vNN revisions share one row
   // that always points at the latest), or by numeric prefix.
   const metaParsed = parseSpecFilename(`${meta.slug || ''}.md`);
@@ -416,7 +446,8 @@ function registerSpec(meta, options = {}) {
   if (existingIdx >= 0) {
     entries[existingIdx] = {
       ...entries[existingIdx],
-      ...meta
+      ...meta,
+      priority
     };
   } else {
     entries.push({
@@ -424,6 +455,7 @@ function registerSpec(meta, options = {}) {
       slug: meta.slug || '',
       title: meta.title || meta.slug || '',
       status: meta.status || 'pending',
+      priority,
       source: meta.source || 'local',
       specDate: meta.specDate || new Date().toISOString().slice(0, 10),
       validation: meta.validation || 'PASS',
