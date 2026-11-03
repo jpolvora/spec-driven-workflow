@@ -3,7 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { resolvePaths, readIndex, writeIndex, scanSpecsDir, findSpecGroupFiles, specGroupKey, parseSpecFilename, parseFrontmatter } = require('./spec_index.cjs');
-const { validateFile } = require('./validate_spec.cjs');
+const { validateFile, normalizePriority } = require('./validate_spec.cjs');
 
 function loadRunStates(stateDir) {
   const statesBySlug = new Map();
@@ -83,6 +83,10 @@ function syncIndex(options = {}) {
     const latest = groupLatest(entry);
     const diskInfo = latest ? { file: latest.filename, fullPath: latest.fullPath } : null;
 
+    // AC4: every registry row carries a priority; a legacy row without one
+    // reads as medium until the frontmatter is projected below.
+    entry.priority = normalizePriority(entry.priority);
+
     // Check disk existence (AC22)
     if (!diskInfo) {
       if (entry.validation !== 'MISSING') {
@@ -123,6 +127,21 @@ function syncIndex(options = {}) {
         }
       } catch (e) {
         entry.validation = 'FAIL';
+      }
+
+      // AC4/AC14: project the frontmatter priority into the row. `high`
+      // specifications keep their value without any manual file edit.
+      const frontmatter = parseFrontmatter(fs.readFileSync(diskInfo.fullPath, 'utf8'));
+      const diskPriority = normalizePriority(frontmatter.priority);
+      if (entry.priority !== diskPriority) {
+        transitions.push({
+          slug: entry.slug,
+          field: 'priority',
+          from: entry.priority,
+          to: diskPriority,
+          reason: 'Projected specification frontmatter priority'
+        });
+        entry.priority = diskPriority;
       }
     }
 
@@ -195,6 +214,7 @@ function syncIndex(options = {}) {
         slug: latestSlug,
         title,
         status: 'pending',
+        priority: normalizePriority(parseFrontmatter(content).priority),
         source,
         specDate,
         validation,
