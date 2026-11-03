@@ -4,7 +4,7 @@ Canonical specification format and schema rules for Spec-Driven Workflow (SDW).
 
 ## 1. YAML Frontmatter
 
-Every specification must begin with YAML frontmatter containing exactly these 6 keys:
+Every specification must begin with YAML frontmatter containing exactly these 6 keys, plus the optional `priority` key:
 
 ```yaml
 ---
@@ -18,6 +18,8 @@ specDate: 2026-10-19      # ISO date (YYYY-MM-DD)
 ```
 
 `status` is the authoring state, not an implementation order. A missing key or an unknown value fails validation.
+
+`priority` is the one optional key. It is a closed enum of `high`, `medium`, and `low`; an unknown value fails validation, and an absent key reads as `medium` so existing specifications stay valid. `sdw-spec list --order=priority` renders the resulting rank.
 
 ## 2. Autoincrement Prefix Convention
 
@@ -90,6 +92,8 @@ The header `status:` records where the specification is in its authoring life. I
 Allowed transitions: `draft` -> `awaiting-approval` -> `ready-to-implement` -> `implemented`; `abandoned` is reachable from any state and may be revived to `draft`. `sdw-spec status` refuses undefined transitions unless `--force` is passed.
 
 The registry `Status` column stays the lifecycle value (`pending`, `completed`, `archived`). `sync` reconciles the registry only; it never rewrites the header.
+
+`priority` ranks authored work; it is not an implementation order. An explicit maintainer implementation order always overrides the computed priority order.
 
 ## 6. Focus, Splitting & Grilling
 

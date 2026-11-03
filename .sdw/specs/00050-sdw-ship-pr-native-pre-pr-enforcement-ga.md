@@ -3,10 +3,9 @@ id: null
 slug: 00050-sdw-ship-pr-native-pre-pr-enforcement-ga
 title: "sdw-ship-pr native pre-PR enforcement: gate shipping on run-state evidence and discovered consumer prepare obligations"
 source: local
-status: draft
+status: implemented
 specDate: 2026-10-22
 ---
-
 # Specification — sdw-ship-pr native pre-PR enforcement: gate shipping on run-state evidence and discovered consumer prepare obligations
 
 ## Description
