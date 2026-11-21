@@ -173,11 +173,9 @@ function generateDagPlan(specContent, options) {
 
   const segregateTests = opts.segregateTests !== undefined
     ? Boolean(opts.segregateTests)
-    : (opts.config && opts.config.implementation
-        ? (opts.config.implementation.segregateTests !== undefined
-            ? Boolean(opts.config.implementation.segregateTests)
-            : opts.config.implementation.mode !== 'command')
-        : false);
+    : (opts.config && opts.config.implementation && opts.config.implementation.segregateTests !== undefined
+        ? Boolean(opts.config.implementation.segregateTests)
+        : true);
 
   const testPatterns = (Array.isArray(opts.testPatterns) && opts.testPatterns.length > 0)
     ? opts.testPatterns

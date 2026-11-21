@@ -1513,30 +1513,14 @@ function cmdRun(options) {
   const blueprint = (state.steps[2] && state.steps[2].output && state.steps[2].output.blueprint) || null;
   const implConfig = (options.implementation || config.implementation || {});
   const implMode = options.implementationMode || implConfig.mode || 'subagent';
-  const isCommandMode = implMode === 'command';
-  const configFile = path.join(targetRoot, '.sdw', 'config.json');
-  const hasConfigFile = fs.existsSync(configFile);
-  let rawConfig = null;
-  if (hasConfigFile) {
-    try { rawConfig = JSON.parse(fs.readFileSync(configFile, 'utf8')); } catch (e) {}
-  }
-  const rawImpl = rawConfig && rawConfig.implementation;
-  let segregateTests;
-  if (options.segregateTests !== undefined) {
-    segregateTests = Boolean(options.segregateTests);
-  } else if (options.implementation && options.implementation.segregateTests !== undefined) {
-    segregateTests = Boolean(options.implementation.segregateTests);
-  } else if (isCommandMode) {
-    segregateTests = Boolean(rawImpl && rawImpl.mode === 'command' && rawImpl.segregateTests);
-  } else if (rawImpl) {
-    if (rawImpl.segregateTests !== undefined) {
-      segregateTests = Boolean(rawImpl.segregateTests);
-    } else {
-      segregateTests = true;
-    }
-  } else {
-    segregateTests = false;
-  }
+  const configuredSegregate = config && config.implementation && config.implementation.segregateTests !== undefined
+    ? Boolean(config.implementation.segregateTests)
+    : true;
+  const segregateTests = options.segregateTests !== undefined
+    ? Boolean(options.segregateTests)
+    : (options.implementation && options.implementation.segregateTests !== undefined
+        ? Boolean(options.implementation.segregateTests)
+        : configuredSegregate);
   if (refineMode && startStep <= 3 && state.steps[3].status !== 'completed' && state.steps[3].status !== 'skipped') {
     state = stateManager.updateStepState(targetRoot, state.runId, 3, 'in_progress');
     const refineAcIds = dagPlanner.parseAcceptanceCriteria(effectiveSpecContent)
@@ -1819,6 +1803,25 @@ function cmdRun(options) {
         }
 
         const taskRole = task.role || (task.id.endsWith('-impl') ? 'implementation' : (task.id.endsWith('-test') ? 'test_author' : undefined));
+        let checkpointTag = null;
+        if (taskRole === 'test_author' && !options.noTaskCheckpoint && !state.refineMode) {
+          try {
+            const checkpoint = checkpointTask(targetRoot, {
+              specSlug,
+              runId: state.runId,
+              taskId: task.id,
+              files: evidenceData.filesChanged,
+              commitSha: useWorktrees && wtInfo ? commitSha : null
+            });
+            commitSha = checkpoint.commitSha || commitSha;
+            checkpointTag = checkpoint.tag;
+            if (checkpoint.tagError) {
+              console.warn(`[Step 4: Checkpoint] Warning: checkpoint tag for "${task.id}" was not created: ${checkpoint.tagError}`);
+            }
+          } catch (chkErr) {
+            console.warn(`[Step 4: Checkpoint] Warning: could not create checkpoint for ${task.id}: ${chkErr.message}`);
+          }
+        }
         state.steps[4].tasks[task.id] = {
           id: task.id,
           role: taskRole,
@@ -1827,6 +1830,7 @@ function cmdRun(options) {
           promptPath: rendered.promptFileRel,
           evidencePath: rendered.evidenceFileRel,
           commitSha,
+          checkpointTag,
           filesChanged: evidenceData.filesChanged,
           acIds: evidenceData.acIds,
           completedAt: new Date().toISOString()

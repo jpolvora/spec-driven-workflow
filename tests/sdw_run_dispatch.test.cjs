@@ -51,7 +51,8 @@ function pauseAtDispatch(root) {
     root,
     specPath: '.sdw/specs/dispatch-demo.md',
     skipReview: true,
-    skipPr: true
+    skipPr: true,
+    segregateTests: false
   });
 }
 
@@ -560,7 +561,7 @@ test('AC38: command mode creates no dispatch state', () => {
       specPath: '.sdw/specs/dispatch-demo.md',
       skipReview: true,
       skipPr: true,
-      implementation: { mode: 'command', command: `node -e "${script.replace(/"/g, '\\"')}"` }
+      implementation: { mode: 'command', segregateTests: false, command: `node -e "${script.replace(/"/g, '\\"')}"` }
     });
     assert.equal(code, 0, 'Command mode runs unattended');
 

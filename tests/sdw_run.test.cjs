@@ -259,6 +259,7 @@ slug: low-score
       skipPr: true,
       implementation: {
         mode: 'command',
+        segregateTests: false,
         command: 'node -e "const fs = require(\'fs\'); fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({ taskId: process.env.SDW_TASK_ID, acIds: [\'AC1\'], filesChanged: [\'.sdw/specs/low-score.md\'], summary: \'partial\' }));"'
       },
       scoring: judgeScoring('none')
@@ -444,6 +445,7 @@ slug: push-feature
       skipPr: false,
       implementation: {
         mode: 'command',
+        segregateTests: false,
         command: 'node -e "const fs = require(\'fs\'); fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({ taskId: process.env.SDW_TASK_ID, acIds: [\'AC1\'], filesChanged: [\'.sdw/specs/push-feature.md\'], summary: \'push feature done\' }));"'
       },
       scoring: judgeScoring()
@@ -591,6 +593,7 @@ title: Branch State
         skipPr: true,
         implementation: {
           mode: 'command',
+          segregateTests: false,
           command: 'node -e "const fs = require(\'fs\'); fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({ taskId: process.env.SDW_TASK_ID, acIds: [\'AC1\'], filesChanged: [\'README.md\'], summary: \'task done\' })); fs.appendFileSync(\'README.md\', \'\\n# update for \' + process.env.SDW_TASK_ID);"'
         },
         scoring: judgeScoring()

@@ -84,7 +84,13 @@ test('AC1: implementation.segregateTests in .sdw/config.json defaults to true', 
   const planBare = dagPlanner.generateDagPlan(specContent, {
     slug: '00099-default-segregate'
   });
-  assert.equal(planBare.totalTasks, 1, 'Must default to 1 task for direct dagPlanner callers without segregateTests option');
+  assert.equal(planBare.totalTasks, 2, 'Must default to 2 tasks for direct dagPlanner callers when segregateTests option is omitted');
+
+  const planOptOut = dagPlanner.generateDagPlan(specContent, {
+    slug: '00099-default-segregate',
+    segregateTests: false
+  });
+  assert.equal(planOptOut.totalTasks, 1, 'Must produce 1 task when segregateTests is explicitly false');
 });
 
 test('AC2: When implementation.segregateTests is enabled, DAG planner decomposes requirement units into sequential pairs', () => {
@@ -635,6 +641,79 @@ test('AC12: System creates atomic checkpoint commit and tag for completed test a
   assert.equal(nextRes.envelope.taskId, 'task-1-impl');
   assert.equal(nextRes.envelope.role, 'implementation');
   assert.deepStrictEqual(nextRes.envelope.dependencies, ['task-1-test']);
+});
+
+test('AC12: Command mode creates atomic checkpoint commit and tag for test_author task', () => {
+  const tmpDir = setupTestRepo();
+  const testFileRel = 'tests/command_auth.test.cjs';
+  fs.mkdirSync(path.join(tmpDir, 'tests'), { recursive: true });
+  fs.writeFileSync(path.join(tmpDir, testFileRel), '// baseline test\n', 'utf8');
+  fs.writeFileSync(path.join(tmpDir, 'app.cjs'), '// baseline app\n', 'utf8');
+  execSync(`git add ${testFileRel} app.cjs && git commit -m "add baseline test and app"`, { cwd: tmpDir, stdio: 'ignore' });
+
+  const slug = '00099-command-checkpoint';
+  const specContent = `---
+slug: ${slug}
+title: Command Checkpoint Spec
+---
+# Command Checkpoint Spec
+## Description
+Test command mode checkpointing for test author tasks.
+## Acceptance Criteria
+- AC1: The system shall checkpoint test author tasks.
+## Notes
+None
+## Out of Scope
+| Feature | Reason |
+|---|---|
+| None | None |
+## Assumptions & Open Questions
+| Assumption | Chosen default | Rationale | Confirmed |
+|---|---|---|---|
+| None | None | None | y |
+## Definition of Ready (DoR)
+| Readiness Item | Requirement | Verification Method |
+|---|---|---|
+| None | None | None |
+## Validation & Observation Notes
+### Telemetry & Observable Signals
+None
+### Negative & Failing Test Scenarios
+- AC1-ERR: If invalid, then fail.
+`;
+  const specPath = path.join(tmpDir, '.sdw', 'specs', `${slug}.md`);
+  fs.writeFileSync(specPath, specContent, 'utf8');
+
+  const runnerScript = `const fs = require('fs'); const taskId = process.env.SDW_TASK_ID; const isTest = taskId.endsWith('-test'); const file = isTest ? '${testFileRel}' : 'app.cjs'; fs.appendFileSync(file, '// work for ' + taskId + '\\n'); const ev = { taskId, status: 'success', acIds: ['AC1'], filesChanged: [file], summary: 'Done ' + taskId }; fs.mkdirSync(require('path').dirname(process.env.SDW_EVIDENCE_FILE), { recursive: true }); fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify(ev, null, 2));`;
+
+  const exitCode = sdwRun.cmdRun({
+    root: tmpDir,
+    specPath: `.sdw/specs/${slug}.md`,
+    skipReview: true,
+    skipPr: true,
+    minScore: 0,
+    segregateTests: true,
+    implementation: {
+      mode: 'command',
+      command: `node -e "${runnerScript}"`
+    }
+  });
+
+  assert.equal(exitCode, 5);
+
+  const state = stateManager.findLatestRunState(tmpDir);
+  assert.equal(state.steps[4].status, 'completed');
+  const testTask = state.steps[4].tasks['task-1-test'];
+  assert.ok(testTask, 'task-1-test must exist');
+  assert.equal(testTask.role, 'test_author');
+  assert.ok(testTask.commitSha, 'test_author task must record commitSha');
+  assert.ok(testTask.checkpointTag, 'test_author task must record checkpointTag');
+
+  const tagSha = execSync(`git rev-parse ${testTask.checkpointTag}`, { cwd: tmpDir, encoding: 'utf8' }).trim();
+  assert.equal(tagSha, testTask.commitSha);
+
+  const commitSubject = execSync(`git log -1 --format=%s ${testTask.commitSha}`, { cwd: tmpDir, encoding: 'utf8' }).trim();
+  assert.equal(commitSubject, `task(${slug}): task-1-test`);
 });
 
 test('AC13: Where implementation.segregateTests is disabled, single-worker dispatch with combined scope fences is preserved', () => {

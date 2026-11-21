@@ -857,6 +857,14 @@ function validateConfigSchema(config) {
           errors.push('Property "implementation.envAllowlist" must be an array of strings.');
         }
       }
+      if ('segregateTests' in config.implementation && typeof config.implementation.segregateTests !== 'boolean') {
+        errors.push('Property "implementation.segregateTests" must be a boolean.');
+      }
+      if ('testPatterns' in config.implementation) {
+        if (!Array.isArray(config.implementation.testPatterns) || !config.implementation.testPatterns.every(p => typeof p === 'string')) {
+          errors.push('Property "implementation.testPatterns" must be an array of strings.');
+        }
+      }
     }
   }
 

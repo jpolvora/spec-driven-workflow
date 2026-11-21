@@ -29,6 +29,7 @@ function setupTestRepo() {
   const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
   cfg.implementation = {
     mode: 'command',
+    segregateTests: false,
     command: 'node -e "const fs = require(\'fs\'); const acs = process.env.SDW_AC_IDS ? process.env.SDW_AC_IDS.split(\',\').filter(Boolean) : [\'AC1\']; const ev = { taskId: process.env.SDW_TASK_ID, acIds: acs.length > 0 ? acs : [\'AC1\'], filesChanged: [\'README.md\'], summary: \'task done\' }; fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify(ev)); fs.appendFileSync(\'README.md\', \'\\n# update for \' + process.env.SDW_TASK_ID);"'
   };
   fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');

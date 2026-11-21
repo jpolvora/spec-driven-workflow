@@ -31,6 +31,7 @@ function setupTestRepo() {
   const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
   cfg.implementation = {
     mode: 'command',
+    segregateTests: false,
     command: 'node -e "const fs = require(\'fs\'); const ev = { taskId: process.env.SDW_TASK_ID, acIds: [\'AC1\'], filesChanged: [\'package.json\'], summary: \'task done\' }; fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify(ev)); const pkg = JSON.parse(fs.readFileSync(\'package.json\', \'utf8\')); pkg.updated = true; fs.writeFileSync(\'package.json\', JSON.stringify(pkg, null, 2));"'
   };
   fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
@@ -156,7 +157,7 @@ slug: test-dag
     testPlan: 'Unit test alpha and beta'
   };
 
-  const dagWithBp = dagPlanner.generateDagPlan(specContent, { slug: 'test-dag', blueprint: bp });
+  const dagWithBp = dagPlanner.generateDagPlan(specContent, { slug: 'test-dag', blueprint: bp, segregateTests: false });
   assert.strictEqual(dagWithBp.tasks[0].targetFiles[0], 'lib/alpha.cjs');
   assert.strictEqual(dagWithBp.tasks[0].architecturalApproach, 'Custom architecture blueprint');
   assert.strictEqual(dagWithBp.tasks[0].testPlan, 'Unit test alpha and beta');
@@ -170,7 +171,7 @@ slug: test-dag
     if (msg.includes('Step 2 refinement blueprint missing')) warned = true;
   };
   try {
-    const dagFallback = dagPlanner.generateDagPlan(specContent, { slug: 'test-dag' });
+    const dagFallback = dagPlanner.generateDagPlan(specContent, { slug: 'test-dag', segregateTests: false });
     assert.ok(warned);
     assert.ok(dagFallback.tasks.length > 0);
   } finally {
