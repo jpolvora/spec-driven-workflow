@@ -133,6 +133,8 @@ function parseArgs(args) {
     else if (arg === '--latest') result.latest = true;
     else if (arg === '--dry-run') result.dryRun = true;
     else if (arg === '--sandbox') result.sandbox = true;
+    else if (arg === '--segregate-tests') result.segregateTests = true;
+    else if (arg === '--no-segregate-tests') result.segregateTests = false;
     else if (arg === '--root') result.root = args[++i];
     else if (arg.startsWith('--root=')) result.root = arg.slice(7);
     else if (arg === '--skills-root') result.skillsRoot = args[++i];
@@ -795,7 +797,16 @@ function loadProjectConfig(targetRoot, options = {}) {
       useWorktrees: false,
       useFeatureBranches: false,
       scmProvider: 'none',
-      ...resolved
+      ...resolved,
+      implementation: {
+        mode: 'subagent',
+        command: null,
+        timeoutMs: 1800000,
+        segregateTests: true,
+        testPatterns: ['tests/**', '**/*.test.*', '**/*.spec.*'],
+        envAllowlist: ['PATH', 'HOME', 'USERPROFILE', 'TEMP', 'TMP', 'LANG', 'LC_ALL'],
+        ...((resolved && resolved.implementation) || {})
+      }
     };
   }
 
@@ -1500,6 +1511,8 @@ function cmdRun(options) {
   // Step 3: Complexity Analysis & DAG Task Decomposition (AC3, AC7)
   let dagPlan = null;
   const blueprint = (state.steps[2] && state.steps[2].output && state.steps[2].output.blueprint) || null;
+  const implConfig = (options.implementation || config.implementation || {});
+  const implMode = options.implementationMode || implConfig.mode || 'subagent';
   if (refineMode && startStep <= 3 && state.steps[3].status !== 'completed' && state.steps[3].status !== 'skipped') {
     state = stateManager.updateStepState(targetRoot, state.runId, 3, 'in_progress');
     const refineAcIds = dagPlanner.parseAcceptanceCriteria(effectiveSpecContent)
@@ -1524,7 +1537,16 @@ function cmdRun(options) {
     dagPlan = state.steps[3].output;
   } else if (startStep <= 3 && state.steps[3].status !== 'completed') {
     state = stateManager.updateStepState(targetRoot, state.runId, 3, 'in_progress');
-    dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint, targetRoot });
+    const isCommandMode = implMode === 'command';
+    const configFile = path.join(targetRoot, '.sdw', 'config.json');
+    const hasConfigFile = fs.existsSync(configFile);
+    const segregateTests = !isCommandMode && (
+      options.segregateTests !== undefined
+        ? Boolean(options.segregateTests)
+        : (hasConfigFile ? implConfig.segregateTests !== false : Boolean(options.implementation && options.implementation.segregateTests))
+    );
+    const testPatterns = (config.implementation && config.implementation.testPatterns) || undefined;
+    dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint, targetRoot, segregateTests, testPatterns, config });
     if (dagPlan.refused) {
       state = refuseDagPlan(targetRoot, state, dagPlan, options);
       return 1;
@@ -1543,7 +1565,16 @@ function cmdRun(options) {
   } else if (state.steps[3].output) {
     dagPlan = state.steps[3].output;
   } else {
-    dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint, targetRoot });
+    const isCommandMode = implMode === 'command';
+    const configFile = path.join(targetRoot, '.sdw', 'config.json');
+    const hasConfigFile = fs.existsSync(configFile);
+    const segregateTests = !isCommandMode && (
+      options.segregateTests !== undefined
+        ? Boolean(options.segregateTests)
+        : (hasConfigFile ? implConfig.segregateTests !== false : Boolean(options.implementation && options.implementation.segregateTests))
+    );
+    const testPatterns = (config.implementation && config.implementation.testPatterns) || undefined;
+    dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint, targetRoot, segregateTests, testPatterns, config });
     if (dagPlan.refused) {
       state = refuseDagPlan(targetRoot, state, dagPlan, options);
       return 1;
@@ -1551,9 +1582,6 @@ function cmdRun(options) {
   }
 
   // Step 4: Implementation execution (Spec 028 subagent dispatch / Spec 015 command mode)
-  const implConfig = (options.implementation || config.implementation || {});
-  const implMode = options.implementationMode || implConfig.mode || 'subagent';
-
   if (startStep <= 4 && state.steps[4].status !== 'completed') {
     state.steps[4].tasks = state.steps[4].tasks || {};
     state.steps[4].gates = state.steps[4].gates || {};
@@ -1566,7 +1594,7 @@ function cmdRun(options) {
       return 1;
     }
 
-    if (useWorktrees && dagPlan.tasks.length <= 1) {
+    if (useWorktrees && (dagPlan.tasks.length <= 1 || (dagPlan.complexity && !dagPlan.complexity.isComplex))) {
       state.worktreeSkipReason = 'single low-complexity task';
       useWorktrees = false;
       state = stateManager.saveRunState(targetRoot, state);
@@ -1686,7 +1714,8 @@ function cmdRun(options) {
           task,
           specAcs,
           useWorktrees,
-          taskWorktreeRel: wtInfo ? wtInfo.worktreeRel : null
+          taskWorktreeRel: wtInfo ? wtInfo.worktreeRel : null,
+          testPatterns: (config.implementation && config.implementation.testPatterns) || undefined
         });
 
         // Execute command
@@ -1715,12 +1744,19 @@ function cmdRun(options) {
         const evValidation = evidenceValidator.validateEvidenceFile(rendered.evidenceFileAbs, {
           expectedTaskId: task.id,
           specAcs,
-          projectRoot: targetRoot
+          projectRoot: targetRoot,
+          taskRole: task.role,
+          testPatterns: (config.implementation && config.implementation.testPatterns) || undefined
         });
 
         if (!evValidation.valid) {
           const errMsg = `Evidence validation failed for ${task.id}:\n  ` + evValidation.errors.join('\n  ');
           console.error(`[Step 4: Implementation] ${errMsg}`);
+          for (const err of evValidation.errors) {
+            if (err.startsWith('Rejecting task:')) {
+              console.error(`[Step 4: Implementation] ${err}`);
+            }
+          }
           state = stateManager.updateStepState(targetRoot, state.runId, 4, 'failed', { error: errMsg, task: task.id });
           return 1;
         }
@@ -2892,6 +2928,8 @@ function dispatchNextTask(context) {
     };
   }
 
+  const config = context.config || loadProjectConfig(targetRoot, options);
+  const testPatterns = (config && config.implementation && config.implementation.testPatterns) || undefined;
   const sandboxed = Boolean(options && options._sandbox);
   const rendered = implementationRunner.renderTaskPrompt({
     targetRoot,
@@ -2907,7 +2945,8 @@ function dispatchNextTask(context) {
     taskStates: tasks,
     abandonments: dispatch.abandonments,
     absolutePaths: sandboxed,
-    refineMode: Boolean(state.refineMode)
+    refineMode: Boolean(state.refineMode),
+    testPatterns
   });
 
   const displayPrompt = sandboxed ? normalizePath(rendered.promptFileAbs) : rendered.promptFileRel;
@@ -2925,6 +2964,7 @@ function dispatchNextTask(context) {
   tasks[ready.id] = {
     ...previous,
     id: ready.id,
+    role: ready.role,
     title: ready.title,
     status: 'dispatched',
     promptPath: displayPrompt,
@@ -2940,6 +2980,7 @@ function dispatchNextTask(context) {
     runId: state.runId,
     specSlug,
     taskId: ready.id,
+    role: ready.role,
     title: ready.title,
     status: 'dispatched',
     sequence: dispatch.sequence,
@@ -2962,7 +3003,7 @@ function printDispatchEnvelope(envelope, state, options) {
     console.log(JSON.stringify(envelope, null, 2));
     return;
   }
-  console.log(`\n[Step 4: Dispatch] ${envelope.taskId} dispatched (sequence ${envelope.sequence}, ${envelope.acIds.length} ACs, ${envelope.dependencies.length} dependency(ies)).`);
+  console.log(`\n[Step 4: Dispatch] ${envelope.taskId} dispatched${envelope.role ? ` [role: ${envelope.role}]` : ''} (sequence ${envelope.sequence}, ${envelope.acIds.length} ACs, ${envelope.dependencies.length} dependency(ies)).`);
   console.log(`  Title:    ${envelope.title}`);
   console.log(`  Prompt:   ${envelope.promptFile} (${envelope.promptBytes} bytes)`);
   console.log(`  Evidence: ${envelope.evidenceFile}`);
@@ -3205,16 +3246,28 @@ function cmdTaskFinish(options) {
     return 1;
   }
 
+  const taskRole = (targetTask && targetTask.role)
+    || (state.steps[4].tasks[taskId] && state.steps[4].tasks[taskId].role)
+    || (taskId.endsWith('-impl') ? 'implementation' : (taskId.endsWith('-test') ? 'test_author' : undefined));
+  const testPatterns = (config.implementation && config.implementation.testPatterns) || undefined;
+
   // Validate evidence schema & content (AC8, AC28, AC29)
   const evValidation = evidenceValidator.validateEvidenceFile(evidenceFileAbs, {
     expectedTaskId: taskId,
     specAcs,
     projectRoot: targetRoot,
-    allowEmptyFilesChanged: Boolean(state.refineMode)
+    allowEmptyFilesChanged: Boolean(state.refineMode),
+    taskRole,
+    testPatterns
   });
 
   if (!evValidation.valid) {
     console.error(`Evidence validation failed for ${taskId}:\n  ` + evValidation.errors.join('\n  '));
+    for (const err of evValidation.errors) {
+      if (err.startsWith('Rejecting task:')) {
+        console.error(err);
+      }
+    }
     return 1;
   }
 
@@ -3344,6 +3397,7 @@ function cmdTaskFinish(options) {
   state.steps[4].tasks[taskId] = {
     ...(state.steps[4].tasks[taskId] || {}),
     id: taskId,
+    role: taskRole,
     title: targetTask.title,
     status: 'completed',
     evidencePath: path.isAbsolute(evidencePath) ? path.relative(targetRoot, evidenceFileAbs).replace(/\\/g, '/') : evidencePath.replace(/\\/g, '/'),

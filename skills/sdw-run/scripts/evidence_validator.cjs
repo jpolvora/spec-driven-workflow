@@ -8,6 +8,46 @@ function normalizePath(p) {
   return p.replace(/\\/g, '/');
 }
 
+const DEFAULT_TEST_PATTERNS = ['tests/**', '**/*.test.*', '**/*.spec.*'];
+
+function globToRegex(pattern) {
+  const norm = String(pattern || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  let reStr = '^';
+  let i = 0;
+  while (i < norm.length) {
+    if (norm.slice(i, i + 3) === '**/') {
+      reStr += '(?:.*/)?';
+      i += 3;
+    } else if (norm.slice(i, i + 2) === '**') {
+      reStr += '.*';
+      i += 2;
+    } else if (norm[i] === '*') {
+      reStr += '[^/]*';
+      i++;
+    } else if (norm[i] === '?') {
+      reStr += '[^/]';
+      i++;
+    } else if (['.', '+', '(', ')', '[', ']', '{', '}', '^', '$', '|'].includes(norm[i])) {
+      reStr += '\\' + norm[i];
+      i++;
+    } else {
+      reStr += norm[i];
+      i++;
+    }
+  }
+  reStr += '$';
+  return new RegExp(reStr);
+}
+
+function isTestFile(filePath, patterns) {
+  if (!filePath || typeof filePath !== 'string') return false;
+  const norm = filePath.replace(/\\/g, '/').replace(/^\.\//, '');
+  const pats = (Array.isArray(patterns) && patterns.length > 0)
+    ? patterns
+    : DEFAULT_TEST_PATTERNS;
+  return pats.some(pat => globToRegex(pat).test(norm));
+}
+
 function isGitTracked(root, rel) {
   try {
     const r = spawnSync('git', ['ls-files', '--error-unmatch', rel], { cwd: root, encoding: 'utf8', stdio: 'ignore' });
@@ -34,7 +74,7 @@ function validateEvidence(evidence, options = {}) {
     return { valid: false, errors: ['Evidence must be a JSON object.'] };
   }
 
-  const { expectedTaskId, specAcs, projectRoot, allowEmptyFilesChanged } = options;
+  const { expectedTaskId, specAcs, projectRoot, allowEmptyFilesChanged, taskRole, testPatterns } = options;
   const root = projectRoot ? path.resolve(projectRoot) : process.cwd();
 
   // 1. taskId
@@ -116,6 +156,10 @@ function validateEvidence(evidence, options = {}) {
         }
         errors.push(`File "${relPath}" listed in "filesChanged" does not exist on disk.`);
       }
+
+      if (taskRole === 'implementation' && isTestFile(normalized, testPatterns)) {
+        errors.push(`Rejecting task: implementation worker modified test file ${normalized}`);
+      }
     }
   }
 
@@ -195,6 +239,9 @@ function validateEvidenceFile(evidenceFilePath, options = {}) {
 }
 
 module.exports = {
+  DEFAULT_TEST_PATTERNS,
+  globToRegex,
+  isTestFile,
   validateEvidence,
   validateEvidenceFile
 };

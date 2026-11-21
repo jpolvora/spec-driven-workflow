@@ -330,6 +330,8 @@ const DEFAULT_CONFIG = {
     mode: 'subagent',
     command: null,
     timeoutMs: 1800000,
+    segregateTests: true,
+    testPatterns: ['tests/**', '**/*.test.*', '**/*.spec.*'],
     envAllowlist: ['PATH', 'HOME', 'USERPROFILE', 'TEMP', 'TMP', 'LANG', 'LC_ALL']
   },
   verification: {
@@ -549,6 +551,17 @@ const DEFAULT_SCHEMA = {
           "type": "integer",
           "default": 1800000,
           "description": "Execution timeout in milliseconds for command mode."
+        },
+        "segregateTests": {
+          "type": "boolean",
+          "default": true,
+          "description": "When true, decompose testable requirement units into paired test-authoring and implementation tasks with mutually exclusive scope fences."
+        },
+        "testPatterns": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["tests/**", "**/*.test.*", "**/*.spec.*"],
+          "description": "Glob patterns identifying test files for test segregation scope fences and validation."
         },
         "envAllowlist": {
           "type": "array",
