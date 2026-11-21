@@ -1819,7 +1819,9 @@ function cmdRun(options) {
               console.warn(`[Step 4: Checkpoint] Warning: checkpoint tag for "${task.id}" was not created: ${checkpoint.tagError}`);
             }
           } catch (chkErr) {
-            console.warn(`[Step 4: Checkpoint] Warning: could not create checkpoint for ${task.id}: ${chkErr.message}`);
+            console.error(`[Step 4: Checkpoint] Error: could not create checkpoint for ${task.id}: ${chkErr.message}`);
+            state = stateManager.updateStepState(targetRoot, state.runId, 4, 'failed', { error: chkErr.message, task: task.id });
+            return 1;
           }
         }
         state.steps[4].tasks[task.id] = {

@@ -24,3 +24,7 @@ Report only findings that change behavior. Maximum 6 findings per review.
 - Never populate `relatedOccurrences` (each entry is published as its own thread). List every other affected location inside the comment body instead.
 - Body, in this order: one-line defect → `Evidence:` the concrete failing scenario with `file:line` → `Fix:` the minimal diff → `Other locations:` the remaining `file:line` anchors, or `none`.
 - No analysis section, no score rationale, no restating the file contents.
+
+## Output format
+
+Always output the final review response as a single valid JSON block enclosed in ```json ... ``` code fence, containing `reviews`, `resolvedThreads`, and `reviewSummary`. Never reply with plain text or prose without the JSON block.

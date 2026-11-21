@@ -158,6 +158,9 @@ function run() {
       /'opencode-go':\s*\{\s*type:\s*'api',\s*key:\s*process\.env\.OPENCODE_API_KEY\s*\|\|\s*''\s*\},?/,
       "'opencode': { type: 'api', key: process.env.OPENCODE_API_KEY || '' },\n  'opencode-go': { type: 'api', key: process.env.OPENCODE_API_KEY || '' },"
     );
+    if (!runnerContent.includes("'opencode': {")) {
+      throw new Error("Failed to patch opencode provider into agentic-code-reviewers run.sh");
+    }
     fs.writeFileSync(runnerPath, runnerContent);
 
     if (pinned) {

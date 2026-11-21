@@ -167,6 +167,9 @@ jobs:
               /\x27opencode-go\x27:\s*\{\s*type:\s*\x27api\x27,\s*key:\s*process\.env\.OPENCODE_API_KEY\s*\|\|\s*\x27\x27\s*\},?/,
               "\x27opencode\x27: { type: \x27api\x27, key: process.env.OPENCODE_API_KEY || \x27\x27 },\n  \x27opencode-go\x27: { type: \x27api\x27, key: process.env.OPENCODE_API_KEY || \x27\x27 },"
             );
+            if (!c.includes("\x27opencode\x27: {")) {
+              throw new Error("Failed to patch opencode provider into agentic-code-reviewers run.sh");
+            }
             fs.writeFileSync(file, c);
           '
           bash /tmp/agentic-code-reviewers-run.sh \
