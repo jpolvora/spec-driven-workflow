@@ -1540,10 +1540,17 @@ function cmdRun(options) {
     const isCommandMode = implMode === 'command';
     const configFile = path.join(targetRoot, '.sdw', 'config.json');
     const hasConfigFile = fs.existsSync(configFile);
+    let rawConfig = null;
+    if (hasConfigFile) {
+      try { rawConfig = JSON.parse(fs.readFileSync(configFile, 'utf8')); } catch (e) {}
+    }
+    const configDeclaresSegregate = rawConfig && rawConfig.implementation && rawConfig.implementation.segregateTests !== undefined;
     const segregateTests = !isCommandMode && (
       options.segregateTests !== undefined
         ? Boolean(options.segregateTests)
-        : (hasConfigFile ? implConfig.segregateTests !== false : Boolean(options.implementation && options.implementation.segregateTests))
+        : (configDeclaresSegregate
+            ? Boolean(rawConfig.implementation.segregateTests)
+            : Boolean(options.implementation && options.implementation.segregateTests))
     );
     const testPatterns = (config.implementation && config.implementation.testPatterns) || undefined;
     dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint, targetRoot, segregateTests, testPatterns, config });
@@ -1568,10 +1575,17 @@ function cmdRun(options) {
     const isCommandMode = implMode === 'command';
     const configFile = path.join(targetRoot, '.sdw', 'config.json');
     const hasConfigFile = fs.existsSync(configFile);
+    let rawConfig = null;
+    if (hasConfigFile) {
+      try { rawConfig = JSON.parse(fs.readFileSync(configFile, 'utf8')); } catch (e) {}
+    }
+    const configDeclaresSegregate = rawConfig && rawConfig.implementation && rawConfig.implementation.segregateTests !== undefined;
     const segregateTests = !isCommandMode && (
       options.segregateTests !== undefined
         ? Boolean(options.segregateTests)
-        : (hasConfigFile ? implConfig.segregateTests !== false : Boolean(options.implementation && options.implementation.segregateTests))
+        : (configDeclaresSegregate
+            ? Boolean(rawConfig.implementation.segregateTests)
+            : Boolean(options.implementation && options.implementation.segregateTests))
     );
     const testPatterns = (config.implementation && config.implementation.testPatterns) || undefined;
     dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint, targetRoot, segregateTests, testPatterns, config });
@@ -1745,7 +1759,7 @@ function cmdRun(options) {
           expectedTaskId: task.id,
           specAcs,
           projectRoot: targetRoot,
-          taskRole: task.role,
+          taskRole: task.role || (task.id.endsWith('-impl') ? 'implementation' : (task.id.endsWith('-test') ? 'test_author' : undefined)),
           testPatterns: (config.implementation && config.implementation.testPatterns) || undefined
         });
 
@@ -1810,8 +1824,10 @@ function cmdRun(options) {
           commitSha = getBaseCommit(targetRoot);
         }
 
+        const taskRole = task.role || (task.id.endsWith('-impl') ? 'implementation' : (task.id.endsWith('-test') ? 'test_author' : undefined));
         state.steps[4].tasks[task.id] = {
           id: task.id,
+          role: taskRole,
           title: task.title,
           status: 'completed',
           promptPath: rendered.promptFileRel,
@@ -2956,6 +2972,7 @@ function dispatchNextTask(context) {
   const rootFlag = sandboxed ? ` --root "${normalizePath(targetRoot)}"` : '';
 
   const previous = tasks[ready.id] || {};
+  const taskRole = ready.role || (ready.id.endsWith('-impl') ? 'implementation' : (ready.id.endsWith('-test') ? 'test_author' : undefined));
   dispatch.activeTaskId = ready.id;
   dispatch.sequence = (dispatch.sequence || 0) + 1;
   dispatch.dispatchedAt = new Date().toISOString();
@@ -2964,7 +2981,7 @@ function dispatchNextTask(context) {
   tasks[ready.id] = {
     ...previous,
     id: ready.id,
-    role: ready.role,
+    role: taskRole,
     title: ready.title,
     status: 'dispatched',
     promptPath: displayPrompt,
@@ -3983,6 +4000,7 @@ module.exports = {
   cmdResume,
   cmdStatus,
   cmdTaskNext,
+  dispatchNextTask,
   cmdTaskAbandon,
   cmdTaskFinish,
   cmdScoreSubmit,

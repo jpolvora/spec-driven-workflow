@@ -160,6 +160,9 @@ function validateEvidence(evidence, options = {}) {
       if (taskRole === 'implementation' && isTestFile(normalized, testPatterns)) {
         errors.push(`Rejecting task: implementation worker modified test file ${normalized}`);
       }
+      if (taskRole === 'test_author' && !isTestFile(normalized, testPatterns)) {
+        errors.push(`Rejecting task: test author worker modified production file ${normalized}`);
+      }
     }
   }
 
