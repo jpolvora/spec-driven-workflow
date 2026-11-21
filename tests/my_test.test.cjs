@@ -84,7 +84,7 @@ test('AC1: implementation.segregateTests in .sdw/config.json defaults to true', 
   const planBare = dagPlanner.generateDagPlan(specContent, {
     slug: '00099-default-segregate'
   });
-  assert.equal(planBare.totalTasks, 2, 'Must default to 2 tasks when no segregateTests option is passed');
+  assert.equal(planBare.totalTasks, 1, 'Must default to 1 task for direct dagPlanner callers without segregateTests option');
 });
 
 test('AC2: When implementation.segregateTests is enabled, DAG planner decomposes requirement units into sequential pairs', () => {

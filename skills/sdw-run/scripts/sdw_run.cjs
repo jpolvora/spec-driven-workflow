@@ -1514,25 +1514,28 @@ function cmdRun(options) {
   const implConfig = (options.implementation || config.implementation || {});
   const implMode = options.implementationMode || implConfig.mode || 'subagent';
   const isCommandMode = implMode === 'command';
+  const configFile = path.join(targetRoot, '.sdw', 'config.json');
+  const hasConfigFile = fs.existsSync(configFile);
+  let rawConfig = null;
+  if (hasConfigFile) {
+    try { rawConfig = JSON.parse(fs.readFileSync(configFile, 'utf8')); } catch (e) {}
+  }
+  const rawImpl = rawConfig && rawConfig.implementation;
   let segregateTests;
   if (options.segregateTests !== undefined) {
     segregateTests = Boolean(options.segregateTests);
   } else if (options.implementation && options.implementation.segregateTests !== undefined) {
     segregateTests = Boolean(options.implementation.segregateTests);
   } else if (isCommandMode) {
-    const configFile = path.join(targetRoot, '.sdw', 'config.json');
-    let rawConfig = null;
-    if (fs.existsSync(configFile)) {
-      try { rawConfig = JSON.parse(fs.readFileSync(configFile, 'utf8')); } catch (e) {}
-    }
-    const rawImpl = rawConfig && rawConfig.implementation;
-    if (options.implementation && options.implementation.mode === 'command') {
-      segregateTests = Boolean(options.implementation.segregateTests);
+    segregateTests = Boolean(rawImpl && rawImpl.mode === 'command' && rawImpl.segregateTests);
+  } else if (rawImpl) {
+    if (rawImpl.segregateTests !== undefined) {
+      segregateTests = Boolean(rawImpl.segregateTests);
     } else {
-      segregateTests = Boolean(rawImpl && rawImpl.mode === 'command' && rawImpl.segregateTests);
+      segregateTests = true;
     }
   } else {
-    segregateTests = config.implementation ? config.implementation.segregateTests !== false : true;
+    segregateTests = false;
   }
   if (refineMode && startStep <= 3 && state.steps[3].status !== 'completed' && state.steps[3].status !== 'skipped') {
     state = stateManager.updateStepState(targetRoot, state.runId, 3, 'in_progress');
