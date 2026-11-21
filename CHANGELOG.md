@@ -1,5 +1,10 @@
 # Changelog
 
+### [2026-11-21 19:57] Agent: agent
+- **Prompt**: Release version 0.4.0 updated with current develop
+- **Done**: Bumped version to 0.4.0 across package.json and package-lock.json, incorporating Node 22 pin (PR #86) and test/implementation agent segregation in orchestrator dispatch (spec 00073, PR #87)
+- **Result**: Suite 490/490 passed; doctor 0 violations across 14 skills; ready for promotion PR into master and v0.4.0 release tag
+
 ### [2026-10-29 09:36] Agent: deepseek-v4.1-flash
 - **Prompt**: Promote develop to master
 - **Done**: Recorded the promotion of specs 00041 (versioned spec files) and 00071 (autonomous delivery state sync, issue #81) plus the registry and update --force repairs; convergence on the promotion PR fixed the --force lifecycle reset, the foreign-table absorption in readTrailingBlock, and the silent registry-row skip in Step 6, then merged through PR #83 and fast-forwarded develop to the result
