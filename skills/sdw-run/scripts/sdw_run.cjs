@@ -1513,6 +1513,27 @@ function cmdRun(options) {
   const blueprint = (state.steps[2] && state.steps[2].output && state.steps[2].output.blueprint) || null;
   const implConfig = (options.implementation || config.implementation || {});
   const implMode = options.implementationMode || implConfig.mode || 'subagent';
+  const isCommandMode = implMode === 'command';
+  let segregateTests;
+  if (options.segregateTests !== undefined) {
+    segregateTests = Boolean(options.segregateTests);
+  } else if (options.implementation && options.implementation.segregateTests !== undefined) {
+    segregateTests = Boolean(options.implementation.segregateTests);
+  } else if (isCommandMode) {
+    const configFile = path.join(targetRoot, '.sdw', 'config.json');
+    let rawConfig = null;
+    if (fs.existsSync(configFile)) {
+      try { rawConfig = JSON.parse(fs.readFileSync(configFile, 'utf8')); } catch (e) {}
+    }
+    const rawImpl = rawConfig && rawConfig.implementation;
+    if (options.implementation && options.implementation.mode === 'command') {
+      segregateTests = Boolean(options.implementation.segregateTests);
+    } else {
+      segregateTests = Boolean(rawImpl && rawImpl.mode === 'command' && rawImpl.segregateTests);
+    }
+  } else {
+    segregateTests = config.implementation ? config.implementation.segregateTests !== false : true;
+  }
   if (refineMode && startStep <= 3 && state.steps[3].status !== 'completed' && state.steps[3].status !== 'skipped') {
     state = stateManager.updateStepState(targetRoot, state.runId, 3, 'in_progress');
     const refineAcIds = dagPlanner.parseAcceptanceCriteria(effectiveSpecContent)
@@ -1537,21 +1558,6 @@ function cmdRun(options) {
     dagPlan = state.steps[3].output;
   } else if (startStep <= 3 && state.steps[3].status !== 'completed') {
     state = stateManager.updateStepState(targetRoot, state.runId, 3, 'in_progress');
-    const isCommandMode = implMode === 'command';
-    const configFile = path.join(targetRoot, '.sdw', 'config.json');
-    const hasConfigFile = fs.existsSync(configFile);
-    let rawConfig = null;
-    if (hasConfigFile) {
-      try { rawConfig = JSON.parse(fs.readFileSync(configFile, 'utf8')); } catch (e) {}
-    }
-    const configDeclaresSegregate = rawConfig && rawConfig.implementation && rawConfig.implementation.segregateTests !== undefined;
-    const segregateTests = !isCommandMode && (
-      options.segregateTests !== undefined
-        ? Boolean(options.segregateTests)
-        : (configDeclaresSegregate
-            ? Boolean(rawConfig.implementation.segregateTests)
-            : Boolean(options.implementation && options.implementation.segregateTests))
-    );
     const testPatterns = (config.implementation && config.implementation.testPatterns) || undefined;
     dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint, targetRoot, segregateTests, testPatterns, config });
     if (dagPlan.refused) {
@@ -1572,21 +1578,6 @@ function cmdRun(options) {
   } else if (state.steps[3].output) {
     dagPlan = state.steps[3].output;
   } else {
-    const isCommandMode = implMode === 'command';
-    const configFile = path.join(targetRoot, '.sdw', 'config.json');
-    const hasConfigFile = fs.existsSync(configFile);
-    let rawConfig = null;
-    if (hasConfigFile) {
-      try { rawConfig = JSON.parse(fs.readFileSync(configFile, 'utf8')); } catch (e) {}
-    }
-    const configDeclaresSegregate = rawConfig && rawConfig.implementation && rawConfig.implementation.segregateTests !== undefined;
-    const segregateTests = !isCommandMode && (
-      options.segregateTests !== undefined
-        ? Boolean(options.segregateTests)
-        : (configDeclaresSegregate
-            ? Boolean(rawConfig.implementation.segregateTests)
-            : Boolean(options.implementation && options.implementation.segregateTests))
-    );
     const testPatterns = (config.implementation && config.implementation.testPatterns) || undefined;
     dagPlan = dagPlanner.generateDagPlan(effectiveSpecContent, { slug: specSlug, blueprint, targetRoot, segregateTests, testPatterns, config });
     if (dagPlan.refused) {

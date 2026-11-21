@@ -547,6 +547,7 @@ function executeTaskCommand(options) {
 
   // SDW variables (AC23)
   filteredEnv.SDW_TASK_ID = task.id;
+  filteredEnv.SDW_TASK_ROLE = task.role || '';
   filteredEnv.SDW_PROMPT_FILE = absPromptFile;
   filteredEnv.SDW_EVIDENCE_FILE = absEvidenceFile;
   filteredEnv.SDW_WORKING_DIR = absWorkingDir;

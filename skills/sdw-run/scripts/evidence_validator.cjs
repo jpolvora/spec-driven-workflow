@@ -150,10 +150,7 @@ function validateEvidence(evidence, options = {}) {
         continue;
       }
 
-      if (!fs.existsSync(absPath)) {
-        if (isGitTracked(root, normalized)) {
-          continue;
-        }
+      if (!fs.existsSync(absPath) && !isGitTracked(root, normalized)) {
         errors.push(`File "${relPath}" listed in "filesChanged" does not exist on disk.`);
       }
 

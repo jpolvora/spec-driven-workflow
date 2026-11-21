@@ -63,6 +63,28 @@ test('AC1: implementation.segregateTests in .sdw/config.json defaults to true', 
   assert.equal(loaded.implementation.segregateTests, true);
 
   assert.equal(sdwConfig.DEFAULT_CONFIG.implementation.segregateTests, true);
+
+  // Default when config omits segregateTests in subagent mode
+  const specContent = buildSpec('00099-default-segregate');
+  const planSubagent = dagPlanner.generateDagPlan(specContent, {
+    slug: '00099-default-segregate',
+    config: { implementation: { mode: 'subagent' } }
+  });
+  assert.equal(planSubagent.totalTasks, 2, 'Must default to 2 tasks in subagent mode when segregateTests is omitted');
+  assert.equal(planSubagent.tasks[0].role, 'test_author');
+  assert.equal(planSubagent.tasks[1].role, 'implementation');
+
+  // Explicit segregateTests: true in command mode
+  const planCommandExplicit = dagPlanner.generateDagPlan(specContent, {
+    slug: '00099-default-segregate',
+    config: { implementation: { mode: 'command', segregateTests: true } }
+  });
+  assert.equal(planCommandExplicit.totalTasks, 2, 'Must produce 2 tasks when segregateTests: true in command mode');
+
+  const planBare = dagPlanner.generateDagPlan(specContent, {
+    slug: '00099-default-segregate'
+  });
+  assert.equal(planBare.totalTasks, 2, 'Must default to 2 tasks when no segregateTests option is passed');
 });
 
 test('AC2: When implementation.segregateTests is enabled, DAG planner decomposes requirement units into sequential pairs', () => {
@@ -227,6 +249,26 @@ test('AC7 & AC8: Implementation task submitting modified test file is rejected w
   assert.equal(validation.valid, false);
   assert.ok(validation.errors.some(e => e === `Rejecting task: implementation worker modified test file ${testFileRel}`));
 
+  // Tracked test file deletion rejection
+  execSync(`git add ${testFileRel} && git commit -m "commit test file"`, { cwd: tmpDir, stdio: 'ignore' });
+  fs.unlinkSync(path.join(tmpDir, testFileRel));
+  const deletionEvidence = {
+    taskId: 'task-1-impl',
+    status: 'success',
+    acIds: ['AC1'],
+    filesChanged: [testFileRel],
+    summary: 'Deleted test file.'
+  };
+  const deletionValidation = evidenceValidator.validateEvidence(deletionEvidence, {
+    expectedTaskId: 'task-1-impl',
+    specAcs: ['AC1'],
+    projectRoot: tmpDir,
+    taskRole: 'implementation'
+  });
+  assert.equal(deletionValidation.valid, false);
+  assert.ok(deletionValidation.errors.some(e => e === `Rejecting task: implementation worker modified test file ${testFileRel}`));
+  fs.writeFileSync(path.join(tmpDir, testFileRel), '// test file\n', 'utf8');
+
   // 2. Full sdw-run task finish CLI check
   const specContent = buildSpec('00099-cli-rejection');
   const specPath = path.join(tmpDir, '.sdw', 'specs', '00099-cli-rejection.md');
@@ -323,6 +365,26 @@ test('AC9 & AC10: Test authoring task submitting modified production file is rej
 
   assert.equal(validation.valid, false);
   assert.ok(validation.errors.some(e => e === `Rejecting task: test author worker modified production file ${prodFileRel}`));
+
+  // Tracked production file deletion rejection
+  execSync(`git add ${prodFileRel} && git commit -m "commit prod file"`, { cwd: tmpDir, stdio: 'ignore' });
+  fs.unlinkSync(path.join(tmpDir, prodFileRel));
+  const prodDeletionEvidence = {
+    taskId: 'task-1-test',
+    status: 'success',
+    acIds: ['AC1'],
+    filesChanged: [prodFileRel],
+    summary: 'Deleted prod file.'
+  };
+  const prodDeletionValidation = evidenceValidator.validateEvidence(prodDeletionEvidence, {
+    expectedTaskId: 'task-1-test',
+    specAcs: ['AC1'],
+    projectRoot: tmpDir,
+    taskRole: 'test_author'
+  });
+  assert.equal(prodDeletionValidation.valid, false);
+  assert.ok(prodDeletionValidation.errors.some(e => e === `Rejecting task: test author worker modified production file ${prodFileRel}`));
+  fs.writeFileSync(path.join(tmpDir, prodFileRel), '// prod file\n', 'utf8');
 
   // 2. Full sdw-run task finish CLI check
   const specContent = buildSpec('00099-author-rejection');
