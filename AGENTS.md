@@ -159,14 +159,14 @@ npm run review:dry
 | Variable | Default |
 |---|---|
 | `AGENTIC_CODE_REVIEWERS_ENGINE` | `opencode` |
-| `AGENTIC_CODE_REVIEWERS_MODEL` | `opencode-go/claude-haiku-5-5` |
+| `AGENTIC_CODE_REVIEWERS_MODEL` | `opencode/deepseek-v4.1-flash-free` |
 | `AGENTIC_CODE_REVIEWERS_VARIANT` | `medium` |
 | `AGENTIC_CODE_REVIEWERS_TARGET_BRANCH` | `refs/heads/master` |
 | `AGENTIC_CODE_REVIEWERS_OPENCODE_BIN` | pinned `opencode-ai@1.19.1` binary |
 | `AGENTIC_CODE_REVIEWERS_TIMEOUT_MS` | `1200000` |
 | `AGENTIC_CODE_REVIEWERS_MAX_ROUNDS` | `20` |
 
-`opencode/claude-haiku-5-5` (Zen provider) is not the default because the OS `OPENCODE_API_KEY` is a Go key; the Zen provider returns HTTP `402 Insufficient account funds`.
+The default model is `opencode/deepseek-v4.1-flash-free` on the OpenCode connection.
 
 
 # Communication/Response style and format

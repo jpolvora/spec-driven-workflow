@@ -70,6 +70,7 @@ Central repository index tracking specification lifecycle states, metadata, and 
 | 00070 | 00070-rename-sdw-orch-to-sdw-run | Rename the sdw-orch skill to sdw-run | completed | high | local | 2026-10-27 | PASS | - |
 | 00071 | 00071-us-81-sdw-run-sync-spec-state-in-the-de | sdw-run: sync spec state in the delivery commit, then ship/converge/merge autonomously on success | completed | medium | github | 2026-10-29 | PASS | - |
 | 00072 | 00072-specification-priority-ordering-validate | Specification priority ordering: validated priority frontmatter, registry column, and deterministic list ordering | completed | high | local | 2026-10-29 | PASS | - |
+| 00073 | 00073-test-implementation-agent-segregation | Test and Implementation Agent Segregation in Orchestrator Dispatch | completed | high | local | 2026-11-19 | PASS | - |
 
 ## Lean-Core Cut (2026-10-25)
 

@@ -99,7 +99,7 @@ function runCompletion(root, slug) {
     skipReview: true,
     skipPr: true,
     minScore: 0,
-    implementation: { mode: 'command', command: IMPLEMENTATION }
+    implementation: { mode: 'command', segregateTests: false, command: IMPLEMENTATION }
   });
 }
 

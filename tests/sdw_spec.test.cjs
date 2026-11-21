@@ -543,6 +543,7 @@ None.
       skipPr: true,
       implementation: {
         mode: 'command',
+        segregateTests: false,
         command: 'node -e "const fs = require(\'fs\'); fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({ taskId: process.env.SDW_TASK_ID, acIds: [\'AC1\'], filesChanged: [\'.sdw/specs/00001-archived-test.md\'], summary: \'done\' }));"'
       }
     });

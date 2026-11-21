@@ -39,6 +39,12 @@
     "mode": "subagent",
     "command": null,
     "timeoutMs": 1800000,
+    "segregateTests": true,
+    "testPatterns": [
+      "tests/**",
+      "**/*.test.*",
+      "**/*.spec.*"
+    ],
     "envAllowlist": [
       "PATH",
       "HOME",

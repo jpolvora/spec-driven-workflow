@@ -1112,7 +1112,7 @@ test('AC14 & AC15: a successful sdw-run run records the exact retro command with
       skipReview: true,
       skipPr: true,
       minScore: 0,
-      implementation: { mode: 'command', command }
+      implementation: { mode: 'command', segregateTests: false, command }
     });
   } finally {
     console.log = originalLog;

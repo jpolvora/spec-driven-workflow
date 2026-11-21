@@ -34,16 +34,12 @@ These rules override convenience. Apply them in every mode, on every harness and
 5. **Surgical Scope Enclosure.** Touch only what the task requires; match existing style. No adjacent refactors, reformatting, renames, or drive-by fixes. Remove only orphans your change created; mention unrelated dead code instead of deleting it.
 6. **Empirical Goal-Driven Verification.** Turn every requirement into a verifiable check, test, or empirical pass/fail signal. State a short plan with a verification step per action and loop until the check passes before declaring completion.
 7. **Product Guarantees.** Preserve zero runtime npm dependencies, Node.js 22 standard library, deterministic CLI anchors, harness/agent agnosticism, portable paths, and file-based contracts.
+8. **Immutable Test Assertions.** Code implementers are strictly prohibited from modifying test assertions to force test passes; satisfy tests exclusively through production code.
 
 ## 🧠 MEMORY-FIRST — MANDATORY FOR EVERY SKILL
 
-Before implementing, fixing, reviewing, or orchestrating: query `sdw-memory`
-for related traps/gaps/patterns/errors and apply returned hints.
-After any verified fix or newly discovered trap/gap/pattern/error: record it
-via `sdw-memory`. Never bypass with direct `traps.md` edits or raw `memo`
-calls; `sdw-memory` is the single wrapper over all store backends.
-Default backend is the `ws-memo` vault; select per user via
-`memory.backends` in `.sdw/config.json`.
+Before implementing, fixing, reviewing, or orchestrating: query `sdw-memory` for related traps/gaps/patterns/errors and apply returned hints.
+After any verified fix or newly discovered trap/gap/pattern/error: record it via `sdw-memory`. Never bypass with direct `traps.md` edits or raw `memo` calls; `sdw-memory` is the single wrapper over all store backends. Default backend is the `ws-memo` vault; select per user via `memory.backends` in `.sdw/config.json`.
 
 ## Mode Cheat Sheet
 

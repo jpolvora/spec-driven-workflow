@@ -532,6 +532,7 @@ function runSmokeTest(options = {}) {
       implementation: {
         mode: 'command',
         command: 'node .sdw/smoke/impl.cjs',
+        segregateTests: false,
         timeoutMs: 60000,
         envAllowlist: ['PATH', 'HOME', 'USERPROFILE', 'TEMP', 'TMP', 'LANG', 'LC_ALL']
       },
