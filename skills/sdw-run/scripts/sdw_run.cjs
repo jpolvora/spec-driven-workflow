@@ -14,6 +14,7 @@ const artifactWriter = require('./artifact_writer.cjs');
 const implementationRunner = require('./implementation_runner.cjs');
 const evidenceValidator = require('./evidence_validator.cjs');
 const sandbox = require('./sandbox.cjs');
+const reviewEvaluator = require('./review_evaluator.cjs');
 
 function resolveSkillScript(targetRoot, skillName, scriptRelPath, options = {}) {
   try {
@@ -101,6 +102,8 @@ function parseArgs(args) {
     taskId: null,
     evidencePath: null,
     verdictPath: null,
+    reportPath: null,
+    reviewMaxIterations: undefined,
     reason: null,
     skillsRoot: null,
     implementationMode: null,
@@ -151,6 +154,11 @@ function parseArgs(args) {
     else if (arg.startsWith('--mode=')) result.implementationMode = arg.slice(7);
     else if (arg === '--verdict') result.verdictPath = args[++i];
     else if (arg.startsWith('--verdict=')) result.verdictPath = arg.slice(10);
+    else if (arg === '--report' || arg === '--report-path') result.reportPath = args[++i];
+    else if (arg.startsWith('--report=')) result.reportPath = arg.slice(9);
+    else if (arg.startsWith('--report-path=')) result.reportPath = arg.slice(14);
+    else if (arg === '--review-max-iterations') result.reviewMaxIterations = parseInt(args[++i], 10);
+    else if (arg.startsWith('--review-max-iterations=')) result.reviewMaxIterations = parseInt(arg.slice(24), 10);
     else if (arg === '--reason') result.reason = args[++i];
     else if (arg.startsWith('--reason=')) result.reason = arg.slice(9);
     else if (arg === '--step') result.step = parseInt(args[++i], 10);
@@ -164,7 +172,9 @@ function parseArgs(args) {
     'task finish': 'task-finish',
     'task next': 'task-next',
     'task abandon': 'task-abandon',
-    'score submit': 'score-submit'
+    'score submit': 'score-submit',
+    'review submit': 'review-submit',
+    'review fix-finish': 'review-fix-finish'
   };
   const combinedMatch = COMBINED[positional.slice(0, 2).join(' ')];
   if (combinedMatch) {
@@ -175,7 +185,9 @@ function parseArgs(args) {
     if (!result.taskId && rest[0]) result.taskId = rest[0];
     if (combinedMatch === 'task-finish' && !result.evidencePath && rest[1]) result.evidencePath = rest[1];
     if (combinedMatch === 'task-abandon' && !result.reason && rest[1]) result.reason = rest[1];
-  } else if (['task-finish', 'task-next', 'task-abandon', 'score-submit'].includes(positional[0])) {
+    if (combinedMatch === 'review-submit' && !result.reportPath && rest[0]) result.reportPath = rest[0];
+    if (combinedMatch === 'review-fix-finish' && !result.evidencePath && rest[0]) result.evidencePath = rest[0];
+  } else if (['task-finish', 'task-next', 'task-abandon', 'score-submit', 'review-submit', 'review-fix-finish'].includes(positional[0])) {
     result.subcommand = positional[0];
     const rest = positional.slice(1);
     result.specPaths = [];
@@ -183,6 +195,8 @@ function parseArgs(args) {
     if (!result.taskId && rest[0]) result.taskId = rest[0];
     if (result.subcommand === 'task-finish' && !result.evidencePath && rest[1]) result.evidencePath = rest[1];
     if (result.subcommand === 'task-abandon' && !result.reason && rest[1]) result.reason = rest[1];
+    if (result.subcommand === 'review-submit' && !result.reportPath && rest[0]) result.reportPath = rest[0];
+    if (result.subcommand === 'review-fix-finish' && !result.evidencePath && rest[0]) result.evidencePath = rest[0];
   } else {
     result.subcommand = positional[0] || null;
     result.specPaths = positional.slice(1);
@@ -2423,141 +2437,292 @@ function cmdRun(options) {
     }
   }
 
-  // Step 7: Delegated Code Review via sdw-code-review (Spec 025)
-  // Sole review authority is skills/sdw-code-review; orchestrator dispatches
-  // CLI runner (or subagent in handoff) and inspects the JSON report.
+  // Step 7: Delegated Code Review via sdw-code-review / subagent (Spec 025, Spec 00076)
   if (startStep <= 7 && state.steps[7].status !== 'completed' && !options.skipReview && !isGitRepo(targetRoot)) {
     // sdw-code-review requires a git range to review; a non-git workspace cannot host it.
     console.log('[Step 7: Delegated Review] Non-git workspace: review skipped.');
     state = stateManager.updateStepState(targetRoot, state.runId, 7, 'skipped', { reason: 'non-git workspace' });
   } else if (startStep <= 7 && state.steps[7].status !== 'completed' && !options.skipReview) {
-    state = stateManager.updateStepState(targetRoot, state.runId, 7, 'in_progress');
-    const resolvedCodeReviewScript = resolveSkillScript(targetRoot, 'sdw-code-review', path.join('scripts', 'sdw_code_review.cjs'), resolveOptions);
-    const codeReviewScript = resolvedCodeReviewScript || path.resolve(__dirname, '../../sdw-code-review/scripts/sdw_code_review.cjs');
-    const hasCodeReview = fs.existsSync(codeReviewScript);
+    const reviewConfig = reviewEvaluator.resolveReviewConfig(config, options);
 
-    if (!hasCodeReview) {
-      const msg = `sdw-code-review skill missing at "${codeReviewScript}". Run packaging installer to restore skills/.`;
-      console.error(`[Step 7: Delegated Review] ${msg}`);
-      state = stateManager.updateStepState(targetRoot, state.runId, 7, 'review_failed', { error: msg });
-      state.status = 'failed';
-      // Spec 00071 AC4: fail closed — record the review gate, never ship.
-      recordBlockedGate(targetRoot, state, 'review', { step: 7, detail: msg });
-      options._runResult = { runId: state.runId, status: 'failed', error: msg };
-      return 1;
-    }
-
-    let artifactsDirAbs = null;
-    try {
-      artifactsDirAbs = artifactWriter.ensureArtifactDir(targetRoot, specSlug, state.runId, state.artifactsDir);
-    } catch (e) { artifactsDirAbs = null; }
-    const reportAbsPath = artifactsDirAbs
-      ? path.join(artifactsDirAbs, `${specSlug}-step-7.md`)
-      : path.join(targetRoot, '.sdw', 'state', 'code-review.report.md');
-
-    function parseReviewJson(stdout) {
-      try {
-        const t = String(stdout || '').trim();
-        if (!t) return null;
-        const s = t.indexOf('{');
-        const e = t.lastIndexOf('}');
-        if (s !== -1 && e !== -1 && e > s) return JSON.parse(t.slice(s, e + 1));
-        return JSON.parse(t);
-      } catch (err) { return null; }
-    }
-
-    function invokeCodeReviewCli(useFix) {
-      const cliArgs = [codeReviewScript, 'run', '--target', targetRoot, '--report', reportAbsPath, '--json', '--max-iterations', '1'];
-      if (state.baseCommit) cliArgs.push('--base', state.baseCommit);
-      if (useFix) cliArgs.push('--fix');
-      try {
-        const proc = spawnSync(process.execPath, cliArgs, { cwd: targetRoot, encoding: 'utf8' });
-        const parsed = parseReviewJson(proc.stdout);
-        if (parsed) return { report: parsed, exitCode: proc.status };
-      } catch (e) {}
-      return null;
-    }
-
-    function invokeCodeReviewModule(useFix) {
-      try {
-        const cr = require(codeReviewScript);
-        const report = cr.runCodeReview({
-          projectRoot: targetRoot,
-          base: state.baseCommit || null,
-          report: reportAbsPath,
-          fix: Boolean(useFix),
-          dryRun: false,
-          maxIterations: 1
-        });
-        return { report, exitCode: report.passed ? 0 : 1 };
-      } catch (e) { return null; }
-    }
-
-    function invokeReview(useFix) {
-      return invokeCodeReviewCli(useFix) || invokeCodeReviewModule(useFix);
-    }
-
-    console.log(`[Step 7: Delegated Review] Dispatching sdw-code-review (CLI) against base '${state.baseCommit || 'auto'}'...`);
-    let first = invokeReview(false);
-    if (!first || !first.report) {
-      const msg = 'sdw-code-review invocation failed with no parsable JSON report.';
-      console.error(`[Step 7: Delegated Review] ${msg}`);
-      state = stateManager.updateStepState(targetRoot, state.runId, 7, 'review_failed', { error: msg });
-      state.status = 'failed';
-      // Spec 00071 AC4: fail closed — record the review gate, never ship.
-      recordBlockedGate(targetRoot, state, 'review', { step: 7, detail: msg });
-      options._runResult = { runId: state.runId, status: 'failed', error: msg };
-      return 1;
-    }
-    let reviewReport = first.report;
-    console.log(`[Step 7: Delegated Review] ${reviewReport.passed ? 'Code review passed.' : `Code review failed with ${reviewReport.blockingCount || 0} blocking finding(s).`} Report: ${reviewReport.reportPath || reportAbsPath}`);
-
-    let reviewLoop = 0;
-    while (reviewReport && !reviewReport.passed && reviewLoop < 3) {
-      const fixable = (reviewReport.findings || []).filter(f => f.fixable && f.status === 'open');
-      if (fixable.length === 0) break;
-      reviewLoop++;
-      console.log(`[Step 7: Delegated Review] Applying auto-fixes for iteration ${reviewLoop}...`);
-      const fixRes = invokeReview(true);
-      if (!fixRes || !fixRes.report) break;
-      const fixedFiles = fixRes.report.fixedFiles || [];
-      if (fixedFiles.length === 0) {
-        reviewReport = fixRes.report;
-        break;
+    if (reviewConfig.mode === 'command') {
+      if (!reviewConfig.command) {
+        const msg = 'codeReview.mode is "command" but no review command is configured.';
+        console.error(`[Step 7: Delegated Review] ${msg}`);
+        state = stateManager.updateStepState(targetRoot, state.runId, 7, 'review_failed', { error: msg });
+        state.status = 'failed';
+        recordBlockedGate(targetRoot, state, 'review', { step: 7, detail: msg });
+        options._runResult = { runId: state.runId, status: 'failed', error: msg };
+        return 1;
       }
-      if (Boolean(config.securityChecksEnabled) && !options.skipSecurity) {
-        console.log(`[Step 7: Security Gate] Running pre-commit leak scan before review-fix commit...`);
-        const scanResult = runSecurityGate(targetRoot, { staged: false });
-        if (scanResult.exitCode !== 0) {
-          console.error(`[Step 7: Security Gate] Review-fix commit blocked by security checks gate (exit code ${scanResult.exitCode}).`);
+      console.log(`[Step 7: Delegated Review] Executing configured review command: ${reviewConfig.command}`);
+      try {
+        execSync(reviewConfig.command, { cwd: targetRoot, stdio: 'inherit' });
+        state.reviewCommit = getBaseCommit(targetRoot);
+        state = stateManager.updateStepState(targetRoot, state.runId, 7, 'completed', { mode: 'command', command: reviewConfig.command });
+      } catch (err) {
+        const msg = `Review command failed: ${err.message}`;
+        console.error(`[Step 7: Delegated Review] ${msg}`);
+        state = stateManager.updateStepState(targetRoot, state.runId, 7, 'review_failed', { error: msg });
+        state.status = 'failed';
+        recordBlockedGate(targetRoot, state, 'review', { step: 7, detail: msg });
+        options._runResult = { runId: state.runId, status: 'failed', error: msg };
+        return 1;
+      }
+    } else if (reviewConfig.mode === 'subagent') {
+      const priorStep7 = state.steps[7] || {};
+      const priorOutput = priorStep7.output || {};
+      const codeReviewState = priorOutput.codeReview || {
+        mode: 'subagent',
+        round: 1,
+        maxIterations: reviewConfig.maxIterations,
+        status: 'awaiting_review',
+        rounds: []
+      };
+      const currentRound = codeReviewState.round || 1;
+
+      if (priorStep7.status === 'awaiting_review') {
+        const paths = reviewEvaluator.resolveReviewPaths({
+          slug: specSlug,
+          runId: state.runId,
+          targetRoot,
+          stateDir: stateManager.resolveStateDir(targetRoot),
+          iteration: currentRound
+        });
+        console.log(`\n[Step 7: Delegated Review] Status: awaiting_review [round: ${currentRound}/${reviewConfig.maxIterations}, mode: subagent]`);
+        console.log(`Review report expected at: ${paths.reportFileRel}`);
+        console.log(`Submit the review report with:`);
+        console.log(`  node "${runCommandPath()}" review submit --run-id ${state.runId} --report ${paths.reportFileRel}`);
+        options._runResult = {
+          runId: state.runId,
+          status: 'awaiting_review',
+          currentStep: 7
+        };
+        return 5;
+      }
+
+      if (priorStep7.status === 'awaiting_review_fix') {
+        const paths = reviewEvaluator.resolveReviewPaths({
+          slug: specSlug,
+          runId: state.runId,
+          targetRoot,
+          stateDir: stateManager.resolveStateDir(targetRoot),
+          iteration: currentRound
+        });
+        console.log(`\n[Step 7: Delegated Review] Status: awaiting_review_fix [round: ${currentRound}/${reviewConfig.maxIterations}]`);
+        console.log(`Fix evidence expected at: ${paths.fixEvidenceFileRel}`);
+        console.log(`Submit fix evidence with:`);
+        console.log(`  node "${runCommandPath()}" review fix-finish --run-id ${state.runId} --evidence ${paths.fixEvidenceFileRel}`);
+        options._runResult = {
+          runId: state.runId,
+          status: 'awaiting_review_fix',
+          currentStep: 7
+        };
+        return 5;
+      }
+
+      // Fresh reviewer subagent dispatch for current round
+      const resolvedSkillsRoot = (skillsInfo && skillsInfo.skillsRoot) ? normalizePath(path.relative(targetRoot, skillsInfo.skillsRoot)) || 'skills' : 'skills';
+      const reviewPaths = reviewEvaluator.resolveReviewPaths({
+        slug: specSlug,
+        runId: state.runId,
+        targetRoot,
+        stateDir: stateManager.resolveStateDir(targetRoot),
+        iteration: currentRound
+      });
+      fs.mkdirSync(reviewPaths.dir, { recursive: true });
+
+      const reviewDiff = scoreEvaluator.collectDiff(targetRoot, state.baseCommit);
+      const touchedFiles = scoreEvaluator.getTouchedFiles(state.baseCommit, targetRoot);
+      const specAcs = dagPlanner.parseAcceptanceCriteria(effectiveSpecContent);
+      let instructions = '';
+      try {
+        instructions = specGrilling.loadProjectInstructions(targetRoot, config);
+      } catch (e) {}
+      let traps = [];
+      try {
+        const sdwMemory = require('../../sdw-memory/scripts/sdw_memory.cjs');
+        traps = sdwMemory.queryTraps({ targetRoot, slug: specSlug });
+      } catch (e) {}
+
+      const promptText = reviewEvaluator.buildReviewerPrompt({
+        slug: specSlug,
+        runId: state.runId,
+        skillsRoot: resolvedSkillsRoot,
+        diff: reviewDiff,
+        touchedFiles,
+        acs: specAcs,
+        instructions,
+        traps,
+        iteration: currentRound
+      });
+      fs.writeFileSync(reviewPaths.promptFileAbs, promptText, 'utf8');
+
+      const envelope = reviewEvaluator.buildReviewerEnvelope({
+        slug: specSlug,
+        runId: state.runId,
+        targetRoot,
+        stateDir: stateManager.resolveStateDir(targetRoot),
+        skillsRoot: resolvedSkillsRoot,
+        reviewConfig,
+        iteration: currentRound
+      });
+
+      codeReviewState.mode = 'subagent';
+      codeReviewState.round = currentRound;
+      codeReviewState.maxIterations = reviewConfig.maxIterations;
+      codeReviewState.status = 'awaiting_review';
+
+      state = stateManager.updateStepState(targetRoot, state.runId, 7, 'awaiting_review', {
+        codeReview: codeReviewState,
+        envelope
+      });
+      state.status = 'paused';
+      stateManager.saveRunState(targetRoot, state);
+
+      console.log(`\n[Step 7: Delegated Review] Dispatched fresh-context reviewer subagent [round: ${currentRound}/${reviewConfig.maxIterations}, mode: subagent]`);
+      console.log(`Reviewer envelope: ${JSON.stringify(envelope, null, 2)}`);
+      console.log(`Spawn one fresh-context reviewer subagent to evaluate code changes against ${reviewPaths.promptFileRel}`);
+      console.log(`When review completes, submit report JSON with:`);
+      console.log(`  node "${runCommandPath()}" review submit --run-id ${state.runId} --report ${reviewPaths.reportFileRel}`);
+
+      options._runResult = {
+        runId: state.runId,
+        status: 'awaiting_review',
+        currentStep: 7,
+        envelope
+      };
+      return 5;
+    } else {
+      // CLI mode (legacy)
+      state = stateManager.updateStepState(targetRoot, state.runId, 7, 'in_progress');
+      const resolvedCodeReviewScript = resolveSkillScript(targetRoot, 'sdw-code-review', path.join('scripts', 'sdw_code_review.cjs'), resolveOptions);
+      const codeReviewScript = resolvedCodeReviewScript || path.resolve(__dirname, '../../sdw-code-review/scripts/sdw_code_review.cjs');
+      const hasCodeReview = fs.existsSync(codeReviewScript);
+
+      if (!hasCodeReview) {
+        const msg = `sdw-code-review skill missing at "${codeReviewScript}". Run packaging installer to restore skills/.`;
+        console.error(`[Step 7: Delegated Review] ${msg}`);
+        state = stateManager.updateStepState(targetRoot, state.runId, 7, 'review_failed', { error: msg });
+        state.status = 'failed';
+        // Spec 00071 AC4: fail closed — record the review gate, never ship.
+        recordBlockedGate(targetRoot, state, 'review', { step: 7, detail: msg });
+        options._runResult = { runId: state.runId, status: 'failed', error: msg };
+        return 1;
+      }
+
+      let artifactsDirAbs = null;
+      try {
+        artifactsDirAbs = artifactWriter.ensureArtifactDir(targetRoot, specSlug, state.runId, state.artifactsDir);
+      } catch (e) { artifactsDirAbs = null; }
+      const reportAbsPath = artifactsDirAbs
+        ? path.join(artifactsDirAbs, `${specSlug}-step-7.md`)
+        : path.join(targetRoot, '.sdw', 'state', 'code-review.report.md');
+
+      function parseReviewJson(stdout) {
+        try {
+          const t = String(stdout || '').trim();
+          if (!t) return null;
+          const s = t.indexOf('{');
+          const e = t.lastIndexOf('}');
+          if (s !== -1 && e !== -1 && e > s) return JSON.parse(t.slice(s, e + 1));
+          return JSON.parse(t);
+        } catch (err) { return null; }
+      }
+
+      function invokeCodeReviewCli(useFix) {
+        const cliArgs = [codeReviewScript, 'run', '--target', targetRoot, '--report', reportAbsPath, '--json', '--max-iterations', '1'];
+        if (state.baseCommit) cliArgs.push('--base', state.baseCommit);
+        if (useFix) cliArgs.push('--fix');
+        try {
+          const proc = spawnSync(process.execPath, cliArgs, { cwd: targetRoot, encoding: 'utf8' });
+          const parsed = parseReviewJson(proc.stdout);
+          if (parsed) return { report: parsed, exitCode: proc.status };
+        } catch (e) {}
+        return null;
+      }
+
+      function invokeCodeReviewModule(useFix) {
+        try {
+          const cr = require(codeReviewScript);
+          const report = cr.runCodeReview({
+            projectRoot: targetRoot,
+            base: state.baseCommit || null,
+            report: reportAbsPath,
+            fix: Boolean(useFix),
+            dryRun: false,
+            maxIterations: 1
+          });
+          return { report, exitCode: report.passed ? 0 : 1 };
+        } catch (e) { return null; }
+      }
+
+      function invokeReview(useFix) {
+        return invokeCodeReviewCli(useFix) || invokeCodeReviewModule(useFix);
+      }
+
+      console.log(`[Step 7: Delegated Review] Dispatching sdw-code-review (CLI) against base '${state.baseCommit || 'auto'}'...`);
+      let first = invokeReview(false);
+      if (!first || !first.report) {
+        const msg = 'sdw-code-review invocation failed with no parsable JSON report.';
+        console.error(`[Step 7: Delegated Review] ${msg}`);
+        state = stateManager.updateStepState(targetRoot, state.runId, 7, 'review_failed', { error: msg });
+        state.status = 'failed';
+        // Spec 00071 AC4: fail closed — record the review gate, never ship.
+        recordBlockedGate(targetRoot, state, 'review', { step: 7, detail: msg });
+        options._runResult = { runId: state.runId, status: 'failed', error: msg };
+        return 1;
+      }
+      let reviewReport = first.report;
+      console.log(`[Step 7: Delegated Review] ${reviewReport.passed ? 'Code review passed.' : `Code review failed with ${reviewReport.blockingCount || 0} blocking finding(s).`} Report: ${reviewReport.reportPath || reportAbsPath}`);
+
+      let reviewLoop = 0;
+      while (reviewReport && !reviewReport.passed && reviewLoop < 3) {
+        const fixable = (reviewReport.findings || []).filter(f => f.fixable && f.status === 'open');
+        if (fixable.length === 0) break;
+        reviewLoop++;
+        console.log(`[Step 7: Delegated Review] Applying auto-fixes for iteration ${reviewLoop}...`);
+        const fixRes = invokeReview(true);
+        if (!fixRes || !fixRes.report) break;
+        const fixedFiles = fixRes.report.fixedFiles || [];
+        if (fixedFiles.length === 0) {
           reviewReport = fixRes.report;
           break;
         }
+        if (Boolean(config.securityChecksEnabled) && !options.skipSecurity) {
+          console.log(`[Step 7: Security Gate] Running pre-commit leak scan before review-fix commit...`);
+          const scanResult = runSecurityGate(targetRoot, { staged: false });
+          if (scanResult.exitCode !== 0) {
+            console.error(`[Step 7: Security Gate] Review-fix commit blocked by security checks gate (exit code ${scanResult.exitCode}).`);
+            reviewReport = fixRes.report;
+            break;
+          }
+        }
+        try {
+          stageAndCommitOnly(targetRoot, fixedFiles, `fix(${specSlug}): apply automated review fixes (iteration ${reviewLoop})`);
+        } catch (e) {}
+        const verify = invokeReview(false);
+        reviewReport = (verify && verify.report) ? verify.report : fixRes.report;
       }
+
+      state.reviewIteration = reviewLoop;
+      let artifactRel = null;
       try {
-        stageAndCommitOnly(targetRoot, fixedFiles, `fix(${specSlug}): apply automated review fixes (iteration ${reviewLoop})`);
-      } catch (e) {}
-      const verify = invokeReview(false);
-      reviewReport = (verify && verify.report) ? verify.report : fixRes.report;
-    }
+        artifactRel = path.relative(targetRoot, reportAbsPath).replace(/\\/g, '/');
+      } catch (e) { artifactRel = null; }
+      if (!reviewReport.passed) {
+        console.error(`[Step 7: Delegated Review] Review loop halted with unresolved errors.`);
+        state = stateManager.updateStepState(targetRoot, state.runId, 7, 'review_failed', reviewReport, null, artifactRel ? { artifact: artifactRel } : undefined);
+        state.status = 'failed';
+        // Spec 00071 AC4: fail closed — record the review gate, never ship.
+        recordBlockedGate(targetRoot, state, 'review', { step: 7, detail: 'Unresolved code review findings' });
+        options._runResult = { runId: state.runId, status: 'failed', error: 'Unresolved code review findings' };
+        return 1;
+      }
 
-    state.reviewIteration = reviewLoop;
-    let artifactRel = null;
-    try {
-      artifactRel = path.relative(targetRoot, reportAbsPath).replace(/\\/g, '/');
-    } catch (e) { artifactRel = null; }
-    if (!reviewReport.passed) {
-      console.error(`[Step 7: Delegated Review] Review loop halted with unresolved errors.`);
-      state = stateManager.updateStepState(targetRoot, state.runId, 7, 'review_failed', reviewReport, null, artifactRel ? { artifact: artifactRel } : undefined);
-      state.status = 'failed';
-      // Spec 00071 AC4: fail closed — record the review gate, never ship.
-      recordBlockedGate(targetRoot, state, 'review', { step: 7, detail: 'Unresolved code review findings' });
-      options._runResult = { runId: state.runId, status: 'failed', error: 'Unresolved code review findings' };
-      return 1;
+      state.reviewCommit = getBaseCommit(targetRoot);
+      state = stateManager.updateStepState(targetRoot, state.runId, 7, 'completed', reviewReport, null, artifactRel ? { artifact: artifactRel } : undefined);
     }
-
-    state.reviewCommit = getBaseCommit(targetRoot);
-    state = stateManager.updateStepState(targetRoot, state.runId, 7, 'completed', reviewReport, null, artifactRel ? { artifact: artifactRel } : undefined);
   } else if (options.skipReview) {
     state = stateManager.updateStepState(targetRoot, state.runId, 7, 'skipped', { reason: 'Skipped via --skip-review' });
   }
@@ -3918,6 +4083,305 @@ function cmdScoreSubmit(options) {
   return 2;
 }
 
+function cmdReviewSubmit(options) {
+  const targetRoot = options.root ? path.resolve(options.root) : process.cwd();
+  let state = null;
+  if (options.runId) {
+    state = stateManager.loadRunState(targetRoot, options.runId);
+  } else {
+    state = stateManager.findLatestRunState(targetRoot);
+  }
+  if (!state) {
+    console.error('Error: No run state found to submit a review report.');
+    return 1;
+  }
+
+  const reportPath = options.reportPath || options.verdictPath || options.evidencePath;
+  if (!reportPath) {
+    console.error('Error: Report path is required (--report <path>).');
+    return 1;
+  }
+  const reportFileAbs = path.isAbsolute(reportPath) ? reportPath : path.resolve(targetRoot, reportPath);
+  if (!fs.existsSync(reportFileAbs)) {
+    console.error(`Error: Report file not found at "${reportFileAbs}".`);
+    return 1;
+  }
+
+  let rawReport = null;
+  try {
+    rawReport = JSON.parse(fs.readFileSync(reportFileAbs, 'utf8'));
+  } catch (err) {
+    console.error(`Error: Malformed JSON in report file "${reportFileAbs}": ${err.message}`);
+    return 1;
+  }
+
+  const validation = reviewEvaluator.validateReviewReport(rawReport);
+  if (!validation.valid) {
+    console.error('Error: Review report rejected:');
+    validation.errors.forEach(e => console.error(`  - ${e}`));
+    return 1;
+  }
+
+  const config = loadProjectConfig(targetRoot, options);
+  const reviewConfig = reviewEvaluator.resolveReviewConfig(config, options);
+
+  const step7 = state.steps && state.steps[7];
+  const priorOutput = (step7 && step7.output) || {};
+  const codeReviewState = priorOutput.codeReview || {
+    mode: 'subagent',
+    round: 1,
+    maxIterations: reviewConfig.maxIterations,
+    status: 'awaiting_review',
+    rounds: []
+  };
+  const currentRound = codeReviewState.round || 1;
+
+  codeReviewState.rounds = codeReviewState.rounds || [];
+  codeReviewState.rounds.push({
+    round: currentRound,
+    report: validation.data,
+    reportFile: path.relative(targetRoot, reportFileAbs).replace(/\\/g, '/')
+  });
+
+  if (validation.data.passed || validation.data.blockingCount === 0) {
+    codeReviewState.status = 'completed';
+    state.steps[7] = state.steps[7] || { name: 'code_review', status: 'pending', output: null, artifact: null };
+    state.steps[7].status = 'completed';
+    state.steps[7].output = {
+      ...validation.data,
+      codeReview: codeReviewState
+    };
+    state.reviewCommit = getBaseCommit(targetRoot);
+    state.status = 'paused';
+    stateManager.saveRunState(targetRoot, state);
+    console.log(`[sdw-run review submit] Code review passed with 0 blocking findings (round ${currentRound}/${reviewConfig.maxIterations}).`);
+    console.log(`Step 7 marked completed. Continue with:`);
+    console.log(`  node "${runCommandPath()}" resume --run-id ${state.runId}${followUpRootFlag(targetRoot)}`);
+    return 0;
+  }
+
+  if (reviewEvaluator.isMaxIterationsReached(currentRound, reviewConfig.maxIterations)) {
+    codeReviewState.status = 'review_failed';
+    state.steps[7] = state.steps[7] || { name: 'code_review', status: 'pending', output: null, artifact: null };
+    state.steps[7].status = 'review_failed';
+    state.steps[7].output = {
+      ...validation.data,
+      codeReview: codeReviewState
+    };
+    state.status = 'failed';
+    recordBlockedGate(targetRoot, state, 'review', {
+      step: 7,
+      detail: `Review-and-fix loop reached max iterations (${reviewConfig.maxIterations}) with ${validation.data.blockingCount} unresolved blocking finding(s).`
+    });
+    stateManager.saveRunState(targetRoot, state);
+    console.error(`[sdw-run review submit] Review-and-fix loop reached max iterations (${reviewConfig.maxIterations}) with ${validation.data.blockingCount} unresolved blocking finding(s).`);
+    return 1;
+  }
+
+  const paths = reviewEvaluator.resolveReviewPaths({
+    slug: state.specSlug,
+    runId: state.runId,
+    targetRoot,
+    stateDir: stateManager.resolveStateDir(targetRoot),
+    iteration: currentRound
+  });
+
+  const fixerEnvelope = reviewEvaluator.buildFixerEnvelope({
+    slug: state.specSlug,
+    runId: state.runId,
+    targetRoot,
+    stateDir: stateManager.resolveStateDir(targetRoot),
+    iteration: currentRound,
+    findings: validation.data.findings,
+    skillsRoot: 'skills'
+  });
+
+  let instructions = '';
+  try {
+    instructions = specGrilling.loadProjectInstructions(targetRoot, config);
+  } catch (e) {}
+
+  let traps = [];
+  try {
+    const sdwMemory = require('../../sdw-memory/scripts/sdw_memory.cjs');
+    traps = sdwMemory.queryTraps({ targetRoot, slug: state.specSlug });
+  } catch (e) {}
+
+  const fixerPrompt = reviewEvaluator.buildFixerPrompt({
+    slug: state.specSlug,
+    runId: state.runId,
+    iteration: currentRound,
+    findings: validation.data.findings,
+    targetFiles: fixerEnvelope.targetFiles,
+    skillsRoot: 'skills',
+    instructions,
+    traps
+  });
+
+  fs.mkdirSync(paths.dir, { recursive: true });
+  fs.writeFileSync(paths.fixPromptFileAbs, fixerPrompt, 'utf8');
+
+  codeReviewState.status = 'awaiting_review_fix';
+  state.steps[7] = state.steps[7] || { name: 'code_review', status: 'pending', output: null, artifact: null };
+  state.steps[7].status = 'awaiting_review_fix';
+  state.steps[7].output = {
+    ...validation.data,
+    codeReview: codeReviewState,
+    fixerEnvelope
+  };
+  state.status = 'paused';
+  stateManager.saveRunState(targetRoot, state);
+
+  console.log(`[sdw-run review submit] ${validation.data.blockingCount} blocking finding(s) identified in round ${currentRound}.`);
+  console.log(`Initiating remediation round ${currentRound}/${reviewConfig.maxIterations}.`);
+  console.log(`Fixer envelope: ${JSON.stringify(fixerEnvelope, null, 2)}`);
+  console.log(`Spawn fresh fixer subagent scoped to: ${fixerEnvelope.targetFiles.join(', ')}`);
+  console.log(`When fix is applied, submit fix evidence with:`);
+  console.log(`  node "${runCommandPath()}" review fix-finish --run-id ${state.runId} --evidence ${paths.fixEvidenceFileRel}`);
+  return 0;
+}
+
+function cmdReviewFixFinish(options) {
+  const targetRoot = options.root ? path.resolve(options.root) : process.cwd();
+  let state = null;
+  if (options.runId) {
+    state = stateManager.loadRunState(targetRoot, options.runId);
+  } else {
+    state = stateManager.findLatestRunState(targetRoot);
+  }
+  if (!state) {
+    console.error('Error: No run state found for review fix-finish.');
+    return 1;
+  }
+
+  const evidencePath = options.evidencePath;
+  if (!evidencePath) {
+    console.error('Error: Evidence path is required (--evidence <path>).');
+    return 1;
+  }
+  const evidenceFileAbs = path.isAbsolute(evidencePath) ? evidencePath : path.resolve(targetRoot, evidencePath);
+  if (!fs.existsSync(evidenceFileAbs)) {
+    console.error(`Error: Evidence file not found at "${evidenceFileAbs}".`);
+    return 1;
+  }
+
+  let evidence = null;
+  try {
+    evidence = JSON.parse(fs.readFileSync(evidenceFileAbs, 'utf8'));
+  } catch (err) {
+    console.error(`Error: Malformed JSON in evidence file "${evidenceFileAbs}": ${err.message}`);
+    return 1;
+  }
+
+  const step7 = state.steps && state.steps[7];
+  const priorOutput = (step7 && step7.output) || {};
+  const codeReviewState = priorOutput.codeReview || {};
+  const fixerEnvelope = priorOutput.fixerEnvelope || {};
+  const targetFiles = fixerEnvelope.targetFiles || [];
+
+  let modifiedFiles = Array.isArray(evidence.modifiedFiles) && evidence.modifiedFiles.length > 0
+    ? evidence.modifiedFiles
+    : getStatusFiles(targetRoot);
+
+  const scopeValidation = reviewEvaluator.validateFixScope(modifiedFiles, targetFiles);
+  if (!scopeValidation.allowed) {
+    console.error(`Error: Fixer modified files outside target scope fence:`);
+    scopeValidation.violations.forEach(v => console.error(`  - ${v}`));
+    return 1;
+  }
+
+  const config = loadProjectConfig(targetRoot, options);
+  if (Boolean(config.securityChecksEnabled) && !options.skipSecurity) {
+    console.log(`[Step 7: Security Gate] Running pre-commit leak scan before review fix commit...`);
+    const scanResult = runSecurityGate(targetRoot, { staged: false });
+    if (scanResult.exitCode !== 0) {
+      console.error(`[Step 7: Security Gate] Review-fix commit blocked by security checks gate (exit code ${scanResult.exitCode}).`);
+      return 1;
+    }
+  }
+
+  const currentRound = codeReviewState.round || 1;
+  const commitMsg = reviewEvaluator.formatFixCommitMessage(state.specSlug, currentRound);
+  if (modifiedFiles.length > 0) {
+    try {
+      stageAndCommitOnly(targetRoot, modifiedFiles, commitMsg);
+      console.log(`[sdw-run review fix-finish] Recorded fix commit: "${commitMsg}"`);
+    } catch (err) {
+      console.error(`Error committing fix modifications: ${err.message}`);
+      return 1;
+    }
+  }
+
+  const nextRound = currentRound + 1;
+  codeReviewState.round = nextRound;
+  codeReviewState.status = 'awaiting_review';
+
+  const paths = reviewEvaluator.resolveReviewPaths({
+    slug: state.specSlug,
+    runId: state.runId,
+    targetRoot,
+    stateDir: stateManager.resolveStateDir(targetRoot),
+    iteration: nextRound
+  });
+
+  const reviewConfig = reviewEvaluator.resolveReviewConfig(config, options);
+  const nextEnvelope = reviewEvaluator.buildReviewerEnvelope({
+    slug: state.specSlug,
+    runId: state.runId,
+    targetRoot,
+    stateDir: stateManager.resolveStateDir(targetRoot),
+    skillsRoot: 'skills',
+    reviewConfig,
+    iteration: nextRound
+  });
+
+  const reviewDiff = scoreEvaluator.collectDiff(targetRoot, state.baseCommit);
+  const touchedFiles = scoreEvaluator.getTouchedFiles(state.baseCommit, targetRoot);
+  let specAcs = [];
+  try {
+    const specContent = fs.readFileSync(path.resolve(targetRoot, state.specPath), 'utf8');
+    specAcs = dagPlanner.parseAcceptanceCriteria(specContent);
+  } catch (e) {}
+  let instructions = '';
+  try {
+    instructions = specGrilling.loadProjectInstructions(targetRoot, config);
+  } catch (e) {}
+  let traps = [];
+  try {
+    const sdwMemory = require('../../sdw-memory/scripts/sdw_memory.cjs');
+    traps = sdwMemory.queryTraps({ targetRoot, slug: state.specSlug });
+  } catch (e) {}
+
+  const nextPrompt = reviewEvaluator.buildReviewerPrompt({
+    slug: state.specSlug,
+    runId: state.runId,
+    skillsRoot: 'skills',
+    diff: reviewDiff,
+    touchedFiles,
+    acs: specAcs,
+    instructions,
+    traps,
+    iteration: nextRound
+  });
+
+  fs.mkdirSync(paths.dir, { recursive: true });
+  fs.writeFileSync(paths.promptFileAbs, nextPrompt, 'utf8');
+
+  state.steps[7].status = 'awaiting_review';
+  state.steps[7].output = {
+    codeReview: codeReviewState,
+    envelope: nextEnvelope
+  };
+  state.status = 'paused';
+  stateManager.saveRunState(targetRoot, state);
+
+  console.log(`[sdw-run review fix-finish] Advanced to review round ${nextRound}/${reviewConfig.maxIterations}.`);
+  console.log(`Dispatched fresh reviewer envelope: ${JSON.stringify(nextEnvelope, null, 2)}`);
+  console.log(`Re-evaluate updated diff and submit review report with:`);
+  console.log(`  node "${runCommandPath()}" review submit --run-id ${state.runId} --report ${paths.reportFileRel}`);
+  return 0;
+}
+
 function cmdSandbox(options) {
   const sourceRoot = options.root ? path.resolve(options.root) : process.cwd();
   const action = String((options.specPaths && options.specPaths[0]) || options.target || 'list').trim().split(/\s+/)[0] || 'list';
@@ -3995,6 +4459,8 @@ Subcommands:
   task finish            Submit accepted evidence for the dispatched DAG task
   task abandon           Return the dispatched DAG task to the queue
   score submit           Submit a judge verdict for Step 5 conformance scoring
+  review submit          Submit code review report for Step 7
+  review fix-finish      Submit fix evidence and advance review-and-fix round
   status                 Check status of current or specified run state
   sandbox list           List isolated sandboxes created by --sandbox
   sandbox report         Regenerate and print the report for a sandbox (--run-id)
@@ -4008,6 +4474,8 @@ Options:
   --evidence <path>      Path to evidence JSON file (alias: --evidence-path)
   --reason <text>        Why the dispatched task is being abandoned
   --verdict <path>       Path to judge verdict JSON file for score submit
+  --report <path>        Path to code review report JSON file for review submit
+  --review-max-iterations <n> Override maximum review-and-fix iterations for Step 7
   --mode <mode>          Implementation mode (subagent | command)
   --dry-run              Print the execution plan and validate the spec; execute nothing
   --sandbox              Execute the whole pipeline in an isolated local clone; never pushes
@@ -4075,6 +4543,12 @@ function main() {
     case 'score-submit':
       code = cmdScoreSubmit(options);
       break;
+    case 'review-submit':
+      code = cmdReviewSubmit(options);
+      break;
+    case 'review-fix-finish':
+      code = cmdReviewFixFinish(options);
+      break;
     case 'status':
       code = cmdStatus(options);
       break;
@@ -4113,6 +4587,8 @@ module.exports = {
   cmdTaskAbandon,
   cmdTaskFinish,
   cmdScoreSubmit,
+  cmdReviewSubmit,
+  cmdReviewFixFinish,
   cmdSandbox,
   printRunDryRunPlan,
   showHelp,

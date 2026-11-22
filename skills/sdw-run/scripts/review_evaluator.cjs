@@ -23,7 +23,9 @@ function normOpt(val) {
  * Resolves codeReview configuration settings (Spec 00076 AC1, AC2, AC16).
  */
 function resolveReviewConfig(config = {}, cliOverrides = {}) {
-  const codeReview = (config && typeof config.codeReview === 'object' && config.codeReview) ? config.codeReview : {};
+  const codeReview = (cliOverrides && typeof cliOverrides.codeReview === 'object' && cliOverrides.codeReview)
+    ? cliOverrides.codeReview
+    : ((config && typeof config.codeReview === 'object' && config.codeReview) ? config.codeReview : {});
   const rawMode = typeof codeReview.mode === 'string' ? codeReview.mode.trim().toLowerCase() : null;
   const mode = ALLOWED_MODES.includes(rawMode) ? rawMode : DEFAULT_MODE;
 
@@ -383,6 +385,38 @@ function buildFixerPrompt(options = {}) {
   return lines.join('\n');
 }
 
+/**
+ * Validates that all modified files stay within the target finding scope fence (Spec 00076 AC11, AC12).
+ */
+function validateFixScope(modifiedFiles = [], targetFiles = []) {
+  const allowedSet = new Set(targetFiles.map(normalizePath));
+  const violations = [];
+  modifiedFiles.forEach(file => {
+    const normalized = normalizePath(file);
+    if (!allowedSet.has(normalized)) {
+      violations.push(normalized);
+    }
+  });
+  return {
+    allowed: violations.length === 0,
+    violations
+  };
+}
+
+/**
+ * Formats the conventional commit message for a review remediation round (Spec 00076 AC13).
+ */
+function formatFixCommitMessage(slug, iteration = 1) {
+  return `fix(${slug}): address code review findings (round ${iteration})`;
+}
+
+/**
+ * Checks if the review-and-fix loop has reached its iteration ceiling (Spec 00076 AC15).
+ */
+function isMaxIterationsReached(iteration, maxIterations = DEFAULT_MAX_ITERATIONS) {
+  return Number(iteration) >= Number(maxIterations);
+}
+
 module.exports = {
   DEFAULT_MODE,
   DEFAULT_MAX_ITERATIONS,
@@ -393,5 +427,8 @@ module.exports = {
   buildReviewerPrompt,
   validateReviewReport,
   buildFixerEnvelope,
-  buildFixerPrompt
+  buildFixerPrompt,
+  validateFixScope,
+  formatFixCommitMessage,
+  isMaxIterationsReached
 };
