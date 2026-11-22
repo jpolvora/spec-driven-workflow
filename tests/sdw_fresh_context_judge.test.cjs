@@ -341,3 +341,90 @@ test('AC13: host mode preserves legacy indefinite pause on resume even past judg
   }
 });
 
+test('AC14: cmdScoreSubmit fails closed with score 0 when verdict submitted past timeout', () => {
+  const tmpDir = setupRepo();
+  try {
+    const implScript = [
+      "const fs = require('fs');",
+      "fs.appendFileSync('index.cjs', '// implemented\\n');",
+      'fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({',
+      "  taskId: process.env.SDW_TASK_ID,",
+      "  status: 'success',",
+      "  acIds: ['AC1', 'AC2'],",
+      "  filesChanged: ['index.cjs'],",
+      "  tests: [],",
+      "  summary: 'implemented index.cjs'",
+      '}));'
+    ].join(' ');
+
+    const initialExit = sdwRun.cmdRun({
+      root: tmpDir,
+      specPath: '.sdw/specs/sample-judge-spec.md',
+      scoring: { judgeMode: 'subagent', judgeTimeoutMs: 1000 },
+      skipReview: true,
+      skipPr: true,
+      implementation: {
+        mode: 'command',
+        segregateTests: false,
+        command: `node -e "${implScript.replace(/"/g, '\\"')}"`
+      }
+    });
+    assert.equal(initialExit, 5);
+
+    const state = stateManager.findLatestRunState(tmpDir);
+    assert.equal(state.steps[5].output.judgeResolution, 'subagent');
+
+    // Artificially age the dispatchedAt timestamp past the timeout
+    state.steps[5].output.dispatchedAt = new Date(Date.now() - 5000).toISOString();
+    stateManager.saveRunState(tmpDir, state);
+
+    // Create valid verdict file
+    const verdictPath = path.join(tmpDir, 'verdict.json');
+    fs.writeFileSync(verdictPath, JSON.stringify({
+      score: 10,
+      verdicts: [
+        { id: 'AC1', verdict: 'verified', evidence: 'index.cjs:1' },
+        { id: 'AC2', verdict: 'verified', evidence: 'index.cjs:2' }
+      ]
+    }));
+
+    // Submitting verdict past timeout must fail closed with 2
+    const submitExit = sdwRun.cmdScoreSubmit({
+      root: tmpDir,
+      runId: state.runId,
+      verdictPath: 'verdict.json',
+      scoring: { judgeTimeoutMs: 1000 }
+    });
+    assert.equal(submitExit, 2);
+
+    const finalState = stateManager.findLatestRunState(tmpDir);
+    assert.equal(finalState.score, 0);
+    assert.equal(finalState.status, 'failed');
+    assert.ok(finalState.errors.some(e => e.error.includes('timed out')));
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('AC12, AC14: runJudgeCommand honors scoring.judgeTimeoutMs in command mode', () => {
+  const tmpDir = setupRepo();
+  try {
+    const res = scoreEvaluator.runJudgeCommand({
+      config: { scoring: { judgeCommand: 'node -e "setTimeout(() => {}, 5000);"', judgeTimeoutMs: 500 } },
+      targetRoot: tmpDir,
+      promptFileAbs: path.join(tmpDir, 'prompt.md'),
+      verdictFileAbs: path.join(tmpDir, 'verdict.json'),
+      diffFileAbs: path.join(tmpDir, 'diff.txt'),
+      criteriaFileAbs: path.join(tmpDir, 'criteria.txt'),
+      slug: 'sample-judge-spec'
+    });
+    assert.equal(res.success, false);
+    assert.equal(res.timedOut, true);
+    assert.ok(res.error.includes('timed out after 500ms'));
+  } finally {
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    } catch (_) {}
+  }
+});
+

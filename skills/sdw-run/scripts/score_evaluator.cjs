@@ -465,16 +465,18 @@ function runJudgeCommand(options) {
   if (judge.effort) filteredEnv.SDW_JUDGE_EFFORT = judge.effort;
   if (judge.apiEndpoint) filteredEnv.SDW_JUDGE_API_ENDPOINT = judge.apiEndpoint;
 
+  const judgeTimeoutMs = judge.timeoutMs || JUDGE_TIMEOUT_MS;
+
   const proc = spawnSync(substituted, {
     cwd: options.targetRoot,
     shell: true,
     env: filteredEnv,
-    timeout: JUDGE_TIMEOUT_MS,
+    timeout: judgeTimeoutMs,
     encoding: 'utf8'
   });
 
   if (proc.error && proc.error.code === 'ETIMEDOUT') {
-    return { success: false, timedOut: true, exitCode: 1, error: `Judge command timed out after ${JUDGE_TIMEOUT_MS}ms.` };
+    return { success: false, timedOut: true, exitCode: 1, error: `Judge command timed out after ${judgeTimeoutMs}ms.` };
   }
   if (proc.status !== 0) {
     const stderr = proc.stderr ? String(proc.stderr).trim() : '';

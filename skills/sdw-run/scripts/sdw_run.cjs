@@ -3834,6 +3834,30 @@ function cmdScoreSubmit(options) {
     ? options.minScore
     : (config.scoreMin !== undefined ? config.scoreMin : 8);
   const judgeConfig = scoreEvaluator.resolveJudgeConfig({ scoring: options.scoring || config.scoring });
+
+  const isSubagentDispatch = priorOutput && priorOutput.judgeResolution === 'subagent';
+  if (isSubagentDispatch && priorOutput.dispatchedAt) {
+    const elapsedMs = Date.now() - new Date(priorOutput.dispatchedAt).getTime();
+    const timeoutMs = judgeConfig.timeoutMs || scoreEvaluator.JUDGE_TIMEOUT_MS || 600000;
+    if (elapsedMs > timeoutMs) {
+      state.steps[5] = state.steps[5] || { name: 'scoring', status: 'pending', output: null, artifact: null };
+      state.steps[5].status = 'reimplementation_needed';
+      state.steps[5].output = {
+        ...priorOutput,
+        score: 0,
+        passed: false,
+        error: `Judge subagent timed out after ${elapsedMs}ms (timeout: ${timeoutMs}ms) without producing a valid verdict.`
+      };
+      state.score = 0;
+      state.status = 'failed';
+      state.errors = state.errors || [];
+      state.errors.push({ step: 5, timestamp: new Date().toISOString(), error: `Judge subagent timed out after ${elapsedMs}ms (timeout: ${timeoutMs}ms) without producing a valid verdict.` });
+      stateManager.saveRunState(targetRoot, state);
+      console.error(`[sdw-run score submit] Judge subagent timed out after ${elapsedMs}ms (timeout: ${timeoutMs}ms); failing closed with score 0.`);
+      return 2;
+    }
+  }
+
   const report = scoreEvaluator.applyVerdict(validation.data, {
     acs: judgeCriteria,
     minScore,
