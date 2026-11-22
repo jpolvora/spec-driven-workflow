@@ -71,6 +71,20 @@ function getScmProviderContract(targetRoot, options = {}) {
   }
 }
 
+function getSdwConfigHelper(targetRoot, options = {}) {
+  try {
+    const sdwConfigScript = resolveSkillScript(targetRoot, 'sdw-config', path.join('scripts', 'sdw_config.cjs'), options);
+    if (sdwConfigScript) {
+      return require(sdwConfigScript);
+    }
+  } catch (e) {}
+  try {
+    return require('../../sdw-config/scripts/sdw_config.cjs');
+  } catch (e) {
+    return null;
+  }
+}
+
 function parseArgs(args) {
   const result = {
     subcommand: null,
@@ -4143,6 +4157,7 @@ function cmdReviewSubmit(options) {
   };
   const currentRound = codeReviewState.round || 1;
   const maxIterations = codeReviewState.maxIterations || reviewConfig.maxIterations;
+  const sdwConfig = getSdwConfigHelper(targetRoot, options);
   const resolvedSkillsInfo = sdwConfig && typeof sdwConfig.resolveSkillsRoot === 'function' ? sdwConfig.resolveSkillsRoot(targetRoot) : null;
   const fallbackSkillsRoot = (resolvedSkillsInfo && resolvedSkillsInfo.skillsRoot) ? normalizePath(path.relative(targetRoot, resolvedSkillsInfo.skillsRoot)) || 'skills' : 'skills';
   const activeSkillsRoot = state.codeReviewSkillsRoot || (codeReviewState && codeReviewState.skillsRoot) || fallbackSkillsRoot;
@@ -4346,6 +4361,7 @@ function cmdReviewFixFinish(options) {
 
   const reviewConfig = reviewEvaluator.resolveReviewConfig(config, options);
   const maxIterations = codeReviewState.maxIterations || reviewConfig.maxIterations;
+  const sdwConfig = getSdwConfigHelper(targetRoot, options);
   const resolvedSkillsInfo = sdwConfig && typeof sdwConfig.resolveSkillsRoot === 'function' ? sdwConfig.resolveSkillsRoot(targetRoot) : null;
   const fallbackSkillsRoot = (resolvedSkillsInfo && resolvedSkillsInfo.skillsRoot) ? normalizePath(path.relative(targetRoot, resolvedSkillsInfo.skillsRoot)) || 'skills' : 'skills';
   const activeSkillsRoot = state.codeReviewSkillsRoot || (codeReviewState && codeReviewState.skillsRoot) || fallbackSkillsRoot;
