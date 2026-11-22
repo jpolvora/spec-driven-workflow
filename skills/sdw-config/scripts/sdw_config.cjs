@@ -357,6 +357,13 @@ const DEFAULT_CONFIG = {
   maxPreemptions: 3,
   memory: {
     backends: { wsMemo: true, traps: true, files: true }
+  },
+  harness: {
+    adapter: 'auto',
+    subagent: {
+      defaultModel: 'flash',
+      defaultEffort: 'low'
+    }
   }
 };
 
@@ -1139,6 +1146,14 @@ function loadConfig(targetRoot, options = {}) {
     verification: {
       ...DEFAULT_CONFIG.verification,
       ...((rawConfig && rawConfig.verification) || {})
+    },
+    harness: {
+      ...DEFAULT_CONFIG.harness,
+      ...((rawConfig && rawConfig.harness) || {}),
+      subagent: {
+        ...DEFAULT_CONFIG.harness.subagent,
+        ...((rawConfig && rawConfig.harness && rawConfig.harness.subagent) || {})
+      }
     }
   };
   const resolved = {};
