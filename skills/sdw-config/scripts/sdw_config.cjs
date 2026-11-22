@@ -402,6 +402,12 @@ const DEFAULT_SCHEMA = {
       "type": "object",
       "description": "Configuration for Step 5 LLM-judge conformance scoring (Spec 027).",
       "properties": {
+        "judgeMode": {
+          "type": "string",
+          "enum": ["subagent", "command", "host"],
+          "default": "subagent",
+          "description": "Execution mode for Step 5 conformance scoring judge. Allowed: subagent (default), command, host."
+        },
         "judgeCommand": {
           "type": ["string", "null"],
           "default": null,

@@ -2024,7 +2024,10 @@ function cmdRun(options) {
         diffTruncated: judgeBundle.diffTruncated
       };
 
-      if (judgeConfig.command) {
+      if (judgeConfig.judgeMode === 'command') {
+        if (!judgeConfig.command) {
+          return failClosedScoring('scoring.judgeMode is "command" but no judge command is configured.', judgeMeta);
+        }
         console.log(`[Step 5: Conformance Scoring] Invoking configured judge command (criticity: ${judgeBundle.criticity}).`);
         const judgeRun = scoreEvaluator.runJudgeCommand({
           config,

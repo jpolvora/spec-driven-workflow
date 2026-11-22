@@ -126,7 +126,7 @@ function buildJudgeEnvelope(options) {
     skillsRoot: resolvedSkillsRoot,
     promptFile: paths.promptFileRel,
     verdictFile: paths.verdictFileRel,
-    submitCommand: `node skills/sdw-run/scripts/sdw_run.cjs score submit --run-id ${runId} --verdict ${paths.verdictFileRel}`
+    submitCommand: `node "${resolvedSkillsRoot}/sdw-run/scripts/sdw_run.cjs" score submit --run-id ${runId} --verdict ${paths.verdictFileRel}`
   };
 }
 
