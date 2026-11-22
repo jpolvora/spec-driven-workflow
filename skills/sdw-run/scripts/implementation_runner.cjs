@@ -23,11 +23,14 @@ function renderTaskPrompt(options) {
     targetRoot, specSlug, specPath, runId, stateDir, task, specAcs, useWorktrees, taskWorktreeRel,
     dagTasks, taskStates, abandonments, absolutePaths, refineMode, testPatterns: optTestPatterns
   } = options;
-  const enableTestingFeatures = options.enableTestingFeatures !== undefined
-    ? Boolean(options.enableTestingFeatures)
-    : (options.config && options.config.enableTestingFeatures !== undefined
-        ? Boolean(options.config.enableTestingFeatures)
-        : false);
+  const hasTestingConfig = (options.enableTestingFeatures !== undefined) ||
+    (options.config && options.config.enableTestingFeatures !== undefined);
+
+  const enableTestingFeatures = hasTestingConfig
+    ? (options.enableTestingFeatures !== undefined
+      ? Boolean(options.enableTestingFeatures)
+      : Boolean(options.config.enableTestingFeatures))
+    : (task && (task.role === 'test_author' || (task.dependencies && task.dependencies.some(d => d.includes('-test')))));
   const root = targetRoot ? path.resolve(targetRoot) : process.cwd();
   const absStateDir = stateDir ? (path.isAbsolute(stateDir) ? stateDir : path.resolve(root, stateDir)) : path.join(root, '.sdw', 'state');
   const taskPromptDir = path.join(absStateDir, specSlug, runId);
@@ -35,8 +38,8 @@ function renderTaskPrompt(options) {
   const testPatterns = (Array.isArray(optTestPatterns) && optTestPatterns.length > 0)
     ? optTestPatterns
     : (Array.isArray(task && task.testPatterns) && task.testPatterns.length > 0
-        ? task.testPatterns
-        : ['tests/**', '**/*.test.*', '**/*.spec.*']);
+      ? task.testPatterns
+      : ['tests/**', '**/*.test.*', '**/*.spec.*']);
   const patternsDisplay = testPatterns.join(', ');
 
   if (!fs.existsSync(taskPromptDir)) {

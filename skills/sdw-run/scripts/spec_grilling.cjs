@@ -154,7 +154,7 @@ function generateRefinementBlueprint(specContent, options = {}) {
     ? Boolean(options.enableTestingFeatures)
     : (options.config && options.config.enableTestingFeatures !== undefined
         ? Boolean(options.config.enableTestingFeatures)
-        : false);
+        : true);
 
   // Only paths the specification names, plus the files it declares new. A
   // pathless specification resolves no target file here: the planner falls back

@@ -171,11 +171,14 @@ function generateDagPlan(specContent, options) {
     console.warn('[Step 3: DAG Generation] Warning: the specification names no target file and declares no new file; the plan carries no file fence.');
   }
 
-  const enableTestingFeatures = opts.enableTestingFeatures !== undefined
-    ? Boolean(opts.enableTestingFeatures)
-    : (opts.config && opts.config.enableTestingFeatures !== undefined
-        ? Boolean(opts.config.enableTestingFeatures)
-        : false);
+  const hasTestingConfig = (opts.enableTestingFeatures !== undefined) ||
+    (opts.config && opts.config.enableTestingFeatures !== undefined);
+
+  const enableTestingFeatures = hasTestingConfig
+    ? (opts.enableTestingFeatures !== undefined
+      ? Boolean(opts.enableTestingFeatures)
+      : Boolean(opts.config.enableTestingFeatures))
+    : true;
 
   if (!enableTestingFeatures) {
     console.log('[Step 3: DAG Generation] Testing features disabled (enableTestingFeatures: false); skipping test task generation.');
@@ -184,16 +187,16 @@ function generateDagPlan(specContent, options) {
   const rawSegregate = opts.segregateTests !== undefined
     ? Boolean(opts.segregateTests)
     : (opts.config && opts.config.implementation && opts.config.implementation.segregateTests !== undefined
-        ? Boolean(opts.config.implementation.segregateTests)
-        : true);
+      ? Boolean(opts.config.implementation.segregateTests)
+      : true);
 
   const segregateTests = enableTestingFeatures && rawSegregate;
 
   const testPatterns = (Array.isArray(opts.testPatterns) && opts.testPatterns.length > 0)
     ? opts.testPatterns
     : ((opts.config && opts.config.implementation && Array.isArray(opts.config.implementation.testPatterns))
-        ? opts.config.implementation.testPatterns
-        : DEFAULT_TEST_PATTERNS);
+      ? opts.config.implementation.testPatterns
+      : DEFAULT_TEST_PATTERNS);
 
   const testTargetFiles = defaultTargetFiles.filter(f => isTestFile(f, testPatterns));
   const prodTargetFiles = defaultTargetFiles.filter(f => !isTestFile(f, testPatterns));
@@ -248,7 +251,6 @@ function generateDagPlan(specContent, options) {
 
       tasks.push({
         id: 'task-1',
-        role: 'implementation',
         title: `Implement ${slug}`,
         description: 'Execute implementation for all specified acceptance criteria in an isolated unit.',
         coveredAcs: acs.map(a => a.id),
@@ -352,7 +354,6 @@ function generateDagPlan(specContent, options) {
 
       tasks.push({
         id: 'task-1',
-        role: 'implementation',
         title: `${slug} — Core Logic & Foundation`,
         description: 'Implement core modules, state management, and baseline logic.',
         coveredAcs: t1Acs.map(a => a.id),
@@ -370,7 +371,6 @@ function generateDagPlan(specContent, options) {
 
       tasks.push({
         id: 'task-2',
-        role: 'implementation',
         title: `${slug} — Workflows, Verification & PR Integration`,
         description: 'Implement downstream workflow loops, reviews, and integrations.',
         coveredAcs: t2Acs.map(a => a.id),
