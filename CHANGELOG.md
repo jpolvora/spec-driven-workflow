@@ -1,5 +1,10 @@
 # Changelog
 
+### [2026-11-21 23:59] Agent: agent
+- **Prompt**: Release version 0.5.0 updated with current develop
+- **Done**: Bumped version to 0.5.0 across package.json and package-lock.json, incorporating configurable testing features toggle (spec 00074, PR #89), enabling test generation/execution suppression when disabled, and zero work loss working tree preservation directives
+- **Result**: Suite 504/504 passed; code review converged; ready for promotion PR into master and v0.5.0 release tag
+
 ### [2026-11-21 19:57] Agent: agent
 - **Prompt**: Release version 0.4.0 updated with current develop
 - **Done**: Bumped version to 0.4.0 across package.json and package-lock.json, incorporating Node 22 pin (PR #86) and test/implementation agent segregation in orchestrator dispatch (spec 00073, PR #87)
