@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 
 const VALID_ADAPTERS = ['auto', 'antigravity', 'claude-code', 'opencode', 'cursor', 'generic'];
 const VALID_EFFORTS = ['low', 'medium', 'high'];
@@ -10,16 +11,28 @@ const VALID_EFFORTS = ['low', 'medium', 'high'];
  * Detects the active runtime agent harness by inspecting environment variables and process markers (AC2).
  * 
  * @param {object} [env=process.env]
+ * @param {object} [options={}]
  * @returns {string} One of: 'antigravity', 'claude-code', 'opencode', 'cursor', 'generic'
  */
-function detectHarness(env = process.env) {
+function detectHarness(env = process.env, options = {}) {
   if (!env || typeof env !== 'object') {
     return 'generic';
   }
 
-  // Antigravity environment detection
+  // Antigravity environment detection (env vars or filesystem marker)
   if (env.ANTIGRAVITY_APP || env.AGY_SESSION_ID) {
     return 'antigravity';
+  }
+
+  const homedir = options.homedir || (env === process.env ? os.homedir() : (env.HOME || env.USERPROFILE));
+  if (homedir) {
+    try {
+      if (fs.existsSync(path.join(homedir, '.gemini', 'antigravity'))) {
+        return 'antigravity';
+      }
+    } catch (_) {
+      // ignore fs errors
+    }
   }
 
   // Claude Code environment detection
@@ -59,7 +72,7 @@ function resolveRoleName(role) {
 function formatDispatch(adapterName, taskContext = {}, options = {}) {
   let target = adapterName;
   if (!target || target === 'auto') {
-    target = detectHarness(options.env || process.env);
+    target = detectHarness(options.env || process.env, options);
   }
 
   if (!VALID_ADAPTERS.includes(target)) {
@@ -72,8 +85,9 @@ function formatDispatch(adapterName, taskContext = {}, options = {}) {
   const promptText = promptFile
     ? `Read ${promptFile} and execute it exactly as written, then report back per its report contract.`
     : (taskContext.promptContent || '');
-  const model = taskContext.model || 'flash';
-  const effort = taskContext.effort || 'low';
+  const subagentDefaults = (options.config && options.config.harness && options.config.harness.subagent) || {};
+  const model = taskContext.model || subagentDefaults.defaultModel || 'flash';
+  const effort = taskContext.effort || subagentDefaults.defaultEffort || 'low';
 
   switch (target) {
     case 'antigravity':
@@ -125,12 +139,16 @@ function formatDispatch(adapterName, taskContext = {}, options = {}) {
 
     case 'generic':
     default: {
-      const command = `node -e "console.log('Execute task: ${taskContext.taskId}')"`;
+      const instruction = promptFile
+        ? `Read ${promptFile} and execute it exactly as written, then report back per its report contract.`
+        : (promptText || `Execute task: ${taskContext.taskId || 'unspecified'}`);
       return {
         harness: 'generic',
-        mode: 'cli',
-        command,
-        promptFile
+        mode: 'instruction',
+        instruction,
+        promptFile,
+        model,
+        effort
       };
     }
   }
@@ -141,12 +159,13 @@ function formatDispatch(adapterName, taskContext = {}, options = {}) {
  *
  * @param {string} adapterName
  * @param {object} [promptContext={}]
+ * @param {object} [options={}]
  * @returns {object}
  */
-function formatConfirmation(adapterName, promptContext = {}) {
+function formatConfirmation(adapterName, promptContext = {}, options = {}) {
   let target = adapterName;
   if (!target || target === 'auto') {
-    target = detectHarness();
+    target = detectHarness(options.env || process.env, options);
   }
 
   if (target === 'antigravity') {

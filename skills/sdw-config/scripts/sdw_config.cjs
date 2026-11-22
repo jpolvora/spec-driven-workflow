@@ -719,6 +719,48 @@ const DEFAULT_SCHEMA = {
         }
       },
       "additionalProperties": true
+    },
+    "harness": {
+      "type": "object",
+      "description": "Configuration for agent runtime harness adapters and subagent dispatch.",
+      "properties": {
+        "adapter": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "antigravity",
+            "claude-code",
+            "opencode",
+            "cursor",
+            "generic"
+          ],
+          "default": "auto",
+          "description": "Active agent harness adapter. Defaults to auto-detection."
+        },
+        "subagent": {
+          "type": "object",
+          "description": "Defaults for subagent model and effort selection.",
+          "properties": {
+            "defaultModel": {
+              "type": "string",
+              "default": "flash",
+              "description": "Default model tier for subagent dispatch."
+            },
+            "defaultEffort": {
+              "type": "string",
+              "enum": [
+                "low",
+                "medium",
+                "high"
+              ],
+              "default": "low",
+              "description": "Default reasoning effort for subagent dispatch."
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": true

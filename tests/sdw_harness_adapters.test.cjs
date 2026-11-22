@@ -56,9 +56,15 @@ test('AC2: detectHarness detects active agent harness from environment variables
   assert.ok(harnessAdapters, 'harness_adapters module must be available');
   assert.equal(typeof harnessAdapters.detectHarness, 'function');
 
-  // Antigravity detection
+  // Antigravity detection via env vars
   assert.equal(harnessAdapters.detectHarness({ ANTIGRAVITY_APP: '1' }), 'antigravity');
   assert.equal(harnessAdapters.detectHarness({ AGY_SESSION_ID: 'session-123' }), 'antigravity');
+
+  // Antigravity detection via filesystem marker ~/.gemini/antigravity
+  const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-fake-home-'));
+  fs.mkdirSync(path.join(fakeHome, '.gemini', 'antigravity'), { recursive: true });
+  assert.equal(harnessAdapters.detectHarness({ HOME: fakeHome }), 'antigravity');
+  assert.equal(harnessAdapters.detectHarness({}, { homedir: fakeHome }), 'antigravity');
 
   // Claude Code detection
   assert.equal(harnessAdapters.detectHarness({ CLAUDE_CODE: '1' }), 'claude-code');
@@ -222,12 +228,30 @@ test('AC8: Unrecognized harness adapter logs actionable warning and falls back t
     };
     const dispatch = harnessAdapters.formatDispatch('unsupported_harness_xyz', taskContext, {});
     assert.equal(dispatch.harness, 'generic', 'Must fall back to generic harness');
-    assert.equal(dispatch.mode, 'cli');
+    assert.equal(dispatch.mode, 'instruction');
+    assert.ok(dispatch.instruction.includes(taskContext.promptFile));
     assert.ok(warnings.some(w => w.includes('Unrecognized harness adapter') && w.includes('generic')),
       `Warning must be logged: ${JSON.stringify(warnings)}`);
   } finally {
     console.warn = originalWarn;
   }
+});
+
+test('AC8b: formatDispatch falls back to config.harness.subagent defaults when taskContext lacks overrides', () => {
+  const config = {
+    harness: {
+      adapter: 'generic',
+      subagent: {
+        defaultModel: 'custom-model',
+        defaultEffort: 'high'
+      }
+    }
+  };
+
+  const dispatch = harnessAdapters.formatDispatch('generic', { taskId: 'task-test' }, { config });
+  assert.equal(dispatch.model, 'custom-model');
+  assert.equal(dispatch.effort, 'high');
+  assert.equal(dispatch.mode, 'instruction');
 });
 
 test('AC9: User confirmation modality selects based on active harness adapter', () => {
@@ -261,6 +285,11 @@ test('AC10: Harness configuration properties registered in .sdw/config.schema.js
   assert.deepEqual(schema.properties.harness.properties.adapter.enum,
     ['auto', 'antigravity', 'claude-code', 'opencode', 'cursor', 'generic']);
   assert.ok(schema.properties.harness.properties.subagent, 'Schema must define harness.subagent');
+
+  // Also verify sdw_config.DEFAULT_SCHEMA has harness property
+  assert.ok(sdwConfig.DEFAULT_SCHEMA.properties.harness, 'DEFAULT_SCHEMA must define harness property');
+  assert.deepEqual(sdwConfig.DEFAULT_SCHEMA.properties.harness.properties.adapter.enum,
+    ['auto', 'antigravity', 'claude-code', 'opencode', 'cursor', 'generic']);
 });
 
 test('AC11: Reference documentation defines harness adapter interface and dispatch protocol', () => {
@@ -283,4 +312,54 @@ test('AC12: Comprehensive automated unit test coverage for harness adapters', ()
   assert.equal(typeof harnessAdapters.formatDispatch, 'function');
   assert.equal(typeof harnessAdapters.formatConfirmation, 'function');
   assert.ok(Array.isArray(harnessAdapters.VALID_ADAPTERS));
+});
+
+test('AC13: sdw_run dispatchNextTask attaches harness dispatch envelope', () => {
+  const sdwRun = require('../skills/sdw-run/scripts/sdw_run.cjs');
+  assert.equal(typeof sdwRun.dispatchNextTask, 'function');
+
+  const ws = setupWorkspace({
+    harness: {
+      adapter: 'generic'
+    }
+  });
+
+  const state = {
+    runId: 'run-test-123',
+    specSlug: 'test-spec',
+    specPath: path.join(ws.tmpDir, '.sdw', 'specs', '00001-test.md'),
+    steps: {
+      4: {
+        status: 'pending',
+        tasks: {}
+      }
+    }
+  };
+
+  const dagPlan = {
+    tasks: [
+      {
+        id: 'task-1-impl',
+        role: 'implementation',
+        title: 'Test Implementation Task',
+        coveredAcs: ['AC1'],
+        dependencies: []
+      }
+    ]
+  };
+
+  const result = sdwRun.dispatchNextTask({
+    targetRoot: ws.tmpDir,
+    state,
+    dagPlan,
+    specAcs: [{ id: 'AC1', text: 'Test AC' }],
+    specSlug: 'test-spec',
+    specPath: state.specPath,
+    options: {}
+  });
+
+  assert.ok(result.ok, 'Dispatch must succeed');
+  assert.ok(result.envelope.harness, 'Envelope must contain harness dispatch payload');
+  assert.equal(result.envelope.harness.harness, 'generic');
+  assert.equal(result.envelope.harness.mode, 'instruction');
 });
