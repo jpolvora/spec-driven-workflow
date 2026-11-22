@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { isTestFile } = require('./evidence_validator.cjs');
 
 const DECISION_DIMENSIONS = [
   {
@@ -166,7 +167,7 @@ function generateRefinementBlueprint(specContent, options = {}) {
   }
 
   if (!enableTestingFeatures && targetFiles && targetFiles.length > 0) {
-    targetFiles = targetFiles.filter(f => !f.includes('test') && !f.startsWith('tests/'));
+    targetFiles = targetFiles.filter(f => !isTestFile(f));
   }
 
   return {

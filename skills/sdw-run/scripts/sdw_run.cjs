@@ -1467,7 +1467,7 @@ function cmdRun(options) {
     state = stateManager.updateStepState(targetRoot, state.runId, 2, 'skipped', { mode: 'refine', reason: 'second pass reviews the delivered implementation' });
   } else if (startStep <= 2 && state.steps[2].status !== 'completed' && state.steps[2].status !== 'skipped') {
     state = stateManager.updateStepState(targetRoot, state.runId, 2, 'in_progress');
-    const grillingResult = specGrilling.analyzeSpecificationGaps(effectiveSpecContent, { slug: specSlug });
+    const grillingResult = specGrilling.analyzeSpecificationGaps(effectiveSpecContent, { slug: specSlug, config });
 
     if (grillingResult.hasGaps) {
       console.log(`[Step 2: Refinement] Detected ${grillingResult.gapsCount} specification decision gaps.`);

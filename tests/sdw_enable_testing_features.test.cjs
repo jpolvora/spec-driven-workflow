@@ -554,15 +554,49 @@ Affects files: \`src/handler.cjs\`, \`tests/handler.test.cjs\`
     config: { enableTestingFeatures: false }
   });
 
-  // Test target files must be omitted
+  // Test target files must be omitted, but production files containing "test" as substring must be retained
   assert.ok(
     blueprintDisabled.targetFiles.includes('src/handler.cjs'),
     'Blueprint targetFiles must retain production target files'
   );
   assert.strictEqual(
-    blueprintDisabled.targetFiles.some(f => f.includes('test') || f.startsWith('tests/')),
+    blueprintDisabled.targetFiles.some(f => f.startsWith('tests/') || f.endsWith('.test.cjs')),
     false,
     'Blueprint targetFiles must omit test files when enableTestingFeatures is false'
+  );
+
+  // Production files containing substring "test" (e.g. src/latest.cjs) must not be filtered out
+  const specWithSubstrings = `---
+title: Substring Test
+---
+# Specification
+
+## Target Files
+- \`src/latest.cjs\`
+- \`tests/latest.test.cjs\`
+`;
+  const blueprintSubstring = specGrilling.generateRefinementBlueprint(specWithSubstrings, {
+    config: { enableTestingFeatures: false }
+  });
+  assert.ok(
+    blueprintSubstring.targetFiles.includes('src/latest.cjs'),
+    'Production file src/latest.cjs must be preserved even if it contains "test"'
+  );
+  assert.strictEqual(
+    blueprintSubstring.targetFiles.includes('tests/latest.test.cjs'),
+    false,
+    'Test file tests/latest.test.cjs must be omitted'
+  );
+
+  // analyzeSpecificationGaps with config: { enableTestingFeatures: false }
+  const gapsResult = specGrilling.analyzeSpecificationGaps(specWithSubstrings, {
+    slug: 'substring-test',
+    config: { enableTestingFeatures: false }
+  });
+  assert.strictEqual(
+    gapsResult.blueprint.testPlan,
+    null,
+    'analyzeSpecificationGaps blueprint testPlan must be null when config.enableTestingFeatures is false'
   );
 
   // Test plan must be omitted or empty
@@ -604,6 +638,18 @@ test('AC12: Config validation passes without verification.testCommand even if ru
     testCmdError,
     undefined,
     'validateConfigSchema must pass without verification.testCommand when enableTestingFeatures is false'
+  );
+
+  // When enableTestingFeatures is omitted (defaults to false), runAllTests: true does NOT require verification.testCommand
+  const omittedConfig = {
+    specsDir: '.sdw/specs',
+    runAllTests: true
+  };
+  const resOmitted = sdwConfig.validateConfigSchema(omittedConfig);
+  assert.strictEqual(
+    resOmitted.errors.find(e => e.includes('Missing required test command')),
+    undefined,
+    'validateConfigSchema must pass without verification.testCommand when enableTestingFeatures is omitted'
   );
 
   // Opt-in symmetry: when enableTestingFeatures is true, runAllTests: true requires verification.testCommand

@@ -944,7 +944,7 @@ function validateConfigSchema(config) {
   if ('runAllTests' in config) {
     if (typeof config.runAllTests !== 'boolean') {
       errors.push('Property "runAllTests" must be a boolean.');
-    } else if (config.runAllTests === true && config.enableTestingFeatures !== false) {
+    } else if (config.runAllTests === true && config.enableTestingFeatures === true) {
       const testCmd = config.verification && config.verification.testCommand;
       if (!testCmd || typeof testCmd !== 'string' || testCmd.trim().length === 0) {
         errors.push('Missing required test command: "runAllTests" is true but "verification.testCommand" is not specified.');
