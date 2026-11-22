@@ -305,6 +305,7 @@ const DEFAULT_CONFIG = {
   enableTestingFeatures: false,
   scoreMin: 8,
   scoring: {
+    judgeMode: 'subagent',
     judgeCommand: null,
     judgeModel: null,
     judgeProvider: null,
@@ -730,6 +731,12 @@ function validateConfigSchema(config) {
       for (const key of ['judgeCommand', 'judgeModel', 'judgeProvider', 'judgeEffort', 'judgeApiEndpoint']) {
         if (key in config.scoring && config.scoring[key] !== null && typeof config.scoring[key] !== 'string') {
           errors.push(`Property "scoring.${key}" must be a string or null.`);
+        }
+      }
+      if ('judgeMode' in config.scoring) {
+        const allowedJudgeModes = ['subagent', 'command', 'host'];
+        if (typeof config.scoring.judgeMode !== 'string' || !allowedJudgeModes.includes(config.scoring.judgeMode)) {
+          errors.push(`Property "scoring.judgeMode" must be one of: ${allowedJudgeModes.join(', ')}.`);
         }
       }
       if ('judgeCriticity' in config.scoring) {

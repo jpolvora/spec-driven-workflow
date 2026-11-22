@@ -4,6 +4,7 @@
   "enableTestingFeatures": true,
   "scoreMin": 8,
   "scoring": {
+    "judgeMode": "subagent",
     "judgeCommand": null,
     "judgeModel": null,
     "judgeProvider": null,

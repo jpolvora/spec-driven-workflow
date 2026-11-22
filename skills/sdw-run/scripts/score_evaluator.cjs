@@ -57,9 +57,19 @@ function resolveJudgeConfig(config) {
   const rawCriticity = String(scoring.judgeCriticity || '').trim().toLowerCase();
   const criticity = CRITICITY_LEVELS.includes(rawCriticity) ? rawCriticity : DEFAULT_CRITICITY;
   const command = normOpt(scoring.judgeCommand) || normOpt(process.env.SDW_JUDGE_COMMAND) || null;
+  const rawJudgeMode = typeof scoring.judgeMode === 'string' ? scoring.judgeMode.trim().toLowerCase() : null;
+  let judgeMode = 'subagent';
+  if (rawJudgeMode === 'host') {
+    judgeMode = 'host';
+  } else if (rawJudgeMode === 'command' || command) {
+    judgeMode = 'command';
+  } else if (rawJudgeMode === 'subagent') {
+    judgeMode = 'subagent';
+  }
 
   return {
     mode: command ? 'command' : 'agent',
+    judgeMode,
     command,
     model: normOpt(scoring.judgeModel),
     provider: normOpt(scoring.judgeProvider),
@@ -96,6 +106,27 @@ function resolveJudgePaths(options) {
     diffFileRel: rel(diffFile),
     criteriaFileAbs: criteriaFile,
     criteriaFileRel: rel(criteriaFile)
+  };
+}
+
+/**
+ * Builds the dispatch envelope for a fresh-context judge subagent (Spec 00075 AC2-AC4, AC7).
+ */
+function buildJudgeEnvelope(options) {
+  const { slug, runId, targetRoot, acs, diff, judge, skillsRoot } = options;
+  const paths = resolveJudgePaths({ slug, runId, targetRoot });
+  const resolvedSkillsRoot = skillsRoot || 'skills';
+  return {
+    type: 'judge',
+    role: 'conformance_judge',
+    slug,
+    runId,
+    model: (judge && judge.model) || null,
+    effort: (judge && judge.effort) || null,
+    skillsRoot: resolvedSkillsRoot,
+    promptFile: paths.promptFileRel,
+    verdictFile: paths.verdictFileRel,
+    submitCommand: `node skills/sdw-run/scripts/sdw_run.cjs score submit --run-id ${runId} --verdict ${paths.verdictFileRel}`
   };
 }
 
@@ -163,9 +194,27 @@ function buildJudgePrompt(options) {
   lines.push(criteriaBlock(acs));
   lines.push('');
   lines.push(`## Code diff (${diff.files.length} file(s), ${diff.bytes} byte(s)${diff.truncated ? ', TRUNCATED' : ''})`);
+  if (diff.files && diff.files.length > 0) {
+    lines.push('');
+    lines.push('### Touched files');
+    diff.files.forEach(f => lines.push(`- ${f}`));
+  }
+  lines.push('');
   lines.push('```diff');
   lines.push(diff.text || '(empty diff)');
   lines.push('```');
+  lines.push('');
+  const resolvedSkillsRoot = options.skillsRoot || 'skills';
+  lines.push('## Qualitative evaluation instructions (sdw-rules harness)');
+  lines.push(`Load and apply the \`sdw-rules\` skill (located at \`${resolvedSkillsRoot}/sdw-rules/SKILL.md\` or \`.agents/skills/sdw-rules/SKILL.md\`) and its anti-patterns reference (\`${resolvedSkillsRoot}/sdw-rules/references/anti_patterns.md\`).`);
+  lines.push('Conduct an in-depth qualitative evaluation across the following dimensions:');
+  lines.push('1. Strict Acceptance Criteria verification against actual diff and touched files (verify each criterion independently with concrete file and diff citations).');
+  lines.push('2. Code quality, correctness, and implementation soundness.');
+  lines.push('3. Best practices, idioms, and design consistency.');
+  lines.push('4. Performance efficiency and unnecessary computational overhead.');
+  lines.push('5. Redundancy, duplicated logic, and repeated function calls.');
+  lines.push('6. Simplicity and anti-overengineering (enforce YAGNI; flag excessive abstractions or single-use patterns per sdw-rules).');
+  lines.push('7. File organization and modular structure.');
   lines.push('');
   lines.push('## Output contract');
   lines.push('Reply with JSON only, no prose around it:');
@@ -175,6 +224,11 @@ function buildJudgePrompt(options) {
   lines.push('  "verdicts": [');
   lines.push('    { "id": "AC1", "verdict": "verified", "evidence": "path/to/file:line" }');
   lines.push('  ],');
+  lines.push('  "qualitativeFindings": {');
+  lines.push('    "quality": "assessment of code quality and correctness",');
+  lines.push('    "simplicity": "YAGNI compliance assessment",');
+  lines.push('    "performance": "efficiency assessment"');
+  lines.push('  },');
   lines.push('  "notes": "optional short justification"');
   lines.push('}');
   lines.push('```');
@@ -277,6 +331,9 @@ function validateVerdict(raw, options) {
         verdict: String(entry.verdict).trim().toLowerCase(),
         evidence: entry.evidence.trim()
       })),
+      qualitativeFindings: (raw.qualitativeFindings && typeof raw.qualitativeFindings === 'object' && !Array.isArray(raw.qualitativeFindings))
+        ? raw.qualitativeFindings
+        : null,
       notes: typeof raw.notes === 'string' ? raw.notes : null
     } : null
   };
@@ -448,6 +505,7 @@ module.exports = {
   getTouchedFiles,
   resolveJudgeConfig,
   resolveJudgePaths,
+  buildJudgeEnvelope,
   collectDiff,
   buildJudgePrompt,
   validateVerdict,

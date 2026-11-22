@@ -1997,13 +1997,15 @@ function cmdRun(options) {
     if (verdict) {
       console.log(`[Step 5: Conformance Scoring] Reusing submitted judge verdict (${judgeResolution}).`);
     } else {
+      const resolvedSkillsRoot = (skillsInfo && skillsInfo.skillsRoot) ? normalizePath(path.relative(targetRoot, skillsInfo.skillsRoot)) || 'skills' : 'skills';
       const judgeDiff = scoreEvaluator.collectDiff(targetRoot, state.baseCommit);
       const judgeBundle = scoreEvaluator.buildJudgePrompt({
         slug: specSlug,
         acs: specAcs,
         diff: judgeDiff,
         criticity: judgeConfig.criticity,
-        judge: judgeConfig
+        judge: judgeConfig,
+        skillsRoot: resolvedSkillsRoot
       });
 
       fs.mkdirSync(judgePaths.dir, { recursive: true });
@@ -2012,7 +2014,7 @@ function cmdRun(options) {
       fs.writeFileSync(judgePaths.criteriaFileAbs, judgeBundle.criteriaText, 'utf8');
 
       judgeMeta = {
-        mode: judgeConfig.mode,
+        mode: judgeConfig.judgeMode || judgeConfig.mode,
         criticity: judgeBundle.criticity,
         model: judgeConfig.model,
         provider: judgeConfig.provider,
@@ -2044,28 +2046,52 @@ function cmdRun(options) {
         verdict = judgeRead.verdict;
         judgeResolution = 'command';
       } else {
+        const isSubagent = judgeConfig.judgeMode === 'subagent';
+        let envelope = null;
+        if (isSubagent) {
+          envelope = scoreEvaluator.buildJudgeEnvelope({
+            slug: specSlug,
+            runId: state.runId,
+            targetRoot,
+            acs: specAcs,
+            diff: judgeDiff,
+            judge: judgeConfig,
+            skillsRoot: resolvedSkillsRoot
+          });
+        }
         const pausedOutput = {
           status: 'awaiting_judgment',
           judgePromptPath: judgePaths.promptFileRel,
           judgeVerdictPath: judgePaths.verdictFileRel,
           judgeAcIds: specAcs.map(ac => ac.id),
-          judge: judgeMeta
+          judgeResolution: isSubagent ? 'subagent' : 'host',
+          judge: judgeMeta,
+          envelope: envelope || undefined
         };
         state = stateManager.updateStepState(targetRoot, state.runId, 5, 'awaiting_judgment', pausedOutput);
         state.status = 'paused';
         stateManager.saveRunState(targetRoot, state);
-        console.log(`\n[Step 5: Conformance Scoring] Status: awaiting_judgment (criticity: ${judgeBundle.criticity}).`);
-        console.log(`Judge context is fenced to the acceptance criteria and the generated diff only (${judgeBundle.diffBytes} bytes${judgeBundle.diffTruncated ? ', truncated' : ''}).`);
-        console.log(`  Prompt:  ${judgePaths.promptFileRel}`);
-        console.log(`  Verdict: ${judgePaths.verdictFileRel}`);
-        console.log(`\nJudge each criterion against the diff, write the verdict JSON, then submit it with:`);
-        console.log(`  node "${runCommandPath()}" score submit --run-id ${state.runId} --verdict <verdictFile>`);
+        if (isSubagent) {
+          console.log(`\n[Step 5: Conformance Scoring] Dispatched fresh-context judge subagent [mode: subagent, criticity: ${judgeBundle.criticity}].`);
+          console.log(`Judge envelope: ${JSON.stringify(envelope, null, 2)}`);
+          console.log(`Spawn one fresh-context subagent to evaluate conformance against ${judgePaths.promptFileRel}`);
+          console.log(`When the judge subagent completes, submit the verdict JSON with:`);
+          console.log(`  node "${runCommandPath()}" score submit --run-id ${state.runId} --verdict ${judgePaths.verdictFileRel}`);
+        } else {
+          console.log(`\n[Step 5: Conformance Scoring] Status: awaiting_judgment (criticity: ${judgeBundle.criticity}).`);
+          console.log(`Judge context is fenced to the acceptance criteria and the generated diff only (${judgeBundle.diffBytes} bytes${judgeBundle.diffTruncated ? ', truncated' : ''}).`);
+          console.log(`  Prompt:  ${judgePaths.promptFileRel}`);
+          console.log(`  Verdict: ${judgePaths.verdictFileRel}`);
+          console.log(`\nJudge each criterion against the diff, write the verdict JSON, then submit it with:`);
+          console.log(`  node "${runCommandPath()}" score submit --run-id ${state.runId} --verdict <verdictFile>`);
+        }
         options._runResult = {
           runId: state.runId,
           status: 'awaiting_judgment',
           currentStep: 5,
           judgePromptPath: judgePaths.promptFileRel,
-          judgeVerdictPath: judgePaths.verdictFileRel
+          judgeVerdictPath: judgePaths.verdictFileRel,
+          envelope: envelope || undefined
         };
         return 5;
       }
