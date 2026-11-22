@@ -48,6 +48,7 @@ every improvement judgment to an explicit operator decision.
    - Done when: the command prints the selected run identifier and artifact directory.
 
 2. **Locate the session transcript**
+   Inspect active environment and host facts: whether operating in Antigravity, Claude Code, OpenCode, Cursor, Codex, or headless CI, introspect session logs and conversation transcripts and supply the path via `--transcript <path>`.
    Use a transcript named by `retro.transcripts` or `--transcript` first. When none is configured, run the finder before any capture fallback:
    ```bash
    node skills/sdw-retro/scripts/find_session_transcript.cjs [--root <projectRoot>] [--json]
