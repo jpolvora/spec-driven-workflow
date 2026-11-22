@@ -35,6 +35,7 @@ These rules override convenience. Apply them in every mode, on every harness and
 6. **Empirical Goal-Driven Verification.** Turn every requirement into a verifiable check, test, or empirical pass/fail signal. State a short plan with a verification step per action and loop until the check passes before declaring completion.
 7. **Product Guarantees.** Preserve zero runtime npm dependencies, Node.js 22 standard library, deterministic CLI anchors, harness/agent agnosticism, portable paths, and file-based contracts.
 8. **Immutable Test Assertions.** When active (`enableTestingFeatures`), Code implementers are strictly prohibited from modifying test assertions to force test passes; satisfy tests exclusively through production code.
+9. **Zero Work Loss & Surgical Commits.** Never discard, clean, or reset unowned work (`git reset --hard`, `git clean -fd` forbidden). Stage and commit only task-owned files; never sweep unowned WIP or newly authored specs into commits. If operations require a clean tree, safely stash (`git stash push -u`) and restore after. Let humans decide.
 
 ## 🧠 MEMORY-FIRST — MANDATORY FOR EVERY SKILL
 

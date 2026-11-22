@@ -32,7 +32,9 @@
    - Do not author compatibility shims, deprecation wrappers, migration layers, or dual-support branches.
    - This is a deliberate phase policy; the maintainer will change it when compatibility matters.
 
-4. **Version Control Execution Protocol:**
+4. **Version Control Execution Protocol & Zero Work Loss:**
+   - **Zero unowned work loss:** Never discard, clean, or reset unowned working tree modifications (`git reset --hard`, `git clean -fd`, or force checkouts are strictly forbidden). When switching branches or performing sync operations that require a clean tree, stash unowned changes (`git stash push -u`) or preserve in a backup branch, and restore them when done.
+   - **Surgical commits only:** Stage and commit only files directly created or modified by the active task or specification. Never stage unowned files, new specifications, or WIP edits authored by humans or concurrent agents.
    - **`sdw-run` runs:** delivery commits in Step 6 and the push in Step 8 (or `--push`) are **pre-authorized** as part of the delivery lifecycle.
    - **Ad-hoc requests:** outside `sdw-run`, never run `git commit` or `git push` unless the user explicitly requested it; leave changes in the working tree and report them.
 

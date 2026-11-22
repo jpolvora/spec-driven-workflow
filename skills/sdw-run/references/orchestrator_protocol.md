@@ -99,6 +99,11 @@ Configurable feature branch activation and per-task isolated git worktrees:
 - **Clean Removal:** Once integrated, removes worktree via `git worktree remove` and deletes task branch via `git branch -d`.
 - **Overrides:** `--no-worktrees` and `--no-feature-branch` flags override configuration for the current run.
 
+### Working Tree Preservation & Zero Work Loss
+- **No Resets:** Never run `git reset --hard` or `git clean -fd` to clear dirty working-tree state. Dirty trees never block or refuse execution.
+- **Surgical Staging:** Checkpoint commits (Step 4), delivery commits (Step 6), and fixer commits (Step 7/8) stage only task-owned files (`filesChanged` from evidence). Unowned files, including newly created specifications in `.sdw/specs/` or WIP edits authored by humans or other agents, must remain untouched in the working tree.
+- **Safe Stash and Restore:** When switching branches or checking out refs where git requires a clean working tree, unowned modifications must be stashed (`git stash push -u -m "sdw-run-preserve-..."`) or saved to a temporary backup branch and restored immediately upon completion.
+
 ## 5. Step Artifacts Persistence Protocol
 
 Intermediate outputs of human-auditable steps (2, 3, 5) are persisted as human-readable Markdown files:

@@ -71,6 +71,11 @@ Without `--json`, each row is logged and the board prints as a Markdown table be
 - When `pushDelivery: false` and `--push` is omitted:
   - Skips remote push. If the branch has never been pushed to the remote origin, remote SCM PR creation will require push.
 
+### 2.1 Working Tree Preservation and Zero Work Loss
+- **Surgical Staging:** When `--push` stages pending working-tree changes before pushing, it commits only run-owned files (`runFiles` and `approvedDirtyFiles`). Unowned files (such as newly authored specs, drafts in `.sdw/specs/`, or unrelated developer modifications) are explicitly excluded and left dirty in the working tree.
+- **Never Reset or Clean:** `sdw-ship-pr` must never execute `git reset --hard` or `git clean -fd`. Unrelated dirty files must never be discarded.
+- **Safe Preservation:** If a branch operation requires a clean working tree, unowned modifications must be safely stashed with an informative message (`git stash push -u -m "sdw-ship-pr-preserve-..."`) and restored after the operation completes.
+
 ---
 
 ## 3. Pull Request Creation & Idempotency
