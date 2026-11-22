@@ -1920,7 +1920,7 @@ function cmdRun(options) {
     });
     const scoringTouchedFiles = scoreEvaluator.getTouchedFiles(state.baseCommit, targetRoot);
 
-    const failClosedScoring = (message, judgeMeta) => {
+    const failClosedScoring = (message, judgeMeta, extra = {}) => {
       const failedReport = {
         score: 0,
         passed: false,
@@ -1945,7 +1945,8 @@ function cmdRun(options) {
           diffBytes: judgeMeta ? judgeMeta.diffBytes : null,
           diffTruncated: judgeMeta ? Boolean(judgeMeta.diffTruncated) : false
         },
-        feedback: `Conformance scoring failed closed: ${message}`
+        feedback: `Conformance scoring failed closed: ${message}`,
+        ...extra
       };
       const failedArtifact = artifactWriter.writeStep5Artifact({
         targetRoot,
@@ -2017,7 +2018,10 @@ function cmdRun(options) {
             diffBytes: null,
             diffTruncated: false
           };
-          return failClosedScoring(`Judge subagent timed out after ${elapsedMs}ms (timeout: ${timeoutMs}ms) without producing a valid verdict.`, timeoutJudgeMeta);
+          return failClosedScoring(`Judge subagent timed out after ${elapsedMs}ms (timeout: ${timeoutMs}ms) without producing a valid verdict.`, timeoutJudgeMeta, {
+            status: 'timed_out',
+            judgeTimedOut: true
+          });
         }
       }
 
@@ -2099,6 +2103,7 @@ function cmdRun(options) {
           judgeVerdictPath: judgePaths.verdictFileRel,
           judgeAcIds: specAcs.map(ac => ac.id),
           judgeResolution: isSubagent ? 'subagent' : 'host',
+          judgeTimedOut: false,
           judge: judgeMeta,
           envelope: envelope || undefined
         };
@@ -3818,6 +3823,10 @@ function cmdScoreSubmit(options) {
   }
 
   const priorOutput = (state.steps[5] && state.steps[5].output) || {};
+  if (priorOutput.judgeTimedOut) {
+    console.error('[sdw-run score submit] The judge subagent already timed out for this run; re-dispatch the judge before submitting a verdict.');
+    return 2;
+  }
   const config = loadProjectConfig(targetRoot, options);
   const judgeConfig = scoreEvaluator.resolveJudgeConfig({ scoring: options.scoring || config.scoring });
 
@@ -3831,6 +3840,7 @@ function cmdScoreSubmit(options) {
       state.steps[5].output = {
         ...priorOutput,
         status: 'timed_out',
+        judgeTimedOut: true,
         dispatchedAt: null,
         score: 0,
         passed: false,

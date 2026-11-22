@@ -555,3 +555,79 @@ test('AC14: after timeout fail-closed, subsequent run re-dispatches with fresh d
   }
 });
 
+test('AC14: cmdScoreSubmit rejects late verdict after timeout fail-closed with exit code 2', () => {
+  const tmpDir = setupRepo();
+  try {
+    const implScript = [
+      "const fs = require('fs');",
+      "fs.appendFileSync('index.cjs', '// implemented\\n');",
+      'fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({',
+      "  taskId: process.env.SDW_TASK_ID,",
+      "  status: 'success',",
+      "  acIds: ['AC1', 'AC2'],",
+      "  filesChanged: ['index.cjs'],",
+      "  tests: [],",
+      "  summary: 'implemented index.cjs'",
+      '}));'
+    ].join(' ');
+
+    const initialExit = sdwRun.cmdRun({
+      root: tmpDir,
+      specPath: '.sdw/specs/sample-judge-spec.md',
+      scoring: { judgeMode: 'subagent', judgeTimeoutMs: 1000 },
+      skipReview: true,
+      skipPr: true,
+      implementation: {
+        mode: 'command',
+        segregateTests: false,
+        command: `node -e "${implScript.replace(/"/g, '\\"')}"`
+      }
+    });
+    assert.equal(initialExit, 5);
+
+    const state = stateManager.findLatestRunState(tmpDir);
+    state.steps[5].output.dispatchedAt = new Date(Date.now() - 5000).toISOString();
+    stateManager.saveRunState(tmpDir, state);
+
+    // Timeout fails closed via resume
+    const timeoutExit = sdwRun.cmdResume({
+      root: tmpDir,
+      runId: state.runId,
+      scoring: { judgeTimeoutMs: 1000 }
+    });
+    assert.equal(timeoutExit, 2);
+
+    const timedOutState = stateManager.findLatestRunState(tmpDir);
+    assert.equal(timedOutState.status, 'failed');
+    assert.equal(timedOutState.steps[5].output.judgeTimedOut, true);
+
+    // Late verdict submitted after fail-closed must be rejected with exit code 2
+    const verdictPath = path.join(tmpDir, 'late-verdict.json');
+    fs.writeFileSync(verdictPath, JSON.stringify({
+      score: 10,
+      passed: true,
+      criteriaVerdicts: [
+        { id: 'AC1', passed: true, score: 5, notes: 'ok' },
+        { id: 'AC2', passed: true, score: 5, notes: 'ok' }
+      ]
+    }));
+
+    const lateSubmitExit = sdwRun.cmdScoreSubmit({
+      root: tmpDir,
+      runId: state.runId,
+      verdictPath
+    });
+    assert.equal(lateSubmitExit, 2, 'Late verdict after fail-closed must exit 2');
+
+    // Run state must remain failed, not revived
+    const finalState = stateManager.findLatestRunState(tmpDir);
+    assert.equal(finalState.status, 'failed');
+    assert.equal(finalState.score, 0);
+  } finally {
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    } catch (_) {}
+  }
+});
+
+
