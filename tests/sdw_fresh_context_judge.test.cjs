@@ -489,3 +489,69 @@ test('AC12, AC14: runJudgeCommand honors scoring.judgeTimeoutMs in command mode'
   }
 });
 
+test('AC14: after timeout fail-closed, subsequent run re-dispatches with fresh dispatchedAt', () => {
+  const tmpDir = setupRepo();
+  try {
+    const implScript = [
+      "const fs = require('fs');",
+      "fs.appendFileSync('index.cjs', '// implemented\\n');",
+      'fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({',
+      "  taskId: process.env.SDW_TASK_ID,",
+      "  status: 'success',",
+      "  acIds: ['AC1', 'AC2'],",
+      "  filesChanged: ['index.cjs'],",
+      "  tests: [],",
+      "  summary: 'implemented index.cjs'",
+      '}));'
+    ].join(' ');
+
+    const initialExit = sdwRun.cmdRun({
+      root: tmpDir,
+      specPath: '.sdw/specs/sample-judge-spec.md',
+      scoring: { judgeMode: 'subagent', judgeTimeoutMs: 1000 },
+      skipReview: true,
+      skipPr: true,
+      implementation: {
+        mode: 'command',
+        segregateTests: false,
+        command: `node -e "${implScript.replace(/"/g, '\\"')}"`
+      }
+    });
+    assert.equal(initialExit, 5);
+
+    const state = stateManager.findLatestRunState(tmpDir);
+    state.steps[5].output.dispatchedAt = new Date(Date.now() - 5000).toISOString();
+    stateManager.saveRunState(tmpDir, state);
+
+    // Timeout fails closed
+    const timeoutExit = sdwRun.cmdResume({
+      root: tmpDir,
+      runId: state.runId,
+      scoring: { judgeTimeoutMs: 1000 }
+    });
+    assert.equal(timeoutExit, 2);
+
+    // Re-dispatching by running cmdRun again must pause with fresh awaiting_judgment, not fail closed
+    const redispatchExit = sdwRun.cmdRun({
+      root: tmpDir,
+      specPath: '.sdw/specs/sample-judge-spec.md',
+      runId: state.runId,
+      startStep: 5,
+      scoring: { judgeMode: 'subagent', judgeTimeoutMs: 1000 },
+      skipReview: true,
+      skipPr: true
+    });
+    assert.equal(redispatchExit, 5);
+
+    const newState = stateManager.findLatestRunState(tmpDir);
+    assert.equal(newState.steps[5].status, 'awaiting_judgment');
+    assert.ok(newState.steps[5].output.dispatchedAt);
+    const age = Date.now() - new Date(newState.steps[5].output.dispatchedAt).getTime();
+    assert.ok(age < 2000, `Expected fresh dispatchedAt timestamp, got age ${age}ms`);
+  } finally {
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    } catch (_) {}
+  }
+});
+

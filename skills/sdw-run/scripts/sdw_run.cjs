@@ -2003,6 +2003,10 @@ function cmdRun(options) {
         const elapsedMs = Date.now() - new Date(priorScoring.dispatchedAt).getTime();
         const timeoutMs = judgeConfig.timeoutMs || scoreEvaluator.JUDGE_TIMEOUT_MS || 600000;
         if (elapsedMs > timeoutMs) {
+          if (priorScoring) {
+            priorScoring.status = 'timed_out';
+            priorScoring.dispatchedAt = null;
+          }
           const timeoutJudgeMeta = {
             mode: judgeConfig.judgeMode || judgeConfig.mode,
             criticity: judgeConfig.criticity,
@@ -2083,9 +2087,14 @@ function cmdRun(options) {
             skillsRoot: resolvedSkillsRoot
           });
         }
+        const continuingSubagentWait = isSubagent
+          && priorScoring
+          && priorScoring.judgeResolution === 'subagent'
+          && priorScoring.status === 'awaiting_judgment'
+          && priorScoring.dispatchedAt;
         const pausedOutput = {
           status: 'awaiting_judgment',
-          dispatchedAt: priorScoring && priorScoring.dispatchedAt ? priorScoring.dispatchedAt : new Date().toISOString(),
+          dispatchedAt: continuingSubagentWait ? priorScoring.dispatchedAt : new Date().toISOString(),
           judgePromptPath: judgePaths.promptFileRel,
           judgeVerdictPath: judgePaths.verdictFileRel,
           judgeAcIds: specAcs.map(ac => ac.id),
@@ -3821,6 +3830,8 @@ function cmdScoreSubmit(options) {
       state.steps[5].status = 'reimplementation_needed';
       state.steps[5].output = {
         ...priorOutput,
+        status: 'timed_out',
+        dispatchedAt: null,
         score: 0,
         passed: false,
         error: `Judge subagent timed out after ${elapsedMs}ms (timeout: ${timeoutMs}ms) without producing a valid verdict.`
