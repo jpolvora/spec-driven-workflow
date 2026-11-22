@@ -81,7 +81,11 @@ function writeStep2Artifact(options) {
     if (grillingResult && grillingResult.blueprint) {
       md += `## Technical Blueprint\n\n`;
       md += `- **Architectural Approach:** ${grillingResult.blueprint.architecturalApproach || 'Standard implementation'}\n`;
-      md += `- **Test Plan:** ${grillingResult.blueprint.testPlan || 'Standard automated testing'}\n`;
+      if (grillingResult.blueprint.testPlan) {
+        md += `- **Test Plan:** ${grillingResult.blueprint.testPlan}\n`;
+      } else {
+        md += `- **Test Plan:** None (testing features disabled)\n`;
+      }
       md += `- **Target Files:**\n`;
       (grillingResult.blueprint.targetFiles || []).forEach(f => {
         md += `  - \`${f}\`\n`;

@@ -794,6 +794,7 @@ function loadProjectConfig(targetRoot, options = {}) {
     }
     config = {
       specsDir: path.join(root, '.sdw', 'specs').replace(/\\/g, '/'),
+      enableTestingFeatures: false,
       scoreMin: 8,
       scmCodeReviewEnabled: false,
       pushDelivery: false,
