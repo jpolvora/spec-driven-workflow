@@ -76,6 +76,7 @@ Central repository index tracking specification lifecycle states, metadata, and 
 | 00076 | 00076-fresh-context-subagent-code-review-fix-loop | Fresh-Context Subagent Code Review and Local Autonomous Fix Loop | completed | high | local | 2026-11-21 | PASS | - |
 | 00077 | 00077-sdw-spec-bugfix-type-and-router-intent | Bugfix Specification Type and Router Intent Support | completed | high | local | 2026-11-21 | PASS | - |
 | 00078 | 00078-sdw-harness-adapters-and-agent-agnostic-dispatch | SDW Harness Adapters and Agent-Agnostic Subagent Dispatch | completed | high | local | 2026-11-22 | PASS | - |
+| 00079 | 00079-sdw-retro-autonomous-candidate-generation-and-pipeline-learning | SDW Retro Autonomous Candidate Generation and Pipeline Execution Learning | pending | high | local | 2026-11-22 | PASS | - |
 
 ## Lean-Core Cut (2026-10-25)
 
