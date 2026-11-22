@@ -15,6 +15,7 @@ const implementationRunner = require('./implementation_runner.cjs');
 const evidenceValidator = require('./evidence_validator.cjs');
 const sandbox = require('./sandbox.cjs');
 const reviewEvaluator = require('./review_evaluator.cjs');
+const harnessAdapters = require('./harness_adapters.cjs');
 
 function resolveSkillScript(targetRoot, skillName, scriptRelPath, options = {}) {
   try {
@@ -3251,6 +3252,31 @@ function dispatchNextTask(context) {
     dispatchedAt: dispatch.dispatchedAt
   };
 
+  let specFrontmatter = {};
+  const actualSpecPath = specPath || state.specPath;
+  if (actualSpecPath) {
+    try {
+      const specContent = fs.readFileSync(path.resolve(targetRoot, actualSpecPath), 'utf8');
+      const specIndexHelper = getSpecIndexHelper(targetRoot, options);
+      if (specIndexHelper && typeof specIndexHelper.parseFrontmatter === 'function') {
+        specFrontmatter = specIndexHelper.parseFrontmatter(specContent) || {};
+      }
+    } catch (_) {}
+  }
+
+  const adapterName = (config && config.harness && config.harness.adapter) || 'auto';
+  const taskModel = ready.model || specFrontmatter.model;
+  const taskEffort = ready.effort || specFrontmatter.effort;
+  const dispatchPayload = harnessAdapters.formatDispatch(adapterName, {
+    taskId: ready.id,
+    role: taskRole,
+    title: ready.title,
+    promptFile: displayPrompt,
+    promptContent: rendered.promptContent,
+    model: taskModel,
+    effort: taskEffort
+  }, { config, env: options && options.env ? options.env : process.env });
+
   const envelope = {
     runId: state.runId,
     specSlug,
@@ -3266,6 +3292,7 @@ function dispatchNextTask(context) {
     workingDir: displayWorkingDir,
     acIds: ready.coveredAcs || [],
     dependencies: ready.dependencies || [],
+    harness: dispatchPayload,
     subagentBrief: `Spawn one subagent for this task only. Give it: read ${sandboxed ? `"${displayPrompt}"` : displayPrompt} and execute it exactly as written, then report back per its report contract.${sandboxed ? ` Run every command with cwd "${displayWorkingDir}".` : ''}`,
     finishCommand: `node "${runCommandPath()}" task finish --run-id ${state.runId} --task ${ready.id} --evidence ${evidenceArg}${rootFlag}`
   };
@@ -3283,6 +3310,9 @@ function printDispatchEnvelope(envelope, state, options) {
   console.log(`  Prompt:   ${envelope.promptFile} (${envelope.promptBytes} bytes)`);
   console.log(`  Evidence: ${envelope.evidenceFile}`);
   console.log(`  Spec:     ${envelope.specPath}`);
+  if (envelope.harness) {
+    console.log(`  Harness:  ${envelope.harness.harness} (mode: ${envelope.harness.mode})`);
+  }
   console.log(`\nSpawn one subagent for this task only:`);
   console.log(`  ${envelope.subagentBrief}`);
   console.log(`\nWhen the worker reports back, submit its evidence with:`);
@@ -3807,6 +3837,28 @@ function cmdResume(options) {
           // AC31: re-emit the in-flight envelope so a lost dispatch is recoverable.
           const activeRecord = (state.steps[4].tasks || {})[dispatch.activeTaskId] || {};
           const activeTask = dagTasks.find(t => t.id === dispatch.activeTaskId) || {};
+          let resumeSpecFrontmatter = {};
+          if (state.specPath) {
+            try {
+              const specContent = fs.readFileSync(path.resolve(targetRoot, state.specPath), 'utf8');
+              const specIndexHelper = getSpecIndexHelper(targetRoot, options);
+              if (specIndexHelper && typeof specIndexHelper.parseFrontmatter === 'function') {
+                resumeSpecFrontmatter = specIndexHelper.parseFrontmatter(specContent) || {};
+              }
+            } catch (_) {}
+          }
+          const resumeAdapter = (resumeConfig && resumeConfig.harness && resumeConfig.harness.adapter) || 'auto';
+          const resumeModel = activeTask.model || resumeSpecFrontmatter.model;
+          const resumeEffort = activeTask.effort || resumeSpecFrontmatter.effort;
+          const resumeDispatch = harnessAdapters.formatDispatch(resumeAdapter, {
+            taskId: dispatch.activeTaskId,
+            role: activeRecord.role || activeTask.role,
+            title: activeRecord.title || activeTask.title || dispatch.activeTaskId,
+            promptFile: activeRecord.promptPath || null,
+            model: resumeModel,
+            effort: resumeEffort
+          }, { config: resumeConfig, env: options && options.env ? options.env : process.env });
+
           const envelope = {
             runId: state.runId,
             specSlug: state.specSlug,
@@ -3821,6 +3873,7 @@ function cmdResume(options) {
             workingDir: activeRecord.workingDir || '.',
             acIds: activeRecord.coveredAcs || activeTask.coveredAcs || [],
             dependencies: activeRecord.dependencies || activeTask.dependencies || [],
+            harness: resumeDispatch,
             subagentBrief: `Spawn one subagent for this task only. Give it: read ${activeRecord.promptPath} and execute it exactly as written, then report back per its report contract.`,
             finishCommand: `node "${runCommandPath()}" task finish --run-id ${state.runId} --task ${dispatch.activeTaskId} --evidence ${sandbox.readMarker(targetRoot) ? `"${activeRecord.evidencePath}"` : activeRecord.evidencePath}${sandbox.readMarker(targetRoot) ? ` --root "${normalizePath(targetRoot)}"` : ''}`
           };
