@@ -282,3 +282,100 @@ test('AC9, AC10, AC11: Initiating remediation round dispatches fresh fixer subag
   assert.ok(prompt.includes('skills/sdw-run/scripts/score_evaluator.cjs'), 'AC11: Lists otherLocations in scope');
   assert.ok(/prohibited.*outside/i.test(prompt) || /forbidden.*outside/i.test(prompt), 'AC12: Prohibits modifying files outside scope fence');
 });
+
+test('AC12: validateFixScope prohibits fixer subagent from modifying files outside target finding scope fence', () => {
+  assert.ok(reviewEvaluator, 'review_evaluator module must exist');
+  assert.equal(typeof reviewEvaluator.validateFixScope, 'function', 'validateFixScope must be exported');
+
+  const targetFiles = ['skills/sdw-run/scripts/sdw_run.cjs', 'skills/sdw-run/scripts/score_evaluator.cjs'];
+
+  // In-scope changes
+  const inScope = reviewEvaluator.validateFixScope(
+    ['skills/sdw-run/scripts/sdw_run.cjs'],
+    targetFiles
+  );
+  assert.equal(inScope.allowed, true);
+  assert.equal(inScope.violations.length, 0);
+
+  // Out-of-scope changes
+  const outOfScope = reviewEvaluator.validateFixScope(
+    ['skills/sdw-run/scripts/sdw_run.cjs', 'package.json'],
+    targetFiles
+  );
+  assert.equal(outOfScope.allowed, false, 'Modifying package.json outside targetFiles must be rejected');
+  assert.ok(outOfScope.violations.includes('package.json'));
+});
+
+test('AC13: formatFixCommitMessage formats conventional commit message for remediation rounds', () => {
+  assert.ok(reviewEvaluator, 'review_evaluator module must exist');
+  assert.equal(typeof reviewEvaluator.formatFixCommitMessage, 'function', 'formatFixCommitMessage must be exported');
+
+  const msg = reviewEvaluator.formatFixCommitMessage('my-feature', 2);
+  assert.equal(msg, 'fix(my-feature): address code review findings (round 2)');
+});
+
+test('AC15, AC16: iteration ceiling is enforced and overridable via CLI flag', () => {
+  assert.ok(reviewEvaluator, 'review_evaluator module must exist');
+
+  // Configured default vs CLI override
+  const conf1 = reviewEvaluator.resolveReviewConfig({ codeReview: { maxIterations: 5 } });
+  assert.equal(conf1.maxIterations, 5);
+
+  const conf2 = reviewEvaluator.resolveReviewConfig(
+    { codeReview: { maxIterations: 5 } },
+    { reviewMaxIterations: 2 }
+  );
+  assert.equal(conf2.maxIterations, 2, 'CLI flag --review-max-iterations must override config');
+
+  assert.equal(typeof reviewEvaluator.isMaxIterationsReached, 'function');
+  assert.equal(reviewEvaluator.isMaxIterationsReached(1, 2), false);
+  assert.equal(reviewEvaluator.isMaxIterationsReached(2, 2), true);
+  assert.equal(reviewEvaluator.isMaxIterationsReached(3, 2), true);
+});
+
+test('AC19: sdwConfig validates codeReview configuration schema bounds and types', () => {
+  // Valid configuration
+  const valid = sdwConfig.validateConfigSchema({
+    specsDir: '.sdw/specs',
+    codeReview: {
+      mode: 'subagent',
+      maxIterations: 3,
+      command: 'npm run lint',
+      model: 'test-model',
+      effort: 'high'
+    }
+  });
+  assert.equal(valid.valid, true, 'Valid codeReview config passes validation');
+
+  // Invalid mode
+  const invalidMode = sdwConfig.validateConfigSchema({
+    specsDir: '.sdw/specs',
+    codeReview: { mode: 'invalid-mode' }
+  });
+  assert.equal(invalidMode.valid, false);
+  assert.ok(invalidMode.errors.some(e => e.includes('codeReview.mode')));
+
+  // Invalid maxIterations (< 1)
+  const invalidMax = sdwConfig.validateConfigSchema({
+    specsDir: '.sdw/specs',
+    codeReview: { maxIterations: 0 }
+  });
+  assert.equal(invalidMax.valid, false);
+  assert.ok(invalidMax.errors.some(e => e.includes('codeReview.maxIterations')));
+});
+
+test('AC20: documentation records fresh-subagent code review and local fix loop protocol', () => {
+  const protocolPath = path.resolve(__dirname, '../skills/sdw-run/references/orchestrator_protocol.md');
+  const skillPath = path.resolve(__dirname, '../skills/sdw-code-review/SKILL.md');
+
+  assert.ok(fs.existsSync(protocolPath), 'orchestrator_protocol.md exists');
+  assert.ok(fs.existsSync(skillPath), 'sdw-code-review/SKILL.md exists');
+
+  const protocolContent = fs.readFileSync(protocolPath, 'utf8');
+  assert.ok(/codeReview\.mode/i.test(protocolContent) || /codeReview/i.test(protocolContent));
+  assert.ok(/subagent/i.test(protocolContent));
+
+  const skillContent = fs.readFileSync(skillPath, 'utf8');
+  assert.ok(/subagent/i.test(skillContent) || /fresh-context/i.test(skillContent));
+});
+
