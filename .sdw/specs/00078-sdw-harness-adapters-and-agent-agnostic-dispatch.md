@@ -3,11 +3,10 @@ id: null
 slug: 00078-sdw-harness-adapters-and-agent-agnostic-dispatch
 title: "SDW Harness Adapters and Agent-Agnostic Subagent Dispatch"
 source: local
-status: draft
+status: implemented
 specDate: 2026-11-22
 priority: high
 ---
-
 # Specification — SDW Harness Adapters and Agent-Agnostic Subagent Dispatch
 
 ## Description
