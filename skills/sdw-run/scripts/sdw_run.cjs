@@ -2572,11 +2572,13 @@ function cmdRun(options) {
       codeReviewState.round = currentRound;
       codeReviewState.maxIterations = reviewConfig.maxIterations;
       codeReviewState.status = 'awaiting_review';
+      codeReviewState.skillsRoot = resolvedSkillsRoot;
 
       state = stateManager.updateStepState(targetRoot, state.runId, 7, 'awaiting_review', {
         codeReview: codeReviewState,
         envelope
       });
+      state.codeReviewSkillsRoot = resolvedSkillsRoot;
       state.status = 'paused';
       stateManager.saveRunState(targetRoot, state);
 
@@ -4122,10 +4124,15 @@ function cmdReviewSubmit(options) {
     return 1;
   }
 
+  const step7 = state.steps && state.steps[7];
+  if (!step7 || step7.status !== 'awaiting_review') {
+    console.error(`[sdw-run review submit] Step 7 is not awaiting a review report (status: "${step7 ? step7.status : 'missing'}").`);
+    return 1;
+  }
+
   const config = loadProjectConfig(targetRoot, options);
   const reviewConfig = reviewEvaluator.resolveReviewConfig(config, options);
 
-  const step7 = state.steps && state.steps[7];
   const priorOutput = (step7 && step7.output) || {};
   const codeReviewState = priorOutput.codeReview || {
     mode: 'subagent',
@@ -4135,6 +4142,10 @@ function cmdReviewSubmit(options) {
     rounds: []
   };
   const currentRound = codeReviewState.round || 1;
+  const maxIterations = codeReviewState.maxIterations || reviewConfig.maxIterations;
+  const resolvedSkillsInfo = sdwConfig && typeof sdwConfig.resolveSkillsRoot === 'function' ? sdwConfig.resolveSkillsRoot(targetRoot) : null;
+  const fallbackSkillsRoot = (resolvedSkillsInfo && resolvedSkillsInfo.skillsRoot) ? normalizePath(path.relative(targetRoot, resolvedSkillsInfo.skillsRoot)) || 'skills' : 'skills';
+  const activeSkillsRoot = state.codeReviewSkillsRoot || (codeReviewState && codeReviewState.skillsRoot) || fallbackSkillsRoot;
 
   codeReviewState.rounds = codeReviewState.rounds || [];
   codeReviewState.rounds.push({
@@ -4143,7 +4154,7 @@ function cmdReviewSubmit(options) {
     reportFile: path.relative(targetRoot, reportFileAbs).replace(/\\/g, '/')
   });
 
-  if (validation.data.passed || validation.data.blockingCount === 0) {
+  if (validation.data.blockingCount === 0 && validation.data.passed !== false) {
     codeReviewState.status = 'completed';
     state.steps[7] = state.steps[7] || { name: 'code_review', status: 'pending', output: null, artifact: null };
     state.steps[7].status = 'completed';
@@ -4154,13 +4165,13 @@ function cmdReviewSubmit(options) {
     state.reviewCommit = getBaseCommit(targetRoot);
     state.status = 'paused';
     stateManager.saveRunState(targetRoot, state);
-    console.log(`[sdw-run review submit] Code review passed with 0 blocking findings (round ${currentRound}/${reviewConfig.maxIterations}).`);
+    console.log(`[sdw-run review submit] Code review passed with 0 blocking findings (round ${currentRound}/${maxIterations}).`);
     console.log(`Step 7 marked completed. Continue with:`);
     console.log(`  node "${runCommandPath()}" resume --run-id ${state.runId}${followUpRootFlag(targetRoot)}`);
     return 0;
   }
 
-  if (reviewEvaluator.isMaxIterationsReached(currentRound, reviewConfig.maxIterations)) {
+  if (reviewEvaluator.isMaxIterationsReached(currentRound, maxIterations)) {
     codeReviewState.status = 'review_failed';
     state.steps[7] = state.steps[7] || { name: 'code_review', status: 'pending', output: null, artifact: null };
     state.steps[7].status = 'review_failed';
@@ -4171,10 +4182,10 @@ function cmdReviewSubmit(options) {
     state.status = 'failed';
     recordBlockedGate(targetRoot, state, 'review', {
       step: 7,
-      detail: `Review-and-fix loop reached max iterations (${reviewConfig.maxIterations}) with ${validation.data.blockingCount} unresolved blocking finding(s).`
+      detail: `Review-and-fix loop reached max iterations (${maxIterations}) with ${validation.data.blockingCount} unresolved blocking finding(s).`
     });
     stateManager.saveRunState(targetRoot, state);
-    console.error(`[sdw-run review submit] Review-and-fix loop reached max iterations (${reviewConfig.maxIterations}) with ${validation.data.blockingCount} unresolved blocking finding(s).`);
+    console.error(`[sdw-run review submit] Review-and-fix loop reached max iterations (${maxIterations}) with ${validation.data.blockingCount} unresolved blocking finding(s).`);
     return 1;
   }
 
@@ -4193,7 +4204,7 @@ function cmdReviewSubmit(options) {
     stateDir: stateManager.resolveStateDir(targetRoot),
     iteration: currentRound,
     findings: validation.data.findings,
-    skillsRoot: 'skills'
+    skillsRoot: activeSkillsRoot
   });
 
   let instructions = '';
@@ -4213,7 +4224,7 @@ function cmdReviewSubmit(options) {
     iteration: currentRound,
     findings: validation.data.findings,
     targetFiles: fixerEnvelope.targetFiles,
-    skillsRoot: 'skills',
+    skillsRoot: activeSkillsRoot,
     instructions,
     traps
   });
@@ -4233,7 +4244,7 @@ function cmdReviewSubmit(options) {
   stateManager.saveRunState(targetRoot, state);
 
   console.log(`[sdw-run review submit] ${validation.data.blockingCount} blocking finding(s) identified in round ${currentRound}.`);
-  console.log(`Initiating remediation round ${currentRound}/${reviewConfig.maxIterations}.`);
+  console.log(`Initiating remediation round ${currentRound}/${maxIterations}.`);
   console.log(`Fixer envelope: ${JSON.stringify(fixerEnvelope, null, 2)}`);
   console.log(`Spawn fresh fixer subagent scoped to: ${fixerEnvelope.targetFiles.join(', ')}`);
   console.log(`When fix is applied, submit fix evidence with:`);
@@ -4273,7 +4284,16 @@ function cmdReviewFixFinish(options) {
     return 1;
   }
 
+  if (!evidence.verification || evidence.verification.passed !== true) {
+    console.error('Error: Fix evidence does not report a passing verification (evidence.verification.passed must be true); refusing to commit.');
+    return 1;
+  }
+
   const step7 = state.steps && state.steps[7];
+  if (!step7 || step7.status !== 'awaiting_review_fix') {
+    console.error(`[sdw-run review fix-finish] Step 7 is not awaiting fix evidence (status: "${step7 ? step7.status : 'missing'}").`);
+    return 1;
+  }
   const priorOutput = (step7 && step7.output) || {};
   const codeReviewState = priorOutput.codeReview || {};
   const fixerEnvelope = priorOutput.fixerEnvelope || {};
@@ -4325,12 +4345,17 @@ function cmdReviewFixFinish(options) {
   });
 
   const reviewConfig = reviewEvaluator.resolveReviewConfig(config, options);
+  const maxIterations = codeReviewState.maxIterations || reviewConfig.maxIterations;
+  const resolvedSkillsInfo = sdwConfig && typeof sdwConfig.resolveSkillsRoot === 'function' ? sdwConfig.resolveSkillsRoot(targetRoot) : null;
+  const fallbackSkillsRoot = (resolvedSkillsInfo && resolvedSkillsInfo.skillsRoot) ? normalizePath(path.relative(targetRoot, resolvedSkillsInfo.skillsRoot)) || 'skills' : 'skills';
+  const activeSkillsRoot = state.codeReviewSkillsRoot || (codeReviewState && codeReviewState.skillsRoot) || fallbackSkillsRoot;
+
   const nextEnvelope = reviewEvaluator.buildReviewerEnvelope({
     slug: state.specSlug,
     runId: state.runId,
     targetRoot,
     stateDir: stateManager.resolveStateDir(targetRoot),
-    skillsRoot: 'skills',
+    skillsRoot: activeSkillsRoot,
     reviewConfig,
     iteration: nextRound
   });
@@ -4355,7 +4380,7 @@ function cmdReviewFixFinish(options) {
   const nextPrompt = reviewEvaluator.buildReviewerPrompt({
     slug: state.specSlug,
     runId: state.runId,
-    skillsRoot: 'skills',
+    skillsRoot: activeSkillsRoot,
     diff: reviewDiff,
     touchedFiles,
     acs: specAcs,
@@ -4375,7 +4400,7 @@ function cmdReviewFixFinish(options) {
   state.status = 'paused';
   stateManager.saveRunState(targetRoot, state);
 
-  console.log(`[sdw-run review fix-finish] Advanced to review round ${nextRound}/${reviewConfig.maxIterations}.`);
+  console.log(`[sdw-run review fix-finish] Advanced to review round ${nextRound}/${maxIterations}.`);
   console.log(`Dispatched fresh reviewer envelope: ${JSON.stringify(nextEnvelope, null, 2)}`);
   console.log(`Re-evaluate updated diff and submit review report with:`);
   console.log(`  node "${runCommandPath()}" review submit --run-id ${state.runId} --report ${paths.reportFileRel}`);

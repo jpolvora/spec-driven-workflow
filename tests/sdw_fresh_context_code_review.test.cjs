@@ -379,3 +379,91 @@ test('AC20: documentation records fresh-subagent code review and local fix loop 
   assert.ok(/subagent/i.test(skillContent) || /fresh-context/i.test(skillContent));
 });
 
+test('PR Review Convergence: validateReviewReport rejects contradictory passed and blockingCount', () => {
+  assert.ok(reviewEvaluator);
+
+  // passed: true with blockingCount > 0
+  const contradict1 = reviewEvaluator.validateReviewReport({
+    passed: true,
+    blockingCount: 2,
+    findings: [
+      { id: 'F1', defectClass: 'bug', file: 'a.js', line: 1, evidence: 'e', otherLocations: [], severity: 'critical' },
+      { id: 'F2', defectClass: 'bug', file: 'b.js', line: 2, evidence: 'e', otherLocations: [], severity: 'warning' }
+    ]
+  });
+  assert.equal(contradict1.valid, false);
+  assert.ok(contradict1.errors.some(e => e.includes('Contradictory report')));
+
+  // passed: false with blockingCount 0
+  const contradict2 = reviewEvaluator.validateReviewReport({
+    passed: false,
+    blockingCount: 0,
+    findings: []
+  });
+  assert.equal(contradict2.valid, false);
+  assert.ok(contradict2.errors.some(e => e.includes('Contradictory report')));
+});
+
+test('PR Review Convergence: review subcommands guard Step 7 status and verification results', () => {
+  assert.ok(sdwRun);
+  const repo = setupRepo();
+
+  // Initialize a dummy run state
+  const stateDir = path.join(repo, '.sdw', 'state');
+  fs.mkdirSync(stateDir, { recursive: true });
+  const runId = 'run-test-guard-001';
+  const statePath = path.join(stateDir, `${runId}.state.json`);
+  const baseState = {
+    runId,
+    specSlug: 'sample-review-spec',
+    specPath: '.sdw/specs/sample-review-spec.md',
+    status: 'in_progress',
+    steps: {
+      7: {
+        name: 'code_review',
+        status: 'pending',
+        output: null
+      }
+    }
+  };
+  fs.writeFileSync(statePath, JSON.stringify(baseState, null, 2), 'utf8');
+
+  // 1. review submit fails if step 7 is not awaiting_review
+  const dummyReportPath = path.join(repo, 'report.json');
+  fs.writeFileSync(dummyReportPath, JSON.stringify({ passed: true, blockingCount: 0, findings: [] }), 'utf8');
+  const submitExit = sdwRun.cmdReviewSubmit({
+    root: repo,
+    runId,
+    reportPath: dummyReportPath
+  });
+  assert.equal(submitExit, 1, 'cmdReviewSubmit must fail when step 7 status is not awaiting_review');
+
+  // 2. review fix-finish fails if step 7 is not awaiting_review_fix
+  const dummyEvidencePath = path.join(repo, 'evidence.json');
+  fs.writeFileSync(dummyEvidencePath, JSON.stringify({ modifiedFiles: [], verification: { passed: true } }), 'utf8');
+  const fixExit = sdwRun.cmdReviewFixFinish({
+    root: repo,
+    runId,
+    evidencePath: dummyEvidencePath
+  });
+  assert.equal(fixExit, 1, 'cmdReviewFixFinish must fail when step 7 status is not awaiting_review_fix');
+
+  // 3. review fix-finish fails if verification.passed is false or missing
+  baseState.steps[7].status = 'awaiting_review_fix';
+  baseState.steps[7].output = {
+    fixerEnvelope: { targetFiles: ['index.cjs'] },
+    codeReview: { round: 1, maxIterations: 5 }
+  };
+  fs.writeFileSync(statePath, JSON.stringify(baseState, null, 2), 'utf8');
+
+  const unverifiedEvidencePath = path.join(repo, 'evidence-unverified.json');
+  fs.writeFileSync(unverifiedEvidencePath, JSON.stringify({ modifiedFiles: [], verification: { passed: false } }), 'utf8');
+  const unverifiedExit = sdwRun.cmdReviewFixFinish({
+    root: repo,
+    runId,
+    evidencePath: unverifiedEvidencePath
+  });
+  assert.equal(unverifiedExit, 1, 'cmdReviewFixFinish must fail when evidence verification.passed is false');
+});
+
+

@@ -219,6 +219,14 @@ function validateReviewReport(raw) {
     errors.push('Report "blockingCount" must be a non-negative integer.');
   }
 
+  if (typeof raw.passed === 'boolean' && Number.isInteger(blockingCount) && blockingCount >= 0) {
+    if (raw.passed && blockingCount > 0) {
+      errors.push(`Contradictory report: "passed" is true but "blockingCount" is ${blockingCount} (> 0).`);
+    } else if (!raw.passed && blockingCount === 0) {
+      errors.push('Contradictory report: "passed" is false but "blockingCount" is 0.');
+    }
+  }
+
   if (!Array.isArray(raw.findings)) {
     errors.push('Report "findings" must be an array.');
   } else {
