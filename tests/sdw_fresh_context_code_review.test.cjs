@@ -464,6 +464,35 @@ test('PR Review Convergence: review subcommands guard Step 7 status and verifica
     evidencePath: unverifiedEvidencePath
   });
   assert.equal(unverifiedExit, 1, 'cmdReviewFixFinish must fail when evidence verification.passed is false');
+
+  // 4. review fix-finish handles null evidence without crashing
+  const nullEvidencePath = path.join(repo, 'evidence-null.json');
+  fs.writeFileSync(nullEvidencePath, 'null', 'utf8');
+  const nullExit = sdwRun.cmdReviewFixFinish({
+    root: repo,
+    runId,
+    evidencePath: nullEvidencePath
+  });
+  assert.equal(nullExit, 1, 'cmdReviewFixFinish must fail cleanly without crashing when evidence is null');
+});
+
+test('PR Review Context: sdw-memory queryTraps and spec-grilling loadProjectInstructions contract', () => {
+  const sdwMemory = require('../skills/sdw-memory/scripts/sdw_memory.cjs');
+  const specGrilling = require('../skills/sdw-run/scripts/spec_grilling.cjs');
+
+  assert.equal(typeof sdwMemory.queryTraps, 'function', 'sdwMemory must export queryTraps');
+  assert.equal(typeof specGrilling.loadProjectInstructions, 'function', 'specGrilling must export loadProjectInstructions');
+
+  // queryTraps returns an array of structured traps
+  const traps = sdwMemory.queryTraps({ slug: '00076-fresh-context-subagent-code-review-fix-loop' });
+  assert.ok(Array.isArray(traps), 'queryTraps must return an array');
+
+  // loadProjectInstructions reads from config override or file
+  const configInstructions = specGrilling.loadProjectInstructions(process.cwd(), { instructions: 'Custom rule set' });
+  assert.equal(configInstructions, 'Custom rule set');
+
+  const fileInstructions = specGrilling.loadProjectInstructions(process.cwd(), {});
+  assert.ok(typeof fileInstructions === 'string');
 });
 
 

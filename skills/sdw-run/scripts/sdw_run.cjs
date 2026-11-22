@@ -2552,12 +2552,25 @@ function cmdRun(options) {
       const specAcs = dagPlanner.parseAcceptanceCriteria(effectiveSpecContent);
       let instructions = '';
       try {
-        instructions = specGrilling.loadProjectInstructions(targetRoot, config);
+        instructions = typeof specGrilling.loadProjectInstructions === 'function'
+          ? specGrilling.loadProjectInstructions(targetRoot, config)
+          : '';
+        if (!instructions) {
+          const agentsPath = path.join(targetRoot, 'AGENTS.md');
+          if (fs.existsSync(agentsPath)) {
+            instructions = fs.readFileSync(agentsPath, 'utf8').trim();
+          }
+        }
       } catch (e) {}
       let traps = [];
       try {
         const sdwMemory = require('../../sdw-memory/scripts/sdw_memory.cjs');
-        traps = sdwMemory.queryTraps({ targetRoot, slug: specSlug });
+        if (typeof sdwMemory.queryTraps === 'function') {
+          traps = sdwMemory.queryTraps({ targetRoot, slug: specSlug });
+        } else if (typeof sdwMemory.queryMemory === 'function') {
+          const res = sdwMemory.queryMemory(targetRoot, specSlug, { kind: 'trap' });
+          traps = (res && Array.isArray(res.hints)) ? res.hints.map(h => ({ slug: h.slug, scenario: h.title, recommendation: h.action })) : [];
+        }
       } catch (e) {}
 
       const promptText = reviewEvaluator.buildReviewerPrompt({
@@ -4211,7 +4224,7 @@ function cmdReviewSubmit(options) {
   const currentRound = codeReviewState.round || 1;
   const maxIterations = codeReviewState.maxIterations || reviewConfig.maxIterations;
   const sdwConfig = getSdwConfigHelper(targetRoot, options);
-  const resolvedSkillsInfo = sdwConfig && typeof sdwConfig.resolveSkillsRoot === 'function' ? sdwConfig.resolveSkillsRoot(targetRoot) : null;
+  const resolvedSkillsInfo = sdwConfig && typeof sdwConfig.resolveSkillsRoot === 'function' ? sdwConfig.resolveSkillsRoot({ root: targetRoot, ...options }) : null;
   const fallbackSkillsRoot = (resolvedSkillsInfo && resolvedSkillsInfo.skillsRoot) ? normalizePath(path.relative(targetRoot, resolvedSkillsInfo.skillsRoot)) || 'skills' : 'skills';
   const activeSkillsRoot = state.codeReviewSkillsRoot || (codeReviewState && codeReviewState.skillsRoot) || fallbackSkillsRoot;
 
@@ -4277,13 +4290,26 @@ function cmdReviewSubmit(options) {
 
   let instructions = '';
   try {
-    instructions = specGrilling.loadProjectInstructions(targetRoot, config);
+    instructions = typeof specGrilling.loadProjectInstructions === 'function'
+      ? specGrilling.loadProjectInstructions(targetRoot, config)
+      : '';
+    if (!instructions) {
+      const agentsPath = path.join(targetRoot, 'AGENTS.md');
+      if (fs.existsSync(agentsPath)) {
+        instructions = fs.readFileSync(agentsPath, 'utf8').trim();
+      }
+    }
   } catch (e) {}
 
   let traps = [];
   try {
     const sdwMemory = require('../../sdw-memory/scripts/sdw_memory.cjs');
-    traps = sdwMemory.queryTraps({ targetRoot, slug: state.specSlug });
+    if (typeof sdwMemory.queryTraps === 'function') {
+      traps = sdwMemory.queryTraps({ targetRoot, slug: state.specSlug });
+    } else if (typeof sdwMemory.queryMemory === 'function') {
+      const res = sdwMemory.queryMemory(targetRoot, state.specSlug, { kind: 'trap' });
+      traps = (res && Array.isArray(res.hints)) ? res.hints.map(h => ({ slug: h.slug, scenario: h.title, recommendation: h.action })) : [];
+    }
   } catch (e) {}
 
   const fixerPrompt = reviewEvaluator.buildFixerPrompt({
@@ -4352,7 +4378,7 @@ function cmdReviewFixFinish(options) {
     return 1;
   }
 
-  if (!evidence.verification || evidence.verification.passed !== true) {
+  if (!evidence || typeof evidence !== 'object' || !evidence.verification || evidence.verification.passed !== true) {
     console.error('Error: Fix evidence does not report a passing verification (evidence.verification.passed must be true); refusing to commit.');
     return 1;
   }
@@ -4415,7 +4441,7 @@ function cmdReviewFixFinish(options) {
   const reviewConfig = reviewEvaluator.resolveReviewConfig(config, options);
   const maxIterations = codeReviewState.maxIterations || reviewConfig.maxIterations;
   const sdwConfig = getSdwConfigHelper(targetRoot, options);
-  const resolvedSkillsInfo = sdwConfig && typeof sdwConfig.resolveSkillsRoot === 'function' ? sdwConfig.resolveSkillsRoot(targetRoot) : null;
+  const resolvedSkillsInfo = sdwConfig && typeof sdwConfig.resolveSkillsRoot === 'function' ? sdwConfig.resolveSkillsRoot({ root: targetRoot, ...options }) : null;
   const fallbackSkillsRoot = (resolvedSkillsInfo && resolvedSkillsInfo.skillsRoot) ? normalizePath(path.relative(targetRoot, resolvedSkillsInfo.skillsRoot)) || 'skills' : 'skills';
   const activeSkillsRoot = state.codeReviewSkillsRoot || (codeReviewState && codeReviewState.skillsRoot) || fallbackSkillsRoot;
 
@@ -4438,12 +4464,25 @@ function cmdReviewFixFinish(options) {
   } catch (e) {}
   let instructions = '';
   try {
-    instructions = specGrilling.loadProjectInstructions(targetRoot, config);
+    instructions = typeof specGrilling.loadProjectInstructions === 'function'
+      ? specGrilling.loadProjectInstructions(targetRoot, config)
+      : '';
+    if (!instructions) {
+      const agentsPath = path.join(targetRoot, 'AGENTS.md');
+      if (fs.existsSync(agentsPath)) {
+        instructions = fs.readFileSync(agentsPath, 'utf8').trim();
+      }
+    }
   } catch (e) {}
   let traps = [];
   try {
     const sdwMemory = require('../../sdw-memory/scripts/sdw_memory.cjs');
-    traps = sdwMemory.queryTraps({ targetRoot, slug: state.specSlug });
+    if (typeof sdwMemory.queryTraps === 'function') {
+      traps = sdwMemory.queryTraps({ targetRoot, slug: state.specSlug });
+    } else if (typeof sdwMemory.queryMemory === 'function') {
+      const res = sdwMemory.queryMemory(targetRoot, state.specSlug, { kind: 'trap' });
+      traps = (res && Array.isArray(res.hints)) ? res.hints.map(h => ({ slug: h.slug, scenario: h.title, recommendation: h.action })) : [];
+    }
   } catch (e) {}
 
   const nextPrompt = reviewEvaluator.buildReviewerPrompt({

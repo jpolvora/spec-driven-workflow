@@ -180,6 +180,33 @@ function queryMemory(root, text, options = {}) {
   return { hints, sources };
 }
 
+function queryTraps(rootOrOptions = {}, maybeSlug = '') {
+  let root = process.cwd();
+  let slug = '';
+  let limit = 10;
+  if (typeof rootOrOptions === 'string') {
+    root = rootOrOptions;
+    slug = typeof maybeSlug === 'string' ? maybeSlug : '';
+  } else if (rootOrOptions && typeof rootOrOptions === 'object') {
+    root = rootOrOptions.targetRoot || rootOrOptions.root || process.cwd();
+    slug = rootOrOptions.slug || rootOrOptions.text || '';
+    if (rootOrOptions.limit) limit = rootOrOptions.limit;
+  }
+  const queryText = slug || '';
+  const c = consultMemory(root, queryText, { kind: 'trap', limit });
+  let hints = [...(c.traps.hints || []), ...(c.files.hints || []), ...(c.vault.hints || [])];
+  if (hints.length === 0 && queryText) {
+    const fallback = consultMemory(root, '', { kind: 'trap', limit });
+    hints = [...(fallback.traps.hints || []), ...(fallback.files.hints || []), ...(fallback.vault.hints || [])];
+  }
+  return hints.slice(0, limit).map(h => ({
+    slug: h.slug || '',
+    scenario: h.title || h.scenario || h.snippet || '',
+    recommendation: h.action || h.recommendation || '',
+    rule: h.avoid || h.rule || ''
+  }));
+}
+
 function recordMemory(root, entry, options = {}) {
   const errors = validateEntry(entry);
   if (errors.length > 0) return { exit: 1, error: errors.join('; ') };
@@ -433,7 +460,7 @@ Usage:
 module.exports = {
   findProjectRoot, keywordsOf, slugOf, memoAvailable, memoDisabled,
   resolveSkillDir, wsMemoStatus, trapsPathFor: require('./backends/traps.cjs').trapsPathFor,
-  consultMemory, queryMemory, recordMemory, recordTrap, loadMemoryConfig, backendsEnabled,
+  consultMemory, queryMemory, queryTraps, recordMemory, recordTrap, loadMemoryConfig, backendsEnabled,
   classifyMemory, consolidateMemory, cmdDoctor
 };
 

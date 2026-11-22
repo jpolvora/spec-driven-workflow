@@ -193,7 +193,7 @@ function cmdList(options) {
         } else {
           if (showType) {
             console.log(`${'PREFIX'.padEnd(pPad)} | ${'SLUG'.padEnd(sPad)} | ${'TYPE'.padEnd(tPad)} | ${'STATUS'.padEnd(stPad)} | ${'HEALTH'.padEnd(vPad)} | TITLE`);
-            console.log(`${'-'.repeat(pPad)}-|-|${'-'.repeat(sPad)}-|-|${'-'.repeat(tPad)}-|-|${'-'.repeat(stPad)}-|-|${'-'.repeat(vPad)}-|-${'-'.repeat(30)}`);
+            console.log(`${'-'.repeat(pPad)}-|-${'-'.repeat(sPad)}-|-${'-'.repeat(tPad)}-|-${'-'.repeat(stPad)}-|-${'-'.repeat(vPad)}-|-${'-'.repeat(30)}`);
             for (const item of list) {
               const pref = (item.prefix || '').padEnd(pPad);
               const slug = (item.slug || '').padEnd(sPad);
@@ -204,7 +204,7 @@ function cmdList(options) {
             }
           } else {
             console.log(`${'PREFIX'.padEnd(pPad)} | ${'SLUG'.padEnd(sPad)} | ${'STATUS'.padEnd(stPad)} | ${'HEALTH'.padEnd(vPad)} | TITLE`);
-            console.log(`${'-'.repeat(pPad)}-|-|${'-'.repeat(sPad)}-|-|${'-'.repeat(stPad)}-|-|${'-'.repeat(vPad)}-|-${'-'.repeat(30)}`);
+            console.log(`${'-'.repeat(pPad)}-|-${'-'.repeat(sPad)}-|-${'-'.repeat(stPad)}-|-${'-'.repeat(vPad)}-|-${'-'.repeat(30)}`);
             for (const item of list) {
               const pref = (item.prefix || '').padEnd(pPad);
               const slug = (item.slug || '').padEnd(sPad);
