@@ -67,6 +67,8 @@ function resolveJudgeConfig(config) {
     judgeMode = 'subagent';
   }
 
+  const timeoutMs = Number(scoring.judgeTimeoutMs || scoring.timeoutMs) || JUDGE_TIMEOUT_MS;
+
   return {
     mode: command ? 'command' : 'agent',
     judgeMode,
@@ -75,7 +77,8 @@ function resolveJudgeConfig(config) {
     provider: normOpt(scoring.judgeProvider),
     effort: normOpt(scoring.judgeEffort),
     apiEndpoint: normOpt(scoring.judgeApiEndpoint),
-    criticity
+    criticity,
+    timeoutMs
   };
 }
 

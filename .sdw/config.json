@@ -5,6 +5,7 @@
   "scoreMin": 8,
   "scoring": {
     "judgeMode": "subagent",
+    "judgeTimeoutMs": 600000,
     "judgeCommand": null,
     "judgeModel": null,
     "judgeProvider": null,

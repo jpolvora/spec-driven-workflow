@@ -1997,6 +1997,25 @@ function cmdRun(options) {
     if (verdict) {
       console.log(`[Step 5: Conformance Scoring] Reusing submitted judge verdict (${judgeResolution}).`);
     } else {
+      // AC14: If judge subagent was already awaiting judgment, check if timeout elapsed without a valid verdict
+      if (priorScoring && priorScoring.status === 'awaiting_judgment' && priorScoring.dispatchedAt) {
+        const elapsedMs = Date.now() - new Date(priorScoring.dispatchedAt).getTime();
+        const timeoutMs = judgeConfig.timeoutMs || scoreEvaluator.JUDGE_TIMEOUT_MS || 600000;
+        if (elapsedMs > timeoutMs) {
+          const timeoutJudgeMeta = {
+            mode: judgeConfig.judgeMode || judgeConfig.mode,
+            criticity: judgeConfig.criticity,
+            model: judgeConfig.model,
+            provider: judgeConfig.provider,
+            effort: judgeConfig.effort,
+            apiEndpoint: judgeConfig.apiEndpoint,
+            diffBytes: null,
+            diffTruncated: false
+          };
+          return failClosedScoring(`Judge subagent timed out after ${elapsedMs}ms (timeout: ${timeoutMs}ms) without producing a valid verdict.`, timeoutJudgeMeta);
+        }
+      }
+
       const resolvedSkillsRoot = (skillsInfo && skillsInfo.skillsRoot) ? normalizePath(path.relative(targetRoot, skillsInfo.skillsRoot)) || 'skills' : 'skills';
       const judgeDiff = scoreEvaluator.collectDiff(targetRoot, state.baseCommit);
       const judgeBundle = scoreEvaluator.buildJudgePrompt({
@@ -2065,6 +2084,7 @@ function cmdRun(options) {
         }
         const pausedOutput = {
           status: 'awaiting_judgment',
+          dispatchedAt: priorScoring && priorScoring.dispatchedAt ? priorScoring.dispatchedAt : new Date().toISOString(),
           judgePromptPath: judgePaths.promptFileRel,
           judgeVerdictPath: judgePaths.verdictFileRel,
           judgeAcIds: specAcs.map(ac => ac.id),

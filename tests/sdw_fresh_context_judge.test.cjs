@@ -234,3 +234,57 @@ test('AC16: documentation in orchestrator_protocol.md and skills/sdw-run/SKILL.m
     'sdw-run SKILL.md must document scoring step');
 });
 
+test('AC14: judge subagent fails closed with score 0 when timeout expires without a valid verdict', () => {
+  const tmpDir = setupRepo();
+  try {
+    const implScript = [
+      "const fs = require('fs');",
+      "fs.appendFileSync('index.cjs', '// implemented\\n');",
+      'fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({',
+      "  taskId: process.env.SDW_TASK_ID,",
+      "  status: 'success',",
+      "  acIds: ['AC1', 'AC2'],",
+      "  filesChanged: ['index.cjs'],",
+      "  tests: [],",
+      "  summary: 'implemented index.cjs'",
+      '}));'
+    ].join(' ');
+
+    const initialExit = sdwRun.cmdRun({
+      root: tmpDir,
+      specPath: '.sdw/specs/sample-judge-spec.md',
+      scoring: { judgeMode: 'subagent', judgeTimeoutMs: 1000 },
+      skipReview: true,
+      skipPr: true,
+      implementation: {
+        mode: 'command',
+        segregateTests: false,
+        command: `node -e "${implScript.replace(/"/g, '\\"')}"`
+      }
+    });
+    assert.equal(initialExit, 5);
+
+    const state = stateManager.findLatestRunState(tmpDir);
+    assert.equal(state.steps[5].status, 'awaiting_judgment');
+
+    // Artificially age the dispatchedAt timestamp past the timeout
+    state.steps[5].output.dispatchedAt = new Date(Date.now() - 5000).toISOString();
+    stateManager.saveRunState(tmpDir, state);
+
+    // Resuming past timeout must fail closed with score 0
+    const resumeExit = sdwRun.cmdResume({
+      root: tmpDir,
+      runId: state.runId,
+      scoring: { judgeTimeoutMs: 1000 }
+    });
+    assert.equal(resumeExit, 2);
+
+    const finalState = stateManager.findLatestRunState(tmpDir);
+    assert.equal(finalState.score, 0);
+    assert.equal(finalState.status, 'failed');
+    assert.ok(finalState.errors.some(e => e.error.includes('timed out')));
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+

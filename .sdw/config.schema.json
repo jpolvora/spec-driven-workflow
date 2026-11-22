@@ -60,6 +60,14 @@
           "default": "subagent",
           "description": "Execution mode for Step 5 conformance scoring judge. Allowed: subagent (default), command, host."
         },
+        "judgeTimeoutMs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "default": 600000,
+          "description": "Timeout in milliseconds for judge evaluation before failing closed."
+        },
         "judgeCommand": {
           "type": [
             "string",
