@@ -71,6 +71,8 @@ Central repository index tracking specification lifecycle states, metadata, and 
 | 00071 | 00071-us-81-sdw-run-sync-spec-state-in-the-de | sdw-run: sync spec state in the delivery commit, then ship/converge/merge autonomously on success | completed | medium | github | 2026-10-29 | PASS | - |
 | 00072 | 00072-specification-priority-ordering-validate | Specification priority ordering: validated priority frontmatter, registry column, and deterministic list ordering | completed | high | local | 2026-10-29 | PASS | - |
 | 00073 | 00073-test-implementation-agent-segregation | Test and Implementation Agent Segregation in Orchestrator Dispatch | completed | high | local | 2026-11-19 | PASS | - |
+| 00074 | 00074-enable-testing-features-config-flag | Configurable Testing Features Toggle to Enable or Disable Test Generation, Execution, and Subagent Segregation | pending | high | local | 2026-11-21 | PASS | - |
+| 00075 | 00075-fresh-context-subagent-judge | Fresh-Context Subagent Judge for Qualitative Conformance and Code Quality Evaluation | pending | high | local | 2026-11-21 | PASS | - |
 
 ## Lean-Core Cut (2026-10-25)
 
