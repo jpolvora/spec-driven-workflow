@@ -255,6 +255,7 @@ function createSpecWithCli({ config, candidate }) {
     'new',
     candidateSpecText(candidate),
     '--title', title,
+    '--type', 'bugfix',
     '--root', config.root,
     '--json'
   ], { cwd: config.root, encoding: 'utf8' });
@@ -410,10 +411,11 @@ function applyRetroFollowUp({ config, manifest, item, options, deps } = {}) {
     const processed = new Set(Array.isArray(followUp.processed) ? followUp.processed : []);
     for (const candidate of candidates) {
       if (!QUEUED_SEVERITIES.includes(candidate.severity)) continue;
+      if (candidate.targetScope === 'upstream') continue;
       const candidateId = candidate.id || null;
       if (candidateId && processed.has(candidateId)) continue;
       try {
-        const created = createSpec({ config, manifest, item, candidate });
+        const created = createSpec({ config, manifest, item, candidate, type: 'bugfix' });
         const entry = appendFollowUpQueueEntry(manifest, item, candidate, created, config);
         followUp.queued.push({ candidateId, spec: entry.spec, slug: entry.slug });
       } catch (err) {

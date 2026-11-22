@@ -783,6 +783,7 @@ function collectSignals(state, inspection, leftoverRuns = [], transcripts = {}) 
   };
 
   return {
+    runId: state.runId || null,
     timestamps,
     retries,
     abandonedDispatches,
@@ -852,12 +853,15 @@ function buildReport(options) {
     transcripts: toArray(options.transcripts),
     excludedInputs: [...options.inspection.excludedInputs],
     artifacts: [...options.inspection.artifacts],
+    inspection: options.inspection || null,
     signals: options.signals,
     candidates,
     candidateContract: candidateContract(),
     candidateMode: options.candidateMode || null,
     candidateEvaluation: options.candidateEvaluation !== undefined ? options.candidateEvaluation : undefined,
-    upstreamIssues: toArray(options.upstreamIssues)
+    suggestedSpecifications: toArray(options.suggestedSpecifications),
+    upstreamIssues: toArray(options.upstreamIssues),
+    warnings: toArray(options.warnings)
   };
 }
 
@@ -996,6 +1000,14 @@ function renderMarkdown(report) {
   lines.push(`Candidate contract: fields ${contract.fields.map((field) => `\`${field}\``).join(', ')}; severity ${contract.severity.join('|')}; category ${contract.category.join('|')}.`);
   lines.push('');
 
+  if (report.suggestedSpecifications && report.suggestedSpecifications.length > 0) {
+    lines.push('## Suggested Local Specifications (Upstream Canonical)', '');
+    for (const spec of report.suggestedSpecifications) {
+      lines.push(`- \`${spec.slug}\` (type: bugfix): \`sdw-spec new --type bugfix --title "${spec.title}"\``);
+    }
+    lines.push('');
+  }
+
   if (report.upstreamIssues && report.upstreamIssues.length > 0) {
     lines.push('## Upstream Issue Candidates', '');
     lines.push('The following framework issues were identified in this consumer workspace. Please file them upstream at [spec-driven-workflow issues](https://github.com/jpolvora/spec-driven-workflow/issues):', '');
@@ -1072,12 +1084,44 @@ function runRetro(options = {}) {
   const shouldEvaluateCandidates = Boolean(options.generateCandidates || retroConfig.candidateMode || options.candidateMode);
 
   let candidateEvaluation;
+  const evaluationWarnings = [];
+  const rawLlmResponse = options.candidateEvaluationInput || options._llmResponseMock;
+  if (rawLlmResponse) {
+    try {
+      const parsed = JSON.parse(rawLlmResponse);
+      if (!Array.isArray(parsed) && !(parsed && Array.isArray(parsed.candidates))) {
+        evaluationWarnings.push('Invalid LLM candidate response: expected JSON array or object with candidates');
+      }
+    } catch (parseErr) {
+      evaluationWarnings.push(`Unparsable LLM candidate response: ${parseErr.message}`);
+    }
+  }
+
   if (shouldEvaluateCandidates) {
     candidateEvaluation = extractCandidateContext(root, state, artifactsDirectoryPath, transcripts.inputs, candidateMode);
+    if (evaluationWarnings.length > 0) {
+      candidateEvaluation.warnings = evaluationWarnings;
+      candidateEvaluation.warning = evaluationWarnings[0];
+    }
   }
   const upstreamIssues = isConsumerWorkspace(root)
     ? extractUpstreamIssues(root, state, artifactsDirectoryPath)
     : [];
+
+  const candidates = [...toArray(options.candidates)];
+  let suggestedSpecifications = [];
+  if (isCanonicalUpstream(root) && candidates.length > 0) {
+    suggestedSpecifications = candidates.map((cand) => {
+      const slug = `fix-${String(cand.id || 'issue').toLowerCase()}`;
+      cand.suggestedSpec = {
+        type: 'bugfix',
+        title: cand.title,
+        slug
+      };
+      cand.suggestedCommand = `node skills/sdw-spec/scripts/sdw_spec.cjs new --type bugfix --title "${cand.title}"`;
+      return cand.suggestedSpec;
+    });
+  }
 
   const report = buildReport({
     state,
@@ -1088,10 +1132,12 @@ function runRetro(options = {}) {
     inspection,
     signals,
     transcripts: transcripts.inputs,
-    candidates: options.candidates,
+    candidates,
     candidateMode,
     candidateEvaluation,
-    upstreamIssues
+    suggestedSpecifications,
+    upstreamIssues,
+    warnings: evaluationWarnings
   });
   const outputs = writeReports(root, artifactsDirectoryPath, report);
   return { root, artifactsDir, outputs, report };
