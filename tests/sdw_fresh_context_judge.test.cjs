@@ -288,3 +288,56 @@ test('AC14: judge subagent fails closed with score 0 when timeout expires withou
   }
 });
 
+test('AC13: host mode preserves legacy indefinite pause on resume even past judgeTimeoutMs', () => {
+  const tmpDir = setupRepo();
+  try {
+    const implScript = [
+      "const fs = require('fs');",
+      "fs.appendFileSync('index.cjs', '// implemented\\n');",
+      'fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({',
+      "  taskId: process.env.SDW_TASK_ID,",
+      "  status: 'success',",
+      "  acIds: ['AC1', 'AC2'],",
+      "  filesChanged: ['index.cjs'],",
+      "  tests: [],",
+      "  summary: 'implemented index.cjs'",
+      '}));'
+    ].join(' ');
+
+    const initialExit = sdwRun.cmdRun({
+      root: tmpDir,
+      specPath: '.sdw/specs/sample-judge-spec.md',
+      scoring: { judgeMode: 'host', judgeTimeoutMs: 1000 },
+      skipReview: true,
+      skipPr: true,
+      implementation: {
+        mode: 'command',
+        segregateTests: false,
+        command: `node -e "${implScript.replace(/"/g, '\\"')}"`
+      }
+    });
+    assert.equal(initialExit, 5);
+
+    const state = stateManager.findLatestRunState(tmpDir);
+    assert.equal(state.steps[5].output.judgeResolution, 'host');
+
+    // Artificially age the dispatchedAt timestamp past the timeout
+    state.steps[5].output.dispatchedAt = new Date(Date.now() - 5000).toISOString();
+    stateManager.saveRunState(tmpDir, state);
+
+    // Resuming in host mode must re-pause with 5 awaiting judgment, NOT fail closed
+    const resumeExit = sdwRun.cmdResume({
+      root: tmpDir,
+      runId: state.runId,
+      scoring: { judgeMode: 'host', judgeTimeoutMs: 1000 }
+    });
+    assert.equal(resumeExit, 5);
+
+    const finalState = stateManager.findLatestRunState(tmpDir);
+    assert.equal(finalState.status, 'paused');
+    assert.equal(finalState.steps[5].status, 'awaiting_judgment');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+

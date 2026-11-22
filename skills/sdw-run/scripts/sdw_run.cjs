@@ -1998,7 +1998,8 @@ function cmdRun(options) {
       console.log(`[Step 5: Conformance Scoring] Reusing submitted judge verdict (${judgeResolution}).`);
     } else {
       // AC14: If judge subagent was already awaiting judgment, check if timeout elapsed without a valid verdict
-      if (priorScoring && priorScoring.status === 'awaiting_judgment' && priorScoring.dispatchedAt) {
+      const isSubagentDispatch = priorScoring && priorScoring.judgeResolution === 'subagent';
+      if (isSubagentDispatch && priorScoring.status === 'awaiting_judgment' && priorScoring.dispatchedAt) {
         const elapsedMs = Date.now() - new Date(priorScoring.dispatchedAt).getTime();
         const timeoutMs = judgeConfig.timeoutMs || scoreEvaluator.JUDGE_TIMEOUT_MS || 600000;
         if (elapsedMs > timeoutMs) {
