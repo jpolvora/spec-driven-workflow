@@ -297,5 +297,27 @@ Re-executes an already delivered specification in refinement mode instead of imp
 - **Lifecycle:** `sandbox list`, `sandbox report --run-id`, `sandbox clean --run-id`. The report is refreshed after `run`, `resume`, and `task finish`; cleanup is always proposed, never automatic, and keeps `sandbox.json` plus `report.md`. Creation halts when the resolved target directory already exists, naming the `sandbox clean --run-id` command; `sandbox clean` also removes an orphaned target left by an interrupted creation (no metadata).
 - **Limits:** a clone is a filesystem and git boundary, not a security sandbox. Worker commands still run with the host credentials and network.
 
+## 11. Harness Adapter Layer & Multi-Harness Dispatch Protocol (Spec 00078)
+
+The Harness Adapter Layer (`skills/sdw-run/scripts/harness_adapters.cjs`) abstracts environment-specific subagent dispatch mechanics, model/effort flags, and user confirmation modalities while preserving core SDW agnosticism.
+
+- **Auto-Detection (`adapter: "auto"`):** Evaluates environment markers:
+  - `antigravity`: `ANTIGRAVITY_APP` or `AGY_SESSION_ID`
+  - `claude-code`: `CLAUDE_CODE` or `CLAUDE_PROJECT_DIR`
+  - `opencode`: `OPENCODE_API_KEY` or `OPENCODE_RUN`
+  - `cursor`: `CURSOR_PROJECT_DIR`
+  - `generic`: Default fallback when no specific markers match
+- **Dispatch Formatting:**
+  - `antigravity`: Emits `invoke_subagent` envelope with `TypeName`, `Role`, `Prompt`, and `Model`.
+  - `opencode`: Emits `opencode run -m <model>` CLI execution command.
+  - `claude-code`: Emits Claude Code subagent execution prompt instruction.
+  - `generic`: Emits generic child process execution command.
+- **Model & Effort Precedence:**
+  1. Specification frontmatter overrides (`model: ...`, `effort: ...`).
+  2. Project configuration defaults (`harness.subagent.defaultModel`, `harness.subagent.defaultEffort`).
+  3. Built-in defaults (`model: "flash"`, `effort: "low"`).
+- **Confirmation Modality:** Maps to `ask_question` in Antigravity and interactive `readline` in generic/terminal environments.
+
+
 
 

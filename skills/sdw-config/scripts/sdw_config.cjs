@@ -843,6 +843,35 @@ function validateConfigSchema(config) {
     }
   }
 
+  // harness (Spec 00078 AC1, AC6, AC10)
+  if ('harness' in config) {
+    if (!config.harness || typeof config.harness !== 'object' || Array.isArray(config.harness)) {
+      errors.push('Property "harness" must be an object.');
+    } else {
+      if ('adapter' in config.harness) {
+        const allowedAdapters = ['auto', 'antigravity', 'claude-code', 'opencode', 'cursor', 'generic'];
+        if (typeof config.harness.adapter !== 'string' || !allowedAdapters.includes(config.harness.adapter)) {
+          errors.push(`Property "harness.adapter" must be one of: ${allowedAdapters.join(', ')}.`);
+        }
+      }
+      if ('subagent' in config.harness) {
+        if (!config.harness.subagent || typeof config.harness.subagent !== 'object' || Array.isArray(config.harness.subagent)) {
+          errors.push('Property "harness.subagent" must be an object.');
+        } else {
+          if ('defaultModel' in config.harness.subagent && typeof config.harness.subagent.defaultModel !== 'string') {
+            errors.push('Property "harness.subagent.defaultModel" must be a string.');
+          }
+          if ('defaultEffort' in config.harness.subagent) {
+            const allowedEfforts = ['low', 'medium', 'high'];
+            if (typeof config.harness.subagent.defaultEffort !== 'string' || !allowedEfforts.includes(config.harness.subagent.defaultEffort)) {
+              errors.push(`Property "harness.subagent.defaultEffort" must be one of: ${allowedEfforts.join(', ')}.`);
+            }
+          }
+        }
+      }
+    }
+  }
+
   // stateDir
   if ('stateDir' in config) {
     if (typeof config.stateDir !== 'string' || config.stateDir.trim().length === 0) {
