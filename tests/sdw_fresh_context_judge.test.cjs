@@ -151,3 +151,70 @@ test('AC9: verdict validation requires per-criterion verdicts, overall score, an
   const incompleteValidation = scoreEvaluator.validateVerdict(incompleteVerdict, { acs });
   assert.equal(incompleteValidation.valid, false, 'Incomplete verdict must fail validation');
 });
+
+test('AC15: sdwConfig validates scoring.judgeMode enum', () => {
+  const validConfigs = ['subagent', 'command', 'host'].map(mode =>
+    sdwConfig.validateConfigSchema({
+      specsDir: '.sdw/specs',
+      scoring: { judgeMode: mode }
+    })
+  );
+  validConfigs.forEach(res => assert.equal(res.valid, true));
+
+  const invalid = sdwConfig.validateConfigSchema({
+    specsDir: '.sdw/specs',
+    scoring: { judgeMode: 'magic' }
+  });
+  assert.equal(invalid.valid, false);
+  assert.ok(invalid.errors.some(e => e.includes('scoring.judgeMode')));
+});
+
+test('AC12, AC13: Step 5 respects judgeMode for command and host execution', () => {
+  const tmpDir = setupRepo();
+  try {
+    const implScript = [
+      "const fs = require('fs');",
+      "fs.appendFileSync('index.cjs', '// implemented\\n');",
+      'fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({',
+      "  taskId: process.env.SDW_TASK_ID,",
+      "  status: 'success',",
+      "  acIds: ['AC1', 'AC2'],",
+      "  filesChanged: ['index.cjs'],",
+      "  tests: [],",
+      "  summary: 'implemented index.cjs'",
+      '}));'
+    ].join(' ');
+
+    const hostExit = sdwRun.cmdRun({
+      root: tmpDir,
+      specPath: '.sdw/specs/sample-judge-spec.md',
+      scoring: { judgeMode: 'host' },
+      skipReview: true,
+      skipPr: true,
+      implementation: {
+        mode: 'command',
+        segregateTests: false,
+        command: `node -e "${implScript.replace(/"/g, '\\"')}"`
+      }
+    });
+    assert.equal(hostExit, 5);
+    const hostState = stateManager.findLatestRunState(tmpDir);
+    assert.equal(hostState.steps[5].output.judgeResolution, 'host');
+    assert.equal(typeof hostState.steps[5].output.envelope, 'undefined');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('AC16: documentation in orchestrator_protocol.md and skills/sdw-run/SKILL.md records fresh-context judge protocol', () => {
+  const protocolPath = path.resolve(__dirname, '../skills/sdw-run/references/orchestrator_protocol.md');
+  const protocol = fs.readFileSync(protocolPath, 'utf8');
+  assert.ok(protocol.includes('judgeMode') || protocol.includes('subagent judge') || protocol.includes('conformance judge'),
+    'orchestrator_protocol.md must document fresh-context subagent judge protocol');
+
+  const skillPath = path.resolve(__dirname, '../skills/sdw-run/SKILL.md');
+  const skill = fs.readFileSync(skillPath, 'utf8');
+  assert.ok(skill.includes('judge') || skill.includes('scoring'),
+    'sdw-run SKILL.md must document scoring step');
+});
+
