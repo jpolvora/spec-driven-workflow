@@ -324,6 +324,12 @@ function validateVerdict(raw, options) {
     errors.push('Verdict "notes" must be a string when present.');
   }
 
+  if (raw.qualitativeFindings !== undefined && raw.qualitativeFindings !== null) {
+    if (typeof raw.qualitativeFindings !== 'object' || Array.isArray(raw.qualitativeFindings)) {
+      errors.push('Verdict "qualitativeFindings" must be an object when present.');
+    }
+  }
+
   return {
     valid: errors.length === 0,
     errors,

@@ -166,6 +166,18 @@ test('AC9: verdict validation requires per-criterion verdicts, overall score, an
   };
   const incompleteValidation = scoreEvaluator.validateVerdict(incompleteVerdict, { acs });
   assert.equal(incompleteValidation.valid, false, 'Incomplete verdict must fail validation');
+
+  // Non-object qualitative findings should fail validation
+  const invalidQualitative = {
+    score: 10,
+    verdicts: [
+      { id: 'AC1', verdict: 'verified', evidence: 'index.cjs:1' },
+      { id: 'AC2', verdict: 'verified', evidence: 'index.cjs:2' }
+    ],
+    qualitativeFindings: 'not-an-object'
+  };
+  const invalidQualValidation = scoreEvaluator.validateVerdict(invalidQualitative, { acs });
+  assert.equal(invalidQualValidation.valid, false, 'Non-object qualitative findings must fail validation');
 });
 
 test('AC15: sdwConfig validates scoring.judgeMode enum', () => {
