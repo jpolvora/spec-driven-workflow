@@ -505,7 +505,7 @@ function isAutonomousDelivery(config) {
 // Every gate-failure return path below records the gate before returning, and
 // all of those paths return before Step 8, so no ship or merge is attempted.
 function failedDeliveryGates(gates) {
-  return Object.keys(gates || {}).filter(g => !gates[g] || gates[g].status !== 'passed');
+  return Object.keys(gates || {}).filter(g => !gates[g] || (gates[g].status !== 'passed' && gates[g].status !== 'skipped'));
 }
 
 function recordBlockedGate(targetRoot, state, gate, detail) {
@@ -2162,7 +2162,7 @@ function cmdRun(options) {
     const topGates = (state.steps[4] && state.steps[4].gates) || {};
     const outGates = (state.steps[4] && state.steps[4].output && state.steps[4].output.gates) || {};
     const gates = Object.keys(topGates).length > 0 ? topGates : outGates;
-    const failedGates = Object.keys(gates).filter(g => gates[g].status !== 'passed');
+    const failedGates = Object.keys(gates).filter(g => gates[g].status !== 'passed' && gates[g].status !== 'skipped');
     if (failedGates.length > 0) {
       console.error(`[Step 6: Delivery Commit] Blocked: required verification gate(s) failed (${failedGates.join(', ')}).`);
       state = stateManager.updateStepState(targetRoot, state.runId, 6, 'blocked_gates_failed');

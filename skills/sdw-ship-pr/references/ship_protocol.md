@@ -14,7 +14,8 @@ Before publishing branches or creating remote pull requests, `sdw-ship-pr` evalu
 | `prePrDiscovery` | string | `block` | Prepare-obligation discovery mode: `block`, `warn`, or `off` (absent resolves to `block`) | Unacknowledged rows in `block` halt ship (exit 1) |
 | `prePrCommand` | string | null | Shell command to execute (e.g. `npm run lint` or custom verify script) | Non-zero exit code halts ship |
 | `requiredBuild` | boolean | false | If true, runs `npm run build` or project build command | Build failure halts ship |
-| `runAllTests` | boolean | false | If true, runs `npm test` or full test suite | Test failure halts ship |
+| `runAllTests` | boolean | false | If true, runs `npm test` or full test suite (skipped when `enableTestingFeatures` is false) | Test failure halts ship |
+| `enableTestingFeatures` | boolean | false | Global master toggle for testing features. When false, test gate is skipped on the pre-PR board with status 'skipped' and post-PR review fix loops skip test execution | N/A |
 | `securityChecksEnabled` | boolean | true | Delegates to `sdw-security-checks` over the worktree for credentials, private keys, or exposed tokens | Leak detection or scanner failure halts ship |
 | `reviewFixCommand` | string | null | Command that applies review-thread fixes before the convergence loop resolves threads | Unset: active threads are reported as `review_pending`, never auto-resolved without verified fix |
 

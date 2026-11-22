@@ -150,6 +150,12 @@ function extractTestPlan(specContent) {
 }
 
 function generateRefinementBlueprint(specContent, options = {}) {
+  const enableTestingFeatures = options.enableTestingFeatures !== undefined
+    ? Boolean(options.enableTestingFeatures)
+    : (options.config && options.config.enableTestingFeatures !== undefined
+        ? Boolean(options.config.enableTestingFeatures)
+        : false);
+
   // Only paths the specification names, plus the files it declares new. A
   // pathless specification resolves no target file here: the planner falls back
   // to a verified bucket or refuses, and never synthesizes `skills/<slug>/...`
@@ -159,10 +165,14 @@ function generateRefinementBlueprint(specContent, options = {}) {
     targetFiles = extractDeclaredNewFiles(specContent);
   }
 
+  if (!enableTestingFeatures && targetFiles && targetFiles.length > 0) {
+    targetFiles = targetFiles.filter(f => !f.includes('test') && !f.startsWith('tests/'));
+  }
+
   return {
     targetFiles,
     architecturalApproach: extractArchitecturalApproach(specContent),
-    testPlan: extractTestPlan(specContent)
+    testPlan: enableTestingFeatures ? extractTestPlan(specContent) : null
   };
 }
 

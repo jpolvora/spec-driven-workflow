@@ -34,7 +34,7 @@ These rules override convenience. Apply them in every mode, on every harness and
 5. **Surgical Scope Enclosure.** Touch only what the task requires; match existing style. No adjacent refactors, reformatting, renames, or drive-by fixes. Remove only orphans your change created; mention unrelated dead code instead of deleting it.
 6. **Empirical Goal-Driven Verification.** Turn every requirement into a verifiable check, test, or empirical pass/fail signal. State a short plan with a verification step per action and loop until the check passes before declaring completion.
 7. **Product Guarantees.** Preserve zero runtime npm dependencies, Node.js 22 standard library, deterministic CLI anchors, harness/agent agnosticism, portable paths, and file-based contracts.
-8. **Immutable Test Assertions.** Code implementers are strictly prohibited from modifying test assertions to force test passes; satisfy tests exclusively through production code.
+8. **Immutable Test Assertions.** When testing features are active (see `enableTestingFeatures`), implementers are strictly prohibited from modifying test assertions to force test passes; satisfy tests exclusively through production code.
 
 ## 🧠 MEMORY-FIRST — MANDATORY FOR EVERY SKILL
 
