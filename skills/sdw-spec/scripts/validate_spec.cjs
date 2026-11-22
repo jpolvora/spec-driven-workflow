@@ -13,6 +13,16 @@ const SPEC_STATUSES = ['draft', 'awaiting-approval', 'ready-to-implement', 'impl
 const SPEC_PRIORITIES = ['high', 'medium', 'low'];
 const DEFAULT_PRIORITY = 'medium';
 
+// Optional frontmatter specification type. Absent values default to `feature`
+// (AC1..AC4 of 00077).
+const SPEC_TYPES = ['feature', 'bugfix', 'task'];
+const DEFAULT_TYPE = 'feature';
+
+function normalizeType(value) {
+  const normalized = String(value === undefined || value === null ? '' : value).trim();
+  return SPEC_TYPES.includes(normalized) ? normalized : DEFAULT_TYPE;
+}
+
 function normalizePriority(value) {
   const normalized = String(value === undefined || value === null ? '' : value).trim();
   return SPEC_PRIORITIES.includes(normalized) ? normalized : DEFAULT_PRIORITY;
@@ -341,6 +351,10 @@ function validate(text, options) {
     if (fm.priority !== undefined && fm.priority !== '' && !SPEC_PRIORITIES.includes(fm.priority)) {
       errors.push({ code: 'priority', message: `priority must be one of: ${SPEC_PRIORITIES.join(', ')}.` });
     }
+    // Spec 00077 AC3, AC4: type is optional (defaults to feature); if present, must be in SPEC_TYPES.
+    if (fm.type !== undefined && fm.type !== '' && !SPEC_TYPES.includes(fm.type)) {
+      errors.push({ code: 'type', message: `type must be one of: ${SPEC_TYPES.join(', ')}.` });
+    }
   }
 
   for (const heading of ['## Description', '## Acceptance Criteria']) {
@@ -448,6 +462,9 @@ module.exports = {
   SPEC_PRIORITIES,
   DEFAULT_PRIORITY,
   normalizePriority,
+  SPEC_TYPES,
+  DEFAULT_TYPE,
+  normalizeType,
   SPEC_FILENAME_RE,
   parseSpecFilename,
   isSpecFilename,

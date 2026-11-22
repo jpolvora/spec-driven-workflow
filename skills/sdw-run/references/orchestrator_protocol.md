@@ -203,12 +203,13 @@ Prohibitions carried by every prompt: no `git commit`/`push`/`branch`/`checkout`
 - Supports automated surgical fix loop (up to 3 attempts) with pre-commit secret leak scan.
 - Gate failures halt execution and record failed gate status in `state.steps[4].gates`.
 
-### LLM-Judge Conformance Scoring (Step 5, Spec 027)
+### LLM-Judge Conformance Scoring (Step 5, Spec 027 & Spec 00075)
 - The static evidence-count formula is gone. Scoring is delegated to an LLM judge invoked with a fenced context: the acceptance criteria plus the generated diff, never transcripts.
-- **Judge resolution:** `scoring.judgeCommand` when configured (env `SDW_JUDGE_COMMAND` as fallback); otherwise the current agent model instance judges and submits.
-- **Agent path:** Step 5 writes `step-5-judge.prompt.md`, sets `awaiting_judgment`, and exits with code `5`. The host judge writes `step-5-judge.verdict.json` and runs:
-  `node skills/sdw-run/scripts/sdw_run.cjs score submit --run-id <runId> --verdict <path>`
-- **Verdict contract:** integer `score` 0–10 plus a `verdicts` array covering every criterion exactly once with `verified`/`failed` and non-empty `evidence`. The score is derived from the per-criterion verdicts (`round(verified / total * 10)`); a divergent reported score is recorded as `judge.scoreMismatch`.
+- **Judge execution mode:** `scoring.judgeMode` in `.sdw/config.json` supports values `"subagent"` (default), `"command"`, and `"host"`.
+  - **Subagent judge (`judgeMode: "subagent"`):** Step 5 emits a structured subagent dispatch envelope (`type: "judge"`, `role: "conformance_judge"`) referencing the active skills harness root (`skillsRoot`) and `sdw-rules` (`skills/sdw-rules/SKILL.md` and `references/anti_patterns.md`). The prompt includes acceptance criteria, diff, touched files list, and explicit qualitative evaluation dimensions (code quality, soundness, best practices, performance, redundancy, simplicity/YAGNI). The fresh-context judge returns structured verdict JSON with per-criterion verdicts, overall score, and `qualitativeFindings`. Step 5 pauses with exit code `5` awaiting verdict submission via `sdw-run score submit`.
+  - **Command mode (`judgeMode: "command"`):** Executes `scoring.judgeCommand` (or env `SDW_JUDGE_COMMAND`) as an external subprocess.
+  - **Host mode (`judgeMode: "host"`):** Preserves legacy behavior where Step 5 pauses for the host agent itself to review `step-5-judge.prompt.md` and submit the verdict.
+- **Verdict contract:** integer `score` 0–10 plus a `verdicts` array covering every criterion exactly once with `verified`/`failed` and non-empty `evidence`, plus `qualitativeFindings` (required for fresh-context subagent judges, optional for external judge commands and test stubs). The score is derived from the per-criterion verdicts (`round(verified / total * 10)`); a divergent reported score is recorded as `judge.scoreMismatch`.
 - **Criticity:** `scoring.judgeCriticity` = `permissive` | `strict` | `perfectionist` (default `strict`), quoted in the judge prompt with its rubric.
 - **Fail closed:** 0 criteria scores 0/10 without invoking the judge; an unavailable judge command, a missing verdict file, or a malformed verdict scores 0/10 with an actionable error and exit code 2.
 - Diff context is capped at 120000 bytes with an explicit truncation marker.
@@ -240,9 +241,20 @@ Step 8 delegates all final PR verification gates, remote publishing, SCM submiss
   - Records delivery outcome (`pullRequest`, `shipStatus`, `pushedBranch`, `reviewConvergence`, `branchingSync`) into `.sdw/state/{runId}.state.json`.
   - Transitions specification status to `completed` in `.sdw/specs/index.specs.md`.
 
-## 8. Delegated Code Review via sdw-code-review (Step 7)
+## 8. Delegated Code Review via sdw-code-review & Fresh-Context Subagents (Step 7)
 
-Step 7 delegates all working-tree review execution to the standalone `sdw-code-review` skill. The orchestrator holds no duplicated review instructions.
+Step 7 evaluates code quality, standards compliance, and defect classes following delivery commit (Step 6) and prior to PR preparation (Step 8).
+
+### Execution Modes (`codeReview.mode`)
+- **Subagent mode (`codeReview.mode: "subagent"`, default):**
+  - **Fresh Context Reviewer:** Dispatches an isolated reviewer subagent session without prior conversation transcripts.
+  - **Read-Only Access:** Reviewer brief strictly enforces read-only access (zero file mutations permitted, no git commits or pushes).
+  - **Context Fencing:** Prompt inlines repository instructions (`AGENTS.md`), active memory traps from `sdw-memory`, `sdw-rules` simplicity directives, specification acceptance criteria, touched files list, and git diff against `baseCommit`.
+  - **Defect-Class Aggregation:** Reviewer aggregates duplicate occurrences of the same underlying defect class into a single finding thread (max 6 findings per round), identifying primary `file:line` coordinates, concrete failing evidence, minimal suggested fix diff, and secondary `otherLocations`.
+  - **Remediation Loop:** When blocking findings are reported, dispatches a distinct fresh-context fixer subagent with write access scoped strictly to target files (`finding.file` and `otherLocations`). Fixes are verified, committed with `fix(<slug>): address code review findings (round <N>)`, and re-evaluated by a clean reviewer subagent up to `codeReview.maxIterations` (default 5, overridable via `--review-max-iterations`).
+  - **Outcome:** Zero blocking findings advances to Step 8; reaching `maxIterations` with open blocking findings records `review_failed` and halts execution.
+- **CLI mode (`codeReview.mode: "cli"`):** Executes legacy deterministic review checks using `sdw_code_review.cjs` against `baseCommit`.
+- **Command mode (`codeReview.mode: "command"`):** Executes custom external runner defined in `codeReview.command`.
 
 ### Delegation Contract
 - **Invocation:** `node skills/sdw-code-review/scripts/sdw_code_review.cjs run --target <root> [--base <ref>] --report <artifactsDir>/<slug>-step-7.md [--fix] [--json]`
@@ -284,6 +296,28 @@ Re-executes an already delivered specification in refinement mode instead of imp
 - **Paths:** dispatch envelopes and task prompts print absolute sandbox paths, the working directory is the clone root, and `task finish` / `resume` commands carry `--root <clonePath>`.
 - **Lifecycle:** `sandbox list`, `sandbox report --run-id`, `sandbox clean --run-id`. The report is refreshed after `run`, `resume`, and `task finish`; cleanup is always proposed, never automatic, and keeps `sandbox.json` plus `report.md`. Creation halts when the resolved target directory already exists, naming the `sandbox clean --run-id` command; `sandbox clean` also removes an orphaned target left by an interrupted creation (no metadata).
 - **Limits:** a clone is a filesystem and git boundary, not a security sandbox. Worker commands still run with the host credentials and network.
+
+## 11. Harness Adapter Layer & Multi-Harness Dispatch Protocol (Spec 00078)
+
+The Harness Adapter Layer (`skills/sdw-run/scripts/harness_adapters.cjs`) abstracts environment-specific subagent dispatch mechanics, model/effort flags, and user confirmation modalities while preserving core SDW agnosticism.
+
+- **Auto-Detection (`adapter: "auto"`):** Evaluates environment markers:
+  - `antigravity`: `ANTIGRAVITY_APP` or `AGY_SESSION_ID`
+  - `claude-code`: `CLAUDE_CODE` or `CLAUDE_PROJECT_DIR`
+  - `opencode`: `OPENCODE_API_KEY` or `OPENCODE_RUN`
+  - `cursor`: `CURSOR_PROJECT_DIR`
+  - `generic`: Default fallback when no specific markers match
+- **Dispatch Formatting:**
+  - `antigravity`: Emits `invoke_subagent` envelope with `TypeName`, `Role`, `Prompt`, and `Model`.
+  - `opencode`: Emits `opencode run -m <model>` CLI execution command.
+  - `claude-code`: Emits Claude Code subagent execution prompt instruction.
+  - `generic`: Emits generic child process execution command.
+- **Model & Effort Precedence:**
+  1. Specification frontmatter overrides (`model: ...`, `effort: ...`).
+  2. Project configuration defaults (`harness.subagent.defaultModel`, `harness.subagent.defaultEffort`).
+  3. Built-in defaults (`model: "flash"`, `effort: "low"`).
+- **Confirmation Modality:** Maps to `ask_question` in Antigravity and interactive `readline` in generic/terminal environments.
+
 
 
 

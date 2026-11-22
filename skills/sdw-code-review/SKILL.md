@@ -42,7 +42,7 @@ uncommitted working-tree changes against an auto-detected base branch, applying
 
 3. **Triage Report & Delegate**
    Read Markdown report as executable fix plan. Under `sdw-run` Step 7, dispatch
-   subagent or CLI runner and inspect JSON (`passed`, `errorCount`,
+   fresh-context subagent or CLI runner and inspect JSON (`passed`, `errorCount`,
    `warningCount`, `suggestionCount`, `findings`) to advance, fix, or pause.
    - Done when: Blocking findings are `0` or fix ceiling reached with residual recorded.
 

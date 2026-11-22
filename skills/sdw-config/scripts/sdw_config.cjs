@@ -305,12 +305,21 @@ const DEFAULT_CONFIG = {
   enableTestingFeatures: false,
   scoreMin: 8,
   scoring: {
+    judgeMode: 'subagent',
+    judgeTimeoutMs: 600000,
     judgeCommand: null,
     judgeModel: null,
     judgeProvider: null,
     judgeEffort: null,
     judgeApiEndpoint: null,
     judgeCriticity: 'strict'
+  },
+  codeReview: {
+    mode: 'subagent',
+    maxIterations: 5,
+    command: null,
+    model: null,
+    effort: null
   },
   scmCodeReviewEnabled: false,
   pushDelivery: false,
@@ -348,6 +357,13 @@ const DEFAULT_CONFIG = {
   maxPreemptions: 3,
   memory: {
     backends: { wsMemo: true, traps: true, files: true }
+  },
+  harness: {
+    adapter: 'auto',
+    subagent: {
+      defaultModel: 'flash',
+      defaultEffort: 'low'
+    }
   }
 };
 
@@ -401,6 +417,17 @@ const DEFAULT_SCHEMA = {
       "type": "object",
       "description": "Configuration for Step 5 LLM-judge conformance scoring (Spec 027).",
       "properties": {
+        "judgeMode": {
+          "type": "string",
+          "enum": ["subagent", "command", "host"],
+          "default": "subagent",
+          "description": "Execution mode for Step 5 conformance scoring judge. Allowed: subagent (default), command, host."
+        },
+        "judgeTimeoutMs": {
+          "type": ["integer", "null"],
+          "default": 600000,
+          "description": "Timeout in milliseconds for judge evaluation before failing closed."
+        },
         "judgeCommand": {
           "type": ["string", "null"],
           "default": null,
@@ -431,6 +458,39 @@ const DEFAULT_SCHEMA = {
           "enum": ["permissive", "strict", "perfectionist"],
           "default": "strict",
           "description": "Judge strictness: permissive credits partial attempts, strict requires the demanded behaviour, perfectionist requires complete implementation with verification."
+        }
+      },
+      "additionalProperties": false
+    },
+    "codeReview": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["subagent", "cli", "command"],
+          "default": "subagent",
+          "description": "Execution mode for Step 7 code review: subagent (default), cli, or command."
+        },
+        "maxIterations": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 5,
+          "description": "Maximum number of review-and-fix iterations."
+        },
+        "command": {
+          "type": ["string", "null"],
+          "default": null,
+          "description": "Custom command to execute when codeReview.mode is 'command'."
+        },
+        "model": {
+          "type": ["string", "null"],
+          "default": null,
+          "description": "Optional model override for reviewer subagent."
+        },
+        "effort": {
+          "type": ["string", "null"],
+          "default": null,
+          "description": "Optional reasoning effort hint for reviewer subagent."
         }
       },
       "additionalProperties": false
@@ -659,6 +719,48 @@ const DEFAULT_SCHEMA = {
         }
       },
       "additionalProperties": true
+    },
+    "harness": {
+      "type": "object",
+      "description": "Configuration for agent runtime harness adapters and subagent dispatch.",
+      "properties": {
+        "adapter": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "antigravity",
+            "claude-code",
+            "opencode",
+            "cursor",
+            "generic"
+          ],
+          "default": "auto",
+          "description": "Active agent harness adapter. Defaults to auto-detection."
+        },
+        "subagent": {
+          "type": "object",
+          "description": "Defaults for subagent model and effort selection.",
+          "properties": {
+            "defaultModel": {
+              "type": "string",
+              "default": "flash",
+              "description": "Default model tier for subagent dispatch."
+            },
+            "defaultEffort": {
+              "type": "string",
+              "enum": [
+                "low",
+                "medium",
+                "high"
+              ],
+              "default": "low",
+              "description": "Default reasoning effort for subagent dispatch."
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": true
@@ -732,6 +834,17 @@ function validateConfigSchema(config) {
           errors.push(`Property "scoring.${key}" must be a string or null.`);
         }
       }
+      if ('judgeMode' in config.scoring) {
+        const allowedJudgeModes = ['subagent', 'command', 'host'];
+        if (typeof config.scoring.judgeMode !== 'string' || !allowedJudgeModes.includes(config.scoring.judgeMode)) {
+          errors.push(`Property "scoring.judgeMode" must be one of: ${allowedJudgeModes.join(', ')}.`);
+        }
+      }
+      if ('judgeTimeoutMs' in config.scoring) {
+        if (config.scoring.judgeTimeoutMs !== null && (!Number.isInteger(config.scoring.judgeTimeoutMs) || config.scoring.judgeTimeoutMs <= 0)) {
+          errors.push('Property "scoring.judgeTimeoutMs" must be a positive integer or null.');
+        }
+      }
       if ('judgeCriticity' in config.scoring) {
         const allowedCriticity = ['permissive', 'strict', 'perfectionist'];
         if (typeof config.scoring.judgeCriticity !== 'string' || !allowedCriticity.includes(config.scoring.judgeCriticity)) {
@@ -741,10 +854,63 @@ function validateConfigSchema(config) {
     }
   }
 
+  // codeReview (Spec 00076 AC1, AC2, AC19)
+  if ('codeReview' in config) {
+    if (!config.codeReview || typeof config.codeReview !== 'object' || Array.isArray(config.codeReview)) {
+      errors.push('Property "codeReview" must be an object.');
+    } else {
+      if ('mode' in config.codeReview) {
+        const allowedReviewModes = ['subagent', 'cli', 'command'];
+        if (typeof config.codeReview.mode !== 'string' || !allowedReviewModes.includes(config.codeReview.mode)) {
+          errors.push(`Property "codeReview.mode" must be one of: ${allowedReviewModes.join(', ')}.`);
+        }
+      }
+      if ('maxIterations' in config.codeReview) {
+        if (!Number.isInteger(config.codeReview.maxIterations) || config.codeReview.maxIterations < 1) {
+          errors.push('Property "codeReview.maxIterations" must be an integer >= 1.');
+        }
+      }
+      for (const key of ['command', 'model', 'effort']) {
+        if (key in config.codeReview && config.codeReview[key] !== null && typeof config.codeReview[key] !== 'string') {
+          errors.push(`Property "codeReview.${key}" must be a string or null.`);
+        }
+      }
+    }
+  }
+
   // scmCodeReviewEnabled
   if ('scmCodeReviewEnabled' in config) {
     if (typeof config.scmCodeReviewEnabled !== 'boolean') {
       errors.push('Property "scmCodeReviewEnabled" must be a boolean.');
+    }
+  }
+
+  // harness (Spec 00078 AC1, AC6, AC10)
+  if ('harness' in config) {
+    if (!config.harness || typeof config.harness !== 'object' || Array.isArray(config.harness)) {
+      errors.push('Property "harness" must be an object.');
+    } else {
+      if ('adapter' in config.harness) {
+        const allowedAdapters = ['auto', 'antigravity', 'claude-code', 'opencode', 'cursor', 'generic'];
+        if (typeof config.harness.adapter !== 'string' || !allowedAdapters.includes(config.harness.adapter)) {
+          errors.push(`Property "harness.adapter" must be one of: ${allowedAdapters.join(', ')}.`);
+        }
+      }
+      if ('subagent' in config.harness) {
+        if (!config.harness.subagent || typeof config.harness.subagent !== 'object' || Array.isArray(config.harness.subagent)) {
+          errors.push('Property "harness.subagent" must be an object.');
+        } else {
+          if ('defaultModel' in config.harness.subagent && typeof config.harness.subagent.defaultModel !== 'string') {
+            errors.push('Property "harness.subagent.defaultModel" must be a string.');
+          }
+          if ('defaultEffort' in config.harness.subagent) {
+            const allowedEfforts = ['low', 'medium', 'high'];
+            if (typeof config.harness.subagent.defaultEffort !== 'string' || !allowedEfforts.includes(config.harness.subagent.defaultEffort)) {
+              errors.push(`Property "harness.subagent.defaultEffort" must be one of: ${allowedEfforts.join(', ')}.`);
+            }
+          }
+        }
+      }
     }
   }
 
@@ -1051,6 +1217,14 @@ function loadConfig(targetRoot, options = {}) {
     verification: {
       ...DEFAULT_CONFIG.verification,
       ...((rawConfig && rawConfig.verification) || {})
+    },
+    harness: {
+      ...DEFAULT_CONFIG.harness,
+      ...((rawConfig && rawConfig.harness) || {}),
+      subagent: {
+        ...DEFAULT_CONFIG.harness.subagent,
+        ...((rawConfig && rawConfig.harness && rawConfig.harness.subagent) || {})
+      }
     }
   };
   const resolved = {};

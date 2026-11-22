@@ -50,6 +50,24 @@
       "type": "object",
       "description": "Configuration for Step 5 LLM-judge conformance scoring (Spec 027).",
       "properties": {
+        "judgeMode": {
+          "type": "string",
+          "enum": [
+            "subagent",
+            "command",
+            "host"
+          ],
+          "default": "subagent",
+          "description": "Execution mode for Step 5 conformance scoring judge. Allowed: subagent (default), command, host."
+        },
+        "judgeTimeoutMs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "default": 600000,
+          "description": "Timeout in milliseconds for judge evaluation before failing closed."
+        },
         "judgeCommand": {
           "type": [
             "string",
@@ -129,6 +147,39 @@
           },
           "default": [],
           "description": "Explicit transcript files the retrospective scans line by line for sdw-run command signatures. Supports the {projectRoot} token; project-relative paths stay inside the project root. Empty by default: transcripts are never discovered."
+        }
+      },
+      "additionalProperties": false
+    },
+    "codeReview": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["subagent", "cli", "command"],
+          "default": "subagent",
+          "description": "Execution mode for Step 7 code review: subagent (default), cli, or command."
+        },
+        "maxIterations": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 5,
+          "description": "Maximum number of review-and-fix iterations."
+        },
+        "command": {
+          "type": ["string", "null"],
+          "default": null,
+          "description": "Custom command to execute when codeReview.mode is 'command'."
+        },
+        "model": {
+          "type": ["string", "null"],
+          "default": null,
+          "description": "Optional model override for reviewer subagent."
+        },
+        "effort": {
+          "type": ["string", "null"],
+          "default": null,
+          "description": "Optional reasoning effort hint for reviewer subagent."
         }
       },
       "additionalProperties": false
@@ -411,6 +462,48 @@
         }
       },
       "additionalProperties": true
+    },
+    "harness": {
+      "type": "object",
+      "description": "Configuration for agent runtime harness adapters and subagent dispatch.",
+      "properties": {
+        "adapter": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "antigravity",
+            "claude-code",
+            "opencode",
+            "cursor",
+            "generic"
+          ],
+          "default": "auto",
+          "description": "Active agent harness adapter. Defaults to auto-detection."
+        },
+        "subagent": {
+          "type": "object",
+          "description": "Defaults for subagent model and effort selection.",
+          "properties": {
+            "defaultModel": {
+              "type": "string",
+              "default": "flash",
+              "description": "Default model tier for subagent dispatch."
+            },
+            "defaultEffort": {
+              "type": "string",
+              "enum": [
+                "low",
+                "medium",
+                "high"
+              ],
+              "default": "low",
+              "description": "Default reasoning effort for subagent dispatch."
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": true

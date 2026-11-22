@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { resolvePaths, registerSpec, readIndex, parseFrontmatter, findSpecGroupFiles, versionedFilename } = require('./spec_index.cjs');
 const { createScmProvider, resolveScmProvider, checkScmCapability } = require('./scm_provider_contract.cjs');
-const { validateFile } = require('./validate_spec.cjs');
+const { validateFile, SPEC_TYPES, DEFAULT_TYPE, normalizeType } = require('./validate_spec.cjs');
 
 function getNextPrefix(specsDir) {
   if (!fs.existsSync(specsDir)) {
@@ -84,6 +84,7 @@ function synthesizeCanonicalSpec(options) {
     slug,
     title,
     source = 'local',
+    type = 'feature',
     specDate = new Date().toISOString().slice(0, 10),
     description = '',
     acceptanceCriteria = [],
@@ -108,6 +109,7 @@ id: ${id !== null ? JSON.stringify(id) : 'null'}
 slug: ${slug}
 title: ${JSON.stringify(title)}
 source: ${source}
+type: ${type}
 status: draft
 specDate: ${specDate}
 ---
@@ -189,11 +191,17 @@ function createNewSpec(inputText, options = {}) {
     ? bullets.map(b => b.replace(/^[-*+]\s+/, '').replace(/^AC\d+:\s*/i, ''))
     : [firstLine];
 
+  const specType = options.type ? String(options.type).trim().toLowerCase() : DEFAULT_TYPE;
+  if (options.type && !SPEC_TYPES.includes(specType)) {
+    throw new Error(`Unrecognized specification type "${options.type}". Allowed types: ${SPEC_TYPES.join(', ')}.`);
+  }
+
   const specContent = synthesizeCanonicalSpec({
     id: null,
     slug,
     title,
     source: 'local',
+    type: specType,
     description: text,
     acceptanceCriteria: criteria,
     isTracker: false
@@ -211,6 +219,7 @@ function createNewSpec(inputText, options = {}) {
     prefix,
     slug,
     title,
+    type: specType,
     status: 'pending',
     source: 'local',
     specDate: new Date().toISOString().slice(0, 10),
@@ -222,6 +231,7 @@ function createNewSpec(inputText, options = {}) {
     prefix,
     slug,
     title,
+    type: specType,
     content: specContent
   };
 }

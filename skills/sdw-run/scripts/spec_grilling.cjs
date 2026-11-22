@@ -223,11 +223,37 @@ function applyDecision(specContent, dimension, chosenOption) {
   return specContent + decisionNote;
 }
 
+/**
+ * Loads project instruction markdown files (AGENTS.md, CLAUDE.md) or config instructions (Spec 00076 AC5).
+ *
+ * @param {string} targetRoot
+ * @param {object} [config={}]
+ * @returns {string}
+ */
+function loadProjectInstructions(targetRoot, config = {}) {
+  if (config && typeof config.instructions === 'string' && config.instructions.trim()) {
+    return config.instructions.trim();
+  }
+  const root = targetRoot || process.cwd();
+  const candidates = ['AGENTS.md', path.join('.agents', 'AGENTS.md'), 'CLAUDE.md'];
+  for (const c of candidates) {
+    const full = path.join(root, c);
+    try {
+      if (fs.existsSync(full)) {
+        const content = fs.readFileSync(full, 'utf8').trim();
+        if (content) return content;
+      }
+    } catch (_) {}
+  }
+  return '';
+}
+
 module.exports = {
   DECISION_DIMENSIONS,
   analyzeSpecificationGaps,
   applyDecision,
   generateRefinementBlueprint,
   extractDeclaredNewFiles,
-  extractTargetFiles
+  extractTargetFiles,
+  loadProjectInstructions
 };

@@ -156,10 +156,12 @@ function readIndex(options = {}) {
           const at = columns ? columns.indexOf(name) : -1;
           return at >= 0 ? (cells[at] || '') : '';
         };
+        const typeVal = pick('type');
         entries.push({
           prefix: pick('prefix'),
           slug: pick('slug'),
           title: pick('title'),
+          type: typeVal ? typeVal : undefined,
           status: pick('status') || 'pending',
           priority: normalizePriority(pick('priority')),
           source: pick('source') || 'local',
@@ -308,6 +310,7 @@ function scanSpecsDir(options = {}) {
       prefix,
       slug,
       title,
+      type: fm.type || 'feature',
       status: 'pending',
       priority: normalizePriority(fm.priority),
       source,
@@ -355,7 +358,16 @@ function listIndex(options = {}) {
       const group = findSpecGroupFiles(specsDir, e.slug) || findSpecGroupFiles(specsDir, e.prefix);
       if (!group) return e;
       const latest = group.files[group.files.length - 1];
-      return { ...e, versions: group.files.length, version: latest.version, filename: latest.filename };
+      let type = e.type;
+      if (!type) {
+        try {
+          const fm = parseFrontmatter(fs.readFileSync(latest.fullPath, 'utf8'));
+          type = fm.type || 'feature';
+        } catch (err) {
+          type = 'feature';
+        }
+      }
+      return { ...e, type, versions: group.files.length, version: latest.version, filename: latest.filename };
     });
   } catch (err) {}
 
@@ -454,6 +466,7 @@ function registerSpec(meta, options = {}) {
       prefix: meta.prefix || '',
       slug: meta.slug || '',
       title: meta.title || meta.slug || '',
+      type: meta.type || undefined,
       status: meta.status || 'pending',
       priority,
       source: meta.source || 'local',

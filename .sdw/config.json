@@ -4,12 +4,21 @@
   "enableTestingFeatures": true,
   "scoreMin": 8,
   "scoring": {
+    "judgeMode": "subagent",
+    "judgeTimeoutMs": 600000,
     "judgeCommand": null,
     "judgeModel": null,
     "judgeProvider": null,
     "judgeEffort": null,
     "judgeApiEndpoint": null,
     "judgeCriticity": "strict"
+  },
+  "codeReview": {
+    "mode": "subagent",
+    "maxIterations": 5,
+    "command": null,
+    "model": null,
+    "effort": null
   },
   "scmCodeReviewEnabled": true,
   "pushDelivery": true,
@@ -76,6 +85,13 @@
   "memory": {
     "backends": {
       "wsMemo": true
+    }
+  },
+  "harness": {
+    "adapter": "auto",
+    "subagent": {
+      "defaultModel": "flash",
+      "defaultEffort": "low"
     }
   }
 }
