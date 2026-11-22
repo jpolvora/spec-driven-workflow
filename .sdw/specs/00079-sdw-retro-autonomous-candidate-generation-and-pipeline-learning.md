@@ -5,7 +5,7 @@ title: "SDW Retro Autonomous Candidate Generation and Pipeline Execution Learnin
 source: local
 type: feature
 priority: high
-status: ready-to-implement
+status: implemented
 specDate: 2026-11-22
 ---
 # Specification — SDW Retro Autonomous Candidate Generation and Pipeline Execution Learning
