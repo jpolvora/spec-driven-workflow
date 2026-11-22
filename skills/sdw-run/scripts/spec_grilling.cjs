@@ -157,6 +157,12 @@ function generateRefinementBlueprint(specContent, options = {}) {
         ? Boolean(options.config.enableTestingFeatures)
         : true);
 
+  const testPatterns = (options.testPatterns && Array.isArray(options.testPatterns))
+    ? options.testPatterns
+    : ((options.config && options.config.implementation && Array.isArray(options.config.implementation.testPatterns))
+      ? options.config.implementation.testPatterns
+      : undefined);
+
   // Only paths the specification names, plus the files it declares new. A
   // pathless specification resolves no target file here: the planner falls back
   // to a verified bucket or refuses, and never synthesizes `skills/<slug>/...`
@@ -167,7 +173,7 @@ function generateRefinementBlueprint(specContent, options = {}) {
   }
 
   if (!enableTestingFeatures && targetFiles && targetFiles.length > 0) {
-    targetFiles = targetFiles.filter(f => !isTestFile(f));
+    targetFiles = targetFiles.filter(f => !isTestFile(f, testPatterns));
   }
 
   return {

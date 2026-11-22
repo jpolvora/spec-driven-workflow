@@ -236,6 +236,16 @@ test('AC4: When enableTestingFeatures is false, implementation prompt instructs 
       /All test files are explicitly excluded/i,
       'Prompt must not explicitly exclude all test files'
     );
+    assert.doesNotMatch(
+      promptContent,
+      /## Test Discipline/i,
+      'Prompt must omit Test Discipline section when enableTestingFeatures is false'
+    );
+    assert.doesNotMatch(
+      promptContent,
+      /Do not record a test you did not execute/i,
+      'Prompt must omit test record prohibition when enableTestingFeatures is false'
+    );
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

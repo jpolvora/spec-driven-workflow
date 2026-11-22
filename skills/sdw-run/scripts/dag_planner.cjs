@@ -198,6 +198,10 @@ function generateDagPlan(specContent, options) {
       ? opts.config.implementation.testPatterns
       : DEFAULT_TEST_PATTERNS);
 
+  if (!enableTestingFeatures && defaultTargetFiles && defaultTargetFiles.length > 0) {
+    defaultTargetFiles = defaultTargetFiles.filter(f => !isTestFile(f, testPatterns));
+  }
+
   const testTargetFiles = defaultTargetFiles.filter(f => isTestFile(f, testPatterns));
   const prodTargetFiles = defaultTargetFiles.filter(f => !isTestFile(f, testPatterns));
 
