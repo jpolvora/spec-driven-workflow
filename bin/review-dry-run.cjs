@@ -8,7 +8,7 @@ const { spawnSync } = require('child_process');
 const REVIEWER_BASE_URL = 'https://raw.githubusercontent.com/jpolvora/agentic-code-reviewers';
 const REVIEWER_DEFAULT_REF = 'release';
 const DEFAULT_ENGINE = 'opencode';
-const DEFAULT_MODEL = 'opencode-go/claude-haiku-5-5';
+const DEFAULT_MODEL = 'opencode/deepseek-v4.1-flash-free';
 const DEFAULT_VARIANT = 'medium';
 const DEFAULT_TIMEOUT_MS = '1200000';
 const DEFAULT_MAX_ROUNDS = '20';
@@ -152,6 +152,16 @@ function run() {
         throw new Error(`Reviewer script checksum mismatch for ref "${config.ref}".`);
       }
     }
+
+    let runnerContent = fs.readFileSync(runnerPath, 'utf8');
+    runnerContent = runnerContent.replace(
+      /'opencode-go':\s*\{\s*type:\s*'api',\s*key:\s*process\.env\.OPENCODE_API_KEY\s*\|\|\s*''\s*\},?/,
+      "'opencode': { type: 'api', key: process.env.OPENCODE_API_KEY || '' },\n  'opencode-go': { type: 'api', key: process.env.OPENCODE_API_KEY || '' },"
+    );
+    if (!runnerContent.includes("'opencode': {")) {
+      throw new Error("Failed to patch opencode provider into agentic-code-reviewers run.sh");
+    }
+    fs.writeFileSync(runnerPath, runnerContent);
 
     if (pinned) {
       process.stdout.write(`Reviewer engine: ${config.engine} (OpenCode ${pinned.version})\n`);

@@ -481,6 +481,15 @@ node skills/sdw-memory/scripts/sdw_memory.cjs consolidate --dry-run --json
 
 Backends are pluggable: `--backend auto` uses the `ws-memo` vault when the `memo` CLI is reachable (`SDW_MEMORY_NO_MEMO=1` opts out) and falls back to `.sdw/memory/traps.md` offline; `all` writes both on record. Select backends per user in `.sdw/config.json` via `memory.backends: { wsMemo, traps, files }`. Contract: `skills/sdw-memory/references/memory_protocol.md`.
 
+### Running the Test Suite
+
+The suite targets Node.js 22, pinned in `.nvmrc` and enforced by `engines` in `package.json`:
+
+```bash
+nvm use          # resolves to the pinned Node 22 line
+npm test         # node --test tests/*.test.cjs
+```
+
 ### Local Agentic Code Review Dry Run
 
 Runs the same `agentic-code-reviewers` recipe as CI against the current branch (`develop` → `master`) without publishing PR threads:
@@ -490,7 +499,7 @@ npm install          # installs the pinned opencode-ai@1.19.1 dev dependency
 npm run review:dry   # alias: npm run review
 ```
 
-The helper uses the `OPENCODE_API_KEY` from the OS environment through the `opencode-go` provider, forces the pinned OpenCode `1.19.1` binary, and passes `--dry-run` with the Custom stack prompt. Findings are printed as `::error` / `::warning` annotations and the command exits `0` even when issues are found. See [AGENTS.md](AGENTS.md#10-local-code-review-dry-run-agentic-code-reviewers) for overrides.
+The helper uses the `OPENCODE_API_KEY` from the OS environment through the `opencode` connection, forces the pinned OpenCode `1.19.1` binary, and passes `--dry-run` with the Custom stack prompt. Findings are printed as `::error` / `::warning` annotations and the command exits `0` even when issues are found. See [AGENTS.md](AGENTS.md#10-local-code-review-dry-run-agentic-code-reviewers) for overrides.
 
 ## 6. License & Contribution
 

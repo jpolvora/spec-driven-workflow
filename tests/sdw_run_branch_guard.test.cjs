@@ -52,7 +52,7 @@ function setupFeatureBranchRun() {
   const root = setupRepo();
   fs.writeFileSync(
     path.join(root, '.sdw', 'config.json'),
-    JSON.stringify({ useFeatureBranches: true }, null, 2),
+    JSON.stringify({ useFeatureBranches: true, implementation: { segregateTests: false } }, null, 2),
     'utf8'
   );
   assert.equal(sdwRun.cmdRun({

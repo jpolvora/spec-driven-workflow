@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const specGrilling = require('./spec_grilling.cjs');
+const { isTestFile, DEFAULT_TEST_PATTERNS } = require('./evidence_validator.cjs');
 
 // A plan that resolves no target file promises nothing, so it is refused and
 // the author is told the declaration the specification must add.
@@ -170,25 +171,82 @@ function generateDagPlan(specContent, options) {
     console.warn('[Step 3: DAG Generation] Warning: the specification names no target file and declares no new file; the plan carries no file fence.');
   }
 
-  if (!complexity.isComplex || acs.length <= 3) {
-    // Single execution unit
-    let prompt = `You are implementing the feature "${slug}". Focus strictly on the following acceptance criteria:\n` +
-      acs.map(a => `- ${a.id}: ${a.text}`).join('\n');
-    if (architecturalApproach) prompt += `\n\nArchitectural Approach:\n${architecturalApproach}`;
-    if (testPlan) prompt += `\n\nTest Plan:\n${testPlan}`;
+  const segregateTests = opts.segregateTests !== undefined
+    ? Boolean(opts.segregateTests)
+    : (opts.config && opts.config.implementation && opts.config.implementation.segregateTests !== undefined
+        ? Boolean(opts.config.implementation.segregateTests)
+        : true);
 
-    tasks.push({
-      id: 'task-1',
-      title: `Implement ${slug}`,
-      description: 'Execute implementation for all specified acceptance criteria in an isolated unit.',
-      coveredAcs: acs.map(a => a.id),
-      dependencies: [],
-      status: 'pending',
-      targetFiles: defaultTargetFiles,
-      architecturalApproach: architecturalApproach || undefined,
-      testPlan: testPlan || undefined,
-      contextPrompt: prompt
-    });
+  const testPatterns = (Array.isArray(opts.testPatterns) && opts.testPatterns.length > 0)
+    ? opts.testPatterns
+    : ((opts.config && opts.config.implementation && Array.isArray(opts.config.implementation.testPatterns))
+        ? opts.config.implementation.testPatterns
+        : DEFAULT_TEST_PATTERNS);
+
+  const testTargetFiles = defaultTargetFiles.filter(f => isTestFile(f, testPatterns));
+  const prodTargetFiles = defaultTargetFiles.filter(f => !isTestFile(f, testPatterns));
+
+  if (!complexity.isComplex || acs.length <= 3) {
+    if (segregateTests) {
+      let testPrompt = `You are authoring tests for the feature "${slug}". Write failing tests strictly asserting assigned acceptance criteria without modifying production code:\n` +
+        acs.map(a => `- ${a.id}: ${a.text}`).join('\n');
+      if (architecturalApproach) testPrompt += `\n\nArchitectural Approach:\n${architecturalApproach}`;
+      if (testPlan) testPrompt += `\n\nTest Plan:\n${testPlan}`;
+
+      tasks.push({
+        id: 'task-1-test',
+        role: 'test_author',
+        title: `Author Tests for ${slug}`,
+        description: 'Write failing tests strictly asserting assigned acceptance criteria without modifying production code.',
+        coveredAcs: acs.map(a => a.id),
+        dependencies: [],
+        status: 'pending',
+        targetFiles: testTargetFiles,
+        testPatterns,
+        architecturalApproach: architecturalApproach || undefined,
+        testPlan: testPlan || undefined,
+        contextPrompt: testPrompt
+      });
+
+      let implPrompt = `You are implementing the feature "${slug}". Satisfy the existing test suite for the following acceptance criteria without modifying test files:\n` +
+        acs.map(a => `- ${a.id}: ${a.text}`).join('\n');
+      if (architecturalApproach) implPrompt += `\n\nArchitectural Approach:\n${architecturalApproach}`;
+      if (testPlan) implPrompt += `\n\nTest Plan:\n${testPlan}`;
+
+      tasks.push({
+        id: 'task-1-impl',
+        role: 'implementation',
+        title: `Implement ${slug}`,
+        description: 'Execute implementation to satisfy the test suite for all specified acceptance criteria without modifying test files.',
+        coveredAcs: acs.map(a => a.id),
+        dependencies: ['task-1-test'],
+        status: 'pending',
+        targetFiles: prodTargetFiles,
+        testPatterns,
+        architecturalApproach: architecturalApproach || undefined,
+        testPlan: testPlan || undefined,
+        contextPrompt: implPrompt
+      });
+    } else {
+      // Single execution unit
+      let prompt = `You are implementing the feature "${slug}". Focus strictly on the following acceptance criteria:\n` +
+        acs.map(a => `- ${a.id}: ${a.text}`).join('\n');
+      if (architecturalApproach) prompt += `\n\nArchitectural Approach:\n${architecturalApproach}`;
+      if (testPlan) prompt += `\n\nTest Plan:\n${testPlan}`;
+
+      tasks.push({
+        id: 'task-1',
+        title: `Implement ${slug}`,
+        description: 'Execute implementation for all specified acceptance criteria in an isolated unit.',
+        coveredAcs: acs.map(a => a.id),
+        dependencies: [],
+        status: 'pending',
+        targetFiles: defaultTargetFiles,
+        architecturalApproach: architecturalApproach || undefined,
+        testPlan: testPlan || undefined,
+        contextPrompt: prompt
+      });
+    }
   } else {
     // Multi-task DAG decomposition. Both execution units may touch any file the
     // specification names: the AC split, not an arbitrary file slice, defines
@@ -197,39 +255,118 @@ function generateDagPlan(specContent, options) {
     const t1Acs = acs.slice(0, Math.ceil(acs.length / 2));
     const t2Acs = acs.slice(Math.ceil(acs.length / 2));
 
-    let p1 = `You are implementing Task 1 (Core Logic) for "${slug}". Focus strictly on:\n` +
-      t1Acs.map(a => `- ${a.id}: ${a.text}`).join('\n');
-    if (architecturalApproach) p1 += `\n\nArchitectural Approach:\n${architecturalApproach}`;
+    if (segregateTests) {
+      let tp1 = `You are authoring tests for Task 1 (Core Logic) of "${slug}". Write failing tests strictly asserting assigned acceptance criteria without modifying production code:\n` +
+        t1Acs.map(a => `- ${a.id}: ${a.text}`).join('\n');
+      if (architecturalApproach) tp1 += `\n\nArchitectural Approach:\n${architecturalApproach}`;
+      if (testPlan) tp1 += `\n\nTest Plan:\n${testPlan}`;
 
-    tasks.push({
-      id: 'task-1',
-      title: `${slug} — Core Logic & Foundation`,
-      description: 'Implement core modules, state management, and baseline logic.',
-      coveredAcs: t1Acs.map(a => a.id),
-      dependencies: [],
-      status: 'pending',
-      targetFiles: defaultTargetFiles,
-      architecturalApproach: architecturalApproach || undefined,
-      testPlan: testPlan || undefined,
-      contextPrompt: p1
-    });
+      tasks.push({
+        id: 'task-1-test',
+        role: 'test_author',
+        title: `${slug} — Test Authoring (Core Logic & Foundation)`,
+        description: 'Author failing tests strictly asserting core logic acceptance criteria without modifying production code.',
+        coveredAcs: t1Acs.map(a => a.id),
+        dependencies: [],
+        status: 'pending',
+        targetFiles: testTargetFiles,
+        testPatterns,
+        architecturalApproach: architecturalApproach || undefined,
+        testPlan: testPlan || undefined,
+        contextPrompt: tp1
+      });
 
-    let p2 = `You are implementing Task 2 (Workflows & Integration) for "${slug}". Focus strictly on:\n` +
-      t2Acs.map(a => `- ${a.id}: ${a.text}`).join('\n');
-    if (testPlan) p2 += `\n\nTest Plan:\n${testPlan}`;
+      let ip1 = `You are implementing Task 1 (Core Logic) for "${slug}". Satisfy the existing test suite without modifying test files. Focus strictly on:\n` +
+        t1Acs.map(a => `- ${a.id}: ${a.text}`).join('\n');
+      if (architecturalApproach) ip1 += `\n\nArchitectural Approach:\n${architecturalApproach}`;
 
-    tasks.push({
-      id: 'task-2',
-      title: `${slug} — Workflows, Verification & PR Integration`,
-      description: 'Implement downstream workflow loops, reviews, and integrations.',
-      coveredAcs: t2Acs.map(a => a.id),
-      dependencies: ['task-1'],
-      status: 'pending',
-      targetFiles: defaultTargetFiles,
-      architecturalApproach: architecturalApproach || undefined,
-      testPlan: testPlan || undefined,
-      contextPrompt: p2
-    });
+      tasks.push({
+        id: 'task-1-impl',
+        role: 'implementation',
+        title: `${slug} — Core Logic & Foundation`,
+        description: 'Implement core modules, state management, and baseline logic to satisfy test suite without modifying test files.',
+        coveredAcs: t1Acs.map(a => a.id),
+        dependencies: ['task-1-test'],
+        status: 'pending',
+        targetFiles: prodTargetFiles,
+        testPatterns,
+        architecturalApproach: architecturalApproach || undefined,
+        testPlan: testPlan || undefined,
+        contextPrompt: ip1
+      });
+
+      let tp2 = `You are authoring tests for Task 2 (Workflows & Integration) of "${slug}". Write failing tests strictly asserting assigned acceptance criteria without modifying production code:\n` +
+        t2Acs.map(a => `- ${a.id}: ${a.text}`).join('\n');
+      if (testPlan) tp2 += `\n\nTest Plan:\n${testPlan}`;
+
+      tasks.push({
+        id: 'task-2-test',
+        role: 'test_author',
+        title: `${slug} — Test Authoring (Workflows & Integration)`,
+        description: 'Author failing tests strictly asserting downstream workflow and integration criteria without modifying production code.',
+        coveredAcs: t2Acs.map(a => a.id),
+        dependencies: ['task-1-impl'],
+        status: 'pending',
+        targetFiles: testTargetFiles,
+        testPatterns,
+        architecturalApproach: architecturalApproach || undefined,
+        testPlan: testPlan || undefined,
+        contextPrompt: tp2
+      });
+
+      let ip2 = `You are implementing Task 2 (Workflows & Integration) for "${slug}". Satisfy the existing test suite without modifying test files. Focus strictly on:\n` +
+        t2Acs.map(a => `- ${a.id}: ${a.text}`).join('\n');
+      if (testPlan) ip2 += `\n\nTest Plan:\n${testPlan}`;
+
+      tasks.push({
+        id: 'task-2-impl',
+        role: 'implementation',
+        title: `${slug} — Workflows, Verification & PR Integration`,
+        description: 'Implement downstream workflow loops, reviews, and integrations to satisfy test suite without modifying test files.',
+        coveredAcs: t2Acs.map(a => a.id),
+        dependencies: ['task-2-test'],
+        status: 'pending',
+        targetFiles: prodTargetFiles,
+        testPatterns,
+        architecturalApproach: architecturalApproach || undefined,
+        testPlan: testPlan || undefined,
+        contextPrompt: ip2
+      });
+    } else {
+      let p1 = `You are implementing Task 1 (Core Logic) for "${slug}". Focus strictly on:\n` +
+        t1Acs.map(a => `- ${a.id}: ${a.text}`).join('\n');
+      if (architecturalApproach) p1 += `\n\nArchitectural Approach:\n${architecturalApproach}`;
+
+      tasks.push({
+        id: 'task-1',
+        title: `${slug} — Core Logic & Foundation`,
+        description: 'Implement core modules, state management, and baseline logic.',
+        coveredAcs: t1Acs.map(a => a.id),
+        dependencies: [],
+        status: 'pending',
+        targetFiles: defaultTargetFiles,
+        architecturalApproach: architecturalApproach || undefined,
+        testPlan: testPlan || undefined,
+        contextPrompt: p1
+      });
+
+      let p2 = `You are implementing Task 2 (Workflows & Integration) for "${slug}". Focus strictly on:\n` +
+        t2Acs.map(a => `- ${a.id}: ${a.text}`).join('\n');
+      if (testPlan) p2 += `\n\nTest Plan:\n${testPlan}`;
+
+      tasks.push({
+        id: 'task-2',
+        title: `${slug} — Workflows, Verification & PR Integration`,
+        description: 'Implement downstream workflow loops, reviews, and integrations.',
+        coveredAcs: t2Acs.map(a => a.id),
+        dependencies: ['task-1'],
+        status: 'pending',
+        targetFiles: defaultTargetFiles,
+        architecturalApproach: architecturalApproach || undefined,
+        testPlan: testPlan || undefined,
+        contextPrompt: p2
+      });
+    }
   }
 
   return {

@@ -21,11 +21,18 @@ function normalizePath(p) {
 function renderTaskPrompt(options) {
   const {
     targetRoot, specSlug, specPath, runId, stateDir, task, specAcs, useWorktrees, taskWorktreeRel,
-    dagTasks, taskStates, abandonments, absolutePaths, refineMode
+    dagTasks, taskStates, abandonments, absolutePaths, refineMode, testPatterns: optTestPatterns
   } = options;
   const root = targetRoot ? path.resolve(targetRoot) : process.cwd();
   const absStateDir = stateDir ? (path.isAbsolute(stateDir) ? stateDir : path.resolve(root, stateDir)) : path.join(root, '.sdw', 'state');
   const taskPromptDir = path.join(absStateDir, specSlug, runId);
+
+  const testPatterns = (Array.isArray(optTestPatterns) && optTestPatterns.length > 0)
+    ? optTestPatterns
+    : (Array.isArray(task && task.testPatterns) && task.testPatterns.length > 0
+        ? task.testPatterns
+        : ['tests/**', '**/*.test.*', '**/*.spec.*']);
+  const patternsDisplay = testPatterns.join(', ');
 
   if (!fs.existsSync(taskPromptDir)) {
     fs.mkdirSync(taskPromptDir, { recursive: true });
@@ -91,16 +98,28 @@ function renderTaskPrompt(options) {
     prompt += remainingAcs.map(ac => `- ${ac.id}`).join('\n') + `\n\n`;
   }
 
+  const role = task && task.role;
+
   prompt += `## Target Files\n`;
   if (Array.isArray(task.targetFiles) && task.targetFiles.length > 0) {
     task.targetFiles.forEach(f => { prompt += `- \`${normalizePath(f)}\`\n`; });
+  } else if (role === 'test_author') {
+    prompt += `- Test files matching configured test file patterns (${patternsDisplay}).\n`;
   } else {
     prompt += `- No explicit targets. Modify the minimum number of files required to satisfy the assigned criteria.\n`;
   }
   prompt += `\n`;
 
   prompt += `## Scope Fence\n`;
-  prompt += `- **Permitted:** the target files above, plus new files required by the assigned criteria.\n`;
+  if (role === 'test_author') {
+    prompt += `- **Permitted:** only test files matching configured test file patterns (${patternsDisplay}).\n`;
+    prompt += `- **Forbidden:** modifying production code files. All non-test files are strictly prohibited.\n`;
+  } else if (role === 'implementation') {
+    prompt += `- **Permitted:** only production code files (the target files above, plus new production files required by the assigned criteria). All test files are explicitly excluded.\n`;
+    prompt += `- **Forbidden:** modifying test files matching configured test file patterns (${patternsDisplay}). Test file modifications are strictly prohibited.\n`;
+  } else {
+    prompt += `- **Permitted:** the target files above, plus new files required by the assigned criteria.\n`;
+  }
   prompt += `- **Forbidden:** files owned by other tasks, \`.sdw/state/**\`, task prompt and evidence files of other tasks, and \`.git/**\`.\n`;
   if (specPath) {
     prompt += `- **Forbidden:** editing the specification (\`${normalizePath(specPath)}\`); report a needed spec change instead.\n`;
@@ -148,6 +167,14 @@ function renderTaskPrompt(options) {
     prompt += `${task.contextPrompt}\n\n`;
   }
 
+  if (role === 'test_author') {
+    prompt += `## Test Authoring Instructions\n`;
+    prompt += `Write failing tests strictly asserting assigned acceptance criteria without modifying production code.\n\n`;
+  } else if (role === 'implementation') {
+    prompt += `## Implementation Instructions\n`;
+    prompt += `Satisfy the existing test suite. Modifying test files is strictly prohibited.\n\n`;
+  }
+
   prompt += `## Implementation Rules (sdw-rules)\n`;
   prompt += `Load and follow the shared \`sdw-rules\` skill before acting (installed under \`.agents/skills/sdw-rules/\` or \`skills/sdw-rules/\`). It is the canonical source for the rules below.\n`;
   prompt += `- **Simplicity first:** write the minimum code that satisfies the assigned criteria; no speculative abstraction, layering, or configurability.\n`;
@@ -163,6 +190,11 @@ function renderTaskPrompt(options) {
   prompt += `- Do not run \`git commit\`, \`git push\`, \`git branch\`, \`git checkout\`, \`git worktree\`, or \`git tag\`. The orchestrator owns version control.\n`;
   prompt += `- Do not spawn subagents or delegate this task to another agent.\n`;
   prompt += `- Do not modify files outside the scope fence.\n`;
+  if (role === 'test_author') {
+    prompt += `- Modifying production code files is strictly prohibited. You may only create or modify test files.\n`;
+  } else if (role === 'implementation') {
+    prompt += `- Modifying test files is strictly prohibited. Test suite assertions must not be weakened or altered.\n`;
+  }
   prompt += `- Do not write run state, prompt files, or the specification.\n`;
   prompt += `- Do not record a test you did not execute.\n`;
   prompt += `- Do not report \`status: "success"\` while any assigned criterion is unmet.\n\n`;
@@ -515,6 +547,7 @@ function executeTaskCommand(options) {
 
   // SDW variables (AC23)
   filteredEnv.SDW_TASK_ID = task.id;
+  filteredEnv.SDW_TASK_ROLE = task.role || '';
   filteredEnv.SDW_PROMPT_FILE = absPromptFile;
   filteredEnv.SDW_EVIDENCE_FILE = absEvidenceFile;
   filteredEnv.SDW_WORKING_DIR = absWorkingDir;

@@ -161,6 +161,7 @@ test('sdw-run reads custom config values from .sdw/config.json', () => {
       stateDir: '{projectRoot}/.sdw/custom-state',
       implementation: {
         mode: 'command',
+        segregateTests: false,
         command: 'node -e "const fs = require(\'fs\'); fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({ taskId: process.env.SDW_TASK_ID, acIds: [\'AC1\'], filesChanged: [\'.sdw/specs/feature.md\'], summary: \'done\' }));"'
       }
     }, null, 2), 'utf8');

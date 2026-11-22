@@ -65,6 +65,7 @@ function implementationOptions(slug = 'score-spec') {
   return {
     implementation: {
       mode: 'command',
+      segregateTests: false,
       command: `node -e "${script.replace(/"/g, '\\"')}"`
     }
   };

@@ -4,7 +4,7 @@ name: Agentic Code Review
 #
 # Repository Variables (configure via Settings -> Secrets and variables -> Actions -> Variables):
 #   - SDW_CODE_REVIEW_ENGINE: Review engine ('opencode' or 'cursor-sdk', default: 'opencode')
-#   - SDW_CODE_REVIEW_MODEL: Model identifier (default: 'opencode-go/claude-haiku-5-5')
+#   - SDW_CODE_REVIEW_MODEL: Model identifier (default: 'opencode/deepseek-v4.1-flash-free')
 #   - SDW_CODE_REVIEW_VARIANT: Review variant/intensity (default: 'medium')
 #   - SDW_CODE_REVIEW_MAX_ROUNDS: PR review round budget before human handoff (default: '20')
 #
@@ -41,7 +41,7 @@ concurrency:
 
 env:
   REVIEW_ENGINE: ${{ vars.SDW_CODE_REVIEW_ENGINE || 'opencode' }}
-  REVIEW_MODEL: ${{ vars.SDW_CODE_REVIEW_MODEL || 'opencode-go/claude-haiku-5-5' }}
+  REVIEW_MODEL: ${{ vars.SDW_CODE_REVIEW_MODEL || 'opencode/deepseek-v4.1-flash-free' }}
   REVIEW_VARIANT: ${{ vars.SDW_CODE_REVIEW_VARIANT || 'medium' }}
 
 jobs:
@@ -159,6 +159,19 @@ jobs:
           if [[ -n "$AGENTIC_CODE_REVIEWERS_SHA256" ]]; then
             echo "${AGENTIC_CODE_REVIEWERS_SHA256}  /tmp/agentic-code-reviewers-run.sh" | sha256sum -c -
           fi
+          node -e '
+            const fs = require("fs");
+            const file = "/tmp/agentic-code-reviewers-run.sh";
+            let c = fs.readFileSync(file, "utf8");
+            c = c.replace(
+              /\x27opencode-go\x27:\s*\{\s*type:\s*\x27api\x27,\s*key:\s*process\.env\.OPENCODE_API_KEY\s*\|\|\s*\x27\x27\s*\},?/,
+              "\x27opencode\x27: { type: \x27api\x27, key: process.env.OPENCODE_API_KEY || \x27\x27 },\n  \x27opencode-go\x27: { type: \x27api\x27, key: process.env.OPENCODE_API_KEY || \x27\x27 },"
+            );
+            if (!c.includes("\x27opencode\x27: {")) {
+              throw new Error("Failed to patch opencode provider into agentic-code-reviewers run.sh");
+            }
+            fs.writeFileSync(file, c);
+          '
           bash /tmp/agentic-code-reviewers-run.sh \
             --engine "$ENGINE_ARG" \
             --model "$REVIEW_MODEL" \

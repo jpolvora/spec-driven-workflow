@@ -50,7 +50,7 @@ test('AC1: a pathless specification never synthesizes a target file from its slu
   const blueprint = specGrilling.generateRefinementBlueprint(content, { slug });
   assert.deepStrictEqual(blueprint.targetFiles, []);
 
-  const plan = dagPlanner.generateDagPlan(content, { slug, blueprint, targetRoot: REPO_ROOT });
+  const plan = dagPlanner.generateDagPlan(content, { slug, blueprint, targetRoot: REPO_ROOT, segregateTests: false });
   assert.equal(plan.refused, undefined);
   assert.equal(plan.totalTasks, 1);
   assert.deepStrictEqual(plan.tasks[0].targetFiles, []);
@@ -61,7 +61,7 @@ test('AC2: a fallback bucket file missing from the repository refuses the plan w
   const root = tempRoot();
   const content = buildSpec('00999-sdw-spec-widget-sync');
 
-  const plan = dagPlanner.generateDagPlan(content, { targetRoot: root });
+  const plan = dagPlanner.generateDagPlan(content, { targetRoot: root, segregateTests: false });
   assert.equal(plan.refused, true);
   assert.equal(plan.reason, 'missing-target-file');
   assert.equal(plan.fallbackRule, 'spec');
@@ -71,7 +71,7 @@ test('AC2: a fallback bucket file missing from the repository refuses the plan w
 
 test('AC2 negative: a bucket whose files all exist plans those files', () => {
   const content = buildSpec('00999-sdw-router-widget');
-  const plan = dagPlanner.generateDagPlan(content, { targetRoot: REPO_ROOT });
+  const plan = dagPlanner.generateDagPlan(content, { targetRoot: REPO_ROOT, segregateTests: false });
 
   assert.ok(!plan.refused);
   assert.ok(Array.isArray(plan.tasks[0].targetFiles));
@@ -87,7 +87,7 @@ test('AC3: a declared new file under a New files note is planned without existin
   const blueprint = specGrilling.generateRefinementBlueprint(content, { slug: '00999-widget-tool' });
   assert.deepStrictEqual(blueprint.targetFiles, [declared]);
 
-  const plan = dagPlanner.generateDagPlan(content, { slug: '00999-widget-tool', blueprint, targetRoot: REPO_ROOT });
+  const plan = dagPlanner.generateDagPlan(content, { slug: '00999-widget-tool', blueprint, targetRoot: REPO_ROOT, segregateTests: false });
   assert.ok(!plan.refused);
   assert.ok(plan.tasks[0].targetFiles.includes(declared));
   assert.equal(fs.existsSync(path.join(REPO_ROOT, declared)), false);
@@ -99,7 +99,7 @@ test('AC5: a specification with real backticked paths plans those files', () => 
     body: ['## Notes', `- Implementation surfaces: \`${named}\``, ''].join('\n')
   });
 
-  const plan = dagPlanner.generateDagPlan(content, { slug: '00999-doctor-widget', targetRoot: REPO_ROOT });
+  const plan = dagPlanner.generateDagPlan(content, { slug: '00999-doctor-widget', targetRoot: REPO_ROOT, segregateTests: false });
   assert.ok(!plan.refused);
   assert.ok(plan.tasks[0].targetFiles.includes(named));
 });
@@ -109,7 +109,8 @@ test('AC6: an empty blueprint with no named path and no declaration plans no fil
   const plan = dagPlanner.generateDagPlan(content, {
     slug: '00999-widget-plain',
     blueprint: { targetFiles: [] },
-    targetRoot: REPO_ROOT
+    targetRoot: REPO_ROOT,
+    segregateTests: false
   });
 
   assert.equal(plan.refused, undefined);

@@ -330,6 +330,8 @@ const DEFAULT_CONFIG = {
     mode: 'subagent',
     command: null,
     timeoutMs: 1800000,
+    segregateTests: true,
+    testPatterns: ['tests/**', '**/*.test.*', '**/*.spec.*'],
     envAllowlist: ['PATH', 'HOME', 'USERPROFILE', 'TEMP', 'TMP', 'LANG', 'LC_ALL']
   },
   verification: {
@@ -549,6 +551,17 @@ const DEFAULT_SCHEMA = {
           "type": "integer",
           "default": 1800000,
           "description": "Execution timeout in milliseconds for command mode."
+        },
+        "segregateTests": {
+          "type": "boolean",
+          "default": true,
+          "description": "When true, decompose testable requirement units into paired test-authoring and implementation tasks with mutually exclusive scope fences."
+        },
+        "testPatterns": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["tests/**", "**/*.test.*", "**/*.spec.*"],
+          "description": "Glob patterns identifying test files for test segregation scope fences and validation."
         },
         "envAllowlist": {
           "type": "array",
@@ -842,6 +855,14 @@ function validateConfigSchema(config) {
       if ('envAllowlist' in config.implementation) {
         if (!Array.isArray(config.implementation.envAllowlist) || !config.implementation.envAllowlist.every(e => typeof e === 'string')) {
           errors.push('Property "implementation.envAllowlist" must be an array of strings.');
+        }
+      }
+      if ('segregateTests' in config.implementation && typeof config.implementation.segregateTests !== 'boolean') {
+        errors.push('Property "implementation.segregateTests" must be a boolean.');
+      }
+      if ('testPatterns' in config.implementation) {
+        if (!Array.isArray(config.implementation.testPatterns) || !config.implementation.testPatterns.every(p => typeof p === 'string')) {
+          errors.push('Property "implementation.testPatterns" must be an array of strings.');
         }
       }
     }
