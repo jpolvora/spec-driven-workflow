@@ -3,7 +3,7 @@ id: null
 slug: 00074-enable-testing-features-config-flag
 title: "Configurable Testing Features Toggle to Enable or Disable Test Generation, Execution, and Subagent Segregation"
 source: local
-status: draft
+status: ready-to-implement
 specDate: 2026-11-21
 priority: high
 ---

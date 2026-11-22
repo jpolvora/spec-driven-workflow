@@ -3,7 +3,7 @@ id: null
 slug: 00075-fresh-context-subagent-judge
 title: "Fresh-Context Subagent Judge for Qualitative Conformance and Code Quality Evaluation"
 source: local
-status: draft
+status: ready-to-implement
 specDate: 2026-11-21
 priority: high
 ---
