@@ -9,7 +9,7 @@ const path = require('path');
 
 const DEFAULT_MAX_ENTRIES = 4000;
 const DEFAULT_TIMEOUT_MS = 2000;
-const MAX_DEPTH = 4;
+const MAX_DEPTH = 6;
 const MAX_ROOTS = 6;
 const RECENT_MS = 24 * 60 * 60 * 1000;
 const TRANSCRIPT_EXTENSIONS = new Set(['.jsonl', '.json', '.log', '.txt', '.md', '.zst', '.zstd']);

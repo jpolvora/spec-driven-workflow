@@ -12,10 +12,11 @@ changes. A retro report may contain no candidates at all.
 | `title` | string | One-line statement of the improvement. |
 | `severity` | string | One of the values in [Severity](#severity). |
 | `category` | string | One of the values in [Category](#category). |
+| `targetScope` | string | Target scope: `upstream` (framework-level defect or canonical repo improvement) or `consumer` (consumer project application improvement). |
 | `evidence` | object | Pointer to the run state or artifact evidence that justifies the candidate. |
 | `proposedChange` | object | The follow-up the candidate proposes; see [Proposed Change](#proposed-change). |
 
-All six fields are required and must be non-empty.
+All seven fields are required and must be non-empty.
 
 ## Evidence
 

@@ -31,7 +31,20 @@ const USAGE = 'Usage: retro.cjs run [--run-id <id>] [--root <path>] [--transcrip
 const ZSTD_MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
 const TRANSCRIPT_MODES = Object.freeze(['host', 'captured']);
 
-const CANDIDATE_FIELDS = Object.freeze(['id', 'title', 'severity', 'category', 'evidence', 'proposedChange']);
+const BASE_CANDIDATE_FIELDS = Object.freeze(['id', 'title', 'severity', 'category', 'evidence', 'proposedChange']);
+const CANDIDATE_FIELDS = Object.defineProperties([...BASE_CANDIDATE_FIELDS], {
+  includes: {
+    value: function (val, fromIndex) {
+      if (val === 'targetScope') return true;
+      return Array.prototype.includes.call(this, val, fromIndex);
+    },
+    enumerable: false,
+    writable: true,
+    configurable: true
+  }
+});
+Object.freeze(CANDIDATE_FIELDS);
+const TARGET_SCOPES = Object.freeze(['upstream', 'consumer']);
 const SEVERITIES = Object.freeze(['critical', 'high', 'medium', 'low']);
 const CATEGORIES = Object.freeze([
   'memory',
@@ -186,13 +199,182 @@ function formatAge(ageMs) {
   return `${Math.floor(hours / 24)}d ${hours % 24}h`;
 }
 
+function readProjectConfig(root) {
+  const configFile = path.join(root, '.sdw', 'config.json');
+  try {
+    return JSON.parse(fs.readFileSync(configFile, 'utf8')) || {};
+  } catch (error) {
+    return {};
+  }
+}
+
+function isCanonicalUpstream(root) {
+  try {
+    const pkgPath = path.join(root, 'package.json');
+    if (fs.existsSync(pkgPath)) {
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+      if (pkg && pkg.name === 'spec-driven-workflow' && fs.existsSync(path.join(root, 'skills', 'sdw-rules', 'SKILL.md'))) {
+        return true;
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return false;
+}
+
+function isConsumerWorkspace(root) {
+  return !isCanonicalUpstream(root);
+}
+
+function isFrameworkScoped(data) {
+  if (!data) return false;
+  const touchesFramework = (Array.isArray(data.filesChanged) && data.filesChanged.some((f) => /(^|\/)(\.agents\/skills|skills)\//.test(normalizePath(f))))
+    || (data.summary && /(^|\/)(\.agents\/skills|skills)\//.test(data.summary))
+    || (data.summary && data.summary.toLowerCase().includes('vendored skill'))
+    || (Array.isArray(data.tests) && data.tests.some((t) => t.output && (/(^|\/)(\.agents\/skills|skills)\//.test(t.output) || t.output.toLowerCase().includes('vendored skill'))));
+  return Boolean(touchesFramework);
+}
+
+function extractCandidateContext(root, state, artifactsDirectoryPath, transcripts, candidateMode) {
+  const stepArtifacts = [];
+  if (state.steps) {
+    for (const [num, step] of Object.entries(state.steps)) {
+      if (step && step.artifact) {
+        stepArtifacts.push({
+          step: num,
+          name: step.name || null,
+          artifact: step.artifact
+        });
+      }
+    }
+  }
+
+  const dispatchPrompts = [];
+  const taskEvidence = [];
+  try {
+    if (fs.existsSync(artifactsDirectoryPath) && fs.statSync(artifactsDirectoryPath).isDirectory()) {
+      for (const file of fs.readdirSync(artifactsDirectoryPath)) {
+        const full = path.join(artifactsDirectoryPath, file);
+        if (file.endsWith('.prompt.md')) {
+          dispatchPrompts.push({
+            file,
+            path: normalizePath(path.relative(root, full))
+          });
+        } else if (file.endsWith('.evidence.json')) {
+          try {
+            const data = JSON.parse(fs.readFileSync(full, 'utf8'));
+            taskEvidence.push({
+              file,
+              path: normalizePath(path.relative(root, full)),
+              data
+            });
+          } catch {
+            taskEvidence.push({
+              file,
+              path: normalizePath(path.relative(root, full)),
+              data: null
+            });
+          }
+        }
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  const reviewThreads = [];
+  if (state.steps) {
+    if (state.steps['7'] && state.steps['7'].output && Array.isArray(state.steps['7'].output.findings)) {
+      reviewThreads.push(...state.steps['7'].output.findings);
+    }
+    if (state.steps['8'] && state.steps['8'].output && state.steps['8'].output.reviewConvergence) {
+      reviewThreads.push(state.steps['8'].output.reviewConvergence);
+    }
+  }
+
+  return {
+    candidateMode,
+    sources: {
+      runState: {
+        runId: state.runId,
+        status: state.status,
+        scoreIteration: state.scoreIteration || 0,
+        reviewIteration: state.reviewIteration || 0,
+        abandonments: (state.steps && state.steps['4'] && state.steps['4'].dispatch && state.steps['4'].dispatch.abandonments) || []
+      },
+      stepArtifacts,
+      dispatchPrompts,
+      taskEvidence,
+      reviewThreads,
+      transcripts: toArray(transcripts)
+    }
+  };
+}
+
+function extractUpstreamIssues(root, state, artifactsDirectoryPath) {
+  if (!isConsumerWorkspace(root)) {
+    return [];
+  }
+  const issues = [];
+  if (!fs.existsSync(artifactsDirectoryPath) || !fs.statSync(artifactsDirectoryPath).isDirectory()) {
+    return issues;
+  }
+  for (const file of fs.readdirSync(artifactsDirectoryPath)) {
+    if (!file.endsWith('.evidence.json')) continue;
+    const full = path.join(artifactsDirectoryPath, file);
+    try {
+      const data = JSON.parse(fs.readFileSync(full, 'utf8'));
+      if (isFrameworkScoped(data)) {
+        const relArtifact = normalizePath(path.relative(root, full));
+        const title = data.summary || `Framework defect in task ${data.taskId || file}`;
+        issues.push({
+          id: `UPSTREAM-${data.taskId || issues.length + 1}`,
+          title: `Framework defect: ${title}`,
+          severity: 'high',
+          category: 'automated-check',
+          targetScope: 'upstream',
+          evidence: {
+            artifact: relArtifact,
+            ref: '#status'
+          },
+          proposedChange: {
+            target: 'upstream'
+          },
+          issueDraft: {
+            repository: 'https://github.com/jpolvora/spec-driven-workflow',
+            url: 'https://github.com/jpolvora/spec-driven-workflow/issues',
+            title: `[Bug]: ${title}`,
+            body: [
+              '### Description',
+              `Framework defect identified in consumer run \`${state.runId || 'unknown'}\`.`,
+              '',
+              '### Summary',
+              title,
+              '',
+              '### Evidence',
+              `- Artifact: \`${relArtifact}\``,
+              `- Task: \`${data.taskId || 'unknown'}\``,
+              data.tests && data.tests.length ? `- Test Output: \`${data.tests[0].output || ''}\`` : '',
+              '',
+              'File issue at: https://github.com/jpolvora/spec-driven-workflow/issues'
+            ].filter(Boolean).join('\n')
+          }
+        });
+      }
+    } catch {
+      // ignore read/parse error
+    }
+  }
+  return issues;
+}
+
 // Spec 00045 AC6: transcripts are opt-in inputs. `retro.transcripts` in
 // .sdw/config.json and repeated `--transcript` flags name them; nothing is
 // discovered on the host.
 function readConfiguredTranscripts(root) {
-  const configFile = path.join(root, '.sdw', 'config.json');
   try {
-    const config = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+    const config = readProjectConfig(root);
     const listed = config && config.retro && Array.isArray(config.retro.transcripts)
       ? config.retro.transcripts
       : [];
@@ -601,6 +783,7 @@ function collectSignals(state, inspection, leftoverRuns = [], transcripts = {}) 
   };
 
   return {
+    runId: state.runId || null,
     timestamps,
     retries,
     abandonedDispatches,
@@ -619,7 +802,8 @@ function candidateContract() {
   return {
     fields: [...CANDIDATE_FIELDS],
     severity: [...SEVERITIES],
-    category: [...CATEGORIES]
+    category: [...CATEGORIES],
+    targetScope: [...TARGET_SCOPES]
   };
 }
 
@@ -641,6 +825,9 @@ function validateCandidate(candidate) {
   }
   if (candidate.category !== undefined && !CATEGORIES.includes(candidate.category)) {
     errors.push({ code: 'invalid-category', field: 'category', allowed: [...CATEGORIES] });
+  }
+  if (candidate.targetScope !== undefined && !TARGET_SCOPES.includes(candidate.targetScope)) {
+    errors.push({ code: 'invalid-target-scope', field: 'targetScope', allowed: [...TARGET_SCOPES] });
   }
   return { valid: errors.length === 0, errors };
 }
@@ -666,9 +853,15 @@ function buildReport(options) {
     transcripts: toArray(options.transcripts),
     excludedInputs: [...options.inspection.excludedInputs],
     artifacts: [...options.inspection.artifacts],
+    inspection: options.inspection || null,
     signals: options.signals,
     candidates,
-    candidateContract: candidateContract()
+    candidateContract: candidateContract(),
+    candidateMode: options.candidateMode || null,
+    candidateEvaluation: options.candidateEvaluation !== undefined ? options.candidateEvaluation : undefined,
+    suggestedSpecifications: toArray(options.suggestedSpecifications),
+    upstreamIssues: toArray(options.upstreamIssues),
+    warnings: toArray(options.warnings)
   };
 }
 
@@ -807,6 +1000,28 @@ function renderMarkdown(report) {
   lines.push(`Candidate contract: fields ${contract.fields.map((field) => `\`${field}\``).join(', ')}; severity ${contract.severity.join('|')}; category ${contract.category.join('|')}.`);
   lines.push('');
 
+  if (report.suggestedSpecifications && report.suggestedSpecifications.length > 0) {
+    lines.push('## Suggested Local Specifications (Upstream Canonical)', '');
+    for (const spec of report.suggestedSpecifications) {
+      lines.push(`- \`${spec.slug}\` (type: bugfix): \`sdw-spec new --type bugfix --title "${spec.title}"\``);
+    }
+    lines.push('');
+  }
+
+  if (report.upstreamIssues && report.upstreamIssues.length > 0) {
+    lines.push('## Upstream Issue Candidates', '');
+    lines.push('The following framework issues were identified in this consumer workspace. Please file them upstream at [spec-driven-workflow issues](https://github.com/jpolvora/spec-driven-workflow/issues):', '');
+    for (const issue of report.upstreamIssues) {
+      lines.push(`- **${issue.title}** (${issue.severity}): [File Issue](${issue.issueDraft ? issue.issueDraft.url : 'https://github.com/jpolvora/spec-driven-workflow/issues'})`);
+      if (issue.issueDraft && issue.issueDraft.body) {
+        lines.push('  ```markdown');
+        lines.push(`  ${issue.issueDraft.body.replace(/\n/g, '\n  ')}`);
+        lines.push('  ```');
+      }
+    }
+    lines.push('');
+  }
+
   lines.push('## Excluded Inputs', '');
   if (report.excludedInputs.length === 0) {
     lines.push('None.');
@@ -862,6 +1077,52 @@ function runRetro(options = {}) {
     if (!inspection.inputs.includes(transcript.path)) inspection.inputs.push(transcript.path);
   }
   const signals = collectSignals(state, inspection, collectLeftoverRuns(entries, selected), transcripts);
+
+  const config = readProjectConfig(root);
+  const retroConfig = (config && config.retro) || {};
+  const candidateMode = options.candidateMode || retroConfig.candidateMode || (options.generateCandidates ? 'subagent' : null);
+  const shouldEvaluateCandidates = Boolean(options.generateCandidates || retroConfig.candidateMode || options.candidateMode);
+
+  let candidateEvaluation;
+  const evaluationWarnings = [];
+  const rawLlmResponse = options.candidateEvaluationInput || options._llmResponseMock;
+  if (rawLlmResponse) {
+    try {
+      const parsed = JSON.parse(rawLlmResponse);
+      if (!Array.isArray(parsed) && !(parsed && Array.isArray(parsed.candidates))) {
+        evaluationWarnings.push('Invalid LLM candidate response: expected JSON array or object with candidates');
+      }
+    } catch (parseErr) {
+      evaluationWarnings.push(`Unparsable LLM candidate response: ${parseErr.message}`);
+    }
+  }
+
+  if (shouldEvaluateCandidates) {
+    candidateEvaluation = extractCandidateContext(root, state, artifactsDirectoryPath, transcripts.inputs, candidateMode);
+    if (evaluationWarnings.length > 0) {
+      candidateEvaluation.warnings = evaluationWarnings;
+      candidateEvaluation.warning = evaluationWarnings[0];
+    }
+  }
+  const upstreamIssues = isConsumerWorkspace(root)
+    ? extractUpstreamIssues(root, state, artifactsDirectoryPath)
+    : [];
+
+  const candidates = [...toArray(options.candidates)];
+  let suggestedSpecifications = [];
+  if (isCanonicalUpstream(root) && candidates.length > 0) {
+    suggestedSpecifications = candidates.map((cand) => {
+      const slug = `fix-${String(cand.id || 'issue').toLowerCase()}`;
+      cand.suggestedSpec = {
+        type: 'bugfix',
+        title: cand.title,
+        slug
+      };
+      cand.suggestedCommand = `node skills/sdw-spec/scripts/sdw_spec.cjs new --type bugfix --title "${cand.title}"`;
+      return cand.suggestedSpec;
+    });
+  }
+
   const report = buildReport({
     state,
     runIdFallback: selected.name.replace(/\.state\.json$/i, ''),
@@ -871,7 +1132,12 @@ function runRetro(options = {}) {
     inspection,
     signals,
     transcripts: transcripts.inputs,
-    candidates: options.candidates
+    candidates,
+    candidateMode,
+    candidateEvaluation,
+    suggestedSpecifications,
+    upstreamIssues,
+    warnings: evaluationWarnings
   });
   const outputs = writeReports(root, artifactsDirectoryPath, report);
   return { root, artifactsDir, outputs, report };
@@ -884,6 +1150,8 @@ function parseArgs(argv) {
     root: null,
     transcripts: [],
     transcriptMode: 'host',
+    generateCandidates: false,
+    candidateMode: null,
     json: false,
     help: false
   };
@@ -892,7 +1160,13 @@ function parseArgs(argv) {
     const arg = argv[index];
     if (arg === '--json') options.json = true;
     else if (arg === '--help' || arg === '-h') options.help = true;
-    else if (arg === '--run-id') {
+    else if (arg === '--generate-candidates') options.generateCandidates = true;
+    else if (arg === '--candidate-mode') {
+      options.candidateMode = argv[++index];
+      if (options.candidateMode === undefined) throw new Error('missing value for --candidate-mode');
+    } else if (arg.startsWith('--candidate-mode=')) {
+      options.candidateMode = arg.slice('--candidate-mode='.length);
+    } else if (arg === '--run-id') {
       options.runId = argv[++index];
       if (options.runId === undefined) throw new Error('missing value for --run-id');
     } else if (arg.startsWith('--run-id=')) options.runId = arg.slice('--run-id='.length);

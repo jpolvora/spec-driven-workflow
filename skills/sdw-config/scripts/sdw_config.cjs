@@ -272,8 +272,10 @@ const BRANCHING_DEFAULTS = {
 function resolveBranching(config) {
   // `loadConfig` exposes the unmerged file contents as `raw`; prefer it so the
   // scaffolded default block is not mistaken for an explicit configuration.
-  const configured = config && typeof config === 'object' && config.raw && typeof config.raw === 'object'
-    ? config.raw.branching
+  const hasRaw = config && typeof config === 'object' && config.raw && typeof config.raw === 'object';
+  const rawBranching = hasRaw ? config.raw.branching : undefined;
+  const configured = hasRaw
+    ? rawBranching
     : (config && typeof config === 'object' && !Array.isArray(config) ? config.branching : undefined);
   const branching = configured && typeof configured === 'object' && !Array.isArray(configured) ? configured : {};
   const has = (key) => Object.prototype.hasOwnProperty.call(branching, key);
@@ -286,9 +288,17 @@ function resolveBranching(config) {
   const workBranch = has('workBranch')
     ? branching.workBranch
     : (preset.mirrorWorkToIntegration ? integrationBranch : preset.workBranch);
+  const isScaffoldedDefault = hasRaw
+    && rawBranching
+    && rawBranching.strategy === 'trunk'
+    && (rawBranching.workBranch === null || rawBranching.workBranch === undefined)
+    && (rawBranching.integrationBranch === null || rawBranching.integrationBranch === undefined)
+    && !rawBranching.updateWorkBranch
+    && !rawBranching.syncWorkBranchAfterMerge
+    && !rawBranching.pushSyncedWorkBranch;
   return {
     strategy,
-    source: has('strategy') ? 'config' : 'default',
+    source: isScaffoldedDefault ? 'default' : (has('strategy') ? 'config' : 'default'),
     mirrorWorkToIntegration: Boolean(preset.mirrorWorkToIntegration),
     workBranch,
     integrationBranch,
@@ -331,10 +341,20 @@ const DEFAULT_CONFIG = {
   changelogFile: '{projectRoot}/CHANGELOG.md',
   stateDir: '{projectRoot}/.sdw/state',
   sandboxDir: '{projectRoot}/.sdw/sandbox',
+  skillsRoot: '{projectRoot}/skills',
   autoResolveGaps: true,
   securityChecksEnabled: false,
   useWorktrees: false,
   useFeatureBranches: false,
+  branching: {
+    strategy: 'trunk',
+    featurePrefix: 'feature/',
+    workBranch: null,
+    integrationBranch: null,
+    updateWorkBranch: false,
+    syncWorkBranchAfterMerge: false,
+    pushSyncedWorkBranch: false
+  },
   scmProvider: 'none',
   implementation: {
     mode: 'subagent',
@@ -353,8 +373,17 @@ const DEFAULT_CONFIG = {
   runAllTests: false,
   prePrCommand: '',
   prePrInstructions: '',
+  prePrDiscovery: 'block',
   reviewFixCommand: '',
   maxPreemptions: 3,
+  retro: {
+    enabled: false,
+    followUp: 'none',
+    candidateMode: 'none',
+    candidateModel: null,
+    candidateEffort: null,
+    transcripts: []
+  },
   memory: {
     backends: { wsMemo: true, traps: true, files: true }
   },
@@ -680,6 +709,12 @@ const DEFAULT_SCHEMA = {
       "description": "Optional project-specific instructions or checklist for agents to verify prior to PR submission.",
       "default": ""
     },
+    "prePrDiscovery": {
+      "type": "string",
+      "enum": ["block", "warn", "off"],
+      "default": "block",
+      "description": "Pre-PR discovered prepare obligations enforcement mode: block (default), warn, or off."
+    },
     "reviewFixCommand": {
       "type": "string",
       "description": "Optional command that applies review-thread fixes. When unset, sdw-ship-pr never resolves active threads automatically.",
@@ -690,6 +725,43 @@ const DEFAULT_SCHEMA = {
       "minimum": 0,
       "description": "Maximum concurrent-push adaptation budget for post-PR review convergence before draining rounds.",
       "default": 3
+    },
+    "retro": {
+      "type": "object",
+      "description": "Configuration for post-delivery retrospective analysis and learning loop.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "When true, sdw-run runs sdw-retro for the completed run and records the outcome in state.retro. When false or absent, it prints the advisory retro command only."
+        },
+        "followUp": {
+          "type": "string",
+          "enum": ["queue", "record", "none"],
+          "default": "queue",
+          "description": "sdw-batch policy for the retrospective candidates of a completed item: queue (create draft specs for critical/high candidates and append them to the batch queue), record (write followups markdown and create nothing), or none."
+        },
+        "candidateMode": {
+          "type": "string",
+          "enum": ["subagent", "command", "none"],
+          "default": "none"
+        },
+        "candidateModel": {
+          "type": ["string", "null"],
+          "default": null
+        },
+        "candidateEffort": {
+          "type": ["string", "null"],
+          "enum": ["low", "medium", "high", null],
+          "default": null
+        },
+        "transcripts": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        }
+      },
+      "additionalProperties": false
     },
     "memory": {
       "type": "object",

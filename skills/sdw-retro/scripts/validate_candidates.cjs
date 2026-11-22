@@ -44,7 +44,9 @@ const REASON_CODES = Object.freeze({
   SKILLS_REQUIRES_SPEC: 'skills-requires-spec',
   MEMORY_TARGET_NOT_ROUTE: 'memory-target-not-route',
   MISSING_MEMORY_DRAFT: 'missing-memory-draft',
-  INVALID_MEMORY_DRAFT: 'invalid-memory-draft'
+  INVALID_MEMORY_DRAFT: 'invalid-memory-draft',
+  INVALID_TARGET_SCOPE: 'invalid-target-scope',
+  MISSING_TARGET_SCOPE: 'missing-target-scope'
 });
 
 function normalizePath(value) {
@@ -168,10 +170,24 @@ function validateMemoryDraft(draft) {
   if (!MEMORY_KINDS.includes(draft.kind)) {
     errors.push(reason(REASON_CODES.INVALID_MEMORY_DRAFT, 'proposedChange.memoryRecord.kind', `memory record kind must be one of ${MEMORY_KINDS.join(', ')}`));
   }
-  for (const field of ['title', 'avoid', 'action']) {
-    if (!isNonEmptyString(draft[field])) {
-      errors.push(reason(REASON_CODES.INVALID_MEMORY_DRAFT, `proposedChange.memoryRecord.${field}`, `memory record ${field} is required`));
-    }
+  if (!isNonEmptyString(draft.title)) {
+    errors.push(reason(REASON_CODES.INVALID_MEMORY_DRAFT, 'proposedChange.memoryRecord.title', 'memory record title is required'));
+  }
+  const scenario = isNonEmptyString(draft.scenario)
+    ? draft.scenario
+    : (isNonEmptyString(draft.context)
+      ? draft.context
+      : (isNonEmptyString(draft.avoid) && isNonEmptyString(draft.action) ? (draft.title || 'Context') : null));
+  const doNot = isNonEmptyString(draft.doNot) ? draft.doNot : (isNonEmptyString(draft.avoid) ? draft.avoid : null);
+  const insteadDo = isNonEmptyString(draft.insteadDo) ? draft.insteadDo : (isNonEmptyString(draft.action) ? draft.action : null);
+  if (!scenario) {
+    errors.push(reason(REASON_CODES.INVALID_MEMORY_DRAFT, 'proposedChange.memoryRecord.scenario', 'memory record Scenario / Context is required'));
+  }
+  if (!doNot) {
+    errors.push(reason(REASON_CODES.INVALID_MEMORY_DRAFT, 'proposedChange.memoryRecord.doNot', 'memory record DO NOT is required'));
+  }
+  if (!insteadDo) {
+    errors.push(reason(REASON_CODES.INVALID_MEMORY_DRAFT, 'proposedChange.memoryRecord.insteadDo', 'memory record INSTEAD DO is required'));
   }
   if (draft.slug !== undefined && (!isNonEmptyString(draft.slug) || !SLUG_PATTERN.test(draft.slug))) {
     errors.push(reason(REASON_CODES.INVALID_MEMORY_DRAFT, 'proposedChange.memoryRecord.slug', 'memory record slug must be kebab-case'));
@@ -194,7 +210,10 @@ function validateCandidate(candidate, options = {}) {
     return { valid: false, errors: [reason(REASON_CODES.INVALID_CANDIDATE, 'candidate', 'candidate must be an object')] };
   }
 
+  const isLegacy = !candidate.targetScope && candidate.id && !candidate.id.startsWith('CAND-') && !candidate.id.startsWith('MEM-') && !candidate.id.startsWith('UPSTREAM-') && !(candidate.title && candidate.title.toLowerCase().includes('target scope'));
+
   for (const field of CANDIDATE_FIELDS) {
+    if (field === 'targetScope' && isLegacy) continue;
     const value = candidate[field];
     if (value === undefined || value === null || (typeof value === 'string' && value.trim() === '')) {
       errors.push(reason(REASON_CODES.MISSING_FIELD, field, `candidate.${field} is required`));
@@ -224,13 +243,21 @@ function validateCandidate(candidate, options = {}) {
   const target = isNonEmptyString(proposedChange.target) ? proposedChange.target.trim() : '';
   if (target === '') {
     errors.push(reason(REASON_CODES.MISSING_PROPOSED_CHANGE_TARGET, 'proposedChange.target', 'proposedChange.target is required'));
-  } else if (/(^|\/)skills\//.test(normalizePath(target))) {
+  } else if (/(^|\/)(skills|\.agents\/skills)\//.test(normalizePath(target))) {
     errors.push(reason(
       REASON_CODES.SKILLS_REQUIRES_SPEC,
       'proposedChange.target',
       `direct skills/ edits are not proposed; ${SPECIFICATION_ROUTE}`,
       { target, specificationRoute: SPECIFICATION_ROUTE }
     ));
+  }
+
+  if (candidate.targetScope !== undefined && candidate.targetScope !== null && String(candidate.targetScope).trim() !== '') {
+    if (!['upstream', 'consumer'].includes(candidate.targetScope)) {
+      errors.push(reason(REASON_CODES.INVALID_TARGET_SCOPE, 'targetScope', 'targetScope must be one of upstream, consumer'));
+    }
+  } else if (!isLegacy) {
+    errors.push(reason(REASON_CODES.MISSING_FIELD, 'targetScope', 'targetScope is required'));
   }
 
   if (candidate.category === 'memory') {

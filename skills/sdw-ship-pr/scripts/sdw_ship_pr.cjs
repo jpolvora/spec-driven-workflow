@@ -1853,6 +1853,40 @@ async function runShipPr(options = {}, customExecutor = null) {
           stateData.pullRequest = report.pullRequest;
           stateData.shipStatus = report.shipStatus;
           if (report.branchingSync) stateData.branchingSync = report.branchingSync;
+          if (report.merge && report.merge.ok === true) {
+            stateData.status = 'completed';
+            if (config && config.retro && config.retro.enabled) {
+              try {
+                let retroModule = null;
+                try {
+                  retroModule = require(path.join(projectRoot, 'skills', 'sdw-retro', 'scripts', 'retro.cjs'));
+                } catch {
+                  try {
+                    retroModule = require(path.join(projectRoot, '.agents', 'skills', 'sdw-retro', 'scripts', 'retro.cjs'));
+                  } catch {
+                    retroModule = require('../../sdw-retro/scripts/retro.cjs');
+                  }
+                }
+                if (retroModule && typeof retroModule.runRetro === 'function') {
+                  const retroRes = retroModule.runRetro({
+                    root: projectRoot,
+                    runId: options.runId,
+                    json: true
+                  });
+                  stateData.retro = {
+                    status: 'completed',
+                    reportJson: retroRes.outputs ? retroRes.outputs.json : null,
+                    reportMd: retroRes.outputs ? retroRes.outputs.markdown : null
+                  };
+                }
+              } catch (retroErr) {
+                stateData.retro = {
+                  status: 'failed',
+                  error: retroErr.message
+                };
+              }
+            }
+          }
           fs.writeFileSync(stateFilePath, JSON.stringify(stateData, null, 2), 'utf8');
           log(`[sdw-ship-pr] Updated run state at ${stateFilePath}`);
         } catch (saveErr) {
