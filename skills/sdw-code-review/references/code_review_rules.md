@@ -49,7 +49,7 @@ Each finding carries:
 - `path`: Precise `file:line` (repo-relative, forward slashes).
 - `rule`: Machine-readable citation (e.g. `no_debugger_statements`).
 - `message`: Failure scenario in one sentence.
-- `fix`: Step-by-step prescription executable by an agent without extra context.
+- `fix`: Step-by-step prescription executable by an agent without extra context (omits re-running test suite instructions when `enableTestingFeatures` is false).
 - `hunk`: Quoted offending lines (up to 3 lines context, secrets redacted).
 - `status`: `open` (unresolved) | `fixed` (auto-fixed this run) | `planned` (dry-run).
 

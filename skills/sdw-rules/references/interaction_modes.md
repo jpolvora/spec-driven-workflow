@@ -86,7 +86,18 @@ When in doubt, treat the action as destructive. The cost of one question is lowe
 
 ---
 
-## 7. Unattended workflows
+## 7. Working Tree & Git State Preservation (Zero Work Loss)
+
+Developers and concurrent agents frequently create new specifications, analyze ideas, or leave work-in-progress files in the working tree while another task or specification is executing.
+
+- **Never delete unowned work:** Agents must never discard, revert, or clean files they did not touch. Never run `git reset --hard`, `git clean -fd`, `git checkout -- .`, or `git restore .` without explicit user instruction.
+- **Surgical commits only:** Never use `git add -A`, `git add .`, or sweep unowned files into commits. Only stage the exact file paths changed or created by the assigned task. Unowned files (such as newly drafted specifications in `.sdw/specs/` or modified files in other subsystems) must remain untouched in the working tree.
+- **Safe preservation on branch switch:** If a git operation (branch switch, pull, merge, rebase) requires a clean tree, unowned modifications must be safely stashed (`git stash push -u -m "sdw-preserve-<context>"`) or saved to a temporary backup branch, and restored immediately after the operation. Never force-checkout over uncommitted changes.
+- **Leave decisions to humans:** Let humans and originating agents decide when to commit, stash, or discard their own work.
+
+---
+
+## 8. Unattended workflows
 
 Some skills are designed to run almost fully unattended (`sdw-run` runs, batch queues, `sdw-ship-pr` convergence, CI workflows).
 
@@ -97,7 +108,7 @@ Some skills are designed to run almost fully unattended (`sdw-run` runs, batch q
 
 ---
 
-## 8. Asking well (harness-agnostic)
+## 9. Asking well (harness-agnostic)
 
 - One decision per question; mutually exclusive options; a recommended default first.
 - Name the consequence of each option in one clause.
@@ -106,7 +117,7 @@ Some skills are designed to run almost fully unattended (`sdw-run` runs, batch q
 
 ---
 
-## 9. Anti-patterns
+## 10. Anti-patterns
 
 - "It's small and safe" → still not authorized.
 - "The spec exists / was approved" → a spec is a document, not an order.
@@ -117,7 +128,7 @@ Some skills are designed to run almost fully unattended (`sdw-run` runs, batch q
 
 ---
 
-## 10. Worked examples
+## 11. Worked examples
 
 **Ambiguous (plan + confirm).** User: "the dry-run feels wrong." → Investigate read-only, find that `--dry-run` executes the pipeline in one path. Plan: A) make it plan-only, B) add `--sandbox` for real isolated execution. Recommend A+B. Ask. Change nothing until approved.
 

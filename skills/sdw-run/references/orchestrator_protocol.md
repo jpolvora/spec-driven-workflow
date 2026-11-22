@@ -65,9 +65,9 @@ Each execution session is completely isolated within a dedicated JSON state file
 ## 2. 8-Step State Machine
 
 1. **Derivation:** Identifies whether the spec is already agent-ready (EARS ACs, DoR, YAML frontmatter). Skips derivation if ready; otherwise reformulates human stories.
-2. **Grilling:** Walks the decision tree covering input bounds, failure scenarios, and concurrency. Auto-resolves known gaps or prompts user via `ask_question` with recommended defaults.
-3. **DAG Generation:** Analyzes complexity (file count, touchpoints) and decomposes requirements into 1 or more atomic tasks.
-4. **Implementation Dispatch:** Sequentially dispatches one DAG task at a time to a single worker, with a complete brief (criteria, scope fence, prohibitions, evidence contract) instead of the orchestrator's transcript. Every accepted task is checkpointed immediately: one scoped commit of its `filesChanged` plus the tag `sdw-checkpoint-{runId}-{taskId}`.
+2. **Grilling:** Walks the decision tree covering input bounds, failure scenarios, and concurrency. Auto-resolves known gaps or prompts user via `ask_question` with recommended defaults. When `enableTestingFeatures` is false, test plan requirements and test target files are omitted from the generated blueprint.
+3. **DAG Generation:** Analyzes complexity (file count, touchpoints) and decomposes requirements into 1 or more atomic tasks. When `enableTestingFeatures` is false (default), test author tasks and test segregation are omitted, generating direct implementation tasks only.
+4. **Implementation Dispatch:** Sequentially dispatches one DAG task at a time to a single worker, with a complete brief (criteria, scope fence, prohibitions, evidence contract) instead of the orchestrator's transcript. When `enableTestingFeatures` is false, test suite execution gates are skipped and recorded as skipped in the run state. Every accepted task is checkpointed immediately: one scoped commit of its `filesChanged` plus the tag `sdw-checkpoint-{runId}-{taskId}`.
 5. **Conformance Scoring:** An LLM judge fences the criteria plus the generated diff, emits a 0-10 score with per-criterion verdicts. If the score is below threshold (default 8/10), feedback triggers the re-implementation loop.
 6. **Delivery Commit:** Creates an atomic, structured git commit for verified code. It remains the delivery commit after the per-task checkpoints and aggregates whatever they did not already commit.
 7. **Delegated Code Review via sdw-code-review:** Dispatches subagent or CLI runner for `sdw-code-review`; inspects the generated JSON report (`passed`, `errorCount`, `warningCount`, `suggestionCount`, `findings`) to advance to Step 8, iterate surgical fixes (up to 3 attempts with security gate and scoped fix commits), or pause on residual blocking findings. `sdw-code-review` is the sole review authority.
@@ -98,6 +98,11 @@ Configurable feature branch activation and per-task isolated git worktrees:
 - **Conflict Handling:** Cherry-pick conflicts halt execution with exit code 1; the conflicted worktree is preserved for operator inspection.
 - **Clean Removal:** Once integrated, removes worktree via `git worktree remove` and deletes task branch via `git branch -d`.
 - **Overrides:** `--no-worktrees` and `--no-feature-branch` flags override configuration for the current run.
+
+### Working Tree Preservation & Zero Work Loss
+- **No Resets:** Never run `git reset --hard` or `git clean -fd` to clear dirty working-tree state. Dirty trees never block or refuse execution.
+- **Surgical Staging:** Checkpoint commits (Step 4), delivery commits (Step 6), and fixer commits (Step 7/8) stage only task-owned files (`filesChanged` from evidence). Unowned files, including newly created specifications in `.sdw/specs/` or WIP edits authored by humans or other agents, must remain untouched in the working tree.
+- **Safe Stash and Restore:** When switching branches or checking out refs where git requires a clean working tree, unowned modifications must be stashed (`git stash push -u -m "sdw-run-preserve-..."`) or saved to a temporary backup branch and restored immediately upon completion.
 
 ## 5. Step Artifacts Persistence Protocol
 

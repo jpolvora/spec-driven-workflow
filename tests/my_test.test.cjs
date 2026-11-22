@@ -645,6 +645,10 @@ test('AC12: System creates atomic checkpoint commit and tag for completed test a
 
 test('AC12: Command mode creates atomic checkpoint commit and tag for test_author task', () => {
   const tmpDir = setupTestRepo();
+  const cfgPath = path.join(tmpDir, '.sdw', 'config.json');
+  const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+  cfg.enableTestingFeatures = true;
+  fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
   const testFileRel = 'tests/command_auth.test.cjs';
   fs.mkdirSync(path.join(tmpDir, 'tests'), { recursive: true });
   fs.writeFileSync(path.join(tmpDir, testFileRel), '// baseline test\n', 'utf8');

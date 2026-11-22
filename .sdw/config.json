@@ -1,6 +1,7 @@
 {
   "$schema": "./config.schema.json",
   "specsDir": "{projectRoot}/.sdw/specs",
+  "enableTestingFeatures": true,
   "scoreMin": 8,
   "scoring": {
     "judgeCommand": null,
