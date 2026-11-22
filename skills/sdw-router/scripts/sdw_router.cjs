@@ -152,7 +152,7 @@ const INTENT_RULES = {
   },
   'sdw-spec': {
     primaryKeywords: ['spec', 'specification', 'index.specs.md', 'prd index', 'ears', 'authoring', 'grill'],
-    secondaryKeywords: ['new spec', 'import spec', 'list specs', 'sync specs', 'validate spec', 'archive spec', 'formatting', 'acceptance criteria', 'format spec', 'grill me', 'refine spec', 'spec status', 'awaiting-approval', 'bugfix spec', 'bugfix specification', 'spec to fix', 'fix bug', 'fix a bug'],
+    secondaryKeywords: ['new spec', 'import spec', 'list specs', 'sync specs', 'validate spec', 'archive spec', 'formatting', 'acceptance criteria', 'format spec', 'grill me', 'refine spec', 'spec status', 'awaiting-approval', 'bugfix spec', 'bugfix specification', 'spec to fix'],
     recommendedOption: 'Author, grill, validate, or synchronize specifications using sdw-spec'
   },
   'sdw-run': {

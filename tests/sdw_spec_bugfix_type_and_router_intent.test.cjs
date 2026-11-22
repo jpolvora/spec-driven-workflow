@@ -179,6 +179,17 @@ test('AC6: sdw-router routes standard specification authoring prompts with defau
   assert.equal(parsed.targetSkill, 'sdw-spec');
   const cliType = (parsed.options && parsed.options.type) || 'feature';
   assert.equal(cliType, 'feature');
+
+  // Generic bugfix coding requests without "spec" pass through cleanly
+  const nonSpecPrompts = [
+    'Fix a bug in the login handler',
+    'Please fix bug with database timeout',
+    'fix a bug in payment gateway'
+  ];
+  for (const prompt of nonSpecPrompts) {
+    const route = sdwRouter.routePrompt(prompt);
+    assert.equal(route.matched, false, `Non-spec coding prompt should not match router: "${prompt}"`);
+  }
 });
 
 test('AC7: sdw-spec list displays TYPE column for registered specifications', () => {
