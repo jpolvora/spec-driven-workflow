@@ -238,6 +238,7 @@ test('sdw-refinement-gates - AC5, AC6: Step 8 executes buildCommand and testComm
     const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     cfg.requiredBuild = true;
     cfg.runAllTests = true;
+    cfg.enableTestingFeatures = true;
     cfg.verification = {
       ...(cfg.verification || {}),
       buildCommand: `node -e "require('fs').writeFileSync('${buildMarker}', 'built')"`,
@@ -344,6 +345,7 @@ test('sdw-refinement-gates - AC8: Successful automated fix resolves test failure
     const configPath = path.join(repoRoot, '.sdw', 'config.json');
     const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     cfg.runAllTests = true;
+    cfg.enableTestingFeatures = true;
     cfg.verification = { ...(cfg.verification || {}), testCommand: 'node test.cjs' };
     fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2), 'utf8');
 
@@ -388,6 +390,7 @@ test('sdw-refinement-gates - AC9: Secret leak check rejects fix commit if automa
     const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     cfg.securityChecksEnabled = true;
     cfg.runAllTests = true;
+    cfg.enableTestingFeatures = true;
     cfg.verification = { ...(cfg.verification || {}), testCommand: 'node test.cjs' };
     fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2), 'utf8');
 
