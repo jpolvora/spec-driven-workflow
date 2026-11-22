@@ -302,6 +302,7 @@ function resolveBranching(config) {
 const DEFAULT_CONFIG = {
   $schema: './config.schema.json',
   specsDir: '{projectRoot}/.sdw/specs',
+  enableTestingFeatures: false,
   scoreMin: 8,
   scoring: {
     judgeCommand: null,
@@ -366,6 +367,11 @@ const DEFAULT_SCHEMA = {
       "type": "string",
       "description": "Path to the directory containing feature specifications. Supports tokens {projectRoot} and {skillsRoot}.",
       "default": "{projectRoot}/.sdw/specs"
+    },
+    "enableTestingFeatures": {
+      "type": "boolean",
+      "description": "Global master toggle for testing features. When false, test generation, test execution, test runner gates, and test segregation agents are disabled.",
+      "default": false
     },
     "automation": {
       "type": "object",
@@ -709,6 +715,13 @@ function validateConfigSchema(config) {
     }
   }
 
+  // enableTestingFeatures
+  if ('enableTestingFeatures' in config) {
+    if (typeof config.enableTestingFeatures !== 'boolean') {
+      errors.push('Property "enableTestingFeatures" must be a boolean.');
+    }
+  }
+
   // scoring (Spec 027)
   if ('scoring' in config) {
     if (!config.scoring || typeof config.scoring !== 'object' || Array.isArray(config.scoring)) {
@@ -931,7 +944,7 @@ function validateConfigSchema(config) {
   if ('runAllTests' in config) {
     if (typeof config.runAllTests !== 'boolean') {
       errors.push('Property "runAllTests" must be a boolean.');
-    } else if (config.runAllTests === true) {
+    } else if (config.runAllTests === true && config.enableTestingFeatures !== false) {
       const testCmd = config.verification && config.verification.testCommand;
       if (!testCmd || typeof testCmd !== 'string' || testCmd.trim().length === 0) {
         errors.push('Missing required test command: "runAllTests" is true but "verification.testCommand" is not specified.');

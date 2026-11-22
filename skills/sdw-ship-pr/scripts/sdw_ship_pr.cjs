@@ -1036,7 +1036,9 @@ async function runShipPr(options = {}, customExecutor = null) {
       }
     }
 
-    if (!config.runAllTests) {
+    if (config.enableTestingFeatures === false) {
+      boardRow('tests', 'skipped', 'enableTestingFeatures is false');
+    } else if (!config.runAllTests) {
       boardRow('tests', 'skipped', 'runAllTests is false');
     } else if (dryRun) {
       log('[sdw-ship-pr] (dry-run) runAllTests not executed.');
@@ -1493,7 +1495,7 @@ async function runShipPr(options = {}, customExecutor = null) {
               log(`[sdw-ship-pr] ${failingChecks.length} failing check(s); applying reviewFixCommand...`);
               const beforeCheckFix = listChangedPaths(executor);
               executor(reviewFixCommand);
-              if (config.runAllTests) executor(testCommand);
+              if (config.runAllTests && config.enableTestingFeatures !== false) executor(testCommand);
               runReviewSecurityGate();
               const changed = stageChangedSince(executor, beforeCheckFix, projectRoot);
               if (changed.length > 0) {
@@ -1571,7 +1573,7 @@ async function runShipPr(options = {}, customExecutor = null) {
               const beforeReviewFix = listChangedPaths(executor);
               executor(effectiveFixCommand);
 
-              if (config.runAllTests) {
+              if (config.runAllTests && config.enableTestingFeatures !== false) {
                 log(`[sdw-ship-pr] Verifying review fixes with test command: ${testCommand}`);
                 executor(testCommand);
               }

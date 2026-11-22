@@ -643,6 +643,9 @@ function runVerificationGates(targetRoot, config, options = {}) {
   const reqTests = options.runAllTests !== undefined
     ? options.runAllTests
     : Boolean(config.runAllTests || (verificationConfig.testCommand && typeof verificationConfig.testCommand === 'string'));
+  const enableTestingFeatures = config && config.enableTestingFeatures !== undefined
+    ? Boolean(config.enableTestingFeatures)
+    : false;
 
   if (reqBuild) {
     const buildCmd = (config.verification && config.verification.buildCommand) || 'npm run build';
@@ -702,7 +705,10 @@ function runVerificationGates(targetRoot, config, options = {}) {
     }
   }
 
-  if (reqTests && passed) {
+  if (!enableTestingFeatures) {
+    gates.test = { status: 'skipped', reason: 'enableTestingFeatures is false' };
+    console.log('[Step 4: Verification Gate] Test execution skipped (enableTestingFeatures: false).');
+  } else if (reqTests && passed) {
     const testCmd = (config.verification && config.verification.testCommand) || 'npm test';
     console.log(`[Step 4: Verification Gate] Executing test command: "${testCmd}"...`);
     const start = Date.now();
@@ -2545,7 +2551,10 @@ function cmdRun(options) {
 
       // 2. Pre-PR Quality Gates (Build Verification & Full Test Pass) (AC5, AC6, AC7, AC8, AC9, AC10)
       const requiredBuild = Boolean(config.requiredBuild);
-      const runAllTests = Boolean(config.runAllTests);
+      const enableTestingFeatures = config && config.enableTestingFeatures !== undefined
+        ? Boolean(config.enableTestingFeatures)
+        : false;
+      const runAllTests = Boolean(config.runAllTests) && enableTestingFeatures;
       const gateTimeoutMs = Number(config.verification && config.verification.timeoutMs) > 0
         ? Number(config.verification.timeoutMs)
         : 600000;
@@ -3996,6 +4005,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  runVerificationGates,
   cmdRun,
   cmdResume,
   cmdStatus,

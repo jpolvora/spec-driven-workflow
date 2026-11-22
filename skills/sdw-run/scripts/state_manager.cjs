@@ -222,6 +222,14 @@ function updateStepState(targetRoot, runId, stepNum, status, outputData, error, 
   }
   if (outputData !== undefined) {
     stepObj.output = outputData;
+    if (outputData && typeof outputData === 'object') {
+      if (outputData.gates) {
+        stepObj.gates = outputData.gates;
+      }
+      if (outputData.tasks) {
+        stepObj.tasks = outputData.tasks;
+      }
+    }
   }
 
   let opt = options;

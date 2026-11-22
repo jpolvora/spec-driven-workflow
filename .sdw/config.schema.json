@@ -17,6 +17,11 @@
       "description": "Path to the directory containing feature specifications. Supports tokens {projectRoot} and {skillsRoot}.",
       "default": "{projectRoot}/.sdw/specs"
     },
+    "enableTestingFeatures": {
+      "type": "boolean",
+      "description": "Global master toggle for testing features. When false, test generation, test execution, test runner gates, and test segregation agents are disabled.",
+      "default": false
+    },
     "automation": {
       "type": "object",
       "description": "Opt-in autonomous delivery. When both flags are true, Step 8 ships, converges, and merges in the same invocation; any failing gate still blocks delivery.",

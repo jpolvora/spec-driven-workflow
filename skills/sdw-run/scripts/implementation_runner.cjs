@@ -23,6 +23,11 @@ function renderTaskPrompt(options) {
     targetRoot, specSlug, specPath, runId, stateDir, task, specAcs, useWorktrees, taskWorktreeRel,
     dagTasks, taskStates, abandonments, absolutePaths, refineMode, testPatterns: optTestPatterns
   } = options;
+  const enableTestingFeatures = options.enableTestingFeatures !== undefined
+    ? Boolean(options.enableTestingFeatures)
+    : (options.config && options.config.enableTestingFeatures !== undefined
+        ? Boolean(options.config.enableTestingFeatures)
+        : false);
   const root = targetRoot ? path.resolve(targetRoot) : process.cwd();
   const absStateDir = stateDir ? (path.isAbsolute(stateDir) ? stateDir : path.resolve(root, stateDir)) : path.join(root, '.sdw', 'state');
   const taskPromptDir = path.join(absStateDir, specSlug, runId);
@@ -114,7 +119,7 @@ function renderTaskPrompt(options) {
   if (role === 'test_author') {
     prompt += `- **Permitted:** only test files matching configured test file patterns (${patternsDisplay}).\n`;
     prompt += `- **Forbidden:** modifying production code files. All non-test files are strictly prohibited.\n`;
-  } else if (role === 'implementation') {
+  } else if (role === 'implementation' && enableTestingFeatures) {
     prompt += `- **Permitted:** only production code files (the target files above, plus new production files required by the assigned criteria). All test files are explicitly excluded.\n`;
     prompt += `- **Forbidden:** modifying test files matching configured test file patterns (${patternsDisplay}). Test file modifications are strictly prohibited.\n`;
   } else {
@@ -163,8 +168,15 @@ function renderTaskPrompt(options) {
   }
 
   if (task.contextPrompt) {
+    let cp = task.contextPrompt;
+    if (!enableTestingFeatures) {
+      cp = cp
+        .replace(/Satisfy the existing test suite[^\n]*\n?/gi, '')
+        .replace(/without modifying test files[^\n]*/gi, '')
+        .trim();
+    }
     prompt += `## Architectural Guidance\n`;
-    prompt += `${task.contextPrompt}\n\n`;
+    prompt += `${cp}\n\n`;
   }
 
   if (role === 'test_author') {
@@ -172,7 +184,11 @@ function renderTaskPrompt(options) {
     prompt += `Write failing tests strictly asserting assigned acceptance criteria without modifying production code.\n\n`;
   } else if (role === 'implementation') {
     prompt += `## Implementation Instructions\n`;
-    prompt += `Satisfy the existing test suite. Modifying test files is strictly prohibited.\n\n`;
+    if (enableTestingFeatures) {
+      prompt += `Satisfy the existing test suite. Modifying test files is strictly prohibited.\n\n`;
+    } else {
+      prompt += `Satisfy assigned acceptance criteria directly in accordance with sdw-rules.\n\n`;
+    }
   }
 
   prompt += `## Implementation Rules (sdw-rules)\n`;
@@ -192,7 +208,7 @@ function renderTaskPrompt(options) {
   prompt += `- Do not modify files outside the scope fence.\n`;
   if (role === 'test_author') {
     prompt += `- Modifying production code files is strictly prohibited. You may only create or modify test files.\n`;
-  } else if (role === 'implementation') {
+  } else if (role === 'implementation' && enableTestingFeatures) {
     prompt += `- Modifying test files is strictly prohibited. Test suite assertions must not be weakened or altered.\n`;
   }
   prompt += `- Do not write run state, prompt files, or the specification.\n`;
