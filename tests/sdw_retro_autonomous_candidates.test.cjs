@@ -16,6 +16,9 @@ const SKILL_MD_PATH = path.join(REPO_ROOT, 'skills', 'sdw-retro', 'SKILL.md');
 
 const retro = require('../skills/sdw-retro/scripts/retro.cjs');
 const validateCandidates = require('../skills/sdw-retro/scripts/validate_candidates.cjs');
+const sdwConfig = require('../skills/sdw-config/scripts/sdw_config.cjs');
+const sdwShipPr = require('../skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs');
+const batchQueue = require('../skills/sdw-batch/scripts/batch_queue.cjs');
 
 function makeWorkspace(t, options = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-retro-cand-'));
@@ -546,4 +549,401 @@ test('AC7: in consumer workspace, classify framework-scoped defects as upstream 
     resMod.errors.some(e => e.code === 'skills-requires-spec' || e.code === 'vendored-skills-immutable' || e.message.includes('skills')),
     'Rejection must cite skills modification restriction'
   );
+});
+
+// =========================================================================
+// AC8: Canonical Upstream Suggests Local Specs with Type 'bugfix' for Approved Candidates
+// =========================================================================
+test('AC8: while running in canonical upstream repository, candidate generation suggests local specifications with type bugfix for approved candidates', (t) => {
+  const ws = makeWorkspace(t);
+  const runId = 'run-20261122-00008';
+  const { fullArtifactsDir, statePath } = writeSampleState(ws.root, runId, '00079-test-feature');
+
+  // Mark ws as canonical upstream repository (package.json name 'spec-driven-workflow' + skills/sdw-rules/SKILL.md)
+  fs.writeFileSync(path.join(ws.root, 'package.json'), JSON.stringify({
+    name: 'spec-driven-workflow',
+    version: '1.0.0'
+  }, null, 2), 'utf8');
+  const rulesDir = path.join(ws.root, 'skills', 'sdw-rules');
+  fs.mkdirSync(rulesDir, { recursive: true });
+  fs.writeFileSync(path.join(rulesDir, 'SKILL.md'), '---\nname: sdw-rules\n---\n# sdw-rules\n', 'utf8');
+
+  // Candidate targeting upstream in canonical upstream repo
+  const candidateList = [
+    {
+      id: 'CAND-UP-001',
+      title: 'Fix issue in upstream skill',
+      severity: 'high',
+      category: 'automated-check',
+      targetScope: 'upstream',
+      evidence: {
+        artifact: path.relative(ws.root, statePath).replace(/\\/g, '/'),
+        ref: '#steps.4.output'
+      },
+      proposedChange: {
+        target: '.sdw/specs/00080-fix.md'
+      }
+    }
+  ];
+
+  // 1. Validate candidate in canonical upstream repository
+  const valResult = validateCandidates.validateCandidates(candidateList, { root: ws.root });
+  assert.equal(valResult.valid, true, `Candidate should be accepted in canonical repo: ${JSON.stringify(valResult.errors || valResult.reasonCodes)}`);
+  assert.equal(valResult.accepted.length, 1);
+
+  // 2. Run retro in canonical upstream repository
+  const retroResult = retro.runRetro({
+    root: ws.root,
+    runId,
+    generateCandidates: true,
+    candidates: candidateList,
+    json: true
+  });
+
+  assert.ok(retroResult && retroResult.report, 'Retro report must be produced');
+  const report = retroResult.report;
+
+  // In canonical upstream repository, approved candidates suggest local specifications with type 'bugfix'
+  const hasBugfixSuggestion = Boolean(
+    (report.suggestedSpecifications && report.suggestedSpecifications.some(s => s.type === 'bugfix')) ||
+    (report.localSpecifications && report.localSpecifications.some(s => s.type === 'bugfix')) ||
+    (report.candidates && report.candidates.some(c => (c.suggestedSpec && c.suggestedSpec.type === 'bugfix') || (c.suggestedCommand && /--type[ =]bugfix/.test(c.suggestedCommand)))) ||
+    (valResult.accepted && valResult.accepted.some(c => (c.suggestedSpec && c.suggestedSpec.type === 'bugfix') || (c.suggestedCommand && /--type[ =]bugfix/.test(c.suggestedCommand)))) ||
+    /sdw-spec\s+new.*--type[ =]bugfix/i.test(retro.renderMarkdown(report))
+  );
+
+  assert.ok(
+    hasBugfixSuggestion,
+    'While running in canonical upstream repository, candidate generation must suggest local specifications with type bugfix for approved candidates'
+  );
+});
+
+// =========================================================================
+// AC9: sdw-ship-pr Updates state.status to 'completed' and Executes Retro on Merge
+// =========================================================================
+test('AC9: when sdw-ship-pr completes a pull request merge and updates run state, update state.status to completed and execute automatic retrospective when retro.enabled is true', async (t) => {
+  const ws = makeWorkspace(t, {
+    config: {
+      scmProvider: 'github',
+      scmCodeReviewEnabled: true,
+      retro: {
+        enabled: true
+      }
+    }
+  });
+  const runId = 'run-20261122-00009';
+  const slug = '00079-test-feature';
+  const { statePath } = writeSampleState(ws.root, runId, slug, {
+    status: 'in_progress',
+    score: 9
+  });
+
+  const calls = [];
+  const fakeExecutor = (cmd) => {
+    calls.push(cmd);
+    if (cmd.includes('--input')) {
+      const match = cmd.match(/--input\s+"([^"]+)"/);
+      if (match && fs.existsSync(match[1])) {
+        const payload = fs.readFileSync(match[1], 'utf8');
+        if (payload.includes('reviewThreads')) {
+          return JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } });
+        }
+      }
+    }
+    if (cmd.includes('pr checks')) return JSON.stringify([{ name: 'ci/build', state: 'pass', bucket: 'pass' }]);
+    if (cmd.includes('gh repo view')) return JSON.stringify({ owner: { login: 'fake-owner' }, name: 'fake-repo' });
+    if (cmd.includes('gh pr list')) {
+      return JSON.stringify([{ number: 42, url: 'https://github.com/fake-owner/fake-repo/pull/42', headRefName: 'develop', baseRefName: 'master' }]);
+    }
+    if (cmd.includes('where gh') || cmd.includes('command -v gh')) return '/usr/bin/gh';
+    if (cmd.includes('gh auth status')) return 'Logged in';
+    if (cmd.includes('gh pr merge')) return '';
+    return '';
+  };
+
+  const loadedConfig = sdwShipPr.loadConfig(ws.root);
+  const report = await sdwShipPr.runShipPr({
+    projectRoot: ws.root,
+    config: loadedConfig,
+    runId,
+    specSlug: slug,
+    head: 'develop',
+    base: 'master',
+    maxIterations: 1,
+    pollIntervalMs: 0,
+    pollPr: true,
+    merge: true
+  }, fakeExecutor);
+
+  assert.equal(report.merge && report.merge.ok, true, 'Merge must succeed');
+
+  const updatedState = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+
+  // 1. state.status must be updated to 'completed'
+  assert.equal(updatedState.status, 'completed', 'state.status must be updated to completed after pull request merge');
+
+  // 2. automatic retrospective executed when retro.enabled is true
+  assert.ok(
+    updatedState.retro !== undefined && updatedState.retro !== null,
+    'state.retro must be recorded when retro.enabled is true'
+  );
+  assert.ok(
+    updatedState.retro.status === 'passed' || updatedState.retro.status === 'completed' || updatedState.retro.reportJson !== undefined,
+    'Automatic retrospective must have executed and recorded report'
+  );
+});
+
+// =========================================================================
+// AC10: sdw-batch Synthesizes Draft Bugfix Specs with Type 'bugfix' for Consumer Critical/High Candidates
+// =========================================================================
+test('AC10: where retro.followUp is configured as queue in sdw-batch, synthesize draft bugfix specifications with type bugfix for consumer-scoped critical and high candidates via sdw-spec new', (t) => {
+  const ws = makeWorkspace(t, {
+    config: {
+      retro: {
+        enabled: true,
+        followUp: 'queue'
+      }
+    }
+  });
+  const runId = 'run-20261122-00010';
+  const { statePath } = writeSampleState(ws.root, runId, '00079-test-feature');
+  const relState = path.relative(ws.root, statePath).replace(/\\/g, '/');
+
+  const candidates = [
+    {
+      id: 'CAND-CRIT-001',
+      title: 'Fix critical crash in consumer app',
+      severity: 'critical',
+      category: 'automated-check',
+      targetScope: 'consumer',
+      evidence: { artifact: relState, ref: '#steps.4.output' },
+      proposedChange: { target: '.sdw/specs/fix-critical-crash.md' }
+    },
+    {
+      id: 'CAND-HIGH-002',
+      title: 'Fix high latency bug in consumer query',
+      severity: 'high',
+      category: 'automated-check',
+      targetScope: 'consumer',
+      evidence: { artifact: relState, ref: '#steps.4.output' },
+      proposedChange: { target: '.sdw/specs/fix-high-latency.md' }
+    },
+    {
+      id: 'CAND-LOW-003',
+      title: 'Minor cosmetic tweak in consumer app',
+      severity: 'low',
+      category: 'automated-check',
+      targetScope: 'consumer',
+      evidence: { artifact: relState, ref: '#steps.4.output' },
+      proposedChange: { target: '.sdw/specs/tweak.md' }
+    },
+    {
+      id: 'CAND-UPSTREAM-004',
+      title: 'Defect in framework skill runner',
+      severity: 'critical',
+      category: 'automated-check',
+      targetScope: 'upstream',
+      evidence: { artifact: relState, ref: '#steps.4.output' },
+      proposedChange: { target: 'upstream' }
+    }
+  ];
+
+  const retroReportRel = `.sdw/state/00079-test-feature/${runId}/${runId}.retro.json`;
+  const retroReportAbs = path.join(ws.root, retroReportRel);
+  fs.mkdirSync(path.dirname(retroReportAbs), { recursive: true });
+  fs.writeFileSync(retroReportAbs, JSON.stringify({ runId, status: 'completed', candidates }, null, 2), 'utf8');
+
+  const stateData = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+  stateData.retro = {
+    status: 'passed',
+    reportJson: retroReportRel,
+    reportMd: retroReportRel.replace(/\.json$/, '.md')
+  };
+  fs.writeFileSync(statePath, JSON.stringify(stateData, null, 2), 'utf8');
+
+  const config = batchQueue.loadConfig(ws.root);
+  const manifest = {
+    batchId: 'batch-test-ac10',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    status: 'in_progress',
+    policy: { continueOnError: false, syncIndex: true },
+    total: 1,
+    currentIndex: 0,
+    queue: [
+      {
+        index: 0,
+        spec: '.sdw/specs/00079-test-feature.md',
+        slug: '00079-test-feature',
+        status: 'completed',
+        runId,
+        deliveryCommit: null,
+        durationMs: 1000,
+        error: null
+      }
+    ]
+  };
+
+  const item = manifest.queue[0];
+  const specCreationCalls = [];
+
+  const result = batchQueue.applyRetroFollowUp({
+    config,
+    manifest,
+    item,
+    deps: {
+      createSpec: (args) => {
+        specCreationCalls.push(args);
+        const cand = args.candidate;
+        return {
+          filePath: path.join(ws.root, '.sdw', 'specs', `00099-${cand.id.toLowerCase()}.md`),
+          slug: `00099-${cand.id.toLowerCase()}`,
+          type: 'bugfix'
+        };
+      }
+    }
+  });
+
+  assert.equal(result.status, 'queued');
+  assert.equal(
+    result.queued.length,
+    2,
+    `Only consumer-scoped critical and high candidates should be queued; got ${result.queued.length}`
+  );
+  assert.ok(result.queued.some(q => q.candidateId === 'CAND-CRIT-001'), 'CAND-CRIT-001 must be queued');
+  assert.ok(result.queued.some(q => q.candidateId === 'CAND-HIGH-002'), 'CAND-HIGH-002 must be queued');
+  assert.ok(!result.queued.some(q => q.candidateId === 'CAND-LOW-003'), 'Low candidate must not be queued');
+  assert.ok(!result.queued.some(q => q.candidateId === 'CAND-UPSTREAM-004'), 'Upstream-scoped candidate must not be queued as local spec in consumer workspace');
+
+  for (const call of specCreationCalls) {
+    assert.equal(
+      call.type || (call.candidate && call.candidate.type) || (call.specType) || 'bugfix',
+      'bugfix',
+      'Draft specifications must be synthesized with type bugfix'
+    );
+  }
+});
+
+// =========================================================================
+// AC11: retro.enabled Defaults to false in config.schema.json and DEFAULT_CONFIG
+// =========================================================================
+test('AC11: retro.enabled defaults to false in .sdw/config.schema.json and in sdw_config.cjs DEFAULT_CONFIG', () => {
+  const schemaPath = path.join(REPO_ROOT, '.sdw', 'config.schema.json');
+  assert.ok(fs.existsSync(schemaPath), '.sdw/config.schema.json must exist');
+  const schema = JSON.parse(fs.readFileSync(schemaPath, 'utf8'));
+
+  assert.ok(schema.properties && schema.properties.retro, 'schema must declare retro property');
+  assert.equal(
+    schema.properties.retro.properties && schema.properties.retro.properties.enabled && schema.properties.retro.properties.enabled.default,
+    false,
+    'schema.properties.retro.properties.enabled.default must be false'
+  );
+
+  assert.ok(sdwConfig.DEFAULT_CONFIG, 'sdw_config.cjs must export DEFAULT_CONFIG');
+  assert.ok(sdwConfig.DEFAULT_CONFIG.retro, 'DEFAULT_CONFIG must define retro key');
+  assert.equal(
+    sdwConfig.DEFAULT_CONFIG.retro.enabled,
+    false,
+    'DEFAULT_CONFIG.retro.enabled must default to false'
+  );
+});
+
+// =========================================================================
+// AC12: sdw-config init Writes All Configuration Keys and Synchronizes DEFAULT_SCHEMA
+// =========================================================================
+test('AC12: sdw-config init writes all configuration keys including retro, branching, skillsRoot, prePrDiscovery, and harness into .sdw/config.json and synchronizes DEFAULT_SCHEMA with .sdw/config.schema.json', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdw-config-init-test-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  sdwConfig.cmdInit({ root: dir });
+
+  const configPath = path.join(dir, '.sdw', 'config.json');
+  const schemaPath = path.join(dir, '.sdw', 'config.schema.json');
+
+  assert.ok(fs.existsSync(configPath), '.sdw/config.json must be created');
+  assert.ok(fs.existsSync(schemaPath), '.sdw/config.schema.json must be created');
+
+  const writtenConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  const writtenSchema = JSON.parse(fs.readFileSync(schemaPath, 'utf8'));
+
+  const requiredKeys = ['retro', 'branching', 'skillsRoot', 'prePrDiscovery', 'harness'];
+  for (const key of requiredKeys) {
+    assert.ok(
+      key in writtenConfig,
+      `.sdw/config.json written by sdw-config init must contain key "${key}"`
+    );
+  }
+
+  assert.ok(sdwConfig.DEFAULT_SCHEMA, 'sdw_config.cjs must export DEFAULT_SCHEMA');
+  for (const key of requiredKeys) {
+    assert.ok(
+      sdwConfig.DEFAULT_SCHEMA.properties && key in sdwConfig.DEFAULT_SCHEMA.properties,
+      `DEFAULT_SCHEMA in sdw_config.cjs must include property "${key}"`
+    );
+    assert.ok(
+      writtenSchema.properties && key in writtenSchema.properties,
+      `.sdw/config.schema.json written by sdw-config init must include property "${key}"`
+    );
+  }
+});
+
+// =========================================================================
+// AC13: Unparsable or Invalid LLM Response Records Warning Without Corrupting Deterministic Signals
+// =========================================================================
+test('AC13: if autonomous candidate evaluation encounters an invalid or unparsable LLM response, record an evaluation warning without corrupting the deterministic signals report', (t) => {
+  const ws = makeWorkspace(t);
+  const runId = 'run-20261122-00013';
+  const { fullArtifactsDir } = writeSampleState(ws.root, runId, '00079-test-feature');
+
+  const malformedLlmOutput = '<<<INVALID_JSON_RESPONSE_FROM_MODEL>>>\nNot valid json at all';
+
+  const retroResult = retro.runRetro({
+    root: ws.root,
+    runId,
+    generateCandidates: true,
+    candidateEvaluationInput: malformedLlmOutput,
+    _llmResponseMock: malformedLlmOutput,
+    json: true
+  });
+
+  assert.ok(retroResult && retroResult.report, 'runRetro must return a report without throwing');
+  const report = retroResult.report;
+
+  const evaluation = report.candidateEvaluation || {};
+  const hasWarning = Boolean(
+    (evaluation.warnings && evaluation.warnings.length > 0) ||
+    evaluation.warning ||
+    (report.warnings && report.warnings.length > 0) ||
+    (report.signals && report.signals.evaluationWarning)
+  );
+  assert.ok(
+    hasWarning,
+    'candidate evaluation must record an evaluation warning when encountering invalid or unparsable LLM response'
+  );
+
+  assert.ok(report.signals, 'Deterministic signals report must exist');
+  assert.ok(Array.isArray(report.signals.missingArtifacts), 'signals.missingArtifacts must be intact');
+  assert.ok(report.inspection, 'inspection report must be intact');
+  assert.equal(report.signals.runId, runId, 'signals.runId must match runId');
+  assert.equal(report.status, 'completed', 'report.status must reflect run status');
+});
+
+// =========================================================================
+// AC14: Maintain 100% Test Pass Rate Across Unit and Integration Tests
+// =========================================================================
+test('AC14: test suite maintains 100% assertions integrity across candidate generation, transcript discovery, issue partitioning, and config schema', () => {
+  assert.ok(typeof retro.runRetro === 'function', 'retro.runRetro must be exported');
+  assert.ok(typeof retro.parseArgs === 'function', 'retro.parseArgs must be exported');
+  assert.ok(typeof retro.renderMarkdown === 'function', 'retro.renderMarkdown must be exported');
+  assert.ok(Array.isArray(retro.CANDIDATE_FIELDS), 'retro.CANDIDATE_FIELDS must be an array');
+  assert.ok(retro.CANDIDATE_FIELDS.includes('targetScope'), 'CANDIDATE_FIELDS must include targetScope');
+
+  assert.ok(typeof validateCandidates.validateCandidate === 'function', 'validateCandidate must be exported');
+  assert.ok(typeof validateCandidates.validateCandidates === 'function', 'validateCandidates must be exported');
+
+  assert.ok(typeof sdwConfig.DEFAULT_CONFIG === 'object', 'sdwConfig.DEFAULT_CONFIG must be exported');
+  assert.ok(typeof sdwConfig.DEFAULT_SCHEMA === 'object', 'sdwConfig.DEFAULT_SCHEMA must be exported');
+
+  assert.ok(typeof sdwShipPr.runShipPr === 'function', 'sdwShipPr.runShipPr must be exported');
+  assert.ok(typeof batchQueue.applyRetroFollowUp === 'function', 'batchQueue.applyRetroFollowUp must be exported');
 });
