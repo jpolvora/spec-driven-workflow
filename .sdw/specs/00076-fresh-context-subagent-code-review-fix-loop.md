@@ -3,7 +3,7 @@ id: null
 slug: 00076-fresh-context-subagent-code-review-fix-loop
 title: "Fresh-Context Subagent Code Review and Local Autonomous Fix Loop"
 source: local
-status: draft
+status: implemented
 specDate: 2026-11-21
 priority: high
 ---
