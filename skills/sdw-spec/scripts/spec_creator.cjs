@@ -219,6 +219,7 @@ function createNewSpec(inputText, options = {}) {
     prefix,
     slug,
     title,
+    type: specType,
     status: 'pending',
     source: 'local',
     specDate: new Date().toISOString().slice(0, 10),

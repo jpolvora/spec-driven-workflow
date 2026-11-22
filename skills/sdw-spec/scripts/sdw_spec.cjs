@@ -143,8 +143,12 @@ function cmdList(options) {
   try {
     const ordered = options.order === 'priority';
     const list = ordered ? orderByPriority(listIndex(options)) : listIndex(options);
+    const showType = list.some(item => Boolean(item.type));
     if (options.json) {
-      const payload = ordered ? list.map((item, index) => ({ rank: index + 1, ...item })) : list;
+      const payload = (ordered ? list.map((item, index) => ({ rank: index + 1, ...item })) : list).map(item => ({
+        ...item,
+        type: item.type || 'feature'
+      }));
       console.log(JSON.stringify(payload, null, 2));
     } else {
       console.log(`[sdw-spec list] Registered specifications (${list.length}${options.status ? ` filtered by status="${options.status}"` : ''}):\n`);
@@ -153,32 +157,61 @@ function cmdList(options) {
       } else {
         const pPad = Math.max(6, ...list.map(l => (l.prefix || '').length));
         const sPad = Math.max(10, ...list.map(l => (l.slug || '').length));
+        const tPad = Math.max(6, ...list.map(l => (l.type || 'feature').length));
         const stPad = 11;
         const vPad = 8;
         if (ordered) {
           // AC8: the rank spells out each row's implement position.
           const rPad = Math.max(4, String(list.length).length);
           const prPad = 8;
-          console.log(`${'RANK'.padEnd(rPad)} | ${'PREFIX'.padEnd(pPad)} | ${'SLUG'.padEnd(sPad)} | ${'STATUS'.padEnd(stPad)} | ${'HEALTH'.padEnd(vPad)} | ${'PRIORITY'.padEnd(prPad)} | TITLE`);
-          console.log(`${'-'.repeat(rPad)}-|-${'-'.repeat(pPad)}-|-${'-'.repeat(sPad)}-|-${'-'.repeat(stPad)}-|-${'-'.repeat(vPad)}-|-${'-'.repeat(prPad)}-|${'-'.repeat(30)}`);
-          list.forEach((item, index) => {
-            const rank = String(index + 1).padEnd(rPad);
-            const pref = (item.prefix || '').padEnd(pPad);
-            const slug = (item.slug || '').padEnd(sPad);
-            const stat = (item.status || 'pending').padEnd(stPad);
-            const val = (item.validation || 'PASS').padEnd(vPad);
-            const prio = normalizePriority(item.priority).padEnd(prPad);
-            console.log(`${rank} | ${pref} | ${slug} | ${stat} | ${val} | ${prio} | ${item.title}`);
-          });
+          if (showType) {
+            console.log(`${'RANK'.padEnd(rPad)} | ${'PREFIX'.padEnd(pPad)} | ${'SLUG'.padEnd(sPad)} | ${'TYPE'.padEnd(tPad)} | ${'STATUS'.padEnd(stPad)} | ${'HEALTH'.padEnd(vPad)} | ${'PRIORITY'.padEnd(prPad)} | TITLE`);
+            console.log(`${'-'.repeat(rPad)}-|-${'-'.repeat(pPad)}-|-${'-'.repeat(sPad)}-|-${'-'.repeat(tPad)}-|-${'-'.repeat(stPad)}-|-${'-'.repeat(vPad)}-|-${'-'.repeat(prPad)}-|${'-'.repeat(30)}`);
+            list.forEach((item, index) => {
+              const rank = String(index + 1).padEnd(rPad);
+              const pref = (item.prefix || '').padEnd(pPad);
+              const slug = (item.slug || '').padEnd(sPad);
+              const type = (item.type || 'feature').padEnd(tPad);
+              const stat = (item.status || 'pending').padEnd(stPad);
+              const val = (item.validation || 'PASS').padEnd(vPad);
+              const prio = normalizePriority(item.priority).padEnd(prPad);
+              console.log(`${rank} | ${pref} | ${slug} | ${type} | ${stat} | ${val} | ${prio} | ${item.title}`);
+            });
+          } else {
+            console.log(`${'RANK'.padEnd(rPad)} | ${'PREFIX'.padEnd(pPad)} | ${'SLUG'.padEnd(sPad)} | ${'STATUS'.padEnd(stPad)} | ${'HEALTH'.padEnd(vPad)} | ${'PRIORITY'.padEnd(prPad)} | TITLE`);
+            console.log(`${'-'.repeat(rPad)}-|-${'-'.repeat(pPad)}-|-${'-'.repeat(sPad)}-|-${'-'.repeat(stPad)}-|-${'-'.repeat(vPad)}-|-${'-'.repeat(prPad)}-|${'-'.repeat(30)}`);
+            list.forEach((item, index) => {
+              const rank = String(index + 1).padEnd(rPad);
+              const pref = (item.prefix || '').padEnd(pPad);
+              const slug = (item.slug || '').padEnd(sPad);
+              const stat = (item.status || 'pending').padEnd(stPad);
+              const val = (item.validation || 'PASS').padEnd(vPad);
+              const prio = normalizePriority(item.priority).padEnd(prPad);
+              console.log(`${rank} | ${pref} | ${slug} | ${stat} | ${val} | ${prio} | ${item.title}`);
+            });
+          }
         } else {
-          console.log(`${'PREFIX'.padEnd(pPad)} | ${'SLUG'.padEnd(sPad)} | ${'STATUS'.padEnd(stPad)} | ${'HEALTH'.padEnd(vPad)} | TITLE`);
-          console.log(`${'-'.repeat(pPad)}-|-|${'-'.repeat(sPad)}-|-|${'-'.repeat(stPad)}-|-|${'-'.repeat(vPad)}-|-${'-'.repeat(30)}`);
-          for (const item of list) {
-            const pref = (item.prefix || '').padEnd(pPad);
-            const slug = (item.slug || '').padEnd(sPad);
-            const stat = (item.status || 'pending').padEnd(stPad);
-            const val = (item.validation || 'PASS').padEnd(vPad);
-            console.log(`${pref} | ${slug} | ${stat} | ${val} | ${item.title}`);
+          if (showType) {
+            console.log(`${'PREFIX'.padEnd(pPad)} | ${'SLUG'.padEnd(sPad)} | ${'TYPE'.padEnd(tPad)} | ${'STATUS'.padEnd(stPad)} | ${'HEALTH'.padEnd(vPad)} | TITLE`);
+            console.log(`${'-'.repeat(pPad)}-|-|${'-'.repeat(sPad)}-|-|${'-'.repeat(tPad)}-|-|${'-'.repeat(stPad)}-|-|${'-'.repeat(vPad)}-|-${'-'.repeat(30)}`);
+            for (const item of list) {
+              const pref = (item.prefix || '').padEnd(pPad);
+              const slug = (item.slug || '').padEnd(sPad);
+              const type = (item.type || 'feature').padEnd(tPad);
+              const stat = (item.status || 'pending').padEnd(stPad);
+              const val = (item.validation || 'PASS').padEnd(vPad);
+              console.log(`${pref} | ${slug} | ${type} | ${stat} | ${val} | ${item.title}`);
+            }
+          } else {
+            console.log(`${'PREFIX'.padEnd(pPad)} | ${'SLUG'.padEnd(sPad)} | ${'STATUS'.padEnd(stPad)} | ${'HEALTH'.padEnd(vPad)} | TITLE`);
+            console.log(`${'-'.repeat(pPad)}-|-|${'-'.repeat(sPad)}-|-|${'-'.repeat(stPad)}-|-|${'-'.repeat(vPad)}-|-${'-'.repeat(30)}`);
+            for (const item of list) {
+              const pref = (item.prefix || '').padEnd(pPad);
+              const slug = (item.slug || '').padEnd(sPad);
+              const stat = (item.status || 'pending').padEnd(stPad);
+              const val = (item.validation || 'PASS').padEnd(vPad);
+              console.log(`${pref} | ${slug} | ${stat} | ${val} | ${item.title}`);
+            }
           }
         }
       }

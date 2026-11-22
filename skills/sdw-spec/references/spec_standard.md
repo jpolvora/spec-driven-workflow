@@ -4,7 +4,7 @@ Canonical specification format and schema rules for Spec-Driven Workflow (SDW).
 
 ## 1. YAML Frontmatter
 
-Every specification must begin with YAML frontmatter containing exactly these 6 keys, plus the optional `priority` key:
+Every specification must begin with YAML frontmatter containing the standard required keys, plus the optional `type` and `priority` keys:
 
 ```yaml
 ---
@@ -12,6 +12,7 @@ id: null                  # Remote tracker issue/work item ID (string or null)
 slug: 00001-feature-name  # Format: NNNNN-<kebab-case-name>
 title: "Feature Title"    # Quoted human-readable title
 source: local             # One of: 'local' | 'github' | 'azure-devops'
+type: feature             # Optional: 'feature' (default) | 'bugfix' | 'task'
 status: draft             # One of the 5 spec statuses (see section 5)
 specDate: 2026-10-19      # ISO date (YYYY-MM-DD)
 ---
@@ -19,7 +20,9 @@ specDate: 2026-10-19      # ISO date (YYYY-MM-DD)
 
 `status` is the authoring state, not an implementation order. A missing key or an unknown value fails validation.
 
-`priority` is the one optional key. It is a closed enum of `high`, `medium`, and `low`; an unknown value fails validation, and an absent key reads as `medium` so existing specifications stay valid. `sdw-spec list --order=priority` renders the resulting rank.
+`type` is an optional frontmatter key with allowed values `bugfix`, `feature`, and `task`, defaulting to `feature` when omitted for complete backward compatibility. Unrecognized type values fail validation.
+
+`priority` is an optional key with a closed enum of `high`, `medium`, and `low`; an unknown value fails validation, and an absent key reads as `medium` so existing specifications stay valid. `sdw-spec list --order=priority` renders the resulting rank.
 
 ## 2. Autoincrement Prefix Convention
 
