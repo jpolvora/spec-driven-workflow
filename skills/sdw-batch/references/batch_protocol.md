@@ -24,6 +24,11 @@ Exit `3` (`--abort-on-gaps` grilling cancellation) is not a batch pause: the que
 
 The host agent owns the paused single run: `task next`, `task finish`, `score submit`, then `sdw-batch resume`.
 
+### 1.1 Zero Work Loss in Batch Queues
+- **Preserve Unowned Work:** While a batch is running, developers or concurrent agents may author new specifications in `.sdw/specs/` or edit files in the workspace. `sdw-batch` and its delegated runs must never reset, clean, or discard unowned working-tree files.
+- **Surgical Isolation:** Each delegated run commits only its own task-owned changes. Unowned files must never be swept into a batch item's delivery commit.
+- **Stash on Switch:** If a switch between feature branches requires a clean working tree, `sdw-batch` or the orchestrator must stash unowned modifications (`git stash push -u -m "sdw-batch-preserve-..."`) and restore them after branch checkout.
+
 ## 2. Manifest
 
 Path: `.sdw/state/batch-{batchId}.json` (gitignored run state).

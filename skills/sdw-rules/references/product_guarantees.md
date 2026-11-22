@@ -19,6 +19,7 @@ If a change breaks a guarantee, the change is wrong — or the guarantee must be
 | **No in-repo agent memory** | Consumer repositories are not polluted with private agent memory files. | Keep traps/decisions in the external memory vault (`spec-memo`/`ws-memo`), never in `MEMORY.md`, `.agents/plans/`, or similar. |
 | **3-Tier skills** | Context cost stays bounded and behavior stays inspectable. | Keep Tier 1 `SKILL.md` compact (≤ ~120 lines; `sdw-rules` ≤ 80), move detail to `references/`, logic to `scripts/`. |
 | **Breaking changes may occur** | In the current phase, interfaces can change between versions; consumers should pin and read release notes. | Do not keep compatibility shims or dual paths; remove superseded behavior instead of wrapping it. |
+| **Zero unowned work loss** | Working tree changes and concurrent work are never lost or swept into unrelated commits. | Commit only task-owned files; never run destructive git resets or cleans; stash and restore unowned changes when branch operations require a clean tree. |
 
 ---
 
@@ -31,6 +32,7 @@ A guarantee is only real if it is checked:
 - **Determinism:** every documented workflow step has a runnable `node …` command and an exit code.
 - **Agnosticism:** review skills for vendor names, API keys, or host-specific imports; only generic CLI/file primitives are allowed.
 - **Paths:** generated reports and commands use `/` separators and project-relative or tokenized paths.
+- **Git preservation:** git operations never run hard resets, clean untracked files, or stage unowned paths; stash and restore protects working tree modifications across branch switches.
 
 ---
 

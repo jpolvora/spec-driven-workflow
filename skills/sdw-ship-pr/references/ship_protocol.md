@@ -14,7 +14,8 @@ Before publishing branches or creating remote pull requests, `sdw-ship-pr` evalu
 | `prePrDiscovery` | string | `block` | Prepare-obligation discovery mode: `block`, `warn`, or `off` (absent resolves to `block`) | Unacknowledged rows in `block` halt ship (exit 1) |
 | `prePrCommand` | string | null | Shell command to execute (e.g. `npm run lint` or custom verify script) | Non-zero exit code halts ship |
 | `requiredBuild` | boolean | false | If true, runs `npm run build` or project build command | Build failure halts ship |
-| `runAllTests` | boolean | false | If true, runs `npm test` or full test suite | Test failure halts ship |
+| `runAllTests` | boolean | false | If true, runs `npm test` or full test suite (skipped when `enableTestingFeatures` is false) | Test failure halts ship |
+| `enableTestingFeatures` | boolean | false | Global master toggle for testing features. When false, test gate is skipped on the pre-PR board with status 'skipped' and post-PR review fix loops skip test execution | N/A |
 | `securityChecksEnabled` | boolean | true | Delegates to `sdw-security-checks` over the worktree for credentials, private keys, or exposed tokens | Leak detection or scanner failure halts ship |
 | `reviewFixCommand` | string | null | Command that applies review-thread fixes before the convergence loop resolves threads | Unset: active threads are reported as `review_pending`, never auto-resolved without verified fix |
 
@@ -69,6 +70,11 @@ Without `--json`, each row is logged and the board prints as a Markdown table be
   - In `--dry-run` mode, git execution is logged without remote mutation.
 - When `pushDelivery: false` and `--push` is omitted:
   - Skips remote push. If the branch has never been pushed to the remote origin, remote SCM PR creation will require push.
+
+### 2.1 Working Tree Preservation and Zero Work Loss
+- **Surgical Staging:** When `--push` stages pending working-tree changes before pushing, it commits only run-owned files (`runFiles` and `approvedDirtyFiles`). Unowned files (such as newly authored specs, drafts in `.sdw/specs/`, or unrelated developer modifications) are explicitly excluded and left dirty in the working tree.
+- **Never Reset or Clean:** `sdw-ship-pr` must never execute `git reset --hard` or `git clean -fd`. Unrelated dirty files must never be discarded.
+- **Safe Preservation:** If a branch operation requires a clean working tree, unowned modifications must be safely stashed with an informative message (`git stash push -u -m "sdw-ship-pr-preserve-..."`) and restored after the operation completes.
 
 ---
 

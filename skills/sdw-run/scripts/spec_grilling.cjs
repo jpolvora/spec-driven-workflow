@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { isTestFile } = require('./evidence_validator.cjs');
 
 const DECISION_DIMENSIONS = [
   {
@@ -150,6 +151,18 @@ function extractTestPlan(specContent) {
 }
 
 function generateRefinementBlueprint(specContent, options = {}) {
+  const enableTestingFeatures = options.enableTestingFeatures !== undefined
+    ? Boolean(options.enableTestingFeatures)
+    : (options.config && options.config.enableTestingFeatures !== undefined
+        ? Boolean(options.config.enableTestingFeatures)
+        : true);
+
+  const testPatterns = (options.testPatterns && Array.isArray(options.testPatterns))
+    ? options.testPatterns
+    : ((options.config && options.config.implementation && Array.isArray(options.config.implementation.testPatterns))
+      ? options.config.implementation.testPatterns
+      : undefined);
+
   // Only paths the specification names, plus the files it declares new. A
   // pathless specification resolves no target file here: the planner falls back
   // to a verified bucket or refuses, and never synthesizes `skills/<slug>/...`
@@ -159,10 +172,14 @@ function generateRefinementBlueprint(specContent, options = {}) {
     targetFiles = extractDeclaredNewFiles(specContent);
   }
 
+  if (!enableTestingFeatures && targetFiles && targetFiles.length > 0) {
+    targetFiles = targetFiles.filter(f => !isTestFile(f, testPatterns));
+  }
+
   return {
     targetFiles,
     architecturalApproach: extractArchitecturalApproach(specContent),
-    testPlan: extractTestPlan(specContent)
+    testPlan: enableTestingFeatures ? extractTestPlan(specContent) : null
   };
 }
 

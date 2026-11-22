@@ -317,10 +317,12 @@ function buildHunk(lines, lineNum) {
   return slice.join('\n');
 }
 
-function fixPrescription(rule, filePath) {
+function fixPrescription(rule, filePath, enableTestingFeatures = false) {
   switch (rule) {
     case 'no_debugger_statements':
-      return `1. Delete the standalone debugger line at ${filePath}. 2. Re-run relevant tests. 3. Re-run sdw-code-review to confirm 0 blocking findings.`;
+      return enableTestingFeatures
+        ? `1. Delete the standalone debugger line at ${filePath}. 2. Re-run relevant tests. 3. Re-run sdw-code-review to confirm 0 blocking findings.`
+        : `1. Delete the standalone debugger line at ${filePath}. 2. Re-run sdw-code-review to confirm 0 blocking findings.`;
     case 'unresolved_todos':
       return `1. Resolve the TODO at ${filePath} or file it as a tracked task. 2. Remove the comment or convert it to a spec AC. 3. Re-run review.`;
     case 'hardcoded_secret':
@@ -338,7 +340,11 @@ function fixPrescription(rule, filePath) {
   }
 }
 
-function analyzeChangedFiles(projectRoot, base, files) {
+function analyzeChangedFiles(projectRoot, base, files, options = {}) {
+  const config = (options && options.config) || loadProjectConfig(projectRoot);
+  const enableTestingFeatures = options && options.enableTestingFeatures !== undefined
+    ? Boolean(options.enableTestingFeatures)
+    : (config && config.enableTestingFeatures !== undefined ? Boolean(config.enableTestingFeatures) : false);
   const raw = [];
   for (const f of files) {
     const norm = normalizePath(f);
@@ -473,7 +479,7 @@ function analyzeChangedFiles(projectRoot, base, files) {
     line: f.line,
     rule: f.rule,
     message: f.message,
-    fix: fixPrescription(f.rule, f.path),
+    fix: fixPrescription(f.rule, f.path, enableTestingFeatures),
     hunk: f.hunk,
     fixable: Boolean(f.fixable),
     status: 'open'
@@ -583,7 +589,13 @@ function runCodeReview(options) {
   const { head, targetBranch } = getHeadInfo(projectRoot);
   const changedFiles = getChangedFiles({ projectRoot, base: resolved.base });
 
-  let findings = analyzeChangedFiles(projectRoot, resolved.base, changedFiles);
+  const config = options.config || loadProjectConfig(projectRoot);
+  const enableTestingFeatures = options.enableTestingFeatures !== undefined
+    ? Boolean(options.enableTestingFeatures)
+    : (config && config.enableTestingFeatures !== undefined ? Boolean(config.enableTestingFeatures) : false);
+  const reviewOpts = { ...options, config, enableTestingFeatures };
+
+  let findings = analyzeChangedFiles(projectRoot, resolved.base, changedFiles, reviewOpts);
   let fixedFiles = [];
   let fixedRecords = [];
   let plannedFixes = [];
@@ -604,7 +616,7 @@ function runCodeReview(options) {
       if (fixed.length === 0) break;
       fixed.forEach(f => { if (!fixedFiles.includes(f)) fixedFiles.push(f); });
       fixable.forEach(f => { fixedAcc.push({ ...f, status: 'fixed' }); });
-      findings = analyzeChangedFiles(projectRoot, resolved.base, getChangedFiles({ projectRoot, base: resolved.base }));
+      findings = analyzeChangedFiles(projectRoot, resolved.base, getChangedFiles({ projectRoot, base: resolved.base }), reviewOpts);
     }
     fixedRecords = fixedAcc;
   }

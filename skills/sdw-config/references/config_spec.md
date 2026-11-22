@@ -46,6 +46,11 @@ The configuration file `.sdw/config.json` conforms to `config.schema.json`:
       "description": "Path to the directory containing feature specifications. Supports tokens {projectRoot} and {skillsRoot}.",
       "default": "{projectRoot}/.sdw/specs"
     },
+    "enableTestingFeatures": {
+      "type": "boolean",
+      "description": "Global master toggle for testing features. When false, test generation, test execution, test runner gates, and test segregation agents are disabled.",
+      "default": false
+    },
     "scoreMin": {
       "type": "integer",
       "description": "Minimum conformance score (0-10) required before creating delivery commits.",

@@ -23,6 +23,14 @@ function renderTaskPrompt(options) {
     targetRoot, specSlug, specPath, runId, stateDir, task, specAcs, useWorktrees, taskWorktreeRel,
     dagTasks, taskStates, abandonments, absolutePaths, refineMode, testPatterns: optTestPatterns
   } = options;
+  const hasTestingConfig = (options.enableTestingFeatures !== undefined) ||
+    (options.config && options.config.enableTestingFeatures !== undefined);
+
+  const enableTestingFeatures = hasTestingConfig
+    ? (options.enableTestingFeatures !== undefined
+      ? Boolean(options.enableTestingFeatures)
+      : Boolean(options.config.enableTestingFeatures))
+    : (task && (task.role === 'test_author' || (task.dependencies && task.dependencies.some(d => d.includes('-test')))));
   const root = targetRoot ? path.resolve(targetRoot) : process.cwd();
   const absStateDir = stateDir ? (path.isAbsolute(stateDir) ? stateDir : path.resolve(root, stateDir)) : path.join(root, '.sdw', 'state');
   const taskPromptDir = path.join(absStateDir, specSlug, runId);
@@ -30,8 +38,8 @@ function renderTaskPrompt(options) {
   const testPatterns = (Array.isArray(optTestPatterns) && optTestPatterns.length > 0)
     ? optTestPatterns
     : (Array.isArray(task && task.testPatterns) && task.testPatterns.length > 0
-        ? task.testPatterns
-        : ['tests/**', '**/*.test.*', '**/*.spec.*']);
+      ? task.testPatterns
+      : ['tests/**', '**/*.test.*', '**/*.spec.*']);
   const patternsDisplay = testPatterns.join(', ');
 
   if (!fs.existsSync(taskPromptDir)) {
@@ -114,7 +122,7 @@ function renderTaskPrompt(options) {
   if (role === 'test_author') {
     prompt += `- **Permitted:** only test files matching configured test file patterns (${patternsDisplay}).\n`;
     prompt += `- **Forbidden:** modifying production code files. All non-test files are strictly prohibited.\n`;
-  } else if (role === 'implementation') {
+  } else if (role === 'implementation' && enableTestingFeatures) {
     prompt += `- **Permitted:** only production code files (the target files above, plus new production files required by the assigned criteria). All test files are explicitly excluded.\n`;
     prompt += `- **Forbidden:** modifying test files matching configured test file patterns (${patternsDisplay}). Test file modifications are strictly prohibited.\n`;
   } else {
@@ -163,8 +171,15 @@ function renderTaskPrompt(options) {
   }
 
   if (task.contextPrompt) {
+    let cp = task.contextPrompt;
+    if (!enableTestingFeatures) {
+      cp = cp
+        .replace(/Satisfy the existing test suite[^\n]*\n?/gi, '')
+        .replace(/without modifying test files[^\n]*/gi, '')
+        .trim();
+    }
     prompt += `## Architectural Guidance\n`;
-    prompt += `${task.contextPrompt}\n\n`;
+    prompt += `${cp}\n\n`;
   }
 
   if (role === 'test_author') {
@@ -172,7 +187,11 @@ function renderTaskPrompt(options) {
     prompt += `Write failing tests strictly asserting assigned acceptance criteria without modifying production code.\n\n`;
   } else if (role === 'implementation') {
     prompt += `## Implementation Instructions\n`;
-    prompt += `Satisfy the existing test suite. Modifying test files is strictly prohibited.\n\n`;
+    if (enableTestingFeatures) {
+      prompt += `Satisfy the existing test suite. Modifying test files is strictly prohibited.\n\n`;
+    } else {
+      prompt += `Satisfy assigned acceptance criteria directly in accordance with sdw-rules.\n\n`;
+    }
   }
 
   prompt += `## Implementation Rules (sdw-rules)\n`;
@@ -181,10 +200,12 @@ function renderTaskPrompt(options) {
   prompt += `- **Surgical changes:** touch only the scope fence; no drive-by refactors, renames, or formatting churn.\n`;
   prompt += `- **No unrequested features:** implement exactly what the assigned criteria require.\n\n`;
 
-  prompt += `## Test Discipline\n`;
-  prompt += `- **While iterating:** run only the focused check for the files you touched, such as the single test file that covers them, one case, or \`node --check\` for syntax; do not re-run the full suite after every edit.\n`;
-  prompt += `- **Full suite only when required:** the change touches a shared helper, an area shared by several tasks, or a gate failure outside this task's scope; record the run and the reason in \`tests\`.\n`;
-  prompt += `- **Before reporting:** run the full suite once and record that run in \`tests\`.\n\n`;
+  if (enableTestingFeatures) {
+    prompt += `## Test Discipline\n`;
+    prompt += `- **While iterating:** run only the focused check for the files you touched, such as the single test file that covers them, one case, or \`node --check\` for syntax; do not re-run the full suite after every edit.\n`;
+    prompt += `- **Full suite only when required:** the change touches a shared helper, an area shared by several tasks, or a gate failure outside this task's scope; record the run and the reason in \`tests\`.\n`;
+    prompt += `- **Before reporting:** run the full suite once and record that run in \`tests\`.\n\n`;
+  }
 
   prompt += `## Prohibited Actions\n`;
   prompt += `- Do not run \`git commit\`, \`git push\`, \`git branch\`, \`git checkout\`, \`git worktree\`, or \`git tag\`. The orchestrator owns version control.\n`;
@@ -192,11 +213,13 @@ function renderTaskPrompt(options) {
   prompt += `- Do not modify files outside the scope fence.\n`;
   if (role === 'test_author') {
     prompt += `- Modifying production code files is strictly prohibited. You may only create or modify test files.\n`;
-  } else if (role === 'implementation') {
+  } else if (role === 'implementation' && enableTestingFeatures) {
     prompt += `- Modifying test files is strictly prohibited. Test suite assertions must not be weakened or altered.\n`;
   }
   prompt += `- Do not write run state, prompt files, or the specification.\n`;
-  prompt += `- Do not record a test you did not execute.\n`;
+  if (enableTestingFeatures) {
+    prompt += `- Do not record a test you did not execute.\n`;
+  }
   prompt += `- Do not report \`status: "success"\` while any assigned criterion is unmet.\n\n`;
 
   prompt += `## Evidence Schema (\`${evidenceDisplay}\`)\n`;

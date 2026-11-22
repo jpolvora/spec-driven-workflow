@@ -505,7 +505,7 @@ function isAutonomousDelivery(config) {
 // Every gate-failure return path below records the gate before returning, and
 // all of those paths return before Step 8, so no ship or merge is attempted.
 function failedDeliveryGates(gates) {
-  return Object.keys(gates || {}).filter(g => !gates[g] || gates[g].status !== 'passed');
+  return Object.keys(gates || {}).filter(g => !gates[g] || (gates[g].status !== 'passed' && gates[g].status !== 'skipped'));
 }
 
 function recordBlockedGate(targetRoot, state, gate, detail) {
@@ -643,6 +643,9 @@ function runVerificationGates(targetRoot, config, options = {}) {
   const reqTests = options.runAllTests !== undefined
     ? options.runAllTests
     : Boolean(config.runAllTests || (verificationConfig.testCommand && typeof verificationConfig.testCommand === 'string'));
+  const enableTestingFeatures = config && config.enableTestingFeatures !== undefined
+    ? Boolean(config.enableTestingFeatures)
+    : false;
 
   if (reqBuild) {
     const buildCmd = (config.verification && config.verification.buildCommand) || 'npm run build';
@@ -702,7 +705,10 @@ function runVerificationGates(targetRoot, config, options = {}) {
     }
   }
 
-  if (reqTests && passed) {
+  if (!enableTestingFeatures) {
+    gates.test = { status: 'skipped', reason: 'enableTestingFeatures is false' };
+    console.log('[Step 4: Verification Gate] Test execution skipped (enableTestingFeatures: false).');
+  } else if (reqTests && passed) {
     const testCmd = (config.verification && config.verification.testCommand) || 'npm test';
     console.log(`[Step 4: Verification Gate] Executing test command: "${testCmd}"...`);
     const start = Date.now();
@@ -788,6 +794,7 @@ function loadProjectConfig(targetRoot, options = {}) {
     }
     config = {
       specsDir: path.join(root, '.sdw', 'specs').replace(/\\/g, '/'),
+      enableTestingFeatures: false,
       scoreMin: 8,
       scmCodeReviewEnabled: false,
       pushDelivery: false,
@@ -1458,7 +1465,7 @@ function cmdRun(options) {
     state = stateManager.updateStepState(targetRoot, state.runId, 2, 'skipped', { mode: 'refine', reason: 'second pass reviews the delivered implementation' });
   } else if (startStep <= 2 && state.steps[2].status !== 'completed' && state.steps[2].status !== 'skipped') {
     state = stateManager.updateStepState(targetRoot, state.runId, 2, 'in_progress');
-    const grillingResult = specGrilling.analyzeSpecificationGaps(effectiveSpecContent, { slug: specSlug });
+    const grillingResult = specGrilling.analyzeSpecificationGaps(effectiveSpecContent, { slug: specSlug, config });
 
     if (grillingResult.hasGaps) {
       console.log(`[Step 2: Refinement] Detected ${grillingResult.gapsCount} specification decision gaps.`);
@@ -1707,7 +1714,8 @@ function cmdRun(options) {
           specAcs,
           useWorktrees,
           taskWorktreeRel: wtInfo ? wtInfo.worktreeRel : null,
-          testPatterns: (config.implementation && config.implementation.testPatterns) || undefined
+          testPatterns: (config.implementation && config.implementation.testPatterns) || undefined,
+          config
         });
 
         // Execute command
@@ -2156,7 +2164,7 @@ function cmdRun(options) {
     const topGates = (state.steps[4] && state.steps[4].gates) || {};
     const outGates = (state.steps[4] && state.steps[4].output && state.steps[4].output.gates) || {};
     const gates = Object.keys(topGates).length > 0 ? topGates : outGates;
-    const failedGates = Object.keys(gates).filter(g => gates[g].status !== 'passed');
+    const failedGates = Object.keys(gates).filter(g => gates[g].status !== 'passed' && gates[g].status !== 'skipped');
     if (failedGates.length > 0) {
       console.error(`[Step 6: Delivery Commit] Blocked: required verification gate(s) failed (${failedGates.join(', ')}).`);
       state = stateManager.updateStepState(targetRoot, state.runId, 6, 'blocked_gates_failed');
@@ -2545,7 +2553,10 @@ function cmdRun(options) {
 
       // 2. Pre-PR Quality Gates (Build Verification & Full Test Pass) (AC5, AC6, AC7, AC8, AC9, AC10)
       const requiredBuild = Boolean(config.requiredBuild);
-      const runAllTests = Boolean(config.runAllTests);
+      const enableTestingFeatures = config && config.enableTestingFeatures !== undefined
+        ? Boolean(config.enableTestingFeatures)
+        : false;
+      const runAllTests = Boolean(config.runAllTests) && enableTestingFeatures;
       const gateTimeoutMs = Number(config.verification && config.verification.timeoutMs) > 0
         ? Number(config.verification.timeoutMs)
         : 600000;
@@ -2962,7 +2973,8 @@ function dispatchNextTask(context) {
     abandonments: dispatch.abandonments,
     absolutePaths: sandboxed,
     refineMode: Boolean(state.refineMode),
-    testPatterns
+    testPatterns,
+    config
   });
 
   const displayPrompt = sandboxed ? normalizePath(rendered.promptFileAbs) : rendered.promptFileRel;
@@ -3996,6 +4008,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  runVerificationGates,
   cmdRun,
   cmdResume,
   cmdStatus,

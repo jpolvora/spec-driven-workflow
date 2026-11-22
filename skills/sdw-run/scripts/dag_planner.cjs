@@ -171,17 +171,36 @@ function generateDagPlan(specContent, options) {
     console.warn('[Step 3: DAG Generation] Warning: the specification names no target file and declares no new file; the plan carries no file fence.');
   }
 
-  const segregateTests = opts.segregateTests !== undefined
+  const hasTestingConfig = (opts.enableTestingFeatures !== undefined) ||
+    (opts.config && opts.config.enableTestingFeatures !== undefined);
+
+  const enableTestingFeatures = hasTestingConfig
+    ? (opts.enableTestingFeatures !== undefined
+      ? Boolean(opts.enableTestingFeatures)
+      : Boolean(opts.config.enableTestingFeatures))
+    : true;
+
+  if (!enableTestingFeatures) {
+    console.log('[Step 3: DAG Generation] Testing features disabled (enableTestingFeatures: false); skipping test task generation.');
+  }
+
+  const rawSegregate = opts.segregateTests !== undefined
     ? Boolean(opts.segregateTests)
     : (opts.config && opts.config.implementation && opts.config.implementation.segregateTests !== undefined
-        ? Boolean(opts.config.implementation.segregateTests)
-        : true);
+      ? Boolean(opts.config.implementation.segregateTests)
+      : true);
+
+  const segregateTests = enableTestingFeatures && rawSegregate;
 
   const testPatterns = (Array.isArray(opts.testPatterns) && opts.testPatterns.length > 0)
     ? opts.testPatterns
     : ((opts.config && opts.config.implementation && Array.isArray(opts.config.implementation.testPatterns))
-        ? opts.config.implementation.testPatterns
-        : DEFAULT_TEST_PATTERNS);
+      ? opts.config.implementation.testPatterns
+      : DEFAULT_TEST_PATTERNS);
+
+  if (!enableTestingFeatures && defaultTargetFiles && defaultTargetFiles.length > 0) {
+    defaultTargetFiles = defaultTargetFiles.filter(f => !isTestFile(f, testPatterns));
+  }
 
   const testTargetFiles = defaultTargetFiles.filter(f => isTestFile(f, testPatterns));
   const prodTargetFiles = defaultTargetFiles.filter(f => !isTestFile(f, testPatterns));
