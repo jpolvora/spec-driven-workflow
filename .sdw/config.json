@@ -13,6 +13,13 @@
     "judgeApiEndpoint": null,
     "judgeCriticity": "strict"
   },
+  "codeReview": {
+    "mode": "subagent",
+    "maxIterations": 5,
+    "command": null,
+    "model": null,
+    "effort": null
+  },
   "scmCodeReviewEnabled": true,
   "pushDelivery": true,
   "automation": {

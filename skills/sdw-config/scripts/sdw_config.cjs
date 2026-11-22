@@ -314,6 +314,13 @@ const DEFAULT_CONFIG = {
     judgeApiEndpoint: null,
     judgeCriticity: 'strict'
   },
+  codeReview: {
+    mode: 'subagent',
+    maxIterations: 5,
+    command: null,
+    model: null,
+    effort: null
+  },
   scmCodeReviewEnabled: false,
   pushDelivery: false,
   automation: {
@@ -444,6 +451,39 @@ const DEFAULT_SCHEMA = {
           "enum": ["permissive", "strict", "perfectionist"],
           "default": "strict",
           "description": "Judge strictness: permissive credits partial attempts, strict requires the demanded behaviour, perfectionist requires complete implementation with verification."
+        }
+      },
+      "additionalProperties": false
+    },
+    "codeReview": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["subagent", "cli", "command"],
+          "default": "subagent",
+          "description": "Execution mode for Step 7 code review: subagent (default), cli, or command."
+        },
+        "maxIterations": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 5,
+          "description": "Maximum number of review-and-fix iterations."
+        },
+        "command": {
+          "type": ["string", "null"],
+          "default": null,
+          "description": "Custom command to execute when codeReview.mode is 'command'."
+        },
+        "model": {
+          "type": ["string", "null"],
+          "default": null,
+          "description": "Optional model override for reviewer subagent."
+        },
+        "effort": {
+          "type": ["string", "null"],
+          "default": null,
+          "description": "Optional reasoning effort hint for reviewer subagent."
         }
       },
       "additionalProperties": false
@@ -760,6 +800,30 @@ function validateConfigSchema(config) {
         const allowedCriticity = ['permissive', 'strict', 'perfectionist'];
         if (typeof config.scoring.judgeCriticity !== 'string' || !allowedCriticity.includes(config.scoring.judgeCriticity)) {
           errors.push(`Property "scoring.judgeCriticity" must be one of: ${allowedCriticity.join(', ')}.`);
+        }
+      }
+    }
+  }
+
+  // codeReview (Spec 00076 AC1, AC2, AC19)
+  if ('codeReview' in config) {
+    if (!config.codeReview || typeof config.codeReview !== 'object' || Array.isArray(config.codeReview)) {
+      errors.push('Property "codeReview" must be an object.');
+    } else {
+      if ('mode' in config.codeReview) {
+        const allowedReviewModes = ['subagent', 'cli', 'command'];
+        if (typeof config.codeReview.mode !== 'string' || !allowedReviewModes.includes(config.codeReview.mode)) {
+          errors.push(`Property "codeReview.mode" must be one of: ${allowedReviewModes.join(', ')}.`);
+        }
+      }
+      if ('maxIterations' in config.codeReview) {
+        if (!Number.isInteger(config.codeReview.maxIterations) || config.codeReview.maxIterations < 1) {
+          errors.push('Property "codeReview.maxIterations" must be an integer >= 1.');
+        }
+      }
+      for (const key of ['command', 'model', 'effort']) {
+        if (key in config.codeReview && config.codeReview[key] !== null && typeof config.codeReview[key] !== 'string') {
+          errors.push(`Property "codeReview.${key}" must be a string or null.`);
         }
       }
     }
