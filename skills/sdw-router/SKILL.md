@@ -26,7 +26,7 @@ Always-autoloaded entrypoint and traffic controller routing agent tasks across a
 | Intent / Keywords | Routed Skill | Description |
 |---|---|---|
 | Project configuration, environment check, `.sdw/config.json`, dry-run | `sdw-config` | Workspace initialization and settings management |
-| Spec authoring, grilling, EARS formatting, PRD index, validation, sync, archiving | `sdw-spec` | Specification lifecycle and quality gates |
+| Spec authoring, bugfix specs, grilling, EARS formatting, PRD index, validation, sync, archiving | `sdw-spec` | Specification lifecycle, bugfix/feature authoring, and quality gates |
 | Installation health, missing skill, hybrid/global install check, workspace doctor | `sdw-doctor` | Read-only installation and workspace audit |
 | Spec implementation, orchestration, DAG tasks, scoring, review, PR | `sdw-run` | End-to-end implementation and delivery pipeline for one specification |
 | Multiple specifications, spec queue, batch, sequential delivery | `sdw-batch` | Loops a specification list through single `sdw-run` runs |
@@ -47,6 +47,7 @@ Always-autoloaded entrypoint and traffic controller routing agent tasks across a
 2. **Evaluate Prompt Intent & Resolve Target Skill**
    Analyze user input against explicit invocations (`/sdw-*`, `@sdw-*`), keyword intents, and tied-confidence ambiguity.
    - Run: `node skills/sdw-router/scripts/sdw_router.cjs route "<prompt>" [--json]`
+   - If prompt asks to create a spec for a bug or defect: routes to `sdw-spec` with `type: bugfix`.
    - If explicit invocation: Direct execution honored immediately.
    - If tied confidence: Query user via `ask_question` with candidate options and recommended default.
    - If target skill directory missing on disk: Report actionable error naming the missing directory.

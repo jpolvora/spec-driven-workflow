@@ -24,7 +24,7 @@ Specification lifecycle, authoring, synchronization, and formatting manager inte
 
 - `init`: Bootstraps `{specsDir}/index.specs.md` with standard tables and status definitions.
 - `list`: Displays registered specifications with statuses and validation health.
-- `new <text>`: Synthesizes a canonical specification with autoincremented numerical prefix; header status `draft`.
+- `new <text> [--type bugfix|feature|task]`: Synthesizes a canonical specification with autoincremented numerical prefix; defaults to `feature`; header status `draft`.
 - `import`: Imports remote tracker items from GitHub issues or Azure DevOps work items using unified SCM contract.
 - `sync`: Reconciles `index.specs.md` against on-disk specification files and orchestrator run state files.
 - `validate <specPath>`: Enforces validation against YAML frontmatter, section hierarchy, and EARS syntax rules.
@@ -58,7 +58,7 @@ Order: `draft` -> `awaiting-approval` -> `ready-to-implement` -> `implemented`. 
 
 2. **Author or Import New Specification**
    Create a new specification with an autoincremented 5-digit prefix (`NNNNN`) from free-text or remote SCM issue. Apply `sdw-rules` for scope enclosure; never infer unprompted features without a user-gate.
-   - Run: `node skills/sdw-spec/scripts/sdw_spec.cjs new "<requirements>"` or `node skills/sdw-spec/scripts/sdw_spec.cjs import --provider <github|azure-devops> --id <id>`
+   - Run: `node skills/sdw-spec/scripts/sdw_spec.cjs new "<requirements>" [--type bugfix|feature|task]` or `node skills/sdw-spec/scripts/sdw_spec.cjs import --provider <github|azure-devops> --id <id>`
    - Done when: Canonical `.sdw/specs/NNNNN-{slug}.md` file exists with `status: draft` and a `pending` registry row.
 
 3. **Grill for Cohesion (optional)**

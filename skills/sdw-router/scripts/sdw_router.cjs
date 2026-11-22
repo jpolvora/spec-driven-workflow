@@ -152,7 +152,7 @@ const INTENT_RULES = {
   },
   'sdw-spec': {
     primaryKeywords: ['spec', 'specification', 'index.specs.md', 'prd index', 'ears', 'authoring', 'grill'],
-    secondaryKeywords: ['new spec', 'import spec', 'list specs', 'sync specs', 'validate spec', 'archive spec', 'formatting', 'acceptance criteria', 'format spec', 'grill me', 'refine spec', 'spec status', 'awaiting-approval'],
+    secondaryKeywords: ['new spec', 'import spec', 'list specs', 'sync specs', 'validate spec', 'archive spec', 'formatting', 'acceptance criteria', 'format spec', 'grill me', 'refine spec', 'spec status', 'awaiting-approval', 'bugfix spec', 'bugfix specification', 'spec to fix'],
     recommendedOption: 'Author, grill, validate, or synchronize specifications using sdw-spec'
   },
   'sdw-run': {
@@ -198,6 +198,26 @@ const INTENT_RULES = {
 };
 
 /**
+ * Detects whether a specification prompt expresses bugfix intent (Spec 00077 AC5).
+ */
+function isBugfixSpecPrompt(lower) {
+  return (
+    /\bbugfix\s+(?:spec|specification)\b/i.test(lower) ||
+    /\b(?:spec|specification)\s+(?:for\s+a\s+bugfix|to\s+fix)\b/i.test(lower) ||
+    /\b(?:create|draft|author|write|new)\s+(?:a\s+)?(?:[a-z0-9_-]+\s+)?(?:spec|specification)\s+to\s+fix\b/i.test(lower) ||
+    /\b(?:create|draft|author|write|new)\s+(?:a\s+)?bugfix\s+(?:spec|specification)\b/i.test(lower) ||
+    (/\b(?:fix|fixing)\s+(?:a\s+)?(?:bug|defect|issue|leak|crash|regression|problem)\b/i.test(lower) && /\b(?:spec|specification)\b/i.test(lower))
+  );
+}
+
+function resolveSkillOptions(skillName, lower) {
+  if (skillName === 'sdw-spec') {
+    return { type: isBugfixSpecPrompt(lower) ? 'bugfix' : 'feature' };
+  }
+  return undefined;
+}
+
+/**
  * Evaluates a user prompt and determines target skill, confidence, and ambiguity status.
  */
 function routePrompt(prompt, options) {
@@ -224,7 +244,11 @@ function routePrompt(prompt, options) {
 
     if (Array.isArray(skill.invocationNames)) {
       for (const inv of skill.invocationNames) {
-        explicitPatterns.push(new RegExp(`(?:^|\\s)[/@]?${inv}\\b`, 'i'));
+        if (!inv.includes('-') && !inv.includes(' ')) {
+          explicitPatterns.push(new RegExp(`(?:^\\s*|\\s[/@])${inv}\\b`, 'i'));
+        } else {
+          explicitPatterns.push(new RegExp(`(?:^|\\s)[/@]?${inv}\\b`, 'i'));
+        }
       }
     }
 
@@ -243,13 +267,15 @@ function routePrompt(prompt, options) {
           };
         }
 
+        const skillOpts = resolveSkillOptions(skill.name, lower);
         return {
           matched: true,
           targetSkill: skill.name,
           confidence: 1.0,
           reason: 'explicit_invocation',
           skill,
-          isAmbiguous: false
+          isAmbiguous: false,
+          ...(skillOpts ? { options: skillOpts } : {})
         };
       }
     }
@@ -387,13 +413,15 @@ function routePrompt(prompt, options) {
     };
   }
 
+  const winningOpts = resolveSkillOptions(winningSkillName, lower);
   return {
     matched: true,
     targetSkill: winningSkillName,
     confidence: Math.min(1.0, topScore / 6),
     reason: 'intent_match',
     skill: targetSkillInfo,
-    isAmbiguous: false
+    isAmbiguous: false,
+    ...(winningOpts ? { options: winningOpts } : {})
   };
 }
 

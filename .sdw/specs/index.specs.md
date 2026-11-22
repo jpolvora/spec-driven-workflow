@@ -74,7 +74,7 @@ Central repository index tracking specification lifecycle states, metadata, and 
 | 00074 | 00074-enable-testing-features-config-flag | Configurable Testing Features Toggle to Enable or Disable Test Generation, Execution, and Subagent Segregation | completed | high | local | 2026-11-21 | PASS | - |
 | 00075 | 00075-fresh-context-subagent-judge | Fresh-Context Subagent Judge for Qualitative Conformance and Code Quality Evaluation | completed | high | local | 2026-11-21 | PASS | - |
 | 00076 | 00076-fresh-context-subagent-code-review-fix-loop | Fresh-Context Subagent Code Review and Local Autonomous Fix Loop | completed | high | local | 2026-11-21 | PASS | - |
-| 00077 | 00077-sdw-spec-bugfix-type-and-router-intent | Bugfix Specification Type and Router Intent Support | pending | high | local | 2026-11-21 | PASS | - |
+| 00077 | 00077-sdw-spec-bugfix-type-and-router-intent | Bugfix Specification Type and Router Intent Support | completed | high | local | 2026-11-21 | PASS | - |
 | 00078 | 00078-sdw-harness-adapters-and-agent-agnostic-dispatch | SDW Harness Adapters and Agent-Agnostic Subagent Dispatch | pending | high | local | 2026-11-22 | PASS | - |
 
 ## Lean-Core Cut (2026-10-25)
