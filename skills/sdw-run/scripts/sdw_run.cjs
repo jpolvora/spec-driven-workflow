@@ -1026,9 +1026,6 @@ function cmdRun(options) {
     sdwConfig = sdwConfigScript ? require(sdwConfigScript) : require('../../sdw-config/scripts/sdw_config.cjs');
   } catch (e) {}
   let config = loadProjectConfig(targetRoot, options);
-  if (options.segregateTests === true && options.enableTestingFeatures === undefined) {
-    config.enableTestingFeatures = true;
-  }
   // AC9/AC10: fail closed, but resolve configuration first so a configured
   // skillsRoot (or {skillsRoot} token) is honored instead of only CLI options.
   const detectedSkillsRoot = config && config.skillsMode && config.skillsMode !== 'unknown'
@@ -1716,7 +1713,8 @@ function cmdRun(options) {
           specAcs,
           useWorktrees,
           taskWorktreeRel: wtInfo ? wtInfo.worktreeRel : null,
-          testPatterns: (config.implementation && config.implementation.testPatterns) || undefined
+          testPatterns: (config.implementation && config.implementation.testPatterns) || undefined,
+          config
         });
 
         // Execute command
@@ -2974,7 +2972,8 @@ function dispatchNextTask(context) {
     abandonments: dispatch.abandonments,
     absolutePaths: sandboxed,
     refineMode: Boolean(state.refineMode),
-    testPatterns
+    testPatterns,
+    config
   });
 
   const displayPrompt = sandboxed ? normalizePath(rendered.promptFileAbs) : rendered.promptFileRel;
