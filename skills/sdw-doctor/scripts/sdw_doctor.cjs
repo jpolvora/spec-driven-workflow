@@ -529,6 +529,7 @@ function runSmokeTest(options = {}) {
       sandboxDir: '{projectRoot}/.sdw/sandbox',
       scoreMin: 8,
       scoring: { judgeCommand: 'node .sdw/smoke/judge.cjs' },
+      codeReview: { mode: 'cli' },
       implementation: {
         mode: 'command',
         command: 'node .sdw/smoke/impl.cjs',

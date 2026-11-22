@@ -241,9 +241,20 @@ Step 8 delegates all final PR verification gates, remote publishing, SCM submiss
   - Records delivery outcome (`pullRequest`, `shipStatus`, `pushedBranch`, `reviewConvergence`, `branchingSync`) into `.sdw/state/{runId}.state.json`.
   - Transitions specification status to `completed` in `.sdw/specs/index.specs.md`.
 
-## 8. Delegated Code Review via sdw-code-review (Step 7)
+## 8. Delegated Code Review via sdw-code-review & Fresh-Context Subagents (Step 7)
 
-Step 7 delegates all working-tree review execution to the standalone `sdw-code-review` skill. The orchestrator holds no duplicated review instructions.
+Step 7 evaluates code quality, standards compliance, and defect classes following delivery commit (Step 6) and prior to PR preparation (Step 8).
+
+### Execution Modes (`codeReview.mode`)
+- **Subagent mode (`codeReview.mode: "subagent"`, default):**
+  - **Fresh Context Reviewer:** Dispatches an isolated reviewer subagent session without prior conversation transcripts.
+  - **Read-Only Access:** Reviewer brief strictly enforces read-only access (zero file mutations permitted, no git commits or pushes).
+  - **Context Fencing:** Prompt inlines repository instructions (`AGENTS.md`), active memory traps from `sdw-memory`, `sdw-rules` simplicity directives, specification acceptance criteria, touched files list, and git diff against `baseCommit`.
+  - **Defect-Class Aggregation:** Reviewer aggregates duplicate occurrences of the same underlying defect class into a single finding thread (max 6 findings per round), identifying primary `file:line` coordinates, concrete failing evidence, minimal suggested fix diff, and secondary `otherLocations`.
+  - **Remediation Loop:** When blocking findings are reported, dispatches a distinct fresh-context fixer subagent with write access scoped strictly to target files (`finding.file` and `otherLocations`). Fixes are verified, committed with `fix(<slug>): address code review findings (round <N>)`, and re-evaluated by a clean reviewer subagent up to `codeReview.maxIterations` (default 5, overridable via `--review-max-iterations`).
+  - **Outcome:** Zero blocking findings advances to Step 8; reaching `maxIterations` with open blocking findings records `review_failed` and halts execution.
+- **CLI mode (`codeReview.mode: "cli"`):** Executes legacy deterministic review checks using `sdw_code_review.cjs` against `baseCommit`.
+- **Command mode (`codeReview.mode: "command"`):** Executes custom external runner defined in `codeReview.command`.
 
 ### Delegation Contract
 - **Invocation:** `node skills/sdw-code-review/scripts/sdw_code_review.cjs run --target <root> [--base <ref>] --report <artifactsDir>/<slug>-step-7.md [--fix] [--json]`

@@ -151,6 +151,39 @@
       },
       "additionalProperties": false
     },
+    "codeReview": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["subagent", "cli", "command"],
+          "default": "subagent",
+          "description": "Execution mode for Step 7 code review: subagent (default), cli, or command."
+        },
+        "maxIterations": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 5,
+          "description": "Maximum number of review-and-fix iterations."
+        },
+        "command": {
+          "type": ["string", "null"],
+          "default": null,
+          "description": "Custom command to execute when codeReview.mode is 'command'."
+        },
+        "model": {
+          "type": ["string", "null"],
+          "default": null,
+          "description": "Optional model override for reviewer subagent."
+        },
+        "effort": {
+          "type": ["string", "null"],
+          "default": null,
+          "description": "Optional reasoning effort hint for reviewer subagent."
+        }
+      },
+      "additionalProperties": false
+    },
     "scmCodeReviewEnabled": {
       "type": "boolean",
       "description": "Enable remote pull request review polling loop and automated review comment resolution.",
