@@ -203,12 +203,13 @@ Prohibitions carried by every prompt: no `git commit`/`push`/`branch`/`checkout`
 - Supports automated surgical fix loop (up to 3 attempts) with pre-commit secret leak scan.
 - Gate failures halt execution and record failed gate status in `state.steps[4].gates`.
 
-### LLM-Judge Conformance Scoring (Step 5, Spec 027)
+### LLM-Judge Conformance Scoring (Step 5, Spec 027 & Spec 00075)
 - The static evidence-count formula is gone. Scoring is delegated to an LLM judge invoked with a fenced context: the acceptance criteria plus the generated diff, never transcripts.
-- **Judge resolution:** `scoring.judgeCommand` when configured (env `SDW_JUDGE_COMMAND` as fallback); otherwise the current agent model instance judges and submits.
-- **Agent path:** Step 5 writes `step-5-judge.prompt.md`, sets `awaiting_judgment`, and exits with code `5`. The host judge writes `step-5-judge.verdict.json` and runs:
-  `node skills/sdw-run/scripts/sdw_run.cjs score submit --run-id <runId> --verdict <path>`
-- **Verdict contract:** integer `score` 0–10 plus a `verdicts` array covering every criterion exactly once with `verified`/`failed` and non-empty `evidence`. The score is derived from the per-criterion verdicts (`round(verified / total * 10)`); a divergent reported score is recorded as `judge.scoreMismatch`.
+- **Judge execution mode:** `scoring.judgeMode` in `.sdw/config.json` supports values `"subagent"` (default), `"command"`, and `"host"`.
+  - **Subagent judge (`judgeMode: "subagent"`):** Step 5 emits a structured subagent dispatch envelope (`type: "judge"`, `role: "conformance_judge"`) referencing the active skills harness root (`skillsRoot`) and `sdw-rules` (`skills/sdw-rules/SKILL.md` and `references/anti_patterns.md`). The prompt includes acceptance criteria, diff, touched files list, and explicit qualitative evaluation dimensions (code quality, soundness, best practices, performance, redundancy, simplicity/YAGNI). The fresh-context judge returns structured verdict JSON with per-criterion verdicts, overall score, and `qualitativeFindings`. Step 5 pauses with exit code `5` awaiting verdict submission via `sdw-run score submit`.
+  - **Command mode (`judgeMode: "command"`):** Executes `scoring.judgeCommand` (or env `SDW_JUDGE_COMMAND`) as an external subprocess.
+  - **Host mode (`judgeMode: "host"`):** Preserves legacy behavior where Step 5 pauses for the host agent itself to review `step-5-judge.prompt.md` and submit the verdict.
+- **Verdict contract:** integer `score` 0–10 plus a `verdicts` array covering every criterion exactly once with `verified`/`failed` and non-empty `evidence`, plus `qualitativeFindings` (required for fresh-context subagent judges, optional for external judge commands and test stubs). The score is derived from the per-criterion verdicts (`round(verified / total * 10)`); a divergent reported score is recorded as `judge.scoreMismatch`.
 - **Criticity:** `scoring.judgeCriticity` = `permissive` | `strict` | `perfectionist` (default `strict`), quoted in the judge prompt with its rubric.
 - **Fail closed:** 0 criteria scores 0/10 without invoking the judge; an unavailable judge command, a missing verdict file, or a malformed verdict scores 0/10 with an actionable error and exit code 2.
 - Diff context is capped at 120000 bytes with an explicit truncation marker.

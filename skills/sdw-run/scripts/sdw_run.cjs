@@ -1920,7 +1920,7 @@ function cmdRun(options) {
     });
     const scoringTouchedFiles = scoreEvaluator.getTouchedFiles(state.baseCommit, targetRoot);
 
-    const failClosedScoring = (message, judgeMeta) => {
+    const failClosedScoring = (message, judgeMeta, extra = {}) => {
       const failedReport = {
         score: 0,
         passed: false,
@@ -1945,7 +1945,8 @@ function cmdRun(options) {
           diffBytes: judgeMeta ? judgeMeta.diffBytes : null,
           diffTruncated: judgeMeta ? Boolean(judgeMeta.diffTruncated) : false
         },
-        feedback: `Conformance scoring failed closed: ${message}`
+        feedback: `Conformance scoring failed closed: ${message}`,
+        ...extra
       };
       const failedArtifact = artifactWriter.writeStep5Artifact({
         targetRoot,
@@ -1997,13 +1998,42 @@ function cmdRun(options) {
     if (verdict) {
       console.log(`[Step 5: Conformance Scoring] Reusing submitted judge verdict (${judgeResolution}).`);
     } else {
+      // AC14: If judge subagent was already awaiting judgment, check if timeout elapsed without a valid verdict
+      const isSubagentDispatch = priorScoring && priorScoring.judgeResolution === 'subagent';
+      if (isSubagentDispatch && priorScoring.status === 'awaiting_judgment' && priorScoring.dispatchedAt) {
+        const elapsedMs = Date.now() - new Date(priorScoring.dispatchedAt).getTime();
+        const timeoutMs = judgeConfig.timeoutMs || scoreEvaluator.JUDGE_TIMEOUT_MS || 600000;
+        if (elapsedMs > timeoutMs) {
+          if (priorScoring) {
+            priorScoring.status = 'timed_out';
+            priorScoring.dispatchedAt = null;
+          }
+          const timeoutJudgeMeta = {
+            mode: judgeConfig.judgeMode || judgeConfig.mode,
+            criticity: judgeConfig.criticity,
+            model: judgeConfig.model,
+            provider: judgeConfig.provider,
+            effort: judgeConfig.effort,
+            apiEndpoint: judgeConfig.apiEndpoint,
+            diffBytes: null,
+            diffTruncated: false
+          };
+          return failClosedScoring(`Judge subagent timed out after ${elapsedMs}ms (timeout: ${timeoutMs}ms) without producing a valid verdict.`, timeoutJudgeMeta, {
+            status: 'timed_out',
+            judgeTimedOut: true
+          });
+        }
+      }
+
+      const resolvedSkillsRoot = (skillsInfo && skillsInfo.skillsRoot) ? normalizePath(path.relative(targetRoot, skillsInfo.skillsRoot)) || 'skills' : 'skills';
       const judgeDiff = scoreEvaluator.collectDiff(targetRoot, state.baseCommit);
       const judgeBundle = scoreEvaluator.buildJudgePrompt({
         slug: specSlug,
         acs: specAcs,
         diff: judgeDiff,
         criticity: judgeConfig.criticity,
-        judge: judgeConfig
+        judge: judgeConfig,
+        skillsRoot: resolvedSkillsRoot
       });
 
       fs.mkdirSync(judgePaths.dir, { recursive: true });
@@ -2012,7 +2042,7 @@ function cmdRun(options) {
       fs.writeFileSync(judgePaths.criteriaFileAbs, judgeBundle.criteriaText, 'utf8');
 
       judgeMeta = {
-        mode: judgeConfig.mode,
+        mode: judgeConfig.judgeMode || judgeConfig.mode,
         criticity: judgeBundle.criticity,
         model: judgeConfig.model,
         provider: judgeConfig.provider,
@@ -2022,7 +2052,10 @@ function cmdRun(options) {
         diffTruncated: judgeBundle.diffTruncated
       };
 
-      if (judgeConfig.command) {
+      if (judgeConfig.judgeMode === 'command') {
+        if (!judgeConfig.command) {
+          return failClosedScoring('scoring.judgeMode is "command" but no judge command is configured.', judgeMeta);
+        }
         console.log(`[Step 5: Conformance Scoring] Invoking configured judge command (criticity: ${judgeBundle.criticity}).`);
         const judgeRun = scoreEvaluator.runJudgeCommand({
           config,
@@ -2044,28 +2077,60 @@ function cmdRun(options) {
         verdict = judgeRead.verdict;
         judgeResolution = 'command';
       } else {
+        const isSubagent = judgeConfig.judgeMode === 'subagent';
+        let envelope = null;
+        if (isSubagent) {
+          envelope = scoreEvaluator.buildJudgeEnvelope({
+            slug: specSlug,
+            runId: state.runId,
+            targetRoot,
+            stateDir: stateManager.resolveStateDir(targetRoot),
+            acs: specAcs,
+            diff: judgeDiff,
+            judge: judgeConfig,
+            skillsRoot: resolvedSkillsRoot
+          });
+        }
+        const continuingSubagentWait = isSubagent
+          && priorScoring
+          && priorScoring.judgeResolution === 'subagent'
+          && priorScoring.status === 'awaiting_judgment'
+          && priorScoring.dispatchedAt;
         const pausedOutput = {
           status: 'awaiting_judgment',
+          dispatchedAt: continuingSubagentWait ? priorScoring.dispatchedAt : new Date().toISOString(),
           judgePromptPath: judgePaths.promptFileRel,
           judgeVerdictPath: judgePaths.verdictFileRel,
           judgeAcIds: specAcs.map(ac => ac.id),
-          judge: judgeMeta
+          judgeResolution: isSubagent ? 'subagent' : 'host',
+          judgeTimedOut: false,
+          judge: judgeMeta,
+          envelope: envelope || undefined
         };
         state = stateManager.updateStepState(targetRoot, state.runId, 5, 'awaiting_judgment', pausedOutput);
         state.status = 'paused';
         stateManager.saveRunState(targetRoot, state);
-        console.log(`\n[Step 5: Conformance Scoring] Status: awaiting_judgment (criticity: ${judgeBundle.criticity}).`);
-        console.log(`Judge context is fenced to the acceptance criteria and the generated diff only (${judgeBundle.diffBytes} bytes${judgeBundle.diffTruncated ? ', truncated' : ''}).`);
-        console.log(`  Prompt:  ${judgePaths.promptFileRel}`);
-        console.log(`  Verdict: ${judgePaths.verdictFileRel}`);
-        console.log(`\nJudge each criterion against the diff, write the verdict JSON, then submit it with:`);
-        console.log(`  node "${runCommandPath()}" score submit --run-id ${state.runId} --verdict <verdictFile>`);
+        if (isSubagent) {
+          console.log(`\n[Step 5: Conformance Scoring] Dispatched fresh-context judge subagent [mode: subagent, criticity: ${judgeBundle.criticity}].`);
+          console.log(`Judge envelope: ${JSON.stringify(envelope, null, 2)}`);
+          console.log(`Spawn one fresh-context subagent to evaluate conformance against ${judgePaths.promptFileRel}`);
+          console.log(`When the judge subagent completes, submit the verdict JSON with:`);
+          console.log(`  node "${runCommandPath()}" score submit --run-id ${state.runId} --verdict ${judgePaths.verdictFileRel}`);
+        } else {
+          console.log(`\n[Step 5: Conformance Scoring] Status: awaiting_judgment (criticity: ${judgeBundle.criticity}).`);
+          console.log(`Judge context is fenced to the acceptance criteria and the generated diff only (${judgeBundle.diffBytes} bytes${judgeBundle.diffTruncated ? ', truncated' : ''}).`);
+          console.log(`  Prompt:  ${judgePaths.promptFileRel}`);
+          console.log(`  Verdict: ${judgePaths.verdictFileRel}`);
+          console.log(`\nJudge each criterion against the diff, write the verdict JSON, then submit it with:`);
+          console.log(`  node "${runCommandPath()}" score submit --run-id ${state.runId} --verdict <verdictFile>`);
+        }
         options._runResult = {
           runId: state.runId,
           status: 'awaiting_judgment',
           currentStep: 5,
           judgePromptPath: judgePaths.promptFileRel,
-          judgeVerdictPath: judgePaths.verdictFileRel
+          judgeVerdictPath: judgePaths.verdictFileRel,
+          envelope: envelope || undefined
         };
         return 5;
       }
@@ -3757,13 +3822,46 @@ function cmdScoreSubmit(options) {
     return 1;
   }
 
+  const priorOutput = (state.steps[5] && state.steps[5].output) || {};
+  if (priorOutput.judgeTimedOut) {
+    console.error('[sdw-run score submit] The judge subagent already timed out for this run; re-dispatch the judge before submitting a verdict.');
+    return 2;
+  }
+  const config = loadProjectConfig(targetRoot, options);
+  const judgeConfig = scoreEvaluator.resolveJudgeConfig({ scoring: options.scoring || config.scoring });
+
+  const isSubagentDispatch = priorOutput && priorOutput.judgeResolution === 'subagent';
+  if (isSubagentDispatch && priorOutput.dispatchedAt) {
+    const elapsedMs = Date.now() - new Date(priorOutput.dispatchedAt).getTime();
+    const timeoutMs = judgeConfig.timeoutMs || scoreEvaluator.JUDGE_TIMEOUT_MS || 600000;
+    if (elapsedMs > timeoutMs) {
+      state.steps[5] = state.steps[5] || { name: 'scoring', status: 'pending', output: null, artifact: null };
+      state.steps[5].status = 'reimplementation_needed';
+      state.steps[5].output = {
+        ...priorOutput,
+        status: 'timed_out',
+        judgeTimedOut: true,
+        dispatchedAt: null,
+        score: 0,
+        passed: false,
+        error: `Judge subagent timed out after ${elapsedMs}ms (timeout: ${timeoutMs}ms) without producing a valid verdict.`
+      };
+      state.score = 0;
+      state.status = 'failed';
+      state.errors = state.errors || [];
+      state.errors.push({ step: 5, timestamp: new Date().toISOString(), error: `Judge subagent timed out after ${elapsedMs}ms (timeout: ${timeoutMs}ms) without producing a valid verdict.` });
+      stateManager.saveRunState(targetRoot, state);
+      console.error(`[sdw-run score submit] Judge subagent timed out after ${elapsedMs}ms (timeout: ${timeoutMs}ms); failing closed with score 0.`);
+      return 2;
+    }
+  }
+
   const verdictRead = scoreEvaluator.readVerdictFile(verdictFileAbs);
   if (!verdictRead.ok) {
     console.error(`Error: ${verdictRead.error}`);
     return 1;
   }
 
-  const priorOutput = (state.steps[5] && state.steps[5].output) || {};
   const judgeCriteria = (Array.isArray(priorOutput.judgeAcIds) && priorOutput.judgeAcIds.length > 0)
     ? priorOutput.judgeAcIds.map(id => {
         const match = specAcs.find(ac => ac.id === id);
@@ -3778,11 +3876,9 @@ function cmdScoreSubmit(options) {
     return 1;
   }
 
-  const config = loadProjectConfig(targetRoot, options);
   const minScore = options.minScore !== undefined
     ? options.minScore
     : (config.scoreMin !== undefined ? config.scoreMin : 8);
-  const judgeConfig = scoreEvaluator.resolveJudgeConfig({ scoring: options.scoring || config.scoring });
   const report = scoreEvaluator.applyVerdict(validation.data, {
     acs: judgeCriteria,
     minScore,

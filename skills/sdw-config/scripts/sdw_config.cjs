@@ -305,6 +305,8 @@ const DEFAULT_CONFIG = {
   enableTestingFeatures: false,
   scoreMin: 8,
   scoring: {
+    judgeMode: 'subagent',
+    judgeTimeoutMs: 600000,
     judgeCommand: null,
     judgeModel: null,
     judgeProvider: null,
@@ -401,6 +403,17 @@ const DEFAULT_SCHEMA = {
       "type": "object",
       "description": "Configuration for Step 5 LLM-judge conformance scoring (Spec 027).",
       "properties": {
+        "judgeMode": {
+          "type": "string",
+          "enum": ["subagent", "command", "host"],
+          "default": "subagent",
+          "description": "Execution mode for Step 5 conformance scoring judge. Allowed: subagent (default), command, host."
+        },
+        "judgeTimeoutMs": {
+          "type": ["integer", "null"],
+          "default": 600000,
+          "description": "Timeout in milliseconds for judge evaluation before failing closed."
+        },
         "judgeCommand": {
           "type": ["string", "null"],
           "default": null,
@@ -730,6 +743,17 @@ function validateConfigSchema(config) {
       for (const key of ['judgeCommand', 'judgeModel', 'judgeProvider', 'judgeEffort', 'judgeApiEndpoint']) {
         if (key in config.scoring && config.scoring[key] !== null && typeof config.scoring[key] !== 'string') {
           errors.push(`Property "scoring.${key}" must be a string or null.`);
+        }
+      }
+      if ('judgeMode' in config.scoring) {
+        const allowedJudgeModes = ['subagent', 'command', 'host'];
+        if (typeof config.scoring.judgeMode !== 'string' || !allowedJudgeModes.includes(config.scoring.judgeMode)) {
+          errors.push(`Property "scoring.judgeMode" must be one of: ${allowedJudgeModes.join(', ')}.`);
+        }
+      }
+      if ('judgeTimeoutMs' in config.scoring) {
+        if (config.scoring.judgeTimeoutMs !== null && (!Number.isInteger(config.scoring.judgeTimeoutMs) || config.scoring.judgeTimeoutMs <= 0)) {
+          errors.push('Property "scoring.judgeTimeoutMs" must be a positive integer or null.');
         }
       }
       if ('judgeCriticity' in config.scoring) {

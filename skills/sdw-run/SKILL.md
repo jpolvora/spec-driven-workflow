@@ -74,7 +74,7 @@ Orchestrates spec execution from input requirement to delivery commit, automated
    - Exit codes: `4` dispatch pause (normal), `1` failure.
 
 5. **Evaluate Conformance Score (LLM judge)**
-   Score conformance with an LLM judge fenced to the acceptance criteria plus the generated diff — never transcripts. Per-criterion verdicts drive the score (`round(verified / total * 10)`); `scoring.judgeCriticity` sets strictness. When `scoring.judgeCommand` is unset, the current agent model judges: Step 5 writes `step-5-judge.prompt.md`, pauses with exit code 5, and accepts a verdict through `score submit`. Zero criteria, an unavailable judge, or a malformed verdict fails closed at 0/10. Below `scoreMin` (default 8/10) triggers the re-implementation loop (exit code 2).
+   Score conformance with an LLM judge fenced to the acceptance criteria plus the generated diff — never transcripts. Per-criterion verdicts drive the score (`round(verified / total * 10)`); `scoring.judgeCriticity` sets strictness. `scoring.judgeMode` supports `"subagent"` (default), `"command"`, and `"host"`. In `"subagent"` mode, Step 5 emits a fresh-context judge envelope citing `sdw-rules` harness and qualitative dimensions, writes `step-5-judge.prompt.md`, pauses with exit code 5, and accepts structured verdict JSON through `score submit`. Zero criteria, an unavailable judge, or a malformed verdict fails closed at 0/10. Below `scoreMin` (default 8/10) triggers the re-implementation loop (exit code 2).
    - Run: `node skills/sdw-run/scripts/sdw_run.cjs score submit --run-id <runId> --verdict <path>`
    - Done when: The judge verdict covers every criterion and the derived score meets the threshold, with the scoring artifact `{slug}-step-5.md` persisted.
 
