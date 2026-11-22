@@ -3808,31 +3808,8 @@ function cmdScoreSubmit(options) {
     return 1;
   }
 
-  const verdictRead = scoreEvaluator.readVerdictFile(verdictFileAbs);
-  if (!verdictRead.ok) {
-    console.error(`Error: ${verdictRead.error}`);
-    return 1;
-  }
-
   const priorOutput = (state.steps[5] && state.steps[5].output) || {};
-  const judgeCriteria = (Array.isArray(priorOutput.judgeAcIds) && priorOutput.judgeAcIds.length > 0)
-    ? priorOutput.judgeAcIds.map(id => {
-        const match = specAcs.find(ac => ac.id === id);
-        return { id, text: match ? match.text : '' };
-      })
-    : specAcs;
-
-  const validation = scoreEvaluator.validateVerdict(verdictRead.verdict, { acs: judgeCriteria });
-  if (!validation.valid) {
-    console.error('Error: Judge verdict rejected:');
-    validation.errors.forEach(item => console.error(`  - ${item}`));
-    return 1;
-  }
-
   const config = loadProjectConfig(targetRoot, options);
-  const minScore = options.minScore !== undefined
-    ? options.minScore
-    : (config.scoreMin !== undefined ? config.scoreMin : 8);
   const judgeConfig = scoreEvaluator.resolveJudgeConfig({ scoring: options.scoring || config.scoring });
 
   const isSubagentDispatch = priorOutput && priorOutput.judgeResolution === 'subagent';
@@ -3858,6 +3835,29 @@ function cmdScoreSubmit(options) {
     }
   }
 
+  const verdictRead = scoreEvaluator.readVerdictFile(verdictFileAbs);
+  if (!verdictRead.ok) {
+    console.error(`Error: ${verdictRead.error}`);
+    return 1;
+  }
+
+  const judgeCriteria = (Array.isArray(priorOutput.judgeAcIds) && priorOutput.judgeAcIds.length > 0)
+    ? priorOutput.judgeAcIds.map(id => {
+        const match = specAcs.find(ac => ac.id === id);
+        return { id, text: match ? match.text : '' };
+      })
+    : specAcs;
+
+  const validation = scoreEvaluator.validateVerdict(verdictRead.verdict, { acs: judgeCriteria });
+  if (!validation.valid) {
+    console.error('Error: Judge verdict rejected:');
+    validation.errors.forEach(item => console.error(`  - ${item}`));
+    return 1;
+  }
+
+  const minScore = options.minScore !== undefined
+    ? options.minScore
+    : (config.scoreMin !== undefined ? config.scoreMin : 8);
   const report = scoreEvaluator.applyVerdict(validation.data, {
     acs: judgeCriteria,
     minScore,

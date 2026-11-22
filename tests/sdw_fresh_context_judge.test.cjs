@@ -406,6 +406,67 @@ test('AC14: cmdScoreSubmit fails closed with score 0 when verdict submitted past
   }
 });
 
+test('AC14: cmdScoreSubmit fails closed with score 0 even when submitted verdict is malformed past timeout', () => {
+  const tmpDir = setupRepo();
+  try {
+    const implScript = [
+      "const fs = require('fs');",
+      "fs.appendFileSync('index.cjs', '// implemented\\n');",
+      'fs.writeFileSync(process.env.SDW_EVIDENCE_FILE, JSON.stringify({',
+      "  taskId: process.env.SDW_TASK_ID,",
+      "  status: 'success',",
+      "  acIds: ['AC1', 'AC2'],",
+      "  filesChanged: ['index.cjs'],",
+      "  tests: [],",
+      "  summary: 'implemented index.cjs'",
+      '}));'
+    ].join(' ');
+
+    const initialExit = sdwRun.cmdRun({
+      root: tmpDir,
+      specPath: '.sdw/specs/sample-judge-spec.md',
+      scoring: { judgeMode: 'subagent', judgeTimeoutMs: 1000 },
+      skipReview: true,
+      skipPr: true,
+      implementation: {
+        mode: 'command',
+        segregateTests: false,
+        command: `node -e "${implScript.replace(/"/g, '\\"')}"`
+      }
+    });
+    assert.equal(initialExit, 5);
+
+    const state = stateManager.findLatestRunState(tmpDir);
+    assert.equal(state.steps[5].output.judgeResolution, 'subagent');
+
+    // Artificially age the dispatchedAt timestamp past the timeout
+    state.steps[5].output.dispatchedAt = new Date(Date.now() - 5000).toISOString();
+    stateManager.saveRunState(tmpDir, state);
+
+    // Create MALFORMED verdict file (missing ACs, invalid schema)
+    const verdictPath = path.join(tmpDir, 'bad_verdict.json');
+    fs.writeFileSync(verdictPath, JSON.stringify({ score: 'invalid', verdicts: [] }));
+
+    // Submitting malformed verdict past timeout must still fail closed with 2 and score 0
+    const submitExit = sdwRun.cmdScoreSubmit({
+      root: tmpDir,
+      runId: state.runId,
+      verdictPath: 'bad_verdict.json',
+      scoring: { judgeTimeoutMs: 1000 }
+    });
+    assert.equal(submitExit, 2);
+
+    const finalState = stateManager.findLatestRunState(tmpDir);
+    assert.equal(finalState.score, 0);
+    assert.equal(finalState.status, 'failed');
+    assert.ok(finalState.errors.some(e => e.error.includes('timed out')));
+  } finally {
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    } catch (_) {}
+  }
+});
+
 test('AC12, AC14: runJudgeCommand honors scoring.judgeTimeoutMs in command mode', () => {
   const tmpDir = setupRepo();
   try {
