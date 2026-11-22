@@ -7,7 +7,7 @@ const path = require('path');
 const { initIndex, listIndex, archiveSpec, resolvePaths, latestGroupFile } = require('./spec_index.cjs');
 const { createNewSpec, createSpecRevision, importRemoteSpec } = require('./spec_creator.cjs');
 const { syncIndex } = require('./spec_sync.cjs');
-const { validateFile, SPEC_STATUSES, normalizePriority } = require('./validate_spec.cjs');
+const { validateFile, SPEC_STATUSES, normalizePriority, SPEC_TYPES, DEFAULT_TYPE, normalizeType } = require('./validate_spec.cjs');
 
 const SPEC_STATUS_TRANSITIONS = {
   draft: ['awaiting-approval', 'abandoned'],
@@ -27,6 +27,7 @@ function parseArgs(args) {
     id: null,
     title: null,
     slug: null,
+    type: null,
     force: false,
     json: false,
     dryRun: false,
@@ -42,6 +43,8 @@ function parseArgs(args) {
     else if (arg === '--dry-run') result.dryRun = true;
     else if (arg === '--order') result.order = args[++i];
     else if (arg.startsWith('--order=')) result.order = arg.slice(8);
+    else if (arg === '--type') result.type = args[++i];
+    else if (arg.startsWith('--type=')) result.type = arg.slice(7);
     else if (arg === '--root') result.root = args[++i];
     else if (arg.startsWith('--root=')) result.root = arg.slice(7);
     else if (arg === '--status') result.status = args[++i];
