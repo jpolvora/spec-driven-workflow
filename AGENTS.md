@@ -165,7 +165,7 @@ npm run review:dry
 | `AGENTIC_CODE_REVIEWERS_VARIANT` | `medium` |
 | `AGENTIC_CODE_REVIEWERS_TARGET_BRANCH` | `refs/heads/master` |
 | `AGENTIC_CODE_REVIEWERS_OPENCODE_BIN` | pinned `opencode-ai@1.19.1` binary |
-| `AGENTIC_CODE_REVIEWERS_TIMEOUT_MS` | `1200000` |
+| `AGENTIC_CODE_REVIEWERS_TIMEOUT_MS` | `180000` |
 | `AGENTIC_CODE_REVIEWERS_MAX_ROUNDS` | `20` |
 
 The default model is `opencode/deepseek-v4.1-flash-free` on the OpenCode connection.
