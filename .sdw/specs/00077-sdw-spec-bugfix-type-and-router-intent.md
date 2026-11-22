@@ -3,11 +3,10 @@ id: null
 slug: 00077-sdw-spec-bugfix-type-and-router-intent
 title: "Bugfix Specification Type and Router Intent Support"
 source: local
-status: draft
+status: implemented
 specDate: 2026-11-21
 priority: high
 ---
-
 # Specification — Bugfix Specification Type and Router Intent Support
 
 ## Description
