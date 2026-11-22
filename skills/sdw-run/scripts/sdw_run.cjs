@@ -2056,6 +2056,7 @@ function cmdRun(options) {
             slug: specSlug,
             runId: state.runId,
             targetRoot,
+            stateDir: stateManager.resolveStateDir(targetRoot),
             acs: specAcs,
             diff: judgeDiff,
             judge: judgeConfig,

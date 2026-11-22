@@ -113,8 +113,8 @@ function resolveJudgePaths(options) {
  * Builds the dispatch envelope for a fresh-context judge subagent (Spec 00075 AC2-AC4, AC7).
  */
 function buildJudgeEnvelope(options) {
-  const { slug, runId, targetRoot, acs, diff, judge, skillsRoot } = options;
-  const paths = resolveJudgePaths({ slug, runId, targetRoot });
+  const { slug, runId, targetRoot, stateDir, acs, diff, judge, skillsRoot } = options;
+  const paths = resolveJudgePaths({ slug, runId, targetRoot, stateDir });
   const resolvedSkillsRoot = skillsRoot || 'skills';
   return {
     type: 'judge',

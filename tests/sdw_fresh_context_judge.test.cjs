@@ -81,6 +81,22 @@ test('AC4, AC7: judge dispatch envelope applies configured model, effort, and re
   assert.ok(envelope.skillsRoot, 'Harness skillsRoot must be included in envelope');
   assert.ok(envelope.promptFile, 'Prompt file path must be in envelope');
   assert.ok(envelope.verdictFile, 'Verdict file path must be in envelope');
+  assert.ok(envelope.submitCommand.includes('skills/sdw-run/scripts/sdw_run.cjs'));
+
+  // Test custom stateDir forwarding and skillsRoot in envelope
+  const customEnvelope = scoreEvaluator.buildJudgeEnvelope({
+    slug: 'sample-judge-spec',
+    runId: 'run-12345',
+    targetRoot: process.cwd(),
+    stateDir: '.sdw/custom-state',
+    acs,
+    diff,
+    judge: judgeConfig,
+    skillsRoot: '.agents/skills'
+  });
+  assert.ok(customEnvelope.promptFile.startsWith('.sdw/custom-state/'));
+  assert.ok(customEnvelope.verdictFile.startsWith('.sdw/custom-state/'));
+  assert.ok(customEnvelope.submitCommand.includes('.agents/skills/sdw-run/scripts/sdw_run.cjs'));
 });
 
 test('AC5, AC6, AC7, AC8: judge prompt bundles criteria, diff, touched files, and sdw-rules qualitative instructions', () => {
