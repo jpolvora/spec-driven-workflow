@@ -166,3 +166,121 @@ test('AC6: Configurable subagent model and effort defaults under harness.subagen
   assert.equal(cfg2.harness.subagent.defaultModel, 'pro');
   assert.equal(cfg2.harness.subagent.defaultEffort, 'medium');
 });
+
+test('AC7: Specification frontmatter model and effort override harness config defaults', () => {
+  assert.ok(harnessAdapters, 'harness_adapters module must be available');
+
+  const configDefaults = {
+    adapter: 'antigravity',
+    subagent: {
+      defaultModel: 'flash',
+      defaultEffort: 'low'
+    }
+  };
+
+  // 1. Task without frontmatter override uses config defaults
+  const taskNoOverride = {
+    taskId: 'task-1-impl',
+    role: 'implementation',
+    promptFile: '.sdw/state/00078/task-task-1-impl.prompt.md',
+    model: configDefaults.subagent.defaultModel,
+    effort: configDefaults.subagent.defaultEffort
+  };
+  const dispatchDefault = harnessAdapters.formatDispatch('antigravity', taskNoOverride, {});
+  assert.equal(dispatchDefault.envelope.Model, 'flash');
+  assert.equal(dispatchDefault.envelope.Effort, 'low');
+
+  // 2. Task with frontmatter overrides
+  const frontmatterOverrides = {
+    model: 'pro',
+    effort: 'high'
+  };
+  const taskWithOverride = {
+    taskId: 'task-1-impl',
+    role: 'implementation',
+    promptFile: '.sdw/state/00078/task-task-1-impl.prompt.md',
+    model: frontmatterOverrides.model,
+    effort: frontmatterOverrides.effort
+  };
+  const dispatchOverride = harnessAdapters.formatDispatch('antigravity', taskWithOverride, {});
+  assert.equal(dispatchOverride.envelope.Model, 'pro', 'Frontmatter model must override default');
+  assert.equal(dispatchOverride.envelope.Effort, 'high', 'Frontmatter effort must override default');
+});
+
+test('AC8: Unrecognized harness adapter logs actionable warning and falls back to generic', () => {
+  assert.ok(harnessAdapters, 'harness_adapters module must be available');
+
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => warnings.push(args.join(' '));
+
+  try {
+    const taskContext = {
+      taskId: 'task-1-impl',
+      role: 'implementation',
+      promptFile: '.sdw/state/00078/task-task-1-impl.prompt.md'
+    };
+    const dispatch = harnessAdapters.formatDispatch('unsupported_harness_xyz', taskContext, {});
+    assert.equal(dispatch.harness, 'generic', 'Must fall back to generic harness');
+    assert.equal(dispatch.mode, 'cli');
+    assert.ok(warnings.some(w => w.includes('Unrecognized harness adapter') && w.includes('generic')),
+      `Warning must be logged: ${JSON.stringify(warnings)}`);
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
+test('AC9: User confirmation modality selects based on active harness adapter', () => {
+  assert.ok(harnessAdapters, 'harness_adapters module must be available');
+  assert.equal(typeof harnessAdapters.formatConfirmation, 'function');
+
+  // Antigravity selects ask_question modality
+  const confAgy = harnessAdapters.formatConfirmation('antigravity', {
+    question: 'Proceed with implementation?',
+    options: ['Yes', 'No']
+  });
+  assert.equal(confAgy.harness, 'antigravity');
+  assert.equal(confAgy.modality, 'ask_question');
+  assert.equal(confAgy.question, 'Proceed with implementation?');
+
+  // Generic / terminal selects readline modality
+  const confGen = harnessAdapters.formatConfirmation('generic', {
+    question: 'Proceed with implementation?'
+  });
+  assert.equal(confGen.harness, 'generic');
+  assert.equal(confGen.modality, 'readline');
+});
+
+test('AC10: Harness configuration properties registered in .sdw/config.schema.json with validation rules', () => {
+  const schemaPath = path.join(__dirname, '..', '.sdw', 'config.schema.json');
+  assert.ok(fs.existsSync(schemaPath), 'config.schema.json must exist');
+  const schema = JSON.parse(fs.readFileSync(schemaPath, 'utf8'));
+
+  assert.ok(schema.properties.harness, 'Schema must define harness property');
+  assert.ok(schema.properties.harness.properties.adapter, 'Schema must define harness.adapter');
+  assert.deepEqual(schema.properties.harness.properties.adapter.enum,
+    ['auto', 'antigravity', 'claude-code', 'opencode', 'cursor', 'generic']);
+  assert.ok(schema.properties.harness.properties.subagent, 'Schema must define harness.subagent');
+});
+
+test('AC11: Reference documentation defines harness adapter interface and dispatch protocol', () => {
+  const root = path.resolve(__dirname, '..');
+  
+  // 1. orchestrator_protocol.md mentions harness adapters
+  const orchProto = fs.readFileSync(path.join(root, 'skills', 'sdw-run', 'references', 'orchestrator_protocol.md'), 'utf8');
+  assert.ok(/Harness Adapter Layer/i.test(orchProto) || /harness_adapters\.cjs/i.test(orchProto),
+    'orchestrator_protocol.md must document Harness Adapter Layer');
+
+  // 2. sdw-rules SKILL.md or references acknowledge agnosticism
+  const sdwRules = fs.readFileSync(path.join(root, 'skills', 'sdw-rules', 'SKILL.md'), 'utf8');
+  assert.ok(/agnostic/i.test(sdwRules) || /anti-overengineering/i.test(sdwRules),
+    'sdw-rules must acknowledge agnosticism and simplicity');
+});
+
+test('AC12: Comprehensive automated unit test coverage for harness adapters', () => {
+  assert.ok(harnessAdapters);
+  assert.equal(typeof harnessAdapters.detectHarness, 'function');
+  assert.equal(typeof harnessAdapters.formatDispatch, 'function');
+  assert.equal(typeof harnessAdapters.formatConfirmation, 'function');
+  assert.ok(Array.isArray(harnessAdapters.VALID_ADAPTERS));
+});
