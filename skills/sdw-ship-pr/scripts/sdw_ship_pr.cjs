@@ -95,8 +95,9 @@ const ISSUE_CLOSING_KEYWORDS = new Map([
   ['azure-devops', ({ issue }) => `Fixes AB#${issue}`]
 ]);
 
-// Matches a standalone closing line, e.g. `Closes #12`, `Fixes AB#12`, `Resolves #7`.
-const CLOSING_KEYWORD_LINE = /^(Closes|Fixes|Resolves)\s+(AB)?#\d+\b/i;
+// Matches a standalone closing line, e.g. `Closes #12`, `Closes owner/repo#12`,
+// `Fixes AB#12`, `Resolves #7`, in any letter case.
+const CLOSING_KEYWORD_LINE = /^(Closes|Fixes|Resolves)\s+(?:[^\s#/]+\/[^\s#]+)?\s*(AB)?#\d+\b/i;
 
 function parseFrontmatterValue(frontmatter, key) {
   const match = String(frontmatter || '').match(new RegExp(`^${key}:\\s*(.*)$`, 'm'));
@@ -388,6 +389,8 @@ function parseArgs(args) {
       options.body = args[++i];
     } else if (arg === '--push') {
       options.push = true;
+    } else if (arg === '--allow-missing-closing-reference') {
+      options.allowMissingClosingReference = true;
     } else if (arg === '--poll-pr') {
       options.pollPr = true;
     } else if (arg === '--merge' || arg === '--allow-merge') {
@@ -942,6 +945,7 @@ async function runShipPr(options = {}, customExecutor = null) {
     prepareObligations: [],
     prepareAck: null,
     runStateGate: null,
+    closingReference: null,
     pullRequest: null,
     // Spec 024 AC26: when merge is requested, an audit record exists from the
     // start, so a delivery that fails before the merge step still explains why
@@ -1159,6 +1163,24 @@ async function runShipPr(options = {}, customExecutor = null) {
     if (options.ackPrepare) {
       report.prepareAck = { note: options.ackPrepare, at: new Date().toISOString() };
       log(`[sdw-ship-pr] Prepare obligations acknowledged via --ack-prepare: ${options.ackPrepare}`);
+    }
+
+    // Spec 00080 AC9/AC10: a declared tracker source must resolve a closing
+    // reference before the push. The gate fails closed unless the caller opts
+    // out with --allow-missing-closing-reference, which downgrades it to warn.
+    if (issueLink.provider && ISSUE_CLOSING_KEYWORDS.has(issueLink.provider)) {
+      const unresolved = `closing-reference unresolved for specification "${specSlug}": source "${issueLink.provider}" resolves no closing reference`;
+      if (issueLink.present) {
+        boardRow('closing-reference', 'pass', `${issueLink.keyword} closes the declared ${issueLink.provider} item`);
+        report.closingReference = { resolved: true, allowMissing: false, keyword: issueLink.keyword };
+      } else if (options.allowMissingClosingReference) {
+        warn(`[sdw-ship-pr] Warning: ${unresolved}; continuing because --allow-missing-closing-reference was passed.`);
+        boardRow('closing-reference', 'warn', `${unresolved} (allowed by --allow-missing-closing-reference)`);
+        report.closingReference = { resolved: false, allowMissing: true, warning: unresolved };
+      } else {
+        report.closingReference = { resolved: false, allowMissing: false, warning: unresolved };
+        failGate('closing-reference', unresolved);
+      }
     }
 
     // Spec 00050 AC11/AC12: one row per evaluated check, printed before the push.

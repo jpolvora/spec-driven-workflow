@@ -58,6 +58,22 @@ All provider implementations must return items normalized to this canonical stru
 }
 ```
 
+### 2.1 Persisted Specification Coordinates (spec 00080)
+
+When `sdw-spec import` writes a specification from a tracker item, it persists the provider coordinates in the spec frontmatter so the closing reference is a pure function of persisted values:
+
+| Frontmatter key | Shape | Meaning |
+|---|---|---|
+| `sourceIssue` | positive integer | Tracker issue or work-item number. |
+| `sourceRepo` | `owner/repo` | Repository that owns the GitHub issue, for cross-repository delivery. |
+| `sourceOrg` | non-empty segment | Azure DevOps organization; provenance only. |
+| `sourceProject` | non-empty segment | Azure DevOps project; provenance only. |
+| `sourceUrl` | absolute URL | Canonical item URL returned by the provider. |
+
+The validator checks `sourceIssue` and `sourceRepo` only when present: a non-integer `sourceIssue` or a `sourceRepo` outside `owner/repo` is rejected with an error naming the offending key. Specs that omit these keys stay valid.
+
+`sdw-ship-pr` renders the closing reference from these keys: `github` with `sourceRepo` → `Closes <sourceRepo>#<sourceIssue>`; `github` without `sourceRepo` → `Closes #<sourceIssue|id>`; `azure-devops` → `Fixes AB#<sourceIssue|id>`. A tracker specification that resolves no closing reference fails the `closing-reference` pre-PR gate (see `sdw-ship-pr/references/ship_protocol.md` §1.4).
+
 ## 3. Provider Implementations
 
 ### GitHub Provider (`github`)
