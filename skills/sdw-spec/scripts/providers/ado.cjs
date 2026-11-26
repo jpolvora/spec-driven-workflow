@@ -13,6 +13,17 @@ const {
   cliFailure
 } = require('./base.cjs');
 
+// Spec 00080: both Azure DevOps URL shapes carry the organization and project,
+// so the import persists them as provenance for the work item coordinates.
+function coordinatesFromWorkItemUrl(url) {
+  const text = String(url || '');
+  const modern = text.match(/^https?:\/\/dev\.azure\.com\/([^/]+)\/([^/]+)\/_workitems/i);
+  if (modern) return { org: modern[1], project: modern[2] };
+  const legacy = text.match(/^https?:\/\/([^./]+)\.visualstudio\.com\/(?:DefaultCollection\/)?([^/]+)\/_workitems/i);
+  if (legacy) return { org: legacy[1], project: legacy[2] };
+  return { org: null, project: null };
+}
+
 class AzureDevOpsProvider extends ScmProvider {
   async fetchWorkItem(itemId) {
     if (!itemId || !/^\d+$/.test(String(itemId).trim())) {
@@ -44,13 +55,18 @@ class AzureDevOpsProvider extends ScmProvider {
 
       const tags = rawTags.split(';').map(t => t.trim()).filter(Boolean);
 
+      const url = data.url || (data._links && data._links.html && data._links.html.href) || '';
+      const coordinates = coordinatesFromWorkItemUrl(url);
+
       return {
         id: String(data.id || safeId),
         title,
         description,
         acceptanceCriteria,
         source: 'azure-devops',
-        url: data.url || (data._links && data._links.html && data._links.html.href) || '',
+        org: coordinates.org,
+        project: coordinates.project,
+        url,
         state,
         tags
       };

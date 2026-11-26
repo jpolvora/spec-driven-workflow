@@ -87,10 +87,12 @@ function getSpecTitle(projectRoot, specSlug) {
 }
 
 // Spec 00051: the provider-specific closing keyword is the only SCM syntax the
-// body needs; where it appears is provider-agnostic.
+// body needs; where it appears is provider-agnostic. Spec 00080: the GitHub form
+// is qualified with the persisted `sourceRepo` when present so cross-repository
+// items close in the repository that owns them.
 const ISSUE_CLOSING_KEYWORDS = new Map([
-  ['github', (id) => `Closes #${id}`],
-  ['azure-devops', (id) => `Fixes AB#${id}`]
+  ['github', ({ issue, sourceRepo }) => (sourceRepo ? `Closes ${sourceRepo}#${issue}` : `Closes #${issue}`)],
+  ['azure-devops', ({ issue }) => `Fixes AB#${issue}`]
 ]);
 
 // Matches a standalone closing line, e.g. `Closes #12`, `Fixes AB#12`, `Resolves #7`.
@@ -121,9 +123,23 @@ function resolveIssueLink(projectRoot, specSlug) {
       const content = fs.readFileSync(path.join(dir, f), 'utf8').split(/\r?\n/).slice(0, 25).join('\n');
       const id = parseFrontmatterValue(content, 'id');
       const provider = parseFrontmatterValue(content, 'source');
-      const formatKeyword = id ? ISSUE_CLOSING_KEYWORDS.get(provider || '') : null;
-      const keyword = formatKeyword ? formatKeyword(id) : null;
-      return { id, provider, keyword, present: Boolean(keyword) };
+      const sourceIssue = parseFrontmatterValue(content, 'sourceIssue');
+      const sourceRepo = parseFrontmatterValue(content, 'sourceRepo');
+      const sourceOrg = parseFrontmatterValue(content, 'sourceOrg');
+      const sourceProject = parseFrontmatterValue(content, 'sourceProject');
+      const sourceUrl = parseFrontmatterValue(content, 'sourceUrl');
+      const issue = sourceIssue || id;
+      const formatKeyword = issue ? ISSUE_CLOSING_KEYWORDS.get(provider || '') : null;
+      const keyword = formatKeyword ? formatKeyword({ issue, sourceRepo }) : null;
+      const link = { id, provider, keyword, present: Boolean(keyword) };
+      // Spec 00080: report the persisted coordinates. Only declared keys are
+      // exposed so a specification without coordinates keeps the spec 00051 shape.
+      if (sourceRepo) link.sourceRepo = sourceRepo;
+      if (sourceOrg) link.sourceOrg = sourceOrg;
+      if (sourceProject) link.sourceProject = sourceProject;
+      if (sourceIssue) link.sourceIssue = sourceIssue;
+      if (sourceUrl) link.sourceUrl = sourceUrl;
+      return link;
     }
   } catch (e) {}
   return empty;
@@ -183,8 +199,10 @@ function buildPrTitle({ explicit, specSlug, specTitle, head, base, commits }) {
 }
 
 function buildPrBody({ explicit, specSlug, specTitle, head, base, commits, files, config, issueLink }) {
-  if (explicit) return explicit;
   const closingKeyword = issueLink && issueLink.present ? issueLink.keyword : null;
+  // Spec 00080 AC7: an explicit body keeps its content and gains the resolved
+  // closing reference, appended once.
+  if (explicit) return appendClosingKeyword(explicit, closingKeyword);
   if ((!commits || commits.length === 0) && (!files || files.length === 0)) {
     const fallback = specSlug ? `Automated delivery for specification ${specSlug}.` : `Automated delivery pull request.`;
     return appendClosingKeyword(fallback, closingKeyword);
