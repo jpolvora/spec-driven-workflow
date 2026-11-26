@@ -55,12 +55,21 @@ class AzureDevOpsProvider extends ScmProvider {
 
       const tags = rawTags.split(';').map(t => t.trim()).filter(Boolean);
 
-      const url = data.url || (data._links && data._links.html && data._links.html.href) || '';
+      // `az boards work-item show` returns the REST resource URL in `url`, which
+      // carries the organization but not the project. The web link carries both.
+      const webUrl = (data._links && data._links.html && data._links.html.href) || '';
+      const restUrl = data.url || '';
+      const url = webUrl || restUrl;
       const coordinates = coordinatesFromWorkItemUrl(url);
+      const org = coordinates.org
+        || (String(url).match(/^https?:\/\/dev\.azure\.com\/([^/]+)\//) || [])[1]
+        || (String(restUrl).match(/^https?:\/\/dev\.azure\.com\/([^/]+)\//) || [])[1]
+        || null;
+      const project = coordinates.project || fields['System.TeamProject'] || null;
       // Spec 00080: a partial import silently drops the provenance coordinates,
-      // so an item URL without both segments is refused instead.
-      if (url && (!coordinates.org || !coordinates.project)) {
-        throw new Error(`Azure DevOps work item URL is missing the organization or project segment: ${url}`);
+      // so an item with no derivable coordinates is refused instead.
+      if (!org || !project) {
+        throw new Error(`Azure DevOps work item is missing the organization or project: ${url || '(no url)'}`);
       }
 
       return {
@@ -69,8 +78,8 @@ class AzureDevOpsProvider extends ScmProvider {
         description,
         acceptanceCriteria,
         source: 'azure-devops',
-        org: coordinates.org,
-        project: coordinates.project,
+        org,
+        project,
         url,
         state,
         tags

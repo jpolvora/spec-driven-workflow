@@ -84,7 +84,7 @@ Implementation constraints:
 - `Fixes AB#<id>` is organization-scoped in Azure DevOps and has no project-qualified variant. `sourceOrg` and `sourceProject` are persisted for provenance and diagnostics, not interpolated into the keyword.
 - Duplicate matching must recognize `Closes owner/repo#N`, `Closes #N`, `Fixes #N`, `Fixes AB#N`, and `Resolves #N` case-insensitively, with optional surrounding whitespace.
 - `resolveIssueLink()` returns `{ id, provider, keyword, present, sourceRepo, sourceOrg, sourceProject, sourceIssue }` so the JSON report explains the decision.
-- The fail-closed check is a pre-PR gate board row evaluated before push, joined through the existing `gateFailures` throw. It applies only when `source` is `github` or `azure-devops` and `id` is non-null.
+- The fail-closed check is a pre-PR gate board row evaluated before push, joined through the existing `gateFailures` throw. It applies whenever `source` is `github` or `azure-devops` and no closing reference resolves from `sourceIssue` or `id`.
 - `--allow-missing-closing-reference` is a ship flag; it downgrades the row to `warn` and records the reason in the JSON report. No new `.sdw/config.json` key.
 - No new runtime dependencies. Node 22 standard library only.
 - A closing reference only takes effect when the pull request targets the provider default branch; the gate guarantees presence, not that the provider closed the item.
@@ -105,7 +105,7 @@ Implementation constraints:
 |------------|----------------|-----------|-----------|
 | `id` keeps the provider item id while `sourceIssue` is added | Keep `id`, add `sourceIssue` | Preserves the spec 00051 contract and existing consumers; this deviates from the issue text, which proposes `id` as the local spec id, so the maintainer must confirm | No |
 | GitHub always renders the qualified `owner/repo#N` form when `sourceRepo` exists | Qualified form when known, unqualified fallback otherwise | GitHub accepts the qualified form for same-repo issues, so no PR-repository lookup is required | No |
-| Fail-closed applies only to tracker-backed specs with a non-null id | Gate `source in (github, azure-devops)` and `id != null` | Local specs have no item to close; gating them would break existing deliveries | Yes |
+| Fail-closed applies to every tracker-backed spec, even without an `id` | Refuse whenever `source in (github, azure-devops)` and no closing reference resolves from `sourceIssue` or `id` | Local specs have no item to close; gating them would break existing deliveries | Yes |
 | Opt-out flag name and shape | `--allow-missing-closing-reference` | Matches the issue proposal and the existing kebab-case flag style | No |
 | Azure DevOps keeps `Fixes AB#<id>` and records coordinates for provenance | Keep the keyword, persist `sourceOrg` and `sourceProject` | Work item ids are organization-scoped; project data serves diagnostics | Yes |
 | New keys sit immediately after `source` | Place them after `source` in generated frontmatter | `resolveIssueLink()` reads only the first 25 lines of the spec file | Yes |

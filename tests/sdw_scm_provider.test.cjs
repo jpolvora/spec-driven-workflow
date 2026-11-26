@@ -550,8 +550,10 @@ test('sdw-scm-provider - AzureDevOpsProvider.fetchWorkItem converts HTML and ext
             'System.Description': '<p>This is HTML formatted description with &amp; entity.</p>',
             'Microsoft.VSTS.Common.AcceptanceCriteria': '<ul><li>The system shall validate active session cookies.</li><li>When session expired, the system shall redirect to login.</li></ul>',
             'System.State': 'Active',
+            'System.TeamProject': 'Platform',
             'System.Tags': 'core; security'
-          }
+          },
+          _links: { html: { href: 'https://dev.azure.com/contoso/Platform/_workitems/edit/555' } }
         });
       }
       throw new Error(`Unexpected command: ${cmd}`);
@@ -584,8 +586,10 @@ test('sdw-scm-provider - AzureDevOpsProvider.queryWorkItems executes WIQL and ma
             'System.Description': 'Simple text description',
             'Microsoft.VSTS.Common.AcceptanceCriteria': '- AC1: The system shall query work items.',
             'System.State': 'New',
+            'System.TeamProject': 'Platform',
             'System.Tags': 'backend'
-          }
+          },
+          url: 'https://dev.azure.com/contoso/_apis/wit/workItems/888'
         });
       }
       throw new Error(`Unexpected command: ${cmd}`);
@@ -600,6 +604,81 @@ test('sdw-scm-provider - AzureDevOpsProvider.queryWorkItems executes WIQL and ma
   assert.strictEqual(items[0].state, 'new');
   assert.deepStrictEqual(items[0].tags, ['backend']);
   assert.strictEqual(items[0].acceptanceCriteria.length, 1);
+});
+
+test('sdw-scm-provider - AzureDevOpsProvider.fetchWorkItem prefers the project-bearing web link over the REST url', async () => {
+  // Shape returned by `az boards work-item show`: `url` is the REST resource URL
+  // and `_links.html.href` is the project-bearing web URL.
+  const webUrl = 'https://dev.azure.com/fabrikam/Fabrikam-Fiber-Git/_workitems/edit/12';
+  const provider = createScmProvider('ado', {
+    executor: (cmd) => {
+      if (cmd.includes('az boards work-item show --id 12')) {
+        return JSON.stringify({
+          id: 12,
+          fields: {
+            'System.Title': 'Carry provenance coordinates',
+            'System.TeamProject': 'Fabrikam-Fiber-Git',
+            'System.State': 'New'
+          },
+          url: 'https://dev.azure.com/fabrikam/_apis/wit/workItems/12',
+          _links: { html: { href: webUrl } }
+        });
+      }
+      throw new Error(`Unexpected command: ${cmd}`);
+    }
+  });
+
+  const item = await provider.fetchWorkItem('12');
+  assert.strictEqual(item.org, 'fabrikam');
+  assert.strictEqual(item.project, 'Fabrikam-Fiber-Git');
+  assert.strictEqual(item.url, webUrl);
+});
+
+test('sdw-scm-provider - AzureDevOpsProvider.fetchWorkItem derives org from the REST url and project from System.TeamProject', async () => {
+  const restUrl = 'https://dev.azure.com/contoso/_apis/wit/workItems/34';
+  const provider = createScmProvider('ado', {
+    executor: (cmd) => {
+      if (cmd.includes('az boards work-item show --id 34')) {
+        return JSON.stringify({
+          id: 34,
+          fields: {
+            'System.Title': 'REST url only',
+            'System.TeamProject': 'Platform',
+            'System.State': 'Active'
+          },
+          url: restUrl
+        });
+      }
+      throw new Error(`Unexpected command: ${cmd}`);
+    }
+  });
+
+  const item = await provider.fetchWorkItem('34');
+  assert.strictEqual(item.org, 'contoso');
+  assert.strictEqual(item.project, 'Platform');
+  assert.strictEqual(item.url, restUrl);
+});
+
+test('sdw-scm-provider - AzureDevOpsProvider.fetchWorkItem refuses an item with no derivable org or project', async () => {
+  const provider = createScmProvider('ado', {
+    executor: (cmd) => {
+      if (cmd.includes('az boards work-item show --id 56')) {
+        return JSON.stringify({
+          id: 56,
+          fields: {
+            'System.Title': 'Untraceable item',
+            'System.State': 'New'
+          }
+        });
+      }
+      throw new Error(`Unexpected command: ${cmd}`);
+    }
+  });
+
+  await assert.rejects(
+    async () => { await provider.fetchWorkItem('56'); },
+    /missing the organization or project/
+  );
 });
 
 test('sdw-scm-provider - GitHubProvider.queryWorkItems maps issues and tags', async () => {

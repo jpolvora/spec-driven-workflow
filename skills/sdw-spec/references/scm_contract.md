@@ -61,7 +61,7 @@ All provider implementations must return items normalized to this canonical stru
 }
 ```
 
-`repo` is set by the GitHub provider from the item URL; `org` and `project` are set by the Azure DevOps provider. A provider that cannot derive a coordinate returns `null`, and `sdw-spec import` persists only the truthy ones (see §2.1).
+`repo` is set by the GitHub provider from the item URL; `org` and `project` are set by the Azure DevOps provider, which refuses a work item when neither coordinate is derivable. `sdw-spec import` persists only the truthy ones (see §2.1).
 
 ### 2.1 Persisted Specification Coordinates (spec 00080)
 
