@@ -2251,3 +2251,143 @@ test('sdw-ship-pr - 00059 AC7, AC11: the default fixer finding carries every com
   }
 });
 
+// Spec 00080: write a tracker specification with explicit frontmatter keys so the
+// closing-reference formatter is exercised as a pure function of persisted values.
+function writeTrackerSpec(projectRoot, slug, frontmatterLines, title = 'Tracker linked specification') {
+  const specsDir = path.join(projectRoot, '.sdw', 'specs');
+  fs.mkdirSync(specsDir, { recursive: true });
+  const lines = [
+    `slug: ${slug}`,
+    `title: ${JSON.stringify(title)}`,
+    'status: draft',
+    ...frontmatterLines
+  ];
+  fs.writeFileSync(
+    path.join(specsDir, `${slug}.md`),
+    `---\n${lines.join('\n')}\n---\n\n# Specification — ${title}\n`,
+    'utf8'
+  );
+}
+
+test('sdw-ship-pr - 00080 AC4: a github specification with sourceRepo renders Closes <owner>/<repo>#<sourceIssue>', () => {
+  const { tmpDir, config } = setupTestWorkspace();
+  const slug = '00080-cross-repo-link';
+  writeTrackerSpec(tmpDir, slug, [
+    'id: "11"',
+    'source: github',
+    'sourceIssue: 11',
+    'sourceRepo: jpolvora/linkage'
+  ]);
+  try {
+    const link = sdwShipPr.resolveIssueLink(tmpDir, slug);
+    assert.strictEqual(link.keyword, 'Closes jpolvora/linkage#11', 'AC4: the qualified owner/repo#N form is rendered');
+    assert.strictEqual(link.present, true);
+    // Spec 00080 Notes: resolveIssueLink() returns the coordinates so the JSON report explains the decision.
+    assert.strictEqual(link.sourceRepo, 'jpolvora/linkage', 'AC4: the resolved coordinates are reported');
+    assert.strictEqual(String(link.sourceIssue), '11', 'AC4: the renderer reads sourceIssue, not a local spec id');
+
+    const body = sdwShipPr.buildPrBody({
+      specSlug: slug, head: 'feature/cross-repo', base: 'master', commits: [], files: [], config, issueLink: link
+    });
+    assert.match(body, /^Closes jpolvora\/linkage#11$/m, 'AC4: the assembled body carries the qualified closing line');
+    assert.doesNotMatch(body, /^Closes #11$/m, 'AC4: the unqualified form is not the default when sourceRepo exists');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('sdw-ship-pr - 00080 AC5: a github specification without sourceRepo falls back to Closes #<id>', () => {
+  const { tmpDir, config } = setupTestWorkspace();
+  const slug = '00080-fallback-link';
+  writeTrackerSpec(tmpDir, slug, [
+    'id: "97"',
+    'source: github'
+  ]);
+  try {
+    const link = sdwShipPr.resolveIssueLink(tmpDir, slug);
+    assert.strictEqual(link.keyword, 'Closes #97', 'AC5: the fallback renders the unqualified id form');
+    assert.strictEqual(link.present, true, 'AC5: the fallback still resolves a closing reference');
+
+    const body = sdwShipPr.buildPrBody({
+      specSlug: slug, head: 'feature/fallback', base: 'master', commits: [], files: [], config, issueLink: link
+    });
+    assert.match(body, /^Closes #97$/m, 'AC5: the fallback line reaches the assembled body');
+    assert.doesNotMatch(body, /Closes [^\s#]+\/[@\w.-]+#97/, 'AC5: the fallback never invents a repository coordinate');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('sdw-ship-pr - 00080 AC6: an azure-devops specification renders Fixes AB#<sourceIssue>', () => {
+  const { tmpDir, config } = setupTestWorkspace();
+  const slug = '00080-ado-workitem-link';
+  writeTrackerSpec(tmpDir, slug, [
+    'id: "123"',
+    'source: azure-devops',
+    'sourceIssue: 123',
+    'sourceOrg: contoso',
+    'sourceProject: Platform'
+  ]);
+  try {
+    const link = sdwShipPr.resolveIssueLink(tmpDir, slug);
+    assert.strictEqual(link.keyword, 'Fixes AB#123', 'AC6: the Azure DevOps keyword is organization-scoped AB#N');
+    assert.strictEqual(link.present, true);
+    assert.strictEqual(String(link.sourceIssue), '123', 'AC6: the renderer reads sourceIssue for the work item number');
+
+    const body = sdwShipPr.buildPrBody({
+      specSlug: slug, head: 'feature/ado-cross', base: 'master', commits: [], files: [], config, issueLink: link
+    });
+    assert.match(body, /^Fixes AB#123$/m, 'AC6: the assembled body carries the Azure DevOps closing line');
+    assert.doesNotMatch(body, /\bCloses\b/, 'AC6: the GitHub keyword is not emitted for Azure DevOps');
+    assert.doesNotMatch(body, /Platform/, 'AC6: sourceProject is provenance only and never interpolated into the keyword');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('sdw-ship-pr - 00080 AC7: an explicit --body keeps its content and gains the resolved closing reference', async () => {
+  const { tmpDir, config } = setupTestWorkspace();
+  config.scmProvider = 'github';
+  const slug = '00080-explicit-body-link';
+  writeTrackerSpec(tmpDir, slug, [
+    'id: "11"',
+    'source: github',
+    'sourceIssue: 11',
+    'sourceRepo: jpolvora/linkage'
+  ]);
+  const explicitBody = 'Hand-written delivery notes.\n\nSecond paragraph of context.';
+  try {
+    const link = sdwShipPr.resolveIssueLink(tmpDir, slug);
+
+    const body = sdwShipPr.buildPrBody({
+      explicit: explicitBody, specSlug: slug, head: 'feature/body', base: 'master',
+      commits: [], files: [], config, issueLink: link
+    });
+    assert.match(body, /Hand-written delivery notes\./, 'AC7: the supplied body content is preserved');
+    assert.match(body, /Second paragraph of context\./, 'AC7: the supplied body keeps every paragraph');
+    assert.match(body, /^Closes jpolvora\/linkage#11$/m, 'AC7: the resolved closing reference is appended to the explicit body');
+    assert.strictEqual((body.match(/^Closes /gm) || []).length, 1, 'AC7: the closing reference is appended exactly once');
+    assert.ok(
+      body.indexOf('Closes jpolvora/linkage#11') > body.indexOf('Second paragraph of context.'),
+      'AC7: the reference is appended after the supplied body, not prepended'
+    );
+
+    const lines = [];
+    const originalLog = console.log;
+    console.log = (...args) => { lines.push(args.map(String).join(' ')); };
+    try {
+      await sdwShipPr.runShipPr({
+        projectRoot: tmpDir, config, head: 'feature/body', base: 'master',
+        specSlug: slug, body: explicitBody, dryRun: true
+      }, fakeGithubExecutor());
+    } finally {
+      console.log = originalLog;
+    }
+    const printed = lines.join('\n');
+    assert.match(printed, /Hand-written delivery notes\./, 'AC7: the shipped body keeps the supplied text');
+    assert.match(printed, /Closes jpolvora\/linkage#11/, 'AC7: the shipped body gains the resolved closing reference');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+

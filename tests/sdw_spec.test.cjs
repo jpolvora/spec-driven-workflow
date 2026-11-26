@@ -709,3 +709,64 @@ test('Spec revisions: update --force preserves the registry lifecycle and title'
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+// Spec 00080: read the generated spec frontmatter without a YAML dependency, and
+// keep the raw first 25 lines because resolveIssueLink() reads only that window.
+function readImportedSpecFrontmatter(filePath) {
+  const text = fs.readFileSync(filePath, 'utf8');
+  const match = text.match(/^---\s*\n([\s\S]*?)\n---\s*\n?/);
+  const values = {};
+  if (match) {
+    for (const line of match[1].split('\n')) {
+      const item = line.match(/^([A-Za-z][A-Za-z0-9_-]*):\s*(.*)$/);
+      if (item) values[item[1]] = item[2].trim().replace(/^["']|["']$/g, '');
+    }
+  }
+  return { values, head: text.split(/\r?\n/).slice(0, 25).join('\n') };
+}
+
+test('00080 AC2, AC3: an Azure DevOps work item import persists sourceOrg, sourceProject, sourceIssue, and sourceUrl', async () => {
+  const { tmpDir } = setupTestWorkspace();
+  try {
+    const workItemUrl = 'https://dev.azure.com/contoso/Platform/_workitems/edit/123';
+    const executor = (cmd) => {
+      if (cmd.includes('az boards work-item show --id 123')) {
+        return JSON.stringify({
+          id: 123,
+          fields: {
+            'System.Title': 'Traceability for linked work items',
+            'System.Description': 'Track the originating work item coordinates.',
+            'Microsoft.VSTS.Common.AcceptanceCriteria': '- AC1: The system shall persist the item coordinates.',
+            'System.State': 'Active',
+            'System.Tags': 'traceability'
+          },
+          _links: { html: { href: workItemUrl } }
+        });
+      }
+      throw new Error(`Unexpected command: ${cmd}`);
+    };
+
+    const imported = await importRemoteSpec({
+      root: tmpDir,
+      id: '123',
+      provider: 'ado',
+      scmProvider: createScmProvider('ado', { executor })
+    });
+
+    const { values, head } = readImportedSpecFrontmatter(imported.filePath);
+
+    assert.equal(values.source, 'azure-devops', 'source records the provider');
+    assert.equal(values.sourceOrg, 'contoso', 'AC2: sourceOrg must persist the organization segment of the item URL');
+    assert.equal(values.sourceProject, 'Platform', 'AC2: sourceProject must persist the project segment of the item URL');
+    assert.equal(values.sourceIssue, '123', 'AC2: sourceIssue must persist the work item number');
+    assert.match(values.sourceIssue, /^\d+$/, 'AC2: sourceIssue is the numeric work item id');
+    assert.equal(values.sourceUrl, workItemUrl, 'AC3: sourceUrl must persist the item URL returned by the provider');
+
+    // resolveIssueLink() and getSpecTitle() read only the first 25 lines.
+    for (const key of ['sourceIssue', 'sourceOrg', 'sourceProject', 'sourceUrl']) {
+      assert.match(head, new RegExp(`^${key}:`, 'm'), `${key} must be emitted inside the first 25 lines`);
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

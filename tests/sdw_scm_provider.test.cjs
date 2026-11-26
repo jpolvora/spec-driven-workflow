@@ -804,3 +804,72 @@ test('sdw-scm-provider - ADO active thread with a resolution marker stays active
   assert.strictEqual(result.activeCount, 1);
   assert.strictEqual(result.threads[0].isResolved, false);
 });
+
+// Spec 00080: read the generated spec frontmatter without a YAML dependency, and
+// keep the raw first 25 lines because resolveIssueLink() reads only that window.
+function readImportedSpecFrontmatter(filePath) {
+  const text = fs.readFileSync(filePath, 'utf8');
+  const match = text.match(/^---\s*\n([\s\S]*?)\n---\s*\n?/);
+  const values = {};
+  if (match) {
+    for (const line of match[1].split('\n')) {
+      const item = line.match(/^([A-Za-z][A-Za-z0-9_-]*):\s*(.*)$/);
+      if (item) values[item[1]] = item[2].trim().replace(/^["']|["']$/g, '');
+    }
+  }
+  return { values, head: text.split(/\r?\n/).slice(0, 25).join('\n') };
+}
+
+test('sdw-scm-provider - 00080 AC1, AC3: a GitHub issue import persists sourceRepo, sourceIssue, and sourceUrl', async () => {
+  const tmpDir = setupTestRepo();
+  try {
+    const executor = (cmd) => {
+      if (cmd.includes('gh issue view 42')) {
+        return JSON.stringify({
+          number: 42,
+          title: 'Cross repository item',
+          body: '## Acceptance Criteria\n- AC1: The system shall close the source item.',
+          url: 'https://github.com/jpolvora/linkage/issues/42',
+          state: 'OPEN',
+          labels: []
+        });
+      }
+      throw new Error(`Unexpected command: ${cmd}`);
+    };
+
+    const imported = await importRemoteSpec({
+      root: tmpDir,
+      id: '42',
+      provider: 'github',
+      scmProvider: createScmProvider('github', { executor })
+    });
+
+    const { values, head } = readImportedSpecFrontmatter(imported.filePath);
+
+    assert.strictEqual(values.source, 'github', 'source records the provider');
+    assert.strictEqual(values.id, '42', 'id keeps the provider item id');
+    assert.strictEqual(
+      values.sourceRepo,
+      'jpolvora/linkage',
+      'AC1: sourceRepo must persist as <owner>/<repo> taken from the item URL'
+    );
+    assert.strictEqual(
+      values.sourceIssue,
+      '42',
+      'AC1: sourceIssue must persist as the item number'
+    );
+    assert.match(values.sourceIssue, /^\d+$/, 'AC1: sourceIssue is the numeric item number, not a local spec id');
+    assert.strictEqual(
+      values.sourceUrl,
+      'https://github.com/jpolvora/linkage/issues/42',
+      'AC3: sourceUrl must persist the item URL returned by the provider'
+    );
+
+    // resolveIssueLink() and getSpecTitle() read only the first 25 lines.
+    for (const key of ['sourceRepo', 'sourceIssue', 'sourceUrl']) {
+      assert.match(head, new RegExp(`^${key}:`, 'm'), `${key} must be emitted inside the first 25 lines`);
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
