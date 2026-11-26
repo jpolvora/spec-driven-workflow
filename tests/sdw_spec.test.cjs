@@ -770,3 +770,66 @@ test('00080 AC2, AC3: an Azure DevOps work item import persists sourceOrg, sourc
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+// Spec 00080: a tracker specification that declares the optional coordinate
+// keys, so the validator sees valid and invalid shapes behind the required
+// source/Prior Work Sweep context.
+function trackerSpecWithCoordinates(coordinateLines) {
+  const coordinates = coordinateLines.length ? `${coordinateLines.join('\n')}\n` : '';
+  return `---
+id: "11"
+slug: 00080-coordinate-shape
+title: "Closing reference coordinates"
+source: github
+${coordinates}status: draft
+specDate: 2026-11-26
+---
+# Specification — Closing reference coordinates
+## Description
+Persist the provider coordinates at import time so the closing reference is a pure function of the spec frontmatter.
+### Design Intent
+The coordinates are the source of truth for the SCM closing reference.
+### Prior Work Sweep
+- Spec 00051 defined the issue linkage.
+## Acceptance Criteria
+- AC1: The system shall validate the coordinate shapes.
+## Notes
+None.
+## Out of Scope
+| Feature | Reason |
+|---|---|
+| None | None |
+## Assumptions & Open Questions
+| Assumption | Chosen default | Rationale | Confirmed |
+|---|---|---|---|
+| None | None | None | y |
+## Definition of Ready (DoR)
+| Readiness Item | Requirement | Verification Method |
+|---|---|---|
+| None | None | None |
+## Validation & Observation Notes
+### Telemetry & Observable Signals
+None
+### Negative & Failing Test Scenarios
+- A non-numeric sourceIssue is rejected with an error naming the key.
+`;
+}
+
+test('00080 AC11: invalid sourceIssue or sourceRepo shapes are rejected with the offending key named', () => {
+  const valid = validate(trackerSpecWithCoordinates(['sourceIssue: 11', 'sourceRepo: jpolvora/linkage']), { mode: 'authoring' });
+  assert.equal(valid.ok, true, `valid coordinate shapes pass validation: ${JSON.stringify(valid.errors)}`);
+
+  const badIssue = validate(trackerSpecWithCoordinates(['sourceIssue: twelve', 'sourceRepo: jpolvora/linkage']), { mode: 'authoring' });
+  assert.equal(badIssue.ok, false, 'a non-numeric sourceIssue is rejected');
+  assert.ok(
+    badIssue.errors.some((error) => String(error.message).includes('sourceIssue')),
+    'the validation error names sourceIssue'
+  );
+
+  const badRepo = validate(trackerSpecWithCoordinates(['sourceIssue: 11', 'sourceRepo: notowner']), { mode: 'authoring' });
+  assert.equal(badRepo.ok, false, 'a sourceRepo without <owner>/<repo> is rejected');
+  assert.ok(
+    badRepo.errors.some((error) => String(error.message).includes('sourceRepo')),
+    'the validation error names sourceRepo'
+  );
+});
