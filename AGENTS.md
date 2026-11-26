@@ -170,6 +170,73 @@ npm run review:dry
 
 The default model is `opencode/deepseek-v4.1-flash-free` on the OpenCode connection.
 
+---
+
+## 10. Tools
+
+These CLIs are installed on the development host. Call them directly from the shell. This section teaches **when** to reach for each one and the exact entry call; protocol depth stays in the authoritative files in §4.
+
+| Tool | Reach for it when | Entry call |
+|---|---|---|
+| `gh` | Any GitHub operation: tracker import, pull requests, checks, review threads, merge | `gh auth status` |
+| `az` | The same operations when `scmProvider` is `azure-devops` | `az account show` |
+| `git` | Branch, diff, history, and worktree work | `git status --short` |
+| `node` / `npm` | Tests, validators, ship and review scripts | `node <script>`, `npm test` |
+| `memo` | Vault memory: bootstrap, search, upsert | `memo bootstrap` |
+
+### SCM provider (`gh`, `az`)
+
+The active provider is `scmProvider` in [`.sdw/config.json`](.sdw/config.json). Its contract is [`scm_contract.md`](skills/sdw-spec/references/scm_contract.md) and [`ship_protocol.md`](skills/sdw-ship-pr/references/ship_protocol.md). Authenticate first; stop on a non-zero exit instead of guessing around it.
+
+```bash
+gh auth status || gh auth login        # GitHub
+az account show || az login            # Azure DevOps
+```
+
+GitHub recipes, quoted ids and JSON output only:
+
+```bash
+gh issue view <id> --json number,title,body,url,state,labels    # tracker import
+gh issue list --state open --limit 50 --json number,title,url   # backlog discovery
+gh pr list --head "feature/<slug>" --base develop --state open --json number,url
+gh pr create --head "feature/<slug>" --base develop --title "<subject>" --body-file <file>
+gh pr view <n> --json number,state,body,url
+gh pr checks <n> --json name,state,bucket,link                  # exits 1/8 while failing/pending, JSON is still valid
+gh run watch <run-id> --exit-status                             # native wait; fall back to interval polling on older gh
+gh pr merge <n> --merge                                         # only when `--merge` was requested
+```
+
+Azure DevOps uses the same provider contract (`az repos pr list --source-branch ...`, `az repos pr create`, `az repos pr update --id <n> --status completed`).
+
+Rules:
+
+- Read the PR number, branch, and run id from the previous command's JSON; never infer them.
+- Never pass `--force`, `--admin`, or `--delete-branch` to `gh`.
+- Never run `gh pr merge` unless the delivery asked for `--merge`.
+- Never `git reset --hard`, `git clean -fd`, or force-checkout; stash unowned work instead (§2.4).
+- Do not hand-run review-thread or gate steps that `sdw-ship-pr` already owns; call the script.
+
+### Runtime and scripts
+
+- Node is pinned to `>=22.20.0 <23` ([`package.json`](package.json), [`.nvmrc`](.nvmrc)): run `nvm use` before any script.
+- `npm test` runs `node --test tests/*.test.cjs`; a failure blocks delivery.
+- Run skill scripts and validators with `node`, never through an npm wrapper: `node skills/sdw-spec/scripts/validate_spec.cjs --mode=authoring <specFile>`, `node skills/sdw-rules/scripts/sdw_rules.cjs doctor`.
+- Delivery, pre-PR gates, and review go through `node skills/sdw-ship-pr/scripts/sdw_ship_pr.cjs ...` and `npm run review:dry` (§8, §9); do not reproduce their gates by hand.
+- Use the `opencode` binary from `node_modules` (`opencode-ai@1.19.1`), never a global install.
+
+### Memory (`memo`)
+
+`memo` is the spec-memo CLI and the only vault entry point; workflows live in [`ws-memo`](.agents/skills/ws-memo/SKILL.md) and [`memory_protocol.md`](skills/sdw-memory/references/memory_protocol.md).
+
+```bash
+memo bootstrap                                          # session start: traps, decisions, specs
+memo search "<topic>"                                   # before a rename or a retried failed command
+memo upsert --kind trap --slug <slug> --frontmatter '<json>' --body '<markdown>'
+memo get --kind trap --slug <slug> --json               # verify the record exists
+```
+
+If `memo` is missing from `PATH`, report it and continue without memory; never write a local memory file as a fallback (§5.4).
+
 
 # Communication/Response style and format
 
