@@ -57,6 +57,11 @@ class AzureDevOpsProvider extends ScmProvider {
 
       const url = data.url || (data._links && data._links.html && data._links.html.href) || '';
       const coordinates = coordinatesFromWorkItemUrl(url);
+      // Spec 00080: a partial import silently drops the provenance coordinates,
+      // so an item URL without both segments is refused instead.
+      if (url && (!coordinates.org || !coordinates.project)) {
+        throw new Error(`Azure DevOps work item URL is missing the organization or project segment: ${url}`);
+      }
 
       return {
         id: String(data.id || safeId),

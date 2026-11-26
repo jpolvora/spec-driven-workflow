@@ -206,9 +206,12 @@ When invoked with `--json`, `sdw-ship-pr` emits JSON with the following structur
   "issueLink": {
     "id": "51",
     "provider": "github",
-    "keyword": "Closes #51",
-    "present": true
+    "keyword": "Closes owner/repo#51",
+    "present": true,
+    "sourceRepo": "owner/repo",
+    "sourceIssue": "51"
   },
+  "closingReference": { "resolved": true, "allowMissing": false, "keyword": "Closes owner/repo#51" },
   "pushed": true,
   "prePrBoard": [
     { "check": "prePrCommand", "status": "skipped", "evidence": "prePrCommand is not configured" },
@@ -216,7 +219,8 @@ When invoked with `--json`, `sdw-ship-pr` emits JSON with the following structur
     { "check": "tests", "status": "pass", "evidence": "npm test exited 0" },
     { "check": "security", "status": "pass", "evidence": "sdw-security-checks found no blocking leak" },
     { "check": "runState", "status": "pass", "evidence": "step 4, step 6 and step 7 completed; score 9 >= scoreMin 8" },
-    { "check": "discovery", "status": "pass", "evidence": "acknowledged via --ack-prepare: Ran the release checklist" }
+    { "check": "discovery", "status": "pass", "evidence": "acknowledged via --ack-prepare: Ran the release checklist" },
+    { "check": "closing-reference", "status": "pass", "evidence": "Closes owner/repo#51 closes the declared github item" }
   ],
   "prepareDiscovery": "block",
   "prepareObligations": [],

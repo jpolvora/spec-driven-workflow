@@ -70,6 +70,7 @@ class GitHubProvider extends ScmProvider {
           description: body,
           acceptanceCriteria: extractAcceptanceCriteria(body),
           source: 'github',
+          repo: repoFromIssueUrl(data.url),
           url: data.url || '',
           state: (data.state || 'open').toLowerCase(),
           tags: Array.isArray(data.labels) ? data.labels.map(l => (typeof l === 'string' ? l : l.name)) : []

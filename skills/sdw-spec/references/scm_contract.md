@@ -52,11 +52,16 @@ All provider implementations must return items normalized to this canonical stru
     "When Y occurs, the system shall do Z"
   ],
   "source": "github",
+  "repo": "org/repo",
+  "org": null,
+  "project": null,
   "url": "https://github.com/org/repo/issues/1234",
   "state": "open",
   "tags": ["feature", "backend"]
 }
 ```
+
+`repo` is set by the GitHub provider from the item URL; `org` and `project` are set by the Azure DevOps provider. A provider that cannot derive a coordinate returns `null`, and `sdw-spec import` persists only the truthy ones (see §2.1).
 
 ### 2.1 Persisted Specification Coordinates (spec 00080)
 
