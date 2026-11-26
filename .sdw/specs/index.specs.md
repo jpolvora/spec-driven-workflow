@@ -77,6 +77,7 @@ Central repository index tracking specification lifecycle states, metadata, and 
 | 00077 | 00077-sdw-spec-bugfix-type-and-router-intent | Bugfix Specification Type and Router Intent Support | completed | high | local | 2026-11-21 | PASS | - |
 | 00078 | 00078-sdw-harness-adapters-and-agent-agnostic-dispatch | SDW Harness Adapters and Agent-Agnostic Subagent Dispatch | completed | high | local | 2026-11-22 | PASS | - |
 | 00079 | 00079-sdw-retro-autonomous-candidate-generation-and-pipeline-learning | SDW Retro Autonomous Candidate Generation and Pipeline Execution Learning | completed | high | local | 2026-11-22 | PASS | - |
+| 00080 | 00080-us-97-always-carry-the-scm-closing-refe | Always carry the SCM closing reference for specs imported from a provider (incl. cross-repo items) | completed | medium | github | 2026-11-26 | PASS | - |
 
 ## Lean-Core Cut (2026-10-25)
 
