@@ -347,6 +347,14 @@ function validate(text, options) {
     if (['github', 'azure-devops'].includes(fm.source) && !/^### Prior Work Sweep\s*$/m.test(normalizedText)) {
       errors.push({ code: 'prior-work', message: 'Tracker specifications require ### Prior Work Sweep.' });
     }
+    // Spec 00080 AC11: the optional tracker coordinates are validated only when
+    // present; absent keys stay valid for same-repository and local specs.
+    if (fm.sourceIssue !== undefined && fm.sourceIssue !== '' && !/^[1-9][0-9]*$/.test(fm.sourceIssue)) {
+      errors.push({ code: 'sourceIssue', message: 'sourceIssue must be a positive integer.' });
+    }
+    if (fm.sourceRepo !== undefined && fm.sourceRepo !== '' && !/^[^/\s]+\/[^/\s]+$/.test(fm.sourceRepo)) {
+      errors.push({ code: 'sourceRepo', message: 'sourceRepo must be the owner/repo form.' });
+    }
     // AC3: an unknown priority is rejected; absent is valid and reads as medium.
     if (fm.priority !== undefined && fm.priority !== '' && !SPEC_PRIORITIES.includes(fm.priority)) {
       errors.push({ code: 'priority', message: `priority must be one of: ${SPEC_PRIORITIES.join(', ')}.` });

@@ -12,6 +12,13 @@ const {
   cliFailure
 } = require('./base.cjs');
 
+// Spec 00080: the item URL carries the repository that owns the issue, so the
+// import persists `owner/repo` and the closing reference can qualify it.
+function repoFromIssueUrl(url) {
+  const match = String(url || '').match(/^https?:\/\/github\.com\/([^/]+)\/([^/?#]+)\/issues\/\d+/i);
+  return match ? `${match[1]}/${match[2]}` : null;
+}
+
 class GitHubProvider extends ScmProvider {
   async fetchWorkItem(itemId) {
     if (!itemId || !/^\d+$/.test(String(itemId).trim())) {
@@ -27,6 +34,7 @@ class GitHubProvider extends ScmProvider {
       const body = data.body || '';
       const acceptanceCriteria = extractAcceptanceCriteria(body);
       const labels = Array.isArray(data.labels) ? data.labels.map(l => (typeof l === 'string' ? l : l.name)) : [];
+      const url = data.url || `https://github.com/issues/${safeId}`;
 
       return {
         id: String(data.number || safeId),
@@ -34,7 +42,8 @@ class GitHubProvider extends ScmProvider {
         description: body,
         acceptanceCriteria,
         source: 'github',
-        url: data.url || `https://github.com/issues/${safeId}`,
+        repo: repoFromIssueUrl(url),
+        url,
         state: (data.state || 'open').toLowerCase(),
         tags: labels
       };
@@ -61,6 +70,7 @@ class GitHubProvider extends ScmProvider {
           description: body,
           acceptanceCriteria: extractAcceptanceCriteria(body),
           source: 'github',
+          repo: repoFromIssueUrl(data.url),
           url: data.url || '',
           state: (data.state || 'open').toLowerCase(),
           tags: Array.isArray(data.labels) ? data.labels.map(l => (typeof l === 'string' ? l : l.name)) : []

@@ -56,10 +56,20 @@ Every evaluated pre-PR check contributes one `prePrBoard` row, in evaluation ord
 | `security` | `securityChecksEnabled` scan of the worktree |
 | `runState` | the `--run-id` evidence gate |
 | `discovery` | the prepare-obligation scan and acknowledgement |
+| `closing-reference` | the tracker closing-reference gate (only when a supported tracker `source` is declared) |
 
-Each row carries `check`, `status` (`pass`, `fail`, or `skipped`), and `evidence`. Checks disabled by configuration and paths not evaluated record `skipped` with the reason as evidence. All rows are evaluated before the refusal, so one run shows every unmet obligation; the JSON report carries the complete board, including on failure.
+Each row carries `check`, `status` (`pass`, `warn`, `fail`, or `skipped`), and `evidence`. Checks disabled by configuration and paths not evaluated record `skipped` with the reason as evidence. All rows are evaluated before the refusal, so one run shows every unmet obligation; the JSON report carries the complete board, including on failure.
 
-Without `--json`, each row is logged and the board prints as a Markdown table before the push; with `--json`, the table is suppressed and stdout stays parseable JSON. `--dry-run` evaluates the read-only gates (`runState`, `discovery`), records the configured command gates as `skipped` for `dry-run`, and performs no push, no pull request creation, and no run-state write.
+Without `--json`, each row is logged and the board prints as a Markdown table before the push; with `--json`, the table is suppressed and stdout stays parseable JSON. `--dry-run` evaluates the read-only gates (`runState`, `discovery`, `closing-reference`), records the configured command gates as `skipped` for `dry-run`, and performs no push, no pull request creation, and no run-state write.
+
+### 1.4 Closing-Reference Gate (`closing-reference`)
+
+When the specification selected by `--spec` declares a supported tracker `source` (`github` or `azure-devops`), the closing reference is mandatory and the gate fails closed:
+
+- The row records `pass` with the resolved keyword when `sourceIssue` (or `id`) resolves one.
+- The row records `fail` and refuses the push and pull request creation with exit code `1` when the tracker source resolves no closing reference; the report carries `issueLink.present: false` and `closingReference: { resolved: false, allowMissing: false, warning }`.
+- `--allow-missing-closing-reference` downgrades the row to `warn`, records `closingReference: { resolved: false, allowMissing: true, warning }`, and continues shipping. The unresolved reference stays visible in the JSON report and console warning.
+- A specification without a tracker source (or with an unsupported one), a missing specification, or an unreadable specification emits no row and never fails the ship.
 
 ---
 
@@ -94,14 +104,15 @@ Without `--json`, each row is logged and the board prints as a Markdown table be
 3. **Creation Payload:**
    - `title`: Enriched by default from `git log {base}..{head}` and spec title (`feat({specSlug}): deliver {specTitle} ({n} commits)` or `feat({head}): {firstSubject} (+n more)`); explicit `--title` overrides.
    - `body`: Markdown with `## Summary`, `## Commits` (sha/subject/author/date), `## Features` grouped (Features/Fixes/Other), `## Files changed` (`git diff --name-status`), and `## Verification` (gates from config). Explicit `--body` overrides; empty git context falls back to legacy one-liner.
-4. **Issue Linkage (spec 00051):**
-   - Looks up `.sdw/specs/<specSlug>.md` from `--spec`; `id` and `source` come from the frontmatter and are parsed with a regex, with no YAML dependency.
-   - Provider mapping lives in one table: `github` → `Closes #<id>`, `azure-devops` → `Fixes AB#<id>`; `local`, `null`, and any other `source` emit nothing.
+4. **Issue Linkage (spec 00051, spec 00080):**
+   - Looks up `.sdw/specs/<specSlug>.md` from `--spec`; `id`, `source`, and the optional coordinates `sourceIssue`, `sourceRepo`, `sourceOrg`, `sourceProject`, and `sourceUrl` come from the frontmatter and are parsed with a regex, with no YAML dependency.
+   - Provider mapping lives in one table: `github` → `Closes <sourceRepo>#<sourceIssue>` when `sourceRepo` is present, otherwise `Closes #<sourceIssue|id>`; `azure-devops` → `Fixes AB#<sourceIssue|id>`; `local`, `null`, and any other `source` emit nothing. `sourceOrg`, `sourceProject`, and `sourceUrl` are provenance only and never interpolated into the keyword.
    - The closing line ends the `## Summary` block, before `## Commits`; no placeholder exists when the link is absent.
-   - On reuse, every existing `^(Closes|Fixes|Resolves)\s+(AB)?#\d+\b` line is dropped before the current keyword is appended, so the body carries it exactly once. When the existing body cannot be read, the amendment is appended with exactly one keyword.
+   - On reuse, every existing `^(Closes|Fixes|Resolves)\s+(?:<owner>/<repo>)?\s*(AB)?#\d+\b` line is dropped before the current keyword is appended, so the body carries it exactly once, including the qualified `Closes <owner>/<repo>#<n>` form and mixed case. When the existing body cannot be read, the amendment is appended with exactly one keyword.
+   - A tracker specification that declares `github` or `azure-devops` but resolves no closing reference fails the `closing-reference` gate; `--allow-missing-closing-reference` records a warning and continues (see §1.4).
    - A missing or unreadable specification, or an unsupported provider, omits the keyword, records `issueLink.present: false`, and never fails the ship.
    - `--dry-run` prints the assembled body, keyword included, and issues no pull-request create or edit command.
-   - `--json` reports `issueLink: { id, provider, keyword, present }` on success and failure.
+   - `--json` reports `issueLink: { id, provider, keyword, present }` plus any declared coordinates on success and failure.
 
 ---
 
@@ -195,9 +206,12 @@ When invoked with `--json`, `sdw-ship-pr` emits JSON with the following structur
   "issueLink": {
     "id": "51",
     "provider": "github",
-    "keyword": "Closes #51",
-    "present": true
+    "keyword": "Closes owner/repo#51",
+    "present": true,
+    "sourceRepo": "owner/repo",
+    "sourceIssue": "51"
   },
+  "closingReference": { "resolved": true, "allowMissing": false, "keyword": "Closes owner/repo#51" },
   "pushed": true,
   "prePrBoard": [
     { "check": "prePrCommand", "status": "skipped", "evidence": "prePrCommand is not configured" },
@@ -205,7 +219,8 @@ When invoked with `--json`, `sdw-ship-pr` emits JSON with the following structur
     { "check": "tests", "status": "pass", "evidence": "npm test exited 0" },
     { "check": "security", "status": "pass", "evidence": "sdw-security-checks found no blocking leak" },
     { "check": "runState", "status": "pass", "evidence": "step 4, step 6 and step 7 completed; score 9 >= scoreMin 8" },
-    { "check": "discovery", "status": "pass", "evidence": "acknowledged via --ack-prepare: Ran the release checklist" }
+    { "check": "discovery", "status": "pass", "evidence": "acknowledged via --ack-prepare: Ran the release checklist" },
+    { "check": "closing-reference", "status": "pass", "evidence": "Closes owner/repo#51 closes the declared github item" }
   ],
   "prepareDiscovery": "block",
   "prepareObligations": [],

@@ -84,6 +84,11 @@ function synthesizeCanonicalSpec(options) {
     slug,
     title,
     source = 'local',
+    sourceIssue = null,
+    sourceRepo = null,
+    sourceOrg = null,
+    sourceProject = null,
+    sourceUrl = null,
     type = 'feature',
     specDate = new Date().toISOString().slice(0, 10),
     description = '',
@@ -104,11 +109,21 @@ function synthesizeCanonicalSpec(options) {
     ? `- Imported from ${source} as item #${id}.\n`
     : '';
 
+  // Spec 00080 AC1, AC2, AC3: imported items persist the coordinates the closing
+  // reference needs. The keys sit immediately after `source` because
+  // resolveIssueLink() and getSpecTitle() read only the first 25 lines.
+  const sourceLines = [`source: ${source}`];
+  if (sourceIssue !== null && sourceIssue !== undefined && sourceIssue !== '') sourceLines.push(`sourceIssue: ${sourceIssue}`);
+  if (sourceRepo) sourceLines.push(`sourceRepo: ${sourceRepo}`);
+  if (sourceOrg) sourceLines.push(`sourceOrg: ${sourceOrg}`);
+  if (sourceProject) sourceLines.push(`sourceProject: ${sourceProject}`);
+  if (sourceUrl) sourceLines.push(`sourceUrl: ${sourceUrl}`);
+
   return `---
 id: ${id !== null ? JSON.stringify(id) : 'null'}
 slug: ${slug}
 title: ${JSON.stringify(title)}
-source: ${source}
+${sourceLines.join('\n')}
 type: ${type}
 status: draft
 specDate: ${specDate}
@@ -428,6 +443,11 @@ async function importRemoteSpec(options = {}) {
     slug,
     title,
     source: item.source,
+    sourceIssue: /^\d+$/.test(String(item.id)) ? String(item.id) : null,
+    sourceRepo: item.repo || null,
+    sourceOrg: item.org || null,
+    sourceProject: item.project || null,
+    sourceUrl: item.url || null,
     description: item.description || `Imported remote item #${item.id} from ${item.source}.`,
     acceptanceCriteria,
     isTracker: true

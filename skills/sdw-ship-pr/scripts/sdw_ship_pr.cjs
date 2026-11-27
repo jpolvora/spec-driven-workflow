@@ -87,14 +87,17 @@ function getSpecTitle(projectRoot, specSlug) {
 }
 
 // Spec 00051: the provider-specific closing keyword is the only SCM syntax the
-// body needs; where it appears is provider-agnostic.
+// body needs; where it appears is provider-agnostic. Spec 00080: the GitHub form
+// is qualified with the persisted `sourceRepo` when present so cross-repository
+// items close in the repository that owns them.
 const ISSUE_CLOSING_KEYWORDS = new Map([
-  ['github', (id) => `Closes #${id}`],
-  ['azure-devops', (id) => `Fixes AB#${id}`]
+  ['github', ({ issue, sourceRepo }) => (sourceRepo ? `Closes ${sourceRepo}#${issue}` : `Closes #${issue}`)],
+  ['azure-devops', ({ issue }) => `Fixes AB#${issue}`]
 ]);
 
-// Matches a standalone closing line, e.g. `Closes #12`, `Fixes AB#12`, `Resolves #7`.
-const CLOSING_KEYWORD_LINE = /^(Closes|Fixes|Resolves)\s+(AB)?#\d+\b/i;
+// Matches a standalone closing line, e.g. `Closes #12`, `Closes owner/repo#12`,
+// `Fixes AB#12`, `Resolves #7`, in any letter case.
+const CLOSING_KEYWORD_LINE = /^(Closes|Fixes|Resolves)\s+(?:[^\s#/]+\/[^\s#]+)?\s*(AB)?#\d+\b/i;
 
 function parseFrontmatterValue(frontmatter, key) {
   const match = String(frontmatter || '').match(new RegExp(`^${key}:\\s*(.*)$`, 'm'));
@@ -121,9 +124,23 @@ function resolveIssueLink(projectRoot, specSlug) {
       const content = fs.readFileSync(path.join(dir, f), 'utf8').split(/\r?\n/).slice(0, 25).join('\n');
       const id = parseFrontmatterValue(content, 'id');
       const provider = parseFrontmatterValue(content, 'source');
-      const formatKeyword = id ? ISSUE_CLOSING_KEYWORDS.get(provider || '') : null;
-      const keyword = formatKeyword ? formatKeyword(id) : null;
-      return { id, provider, keyword, present: Boolean(keyword) };
+      const sourceIssue = parseFrontmatterValue(content, 'sourceIssue');
+      const sourceRepo = parseFrontmatterValue(content, 'sourceRepo');
+      const sourceOrg = parseFrontmatterValue(content, 'sourceOrg');
+      const sourceProject = parseFrontmatterValue(content, 'sourceProject');
+      const sourceUrl = parseFrontmatterValue(content, 'sourceUrl');
+      const issue = sourceIssue || id;
+      const formatKeyword = issue ? ISSUE_CLOSING_KEYWORDS.get(provider || '') : null;
+      const keyword = formatKeyword ? formatKeyword({ issue, sourceRepo }) : null;
+      const link = { id, provider, keyword, present: Boolean(keyword) };
+      // Spec 00080: report the persisted coordinates. Only declared keys are
+      // exposed so a specification without coordinates keeps the spec 00051 shape.
+      if (sourceRepo) link.sourceRepo = sourceRepo;
+      if (sourceOrg) link.sourceOrg = sourceOrg;
+      if (sourceProject) link.sourceProject = sourceProject;
+      if (sourceIssue) link.sourceIssue = sourceIssue;
+      if (sourceUrl) link.sourceUrl = sourceUrl;
+      return link;
     }
   } catch (e) {}
   return empty;
@@ -183,8 +200,10 @@ function buildPrTitle({ explicit, specSlug, specTitle, head, base, commits }) {
 }
 
 function buildPrBody({ explicit, specSlug, specTitle, head, base, commits, files, config, issueLink }) {
-  if (explicit) return explicit;
   const closingKeyword = issueLink && issueLink.present ? issueLink.keyword : null;
+  // Spec 00080 AC7: an explicit body keeps its content and gains the resolved
+  // closing reference, appended once.
+  if (explicit) return appendClosingKeyword(explicit, closingKeyword);
   if ((!commits || commits.length === 0) && (!files || files.length === 0)) {
     const fallback = specSlug ? `Automated delivery for specification ${specSlug}.` : `Automated delivery pull request.`;
     return appendClosingKeyword(fallback, closingKeyword);
@@ -370,6 +389,8 @@ function parseArgs(args) {
       options.body = args[++i];
     } else if (arg === '--push') {
       options.push = true;
+    } else if (arg === '--allow-missing-closing-reference') {
+      options.allowMissingClosingReference = true;
     } else if (arg === '--poll-pr') {
       options.pollPr = true;
     } else if (arg === '--merge' || arg === '--allow-merge') {
@@ -924,6 +945,7 @@ async function runShipPr(options = {}, customExecutor = null) {
     prepareObligations: [],
     prepareAck: null,
     runStateGate: null,
+    closingReference: null,
     pullRequest: null,
     // Spec 024 AC26: when merge is requested, an audit record exists from the
     // start, so a delivery that fails before the merge step still explains why
@@ -1141,6 +1163,24 @@ async function runShipPr(options = {}, customExecutor = null) {
     if (options.ackPrepare) {
       report.prepareAck = { note: options.ackPrepare, at: new Date().toISOString() };
       log(`[sdw-ship-pr] Prepare obligations acknowledged via --ack-prepare: ${options.ackPrepare}`);
+    }
+
+    // Spec 00080 AC9/AC10: a declared tracker source must resolve a closing
+    // reference before the push. The gate fails closed unless the caller opts
+    // out with --allow-missing-closing-reference, which downgrades it to warn.
+    if (issueLink.provider && ISSUE_CLOSING_KEYWORDS.has(issueLink.provider)) {
+      const unresolved = `closing-reference unresolved for specification "${specSlug}": source "${issueLink.provider}" resolves no closing reference`;
+      if (issueLink.present) {
+        boardRow('closing-reference', 'pass', `${issueLink.keyword} closes the declared ${issueLink.provider} item`);
+        report.closingReference = { resolved: true, allowMissing: false, keyword: issueLink.keyword };
+      } else if (options.allowMissingClosingReference) {
+        warn(`[sdw-ship-pr] Warning: ${unresolved}; continuing because --allow-missing-closing-reference was passed.`);
+        boardRow('closing-reference', 'warn', `${unresolved} (allowed by --allow-missing-closing-reference)`);
+        report.closingReference = { resolved: false, allowMissing: true, warning: unresolved };
+      } else {
+        report.closingReference = { resolved: false, allowMissing: false, warning: unresolved };
+        failGate('closing-reference', unresolved);
+      }
     }
 
     // Spec 00050 AC11/AC12: one row per evaluated check, printed before the push.

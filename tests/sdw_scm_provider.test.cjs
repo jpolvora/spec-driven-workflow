@@ -550,8 +550,10 @@ test('sdw-scm-provider - AzureDevOpsProvider.fetchWorkItem converts HTML and ext
             'System.Description': '<p>This is HTML formatted description with &amp; entity.</p>',
             'Microsoft.VSTS.Common.AcceptanceCriteria': '<ul><li>The system shall validate active session cookies.</li><li>When session expired, the system shall redirect to login.</li></ul>',
             'System.State': 'Active',
+            'System.TeamProject': 'Platform',
             'System.Tags': 'core; security'
-          }
+          },
+          _links: { html: { href: 'https://dev.azure.com/contoso/Platform/_workitems/edit/555' } }
         });
       }
       throw new Error(`Unexpected command: ${cmd}`);
@@ -584,8 +586,10 @@ test('sdw-scm-provider - AzureDevOpsProvider.queryWorkItems executes WIQL and ma
             'System.Description': 'Simple text description',
             'Microsoft.VSTS.Common.AcceptanceCriteria': '- AC1: The system shall query work items.',
             'System.State': 'New',
+            'System.TeamProject': 'Platform',
             'System.Tags': 'backend'
-          }
+          },
+          url: 'https://dev.azure.com/contoso/_apis/wit/workItems/888'
         });
       }
       throw new Error(`Unexpected command: ${cmd}`);
@@ -600,6 +604,81 @@ test('sdw-scm-provider - AzureDevOpsProvider.queryWorkItems executes WIQL and ma
   assert.strictEqual(items[0].state, 'new');
   assert.deepStrictEqual(items[0].tags, ['backend']);
   assert.strictEqual(items[0].acceptanceCriteria.length, 1);
+});
+
+test('sdw-scm-provider - AzureDevOpsProvider.fetchWorkItem prefers the project-bearing web link over the REST url', async () => {
+  // Shape returned by `az boards work-item show`: `url` is the REST resource URL
+  // and `_links.html.href` is the project-bearing web URL.
+  const webUrl = 'https://dev.azure.com/fabrikam/Fabrikam-Fiber-Git/_workitems/edit/12';
+  const provider = createScmProvider('ado', {
+    executor: (cmd) => {
+      if (cmd.includes('az boards work-item show --id 12')) {
+        return JSON.stringify({
+          id: 12,
+          fields: {
+            'System.Title': 'Carry provenance coordinates',
+            'System.TeamProject': 'Fabrikam-Fiber-Git',
+            'System.State': 'New'
+          },
+          url: 'https://dev.azure.com/fabrikam/_apis/wit/workItems/12',
+          _links: { html: { href: webUrl } }
+        });
+      }
+      throw new Error(`Unexpected command: ${cmd}`);
+    }
+  });
+
+  const item = await provider.fetchWorkItem('12');
+  assert.strictEqual(item.org, 'fabrikam');
+  assert.strictEqual(item.project, 'Fabrikam-Fiber-Git');
+  assert.strictEqual(item.url, webUrl);
+});
+
+test('sdw-scm-provider - AzureDevOpsProvider.fetchWorkItem derives org from the REST url and project from System.TeamProject', async () => {
+  const restUrl = 'https://dev.azure.com/contoso/_apis/wit/workItems/34';
+  const provider = createScmProvider('ado', {
+    executor: (cmd) => {
+      if (cmd.includes('az boards work-item show --id 34')) {
+        return JSON.stringify({
+          id: 34,
+          fields: {
+            'System.Title': 'REST url only',
+            'System.TeamProject': 'Platform',
+            'System.State': 'Active'
+          },
+          url: restUrl
+        });
+      }
+      throw new Error(`Unexpected command: ${cmd}`);
+    }
+  });
+
+  const item = await provider.fetchWorkItem('34');
+  assert.strictEqual(item.org, 'contoso');
+  assert.strictEqual(item.project, 'Platform');
+  assert.strictEqual(item.url, restUrl);
+});
+
+test('sdw-scm-provider - AzureDevOpsProvider.fetchWorkItem refuses an item with no derivable org or project', async () => {
+  const provider = createScmProvider('ado', {
+    executor: (cmd) => {
+      if (cmd.includes('az boards work-item show --id 56')) {
+        return JSON.stringify({
+          id: 56,
+          fields: {
+            'System.Title': 'Untraceable item',
+            'System.State': 'New'
+          }
+        });
+      }
+      throw new Error(`Unexpected command: ${cmd}`);
+    }
+  });
+
+  await assert.rejects(
+    async () => { await provider.fetchWorkItem('56'); },
+    /missing the organization or project/
+  );
 });
 
 test('sdw-scm-provider - GitHubProvider.queryWorkItems maps issues and tags', async () => {
@@ -803,4 +882,73 @@ test('sdw-scm-provider - ADO active thread with a resolution marker stays active
   const result = await provider.listReviewThreads(42);
   assert.strictEqual(result.activeCount, 1);
   assert.strictEqual(result.threads[0].isResolved, false);
+});
+
+// Spec 00080: read the generated spec frontmatter without a YAML dependency, and
+// keep the raw first 25 lines because resolveIssueLink() reads only that window.
+function readImportedSpecFrontmatter(filePath) {
+  const text = fs.readFileSync(filePath, 'utf8');
+  const match = text.match(/^---\s*\n([\s\S]*?)\n---\s*\n?/);
+  const values = {};
+  if (match) {
+    for (const line of match[1].split('\n')) {
+      const item = line.match(/^([A-Za-z][A-Za-z0-9_-]*):\s*(.*)$/);
+      if (item) values[item[1]] = item[2].trim().replace(/^["']|["']$/g, '');
+    }
+  }
+  return { values, head: text.split(/\r?\n/).slice(0, 25).join('\n') };
+}
+
+test('sdw-scm-provider - 00080 AC1, AC3: a GitHub issue import persists sourceRepo, sourceIssue, and sourceUrl', async () => {
+  const tmpDir = setupTestRepo();
+  try {
+    const executor = (cmd) => {
+      if (cmd.includes('gh issue view 42')) {
+        return JSON.stringify({
+          number: 42,
+          title: 'Cross repository item',
+          body: '## Acceptance Criteria\n- AC1: The system shall close the source item.',
+          url: 'https://github.com/jpolvora/linkage/issues/42',
+          state: 'OPEN',
+          labels: []
+        });
+      }
+      throw new Error(`Unexpected command: ${cmd}`);
+    };
+
+    const imported = await importRemoteSpec({
+      root: tmpDir,
+      id: '42',
+      provider: 'github',
+      scmProvider: createScmProvider('github', { executor })
+    });
+
+    const { values, head } = readImportedSpecFrontmatter(imported.filePath);
+
+    assert.strictEqual(values.source, 'github', 'source records the provider');
+    assert.strictEqual(values.id, '42', 'id keeps the provider item id');
+    assert.strictEqual(
+      values.sourceRepo,
+      'jpolvora/linkage',
+      'AC1: sourceRepo must persist as <owner>/<repo> taken from the item URL'
+    );
+    assert.strictEqual(
+      values.sourceIssue,
+      '42',
+      'AC1: sourceIssue must persist as the item number'
+    );
+    assert.match(values.sourceIssue, /^\d+$/, 'AC1: sourceIssue is the numeric item number, not a local spec id');
+    assert.strictEqual(
+      values.sourceUrl,
+      'https://github.com/jpolvora/linkage/issues/42',
+      'AC3: sourceUrl must persist the item URL returned by the provider'
+    );
+
+    // resolveIssueLink() and getSpecTitle() read only the first 25 lines.
+    for (const key of ['sourceRepo', 'sourceIssue', 'sourceUrl']) {
+      assert.match(head, new RegExp(`^${key}:`, 'm'), `${key} must be emitted inside the first 25 lines`);
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });
